@@ -13,7 +13,7 @@ void TappedGameTransport::Close(SessionRouter::GameId game, std::uint16_t code, 
   inner_->Close(game, code, reason);
 }
 
-void TappedGameTransport::SetHeld(SessionRouter::GameId game, bool held) { inner_->SetHeld(game, held); }
+void TappedGameTransport::SetIdleExempt(SessionRouter::GameId game, bool exempt) { inner_->SetIdleExempt(game, exempt); }
 
 bool TappedRemoteTransport::Open(const SessionRouter::RemoteOpenRequest& request) {
   if (request.role == SessionRouter::Role::Login && !request.standaloneMatchmaker) {

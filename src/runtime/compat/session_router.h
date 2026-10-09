@@ -24,10 +24,13 @@
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
 //   * a held login: while the wiring says the account the login needs is still being obtained
 //     (Options::loginGate answers Awaiting) the login connection's remote is not opened, and the connection
-//     is neither failed nor closed. GameTransport::SetHeld tells the transport to keep it open. When the gate
+//     is neither failed nor closed. When the gate
 //     answers Ready the remote opens and the frames the game queued meanwhile follow; when it answers Refused
 //     the hold ends with a close. Config and matchmaker connections are never held: with no account they fail
 //     at once.
+//   * the login connection is silent until the game sends its LogInRequest, however long the player takes, so
+//     the transport is told (GameTransport::SetIdleExempt) not to close it for sending nothing, held or not,
+//     for as long as it is the login connection.
 //   * limits: an oversized frame, an unbounded wait for a remote that never opens and a transport that
 //     never drains are each ended with a named close code and one log line, never silently dropped.
 //
@@ -84,11 +87,12 @@ bool IsLoginSessionReply(uint64_t symbol);
 class GameTransport {
  public:
   virtual ~GameTransport() = default;
-  // The router holds this connection open while it waits for an account (see Options::loginGate): the
-  // transport must not close it for sending nothing. `held == false` ends the exemption. Optional.
-  virtual void SetHeld(GameId game, bool held) {
+  // This is the login connection: it is silent until the game's LogInRequest, so the transport must not
+  // close it for sending nothing. `exempt == false` when the connection stops being the login connection.
+  // Optional.
+  virtual void SetIdleExempt(GameId game, bool exempt) {
     (void)game;
-    (void)held;
+    (void)exempt;
   }
   virtual SendResult Send(GameId game, std::string_view frame, bool binary) = 0;
   // Must not block on the router. May be called from any thread, never with the router lock held.

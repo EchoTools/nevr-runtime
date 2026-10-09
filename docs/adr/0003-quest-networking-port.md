@@ -462,9 +462,13 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    connects) must not fail. `Options::loginGate` answers Awaiting, Ready or Refused
    (`TokenIdentitySource::GateFor`, kept current by the token-auth poll as a lock-free atomic).
    While it answers Awaiting the router creates the login session's record but does not open its
-   remote (`Stats::heldRemotes`), tells the transport `GameTransport::SetHeld`, and queues what the
-   game sends in order. `LoopbackGameServer` exempts a held connection from `idleFirstFrameMs`
-   (pings are still answered) and restarts that clock when the hold ends. `ReevaluateHeldLogins`
+   remote (`Stats::heldRemotes`), and queues what the
+   game sends in order. The login connection is silent until the game's `LogInRequestv2` (the game
+   sends none before the player has signed in, however long that takes), so the router tells the
+   transport (`GameTransport::SetIdleExempt`) that it is never to be closed for sending nothing, held
+   or released, for as long as it is the login connection; `LoopbackGameServer` then exempts it from
+   `idleFirstFrameMs` (pings are still answered). Config, matchmaker and unclassified connections
+   keep the idle close. `ReevaluateHeldLogins`
    (via `IntegratedBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
    Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
    never held: with no token their remote cannot start and they close with 1011 at once. A

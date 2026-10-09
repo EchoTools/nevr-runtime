@@ -144,7 +144,7 @@ struct Router::Effects {
   std::vector<GameId> drainGames;
   std::vector<std::pair<RemoteId, uint16_t>> remoteCloses;
   std::vector<GameClose> gameCloses;
-  std::vector<std::pair<GameId, bool>> holds;  // SetHeld calls
+  std::vector<std::pair<GameId, bool>> holds;  // SetIdleExempt calls
 };
 
 Router::Router(GameTransport* games, RemoteTransport* remotes, Options options)
@@ -158,7 +158,7 @@ void Router::Log(Effects& fx, LogLevel level, std::string line) {
 
 void Router::Run(Effects& fx) {
   for (const auto& entry : fx.logs) options_.log(entry.first, entry.second);
-  for (const auto& hold : fx.holds) games_->SetHeld(hold.first, hold.second);
+  for (const auto& hold : fx.holds) games_->SetIdleExempt(hold.first, hold.second);
   for (const RemoteId remote : fx.drainRemotes) DrainRemote(remote);
   for (const GameId game : fx.drainGames) DrainGame(game);
   for (const RemoteOpenRequest& request : fx.opens) {
@@ -361,7 +361,7 @@ void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
     g.remote = loginRemote_;
     loginGame_ = game;
     const bool held = remoteTable_.at(loginRemote_).deferred;
-    if (held) fx.holds.emplace_back(game, true);
+    fx.holds.emplace_back(game, true);
     Log(fx, LogLevel::Info,
         Fmt("[router] game=%llu conn=%d (login) takes over login session remote=%llu%s", Ull(game), g.connIdx,
             Ull(loginRemote_), held ? " (held: waiting for the account)" : ""));
@@ -385,8 +385,8 @@ void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
     loginRemote_ = remote;
     loginGame_ = game;
   }
+  if (g.role == Role::Login) fx.holds.emplace_back(game, true);
   if (hold) {
-    fx.holds.emplace_back(game, true);
     Log(fx, LogLevel::Info,
         Fmt("[router] game=%llu conn=%d (login) held: remote=%llu opens when the account is available", Ull(game),
             g.connIdx, Ull(remote)));
@@ -729,9 +729,6 @@ void Router::ReevaluateHeldLogins() {
       if (gate == LoginGate::Ready) {
         rit->second.deferred = false;
         fx.opens.push_back(rit->second.request);
-        for (const auto& entry : gameTable_) {
-          if (entry.second.remote == id) fx.holds.emplace_back(entry.first, false);
-        }
         Log(fx, LogLevel::Info, Fmt("[router] remote=%llu: the account is available; opening the held login", Ull(id)));
       } else {
         // The sign-in expired or failed: the hold ends with a close, so the game sees a failed connect.

@@ -58,9 +58,9 @@ class FakeGames : public GameTransport {
     sent.push_back({game, std::string(frame), binary});
     return SendResult::Sent;
   }
-  void SetHeld(GameId game, bool held) override {
+  void SetIdleExempt(GameId game, bool exempt) override {
     std::lock_guard<std::mutex> lock(mutex);
-    holds.emplace_back(game, held);
+    holds.emplace_back(game, exempt);
   }
   std::vector<std::pair<GameId, bool>> Holds() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -992,8 +992,9 @@ void TestHeldLoginOpensWhenTheAccountAppears() {
   }
   QCHECK(rig.router->GetStats().heldRemotes == 0);
   {
-    const auto released = rig.games.Holds();
-    QCHECK(!released.empty() && released.back() == std::make_pair(GameId(2), false));
+    // The login connection stays idle-exempt after the release: it is silent until the game's login.
+    const auto after = rig.games.Holds();
+    QCHECK(after.size() == 1 && after[0] == std::make_pair(GameId(2), true));
   }
   rig.router->ReevaluateHeldLogins();  // idempotent: no second open
   QCHECK(rig.remotes.Opens().size() == 2);
@@ -1066,14 +1067,45 @@ void TestReplacementLoginConnectionIsHeldOnTheSameSession() {
   QCHECK(rig.remotes.Opens().size() == 2);
 }
 
-// The Quest and PC wiring without a gate never holds anything.
+// Without a gate nothing is held, but the login connection is idle-exempt all the same.
 void TestNoGateNeverHolds() {
   Rig rig;
   rig.router->OnGameOpen(1);
   rig.router->OnGameOpen(2);
   QCHECK(rig.remotes.Opens().size() == 2 && rig.router->GetStats().heldRemotes == 0);
-  QCHECK(rig.games.Holds().empty());
+  // The login connection is idle-exempt with or without a gate (and only the login connection is).
+  const auto holds = rig.games.Holds();
+  QCHECK(holds.size() == 1 && holds[0] == std::make_pair(GameId(2), true));
   rig.router->ReevaluateHeldLogins();
+}
+
+// Failure caught (#239 review H1): the login connection is silent until the game's LogInRequest, which can come
+// minutes after it connected. It must be exempt from the first-frame idle close from the moment it is known
+// to be the login connection until it stops being it; config and matchmaker connections never are.
+void TestOnlyTheLoginConnectionIsIdleExempt() {
+  Rig rig;
+  OpenThree(rig);  // config 1, login 2, matchmaker 3
+  auto holds = rig.games.Holds();
+  QCHECK(holds.size() == 1 && holds[0] == std::make_pair(GameId(2), true));
+  // A connection that proves to be the config connection while provisionally the login loses the exemption.
+  Rig other;
+  other.router->OnGameOpen(1);
+  other.router->OnGameOpen(2);  // provisional login: exempt
+  other.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);  // it was the config connection
+  holds = other.games.Holds();
+  QCHECK(holds.size() == 2 && holds[0] == std::make_pair(GameId(2), true) && holds[1] == std::make_pair(GameId(2), false));
+  // A matchmaker that takes over the login role gets it.
+  Rig third;
+  OpenThree(third);
+  third.router->OnGameOpen(4);
+  third.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  holds = third.games.Holds();
+  bool fourExempt = false, twoReleased = false;
+  for (const auto& h : holds) {
+    fourExempt = fourExempt || h == std::make_pair(GameId(4), true);
+    twoReleased = twoReleased || h == std::make_pair(GameId(2), false);  // the old login stops being exempt
+  }
+  QCHECK(fourExempt && twoReleased);
 }
 
 }  // namespace
@@ -1122,6 +1154,7 @@ int main() {
   TestHeldLoginIsClosedWhenTheAccountIsRefused();
   TestReplacementLoginConnectionIsHeldOnTheSameSession();
   TestNoGateNeverHolds();
+  TestOnlyTheLoginConnectionIsIdleExempt();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
