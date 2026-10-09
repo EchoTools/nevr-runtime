@@ -269,6 +269,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_token_mints_are_serialized(self):
+        # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
+        # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
+        helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
+        self.assertRegex(helper, r"std::lock_guard<std::mutex>")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The

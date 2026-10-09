@@ -1,18 +1,12 @@
 /*
- * nevr_module_interface.h — Interface for nevr-runtime loadable modules.
+ * nevr_module_interface.h — Interface for nevr-runtime modules.
  *
- * Modules are DLLs loaded by the boot sequence before plugins. They run
- * inside the loader's address space and have access to the game's base
- * address and function pointers. Each module DLL exports NvrModuleInit()
- * and optionally NvrModuleShutdown().
- *
- * Unlike plugins (which load after game init), modules load during
- * PreprocessCommandLineHook — before the game's own initialization.
- * This allows them to install hooks that must be active before the
- * game makes its first network call or loads config.
- *
- * Each module DLL statically links MinHook. MinHook statics are per-DLL,
- * so each module MUST call Hooking::Initialize() before any hook calls.
+ * Modules are statically linked into BugSplat64.dll and registered with
+ * RegisterStaticModule() from the boot sequence (platform_compat, token_auth).
+ * Each exports an Init, an ApiVersion and optionally a Shutdown under a
+ * module-prefixed name, and runs before plugins, during the deferred bootstrap
+ * (RunDeferredRuntimeBootstrap), before the game makes its first network call.
+ * There are no module DLLs and no LoadLibrary-based module loader.
  */
 
 #pragma once
@@ -77,8 +71,8 @@ struct NvrModuleContext {
  * is a backward-incompatible bump.
  *
  * A module reports the version it was compiled against via the optional
- * NvrModuleApiVersion export. The loader REFUSES (FatalError — modules are
- * required, N120 fatal-on-failure) a module whose reported version EXCEEDS the
+ * NvrModuleApiVersion export. The boot sequence REFUSES (FatalError — modules are
+ * required) a module whose reported version EXCEEDS the
  * host's: such a module was built against a newer ABI and would expect context
  * fields this host does not set. An older/equal module is accepted — appended
  * fields it does not know about are simply unused. (Unlike plugins, which are
@@ -96,8 +90,8 @@ constexpr bool NvrModuleApiVersionSupported(uint32_t module_version) {
     return module_version <= NEVR_MODULE_API_VERSION;
 }
 
-/* Required export: called once after LoadLibrary. Return 0 on success, non-zero on failure.
- * On failure, the loader calls FatalError and the game does not start. */
+/* Required export: called once by the boot sequence. Return 0 on success, non-zero on failure.
+ * On failure, the boot sequence calls FatalError and the game does not start. */
 typedef int (*NvrModuleInit_fn)(const NvrModuleContext* ctx);
 
 /* Optional export: called during shutdown for cleanup */
