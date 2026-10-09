@@ -422,14 +422,15 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
-  // WinHTTP hook (InstallWinHTTPHook) handles TLS for HTTP/REST calls via curl.
+  // The game's HTTP/REST calls go through the system MSXML6 XMLHTTP object over Schannel;
+  // platform_compat only logs its creation (InstallMsxml6PassThroughHook).
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
   BootLogTee::TeeFprintf("[NEVR.PATCH] tls deferred=ws_bridge stage=boot\n");
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
   InstallCrashRecoveryHooks();
   BootLogTee::TeeFprintf("[NEVR.CRASH] crash recovery hooks installed\n");
-  // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
+  // CreateDirectory + MSXML6 pass-through hooks live in the platform_compat module (loaded in boot.cpp)
   BootLogTee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
