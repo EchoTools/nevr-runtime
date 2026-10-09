@@ -1020,8 +1020,7 @@ verify:
         exit 1
     fi
 
-    # platform_compat returned 0 even when the hook its own comment calls
-    # silent-but-fatal had failed. It must report failure so module_loader's
+    # platform_compat returned 0 even when the TLS hook had failed. It must report failure so module_loader's
     # existing FatalError fires at the point of the defect.
     N120_RC2=0; N120_PC=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/platform-compat/src/platform_compat.cpp) || N120_RC2=$?
     sensor_stage1 "N120 platform_compat reports failure" "src/modules/platform-compat/src/platform_compat.cpp" "$N120_RC2"
