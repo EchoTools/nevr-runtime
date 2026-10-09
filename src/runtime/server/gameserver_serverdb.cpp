@@ -196,10 +196,9 @@ static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
     return token;
 }
 
-// N133 S4b: all NEVR-key reads moved from the game-passed config JSON to
-// config.yaml (nevr_config). The IServerLib vtable slot still passes the game's
-// localConfig pointer, but the runtime no longer reads NEVR keys from it, so the
-// parameter is intentionally unnamed.
+// N133 S4b: NEVR keys are read from config.yaml (nevr_config), not from the game-passed
+// config JSON. The IServerLib vtable slot passes the game's localConfig pointer, but the
+// runtime does not read NEVR keys from it, so the parameter is intentionally unnamed.
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,
                                         const EchoVR::Json*) {
   // Update session state

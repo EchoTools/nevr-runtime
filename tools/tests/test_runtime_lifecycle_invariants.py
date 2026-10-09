@@ -361,10 +361,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")
 
     def test_console_defer_needs_gameserverlib_started(self):
-        # Issue #241: re-arming the handler used to set the defer flag unconditionally, so a server that
-        # never reached GameServerLib::Initialize deferred to a teardown that never ends (watchdog, exit 1).
-        # Only GameServerLib::Initialize marks the library started, and the boot sequence no longer
-        # re-arms before the game has installed its handler.
+        # Issue #241: re-arming the handler must not set the defer flag unconditionally, or a server that
+        # never reached GameServerLib::Initialize defers to a teardown that never ends (watchdog, exit 1).
+        # Only GameServerLib::Initialize marks the library started, and the boot sequence does not
+        # re-arm before the game has installed its handler.
         recovery = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         rearm = extract_braced_function(recovery, "void RearmConsoleCtrlHandler(")
         self.assertNotRegex(rearm, r"s_gameServerLibStarted")
