@@ -10,9 +10,11 @@ bool RegisterClockCounters() noexcept;  // 2 counters
 bool InstallClockHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
 // The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
 // seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
-bool RegisterLoginPromptCounters() noexcept;  // 3 counters
+bool RegisterLoginPromptCounters() noexcept;  // 14 counters
 // login_prompt::InstallIfCounted(countersRegistered): installs only with its counters registered.
-bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when both slots hold their thunks
+bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
+// login_prompt::SetAwaitingPlayer: token auth is waiting for the player to sign in. Lock-free, any thread.
+void SetLoginPromptAwaitingPlayer(bool awaiting) noexcept;
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

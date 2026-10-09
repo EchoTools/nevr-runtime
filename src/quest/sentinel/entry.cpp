@@ -79,6 +79,8 @@ bool InstallLoginPromptHook(bool countersRegistered) noexcept {
     return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
 }
 
+void SetLoginPromptAwaitingPlayer(bool awaiting) noexcept { nevr_quest::login_prompt::SetAwaitingPlayer(awaiting); }
+
 }  // namespace nevr_quest::integration
 
 extern "C" {

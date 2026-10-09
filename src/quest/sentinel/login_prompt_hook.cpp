@@ -32,6 +32,7 @@ std::atomic<std::uint64_t> g_notLocal{0};
 std::atomic<std::uint64_t> g_busy{0};
 std::atomic<std::uint64_t> g_notOurs{0};
 std::atomic<std::uint64_t> g_errorPageDropped{0};
+std::atomic<std::uint64_t> g_loggingInPageDropped{0};
 std::atomic<std::uint64_t> g_pagePassedArmed{0};
 std::atomic<std::uint64_t> g_resent{0};
 std::atomic<std::uint64_t> g_resendUnavailable{0};
@@ -92,6 +93,8 @@ std::atomic<bool> g_latchArmed{false};
 std::atomic<bool> g_latchDead{false};
 std::atomic<std::uint64_t> g_latchHash{0};
 std::atomic<CR15NetGameOpaque*> g_latchSelf{nullptr};
+// Whether token auth is waiting for the player to sign in (no account token yet).
+std::atomic<bool> g_awaitingPlayer{false};
 
 // FNV-1a over the whole error block; never 0 (0 means "no latch").
 std::uint64_t HashBlock(const unsigned char* block) noexcept {
@@ -251,8 +254,17 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
     ArmLatch(self, block);
+  } else if (read == board::ReadResult::kCopied && mode == board::Mode::kNotice) {
+    // The player signed in while this attempt was in flight, and the attempt failed with the game's local
+    // text: the screen says so, because RETRY on it now logs in with the new sign-in.
+    LayOut(g_written, text);
+    CopyBlock(block, g_written);
+    g_kind = Kind::kNotice;
+    g_applied.store(version, std::memory_order_relaxed);
+    g_shown.fetch_add(1, std::memory_order_relaxed);
+    ArmLatch(self, block);
   } else {
-    // Nothing to show yet (or only a notice, or the board was busy): the game's text stays, and the
+    // Nothing to show yet (or the board was busy): the game's text stays, and the
     // instance is followed so that a prompt published later still reaches this screen.
     CopyBlock(g_written, block);
     g_kind = Kind::kGame;
@@ -378,23 +390,29 @@ void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std:
 }
 
 // CR15UIPage2EnablePageNode::Enter. While the latch is armed (the screen shows our sign-in text) the game
-// must not replace it with an error page: the enable of the error page and of the fatal error page is
-// skipped. Skipping is a plain return: the node writes nothing to its thread, and its caller ignores the
-// return. Anything else, and every enable while the latch is not armed (a genuine error), goes to the game
-// unchanged. Reads atomics only, no logging: it may run on a task-scheduler worker thread.
+// must not replace it: the enable of the error page or the fatal error page is skipped, and so is the
+// enable of the logging-in page while token auth still waits for the player (the screen would lose its
+// header and buttons for a login that cannot succeed yet). Skipping is a plain return: the node writes
+// nothing to its thread, and its caller ignores the return. Anything else, and every enable while the
+// latch is not armed (a genuine error), goes to the game unchanged. Reads atomics only, no logging: it may
+// run on a task-scheduler worker thread.
 void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const void* data) noexcept {
   if (data != nullptr && g_latchArmed.load(std::memory_order_acquire)) {
     const unsigned char* bytes = static_cast<const unsigned char*>(data);
     std::uint64_t actor = 0;
     __builtin_memcpy(&actor, bytes + ui::kEnablePageActorIdOffset, sizeof(actor));
-    if (actor == ui::kErrorDisplayPage || actor == ui::kFatalErrorDisplayPage) {
+    const bool errorPage = actor == ui::kErrorDisplayPage || actor == ui::kFatalErrorDisplayPage;
+    const bool loggingIn = actor == ui::kLoggingInPage && g_awaitingPlayer.load(std::memory_order_relaxed);
+    if (errorPage || loggingIn) {
       // The record's own shape: the node is the record plus 0x20. A mismatch means this is not the record
       // measured, so the game's call goes ahead.
       if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset) {
-        g_errorPageDropped.fetch_add(1, std::memory_order_relaxed);
+        (errorPage ? g_errorPageDropped : g_loggingInPageDropped).fetch_add(1, std::memory_order_relaxed);
         return;
       }
       g_pagePassedArmed.fetch_add(1, std::memory_order_relaxed);
+    } else if (actor == ui::kLoggingInPage) {
+      g_pagePassedArmed.fetch_add(1, std::memory_order_relaxed);  // armed, but token auth is not waiting
     }
   }
   original(node, data);
@@ -431,6 +449,7 @@ bool RegisterCounters() noexcept {
       {"login_prompt_update_thunk_faults", &UpdateThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"login_prompt_enable_thunk_faults", &EnablePageThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"login_prompt_error_page_dropped", &g_errorPageDropped, sentinel::ReportKind::kCalls},
+      {"login_prompt_logging_in_page_dropped", &g_loggingInPageDropped, sentinel::ReportKind::kCalls},
       {"login_prompt_page_passed_armed", &g_pagePassedArmed, sentinel::ReportKind::kCalls},
       {"login_prompt_error_resent", &g_resent, sentinel::ReportKind::kCalls},
       {"login_prompt_error_resend_unavailable", &g_resendUnavailable, sentinel::ReportKind::kFaults},
@@ -504,11 +523,14 @@ void ArmForTest() noexcept {
   EnablePageThunk::Arm(kEnablePageHook);
 }
 
+void SetAwaitingPlayer(bool awaiting) noexcept { g_awaitingPlayer.store(awaiting, std::memory_order_relaxed); }
+
 bool LatchArmedForTest() noexcept { return g_latchArmed.load(std::memory_order_acquire); }
 
 void ResetLatchForTest() noexcept {
   g_latchDead.store(false, std::memory_order_relaxed);
   g_latchSelf.store(nullptr, std::memory_order_relaxed);
+  g_awaitingPlayer.store(false, std::memory_order_relaxed);
   ClearLatch();
 }
 
@@ -529,7 +551,8 @@ Counts CurrentCounts() noexcept {
           g_kept.load(std::memory_order_relaxed),     g_notLocal.load(std::memory_order_relaxed),
           g_busy.load(std::memory_order_relaxed),     g_notOurs.load(std::memory_order_relaxed),
           g_resent.load(std::memory_order_relaxed),   g_resendUnavailable.load(std::memory_order_relaxed),
-          g_errorPageDropped.load(std::memory_order_relaxed), g_pagePassedArmed.load(std::memory_order_relaxed)};
+          g_errorPageDropped.load(std::memory_order_relaxed), g_loggingInPageDropped.load(std::memory_order_relaxed),
+          g_pagePassedArmed.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::login_prompt

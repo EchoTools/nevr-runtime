@@ -169,7 +169,9 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   exceptions, in one of two modes: `prompt` (the code; after the last code, "Sign-in timed out.
   Restart the game to try again.", or "No sign-in code could be shown. Restart the game to try
   again." when none of the codes could be shown) or `notice` ("Signed in to EchoVRCE. Select RETRY
-  to finish.", after a sign-in). A notice only ever replaces a prompt the screen shows.
+  to finish.", after a sign-in). A notice replaces a prompt or a notice the screen shows, and is shown for a
+  local login failure that arrives while it is on the board (the player signed in while that attempt was
+  in flight); on a screen that showed the game's own text and no prompt it is not applied later.
   Publishing rewrites the whole buffer and withdrawing zeroes it.
 - A GOT hook on `SetDelimitedErrorMessage` lets the game store and log its own message first, so
   the code never passes through the game's logging. If the game was logging in (state 2), the
@@ -208,7 +210,9 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0xee753e35461e0ef4`); that wakes a script parked since boot (`libfe3f05ac05841a2e.so`, on
   `delegate_onnetgameerror`) which enables the error page (`error_display_page`, `0x4b8a0630361f3ac5`;
   `fatal_error_display_page`, `0xe26415a8c369eb2e`), and the logging-in page has no header and no buttons.
-  The hook skips (a plain return) the enable of the error pages while the latch is armed. The latch is armed when the Update or error text
+  The hook skips (a plain return) the enable of the error pages while the latch is armed, and the enable of
+  the logging-in page while the latch is armed and token auth is waiting for the player
+  (`SetAwaitingPlayer`, fed by the token-auth poll). The latch is armed when the Update or error text
   hook writes a prompt or a notice into the error block, cleared as soon as the block holds anything else
   (checked after every write the error text hook sees and on every Update call), and dead for good when
   the game reaches "loading global" (state 4). It does not depend on the followed instance, which is dropped
@@ -225,9 +229,9 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- No hook logs or takes a lock. Their thirteen counters are `login_prompt_text_shown`,
+- No hook logs or takes a lock. Their fourteen counters are `login_prompt_text_shown`,
   `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the three
-  thunks' fault counters, `_error_page_dropped`, `_page_passed_armed`,
+  thunks' fault counters, `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`,
   `_error_resent` and `_error_resend_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
 

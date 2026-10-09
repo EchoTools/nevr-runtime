@@ -205,13 +205,25 @@ void ABlockAnotherWriterChangedIsLeftAlone() {
   QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
 }
 
-void ANoticeIsNotShownForANewFailure() {
+// The player signed in while a login attempt was in flight and the attempt fails with the game's local
+// text: the notice is what the screen shows (RETRY on it now logs in), and the game's text comes back when
+// the board is withdrawn.
+void ANoticePublishedBeforeAFailureIsShownForIt() {
+  lp::ResetLatchForTest();
   Publish(kNotice, board::Mode::kNotice);
   const lp::Counts before = lp::CurrentCounts();
   FailLocally(g_game);
-  QCHECK(Line(g_game, 0) == kLocal);
-  QCHECK(lp::CurrentCounts().kept == before.kept + 1);
+  QCHECK(g_gameReceived == kLocal);
+  QCHECK(BlockOf(g_game)[0] == 1);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
+  QCHECK(Line(g_game, 1) == "Select RETRY to finish.");
+  QCHECK(lp::CurrentCounts().shown == before.shown + 1);
+  QCHECK(lp::CurrentCounts().kept == before.kept);
+  QCHECK(lp::LatchArmedForTest());  // the notice is protected from an error page too
   board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  lp::ResetLatchForTest();
 }
 
 void ServerMessagesAndLoggedInRemovalsAreNeverReplaced() {
@@ -258,8 +270,8 @@ void ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame() {
   UpdateEntry()(Obj(g_game), 16);
 }
 
-// A notice only ever replaces a prompt: on a screen that shows the game's own text it is not applied,
-// whether the board was busy at the failure (a) or a second notice follows a first (b).
+// A notice published after a failure replaces only a prompt or a notice: on a screen that shows the game's own
+// text it is not applied (a, the board was busy at the failure); one up at the failure is shown (b).
 void ANoticeDoesNotReplaceTheGameTextOfAScreenThatShowedNoPrompt() {
   // (a) Busy board at the failure, a notice published: the next frame applies nothing.
   Publish(kNotice, board::Mode::kNotice);
@@ -268,14 +280,15 @@ void ANoticeDoesNotReplaceTheGameTextOfAScreenThatShowedNoPrompt() {
   board::EndWriteForTest();
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
-  // (b) Kept with a notice up, then another notice (a second sign-in): still the game's text.
+  // (b) A notice up when the attempt fails is shown for it, and a second notice replaces the first.
   board::Withdraw();
   Publish(kNotice, board::Mode::kNotice);
   FailLocally(g_game);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
   Publish("Signed in to EchoVRCE.\nAgain.", board::Mode::kNotice);
   UpdateEntry()(Obj(g_game), 16);
-  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
-  // A prompt still goes up there, and a notice may then replace it.
+  QCHECK(Line(g_game, 1) == "Again.");
+  // A prompt goes up there too, and a notice may then replace it.
   Publish(Prompt("NOTE1-CODE"));
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(Line(g_game, 2) == "and enter the code NOTE1-CODE");
@@ -402,7 +415,7 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A nearly full reporter table (two slots left, the hook needs thirteen): the counters are refused,
+  // A nearly full reporter table (two slots left, the hook needs fourteen): the counters are refused,
   // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
   constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
@@ -600,7 +613,7 @@ void PromptOnScreen(const char* code) {
 
 // Failure caught (#239 D5): after RETRY a parked UI script replaced the screen that shows the code with the
 // error page; the player never saw the code. While the sentinel's text is in the block the error pages are
-// skipped; anything else goes through.
+// skipped; the logging-in page is skipped only while the player is awaited; anything else goes through.
 void WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled() {
   PromptOnScreen("LATCH1-CODE");
   QCHECK(lp::LatchArmedForTest());
@@ -608,7 +621,13 @@ void WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled() {
   QCHECK(!Enabled(ui::kErrorDisplayPage));
   QCHECK(!Enabled(ui::kFatalErrorDisplayPage));
   QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped + 2);
-  // The logging-in page is the game's business here.
+  // The logging-in page: through while token auth is not waiting for the player, skipped while it is.
+  QCHECK(Enabled(ui::kLoggingInPage));
+  QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed + 1);
+  lp::SetAwaitingPlayer(true);
+  QCHECK(!Enabled(ui::kLoggingInPage));
+  QCHECK(lp::CurrentCounts().logging_in_page_dropped == before.logging_in_page_dropped + 1);
+  lp::SetAwaitingPlayer(false);
   QCHECK(Enabled(ui::kLoggingInPage));
   // Any other page is the game's business.
   QCHECK(Enabled(kSomeOtherPage));
@@ -682,7 +701,11 @@ void WithoutAPromptOnScreenNothingIsHeldBack() {
   board::Withdraw();
   const lp::Counts before = lp::CurrentCounts();
   QCHECK(Enabled(ui::kErrorDisplayPage) && Enabled(ui::kFatalErrorDisplayPage) && Enabled(ui::kLoggingInPage));
+  lp::SetAwaitingPlayer(true);
+  QCHECK(Enabled(ui::kLoggingInPage));
+  lp::SetAwaitingPlayer(false);
   QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped);
+  QCHECK(lp::CurrentCounts().logging_in_page_dropped == before.logging_in_page_dropped);
   QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed);
   PromptOnScreen("LATCH6-CODE");
   QCHECK(lp::LatchArmedForTest());
@@ -748,7 +771,7 @@ int main() {
   ALocalFailureWhileLoggingInShowsThePromptAndTheGameNeverSeesTheCode();
   TheScreenFollowsTheBoardWhileTheGameStaysInLoginFailed();
   ABlockAnotherWriterChangedIsLeftAlone();
-  ANoticeIsNotShownForANewFailure();
+  ANoticePublishedBeforeAFailureIsShownForIt();
   ServerMessagesAndLoggedInRemovalsAreNeverReplaced();
   ABlockThatDoesNotHoldTheGameMessageIsNotWritten();
   ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame();
