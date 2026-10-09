@@ -30,11 +30,10 @@ void GameServerLib::ConnectTelemetry(const std::string& wsToken) {
       }
       m_telemetry->Connect(std::string(telemetryUri), token);
     } else {
-      // N124. Was Debug — off in production — so a server running without
-      // telemetry was silent about it, and "deliberately disabled" looked
-      // identical to "the telemetry code never ran". Exactly the asymmetry N122
-      // found in UPnP: the healthy-but-off state has to be observable or an
-      // operator cannot tell configuration from breakage.
+      // Logged at Info, which production keeps: a server running without telemetry must say so,
+      // or "deliberately disabled" looks identical to "the telemetry code never ran". The
+      // healthy-but-off state has to be observable or an operator cannot tell configuration from
+      // breakage (the same rule as UPnP).
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config — telemetry disabled");
     }
   } else {
