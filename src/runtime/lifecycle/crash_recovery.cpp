@@ -4,6 +4,7 @@
 #endif
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
+#include "runtime/lifecycle/console_ctrl_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
@@ -1072,7 +1073,11 @@ static volatile LONG s_consoleShutdownPending = 0;
 // chain, which is also the point at which we know there is a handler BEHIND us
 // to hand the event to. Before that, returning FALSE would hand the event to
 // nobody, so we must do the shutdown ourselves.
-static volatile LONG s_deferToGameTeardown = 0;
+static volatile LONG s_gameHandlerBehindUs = 0;
+
+// Non-zero once GameServerLib::Initialize ran: only then can the game's teardown
+// reach GameServerLib::Terminate, which is where a deferred shutdown exits.
+static volatile LONG s_gameServerLibStarted = 0;
 
 // Upper bound on the game's own teardown. Measured at ~3.1s from
 // "Console close signal received" to "Terminated game server"
@@ -1138,12 +1143,17 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     return TRUE;
   }
 
+  const bool handlerBehind = s_gameHandlerBehindUs != 0;
+  const bool libStarted = s_gameServerLibStarted != 0;
+  const bool defer = ConsoleCtrlPolicy::ShouldDeferToGame(handlerBehind, libStarted);
   ShutdownReport(EchoVR::LogLevel::Info,
                  "[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
-                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s",
-                 dwCtrlType, s_deferToGameTeardown != 0 ? "true" : "false");
+                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s game_handler_behind=%s "
+                 "game_server_lib_started=%s",
+                 dwCtrlType, defer ? "true" : "false", handlerBehind ? "true" : "false",
+                 libStarted ? "true" : "false");
 
-  if (s_deferToGameTeardown != 0) {
+  if (defer) {
     // Return FALSE so the chain continues to the game's own handler, which is
     // what actually unregisters the lobby and closes the ServerDB socket. We
     // exit cleanly at the end of GameServerLib::Terminate(), once that work is
@@ -1155,7 +1165,9 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     return FALSE;
   }
 
-  // Nobody behind us in the chain yet — do it ourselves.
+  // The game's teardown cannot finish this for us — do it ourselves.
+  ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] shutting down directly: %s",
+                 ConsoleCtrlPolicy::NoDeferReason(handlerBehind, libStarted));
   PerformGracefulShutdown(0);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return TRUE;
@@ -1173,10 +1185,17 @@ void RearmConsoleCtrlHandler() {
         GetLastError());
     return;
   }
-  InterlockedExchange(&s_deferToGameTeardown, 1);
+  InterlockedExchange(&s_gameHandlerBehindUs, 1);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] console ctrl handler re-armed to front of chain (CTRL+C reaches us first; the "
-      "game's teardown runs behind us)");
+      "game's handler runs behind us)");
+}
+
+void NotifyGameServerLibStarted() {
+  InterlockedExchange(&s_gameServerLibStarted, 1);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] GameServerLib started — CTRL+C now defers to the game's teardown, which exits at "
+      "GameServerLib::Terminate");
 }
 
 void InstallConsoleCtrlHandler() {
@@ -1185,7 +1204,7 @@ void InstallConsoleCtrlHandler() {
   // the chain is LIFO). It only becomes reachable once RearmConsoleCtrlHandler()
   // moves it to the front. Registering now still matters: it covers a CTRL+C
   // that arrives before the game has installed its own handler, where
-  // s_deferToGameTeardown is 0 and we shut down directly.
+  // the game handler is not behind us and we shut down directly.
   if (SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE) == FALSE) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SetConsoleCtrlHandler install FAILED err=%lu — no CTRL+C/close handling "

@@ -874,6 +874,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   // game's teardown (lobby unregistration + ServerDB close) still runs behind
   // it, and we exit cleanly in Terminate() below.
   RearmConsoleCtrlHandler();
+  NotifyGameServerLibStarted();
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
