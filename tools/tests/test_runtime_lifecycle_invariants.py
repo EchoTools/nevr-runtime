@@ -269,6 +269,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
+        # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
+        # A failure is Warning or higher; an observe-only hook that fails to attach is a Warning too.
+        source = (ROOT / "src/modules/platform-compat/src/platform_compat.cpp").read_text()
+        hook = extract_braced_function(source, "HRESULT WINAPI CoCreateInstanceHook(")
+        self.assertRegex(hook, r"Log\(SUCCEEDED\(hr\)\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning")
+        install = extract_braced_function(source, "static bool InstallWinHTTPHook(")
+        attach_failure = install.split("Hooking::Attach", 1)[1].split("return false;", 1)[0]
+        self.assertIn("EchoVR::LogLevel::Warning", attach_failure)
+        self.assertNotIn("EchoVR::LogLevel::Error", attach_failure)
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
