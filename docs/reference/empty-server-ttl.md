@@ -19,8 +19,15 @@ holds a request made while no player session is accepted (join state 4,
 - a player joins: the hold is dropped and the session continues;
 - a shutdown is pending (Ctrl+C, a shutdown command): the hold is dropped and the process exits as usual.
 
-The runtime's own call on a ServerDB `CODE_ENDED` (`gameserver_callbacks.cpp`) goes through the same
-`ReturnToLobby::Request`, so it is held too.
+The runtime's own call on a ServerDB `CODE_ENDED` goes through the same `ReturnToLobby::Request`, so it
+is held too. The failed-level-load reset in `state_machine.cpp` and the `NEVR_ScheduleReturnToLobby`
+export call the game function directly and are never held. If the detour cannot be installed (prologue
+mismatch) the TTL is dropped to 0 and nothing is held.
+
+The game asks again every tick while the session stays empty (`CR15NetDedicatedLobby` vslot 1,
+`0x1401bbb80`, state 0xb, calls `0x1401a89f0` and changes no state). Only the first request of a hold is
+logged; the line that ends the hold carries the request count. After the TTL releases the return, requests
+proceed until a player has been seen, so an empty session spends one TTL.
 
 ## What it does not do
 
@@ -33,6 +40,9 @@ players to that match; making an empty server joinable for up to the TTL needs a
 
 ## Not verified
 
-No live server run: the detour target's prologue was read from the dev install's `echovr.exe`
+No live server run. `Update 0x1401bbdb0` also calls `0x1401a89f0` every frame while a game flag
+(bit 42 of the lobby flags) is set, and `0x1401a89f0` only queues a callback; whether that flag path
+can fire while a player has joined during a hold, and so return a session that has players, is
+unobserved. The detour target's prologue was read from the dev install's `echovr.exe`
 (`40 53 48 83 ec 30 33 d2`), and the decision logic is unit-tested, but whether the game re-issues the
 request each frame while held, and what it does with a level that stays loaded and empty, is unobserved.
