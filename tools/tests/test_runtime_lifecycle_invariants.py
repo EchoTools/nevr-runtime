@@ -92,6 +92,13 @@ def strip_comments(text: str) -> str:
     return "".join(result)
 
 
+
+def gameserver_text() -> str:
+    """The GameServerLib implementation, which is split across these files (#47)."""
+    names = ("gameserver.cpp", "gameserver_callbacks.cpp", "gameserver_telemetry.cpp", "gameserver_serverdb.cpp")
+    return "\n".join((ROOT / "src/runtime/server" / n).read_text() for n in names)
+
+
 def extract_braced_function(source: str, signature: str) -> str:
     """Extract a function body by brace-matching, with comments stripped.
 
@@ -253,8 +260,11 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(streamer, re.compile(
             r"case ix::WebSocketMessageType::Error:(?:(?!WebSocketMessageType::Message).)*?"
             r"m_bearerAuth\.OnError\s*\(\s*msg->errorInfo\.http_status", re.S))
-        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        fallback = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        server = gameserver_text()
+        request = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        self.assertRegex(request, r"\bConnectTelemetry\s*\(\s*wsToken\s*\)")
+        telemetry = (ROOT / "src/runtime/server/gameserver_telemetry.cpp").read_text()
+        fallback = extract_braced_function(telemetry, "void GameServerLib::ConnectTelemetry(")
         self.assertRegex(fallback, re.compile(
             r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
 
@@ -268,6 +278,58 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(hook, r"\bRearmConsoleCtrlHandler\s*\(\s*\)")
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
+
+    def test_plugins_log_through_the_shared_leveled_logger(self):
+        # Issue #34: each plugin hand-rolled a stderr wrapper (one named Log(), shadowing the host's
+        # structured Log()) or used a levelless PluginLog. All plugins use NEVR_DEFINE_PLUGIN_LOG.
+        for rel in sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/src/*.cpp")):
+            text = strip_comments((ROOT / rel).read_text())
+            if "fprintf(stderr" in text.replace("std::", ""):
+                self.assertIn("NEVR_DEFINE_PLUGIN_LOG", text, f"{rel} writes to stderr without the shared logger")
+            self.assertNotRegex(text, r"static\s+void\s+(Log|PluginLog)\s*\(", f"{rel} hand-rolls a logger")
+        header = (ROOT / "plugins/common/include/plugin_logger.h").read_text()
+        for level in ("INFO", "WARNING", "ERROR"):
+            self.assertIn(f'"{level}"', header)
+
+    def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
+        # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
+        # duplicated HookLiveness::Report for the same two hooks. HookLiveness is the one instrument.
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
+            self.assertNotIn(gone, patches)
+        for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
+                             ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
+            self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
+        tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
+        self.assertNotIn("LogBroadcasterHookStats", tick)
+        for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
+            self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
+        self.assertIn('HookLiveness::Report("periodic")', tick)
+
+    def test_getsymbol_hook_validates_its_prologue(self):
+        # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
+        # patches require prologue validation (AGENTS.md Guardrails); a mismatch marks the boot hook failed.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        match = re.search(r"sym_target[^;]*;(?P<rest>.*?)hooked name=CSysDLL_GetSymbol", body, re.S)
+        self.assertIsNotNone(match)
+        rest = match.group("rest")
+        self.assertRegex(rest, r"memcmp\(\s*sym_target\s*,\s*kGetSymbolPrologue")
+        self.assertLess(rest.index("memcmp("), rest.index("MH_CreateHook("))
+        self.assertIn("prologue_mismatch", rest)
+        self.assertIn("g_bootHookFailed = true", rest.split("MH_CreateHook(")[0])
+
+    def test_bridge_connection_lines_carry_the_connection_label(self):
+        # Issue #48: only close/disconnect lines named the connection (config/login/matchmaker); the
+        # open, login-injected and game-connected lines gave the bare number.
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        for anchor in ("Proxy: game connected (conn=", "login injected xpid=", "Remote open (conn=",
+                       "could not percent-encode URL credentials"):
+            starts = [m.start() for m in re.finditer(re.escape(anchor), source)]
+            self.assertTrue(starts, anchor)
+            for start in starts:
+                statement = source[start:source.index(");", start)]
+                self.assertIn("ConnLabel(", statement, f"{anchor!r} logs a bare connection number")
 
     def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
         # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
@@ -292,8 +354,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_token_mints_are_serialized(self):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
         # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
-        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        server = gameserver_text()
+        acquire = extract_braced_function(server, "std::string AcquireServerDbToken(")
         self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
         helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")
@@ -308,18 +370,80 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(rearm, r"s_gameServerLibStarted")
         handler = extract_braced_function(recovery, "static BOOL WINAPI ConsoleCtrlHandler(")
         self.assertRegex(handler, r"ConsoleCtrlPolicy::ShouldDeferToGame\s*\(")
-        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        server = gameserver_text()
         initialize = extract_braced_function(server, "VOID* GameServerLib::Initialize(")
         self.assertRegex(initialize, r"\bNotifyGameServerLibStarted\s*\(\s*\)")
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_telemetry_disconnect_cancels_the_bearer_refresh_before_stopping(self):
+        # Issue #254: stop() joins ixwebsocket's thread, so a 401 mint (up to the 10 s HTTP timeout)
+        # started during the stop would stall Disconnect.
+        source = strip_comments((ROOT / "src/runtime/server/telemetry_streamer.cpp").read_text())
+        body = extract_braced_function(source, "void TelemetryStreamer::Disconnect(")
+        self.assertLess(body.index("m_bearerAuth.Cancel()"), body.index("m_ws->stop()"))
+
+    def test_game_main_hook_has_no_c_style_casts(self):
+        # Issue #254 (CPP-MINGW addendum: no C-style casts).
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void InstallGameMainHook(")
+        self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
+
+    def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
+        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
+        # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
+        # that OnDllLoaded does not guard it lives here.
+        source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
+        body = extract_braced_function(source, "static VOID CALLBACK OnDllLoaded(") if "static VOID CALLBACK OnDllLoaded(" in source else None
+        if body is None:
+            body = source[source.index("OnDllLoaded"):]
+        start = body.index('"pnsradmatchmaking.dll"')
+        branch = body[start:body.index("PatchMatchmakingHost(", start)]
+        self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
+                            "a guard around the matchmaking host patch leaves a reloaded image unpatched")
+
+    def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
+        # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
+        # directly) and the game thread polls the hold once per Update.
+        server = strip_comments(gameserver_text())
+        call = extract_braced_function(server, "void CallScheduleReturnToLobby(")
+        self.assertIn("ReturnToLobby::Request(", call)
+        self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
+        update = extract_braced_function(server, "VOID GameServerLib::Update(")
+        self.assertRegex(update.lstrip("{ \n"), r"^ReturnToLobby::Poll\(\)")
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        self.assertRegex(boot, r"ReturnToLobby::Configure\(")
+        glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
+        self.assertIn("0x1A89F0", glue)
+        self.assertRegex(glue, r"memcmp\(target, kPrologue")
+        self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
+
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
-        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        # gameserver.cpp holds the initial registration, gameserver_callbacks.cpp the re-registration.
+        server = strip_comments(gameserver_text())
         self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)
+
+    def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
+        # Issue #5: boot and runtime events are one stream. The main log replays this run's
+        # nevr-boot.jsonl lines when it first opens; rotation reopens without replaying; the boot file
+        # is read, never deleted (it is the crash spool).
+        filt = strip_comments((ROOT / "src/runtime/log/builtin_filter.cpp").read_text())
+        init = extract_braced_function(filt, "static void InitFileLogging(")
+        self.assertLess(init.index("OpenLogFile()"), init.index("ReplayBootLines()"))
+        rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
+        self.assertNotIn("ReplayBootLines", rotate)
+        replay = extract_braced_function(filt, "static void ReplayBootLines(")
+        self.assertIn("BootReplay::ParseRun(contents, GetRunId())", replay)
+        for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
+            self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
+        tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
+        self.assertIn("BootLines::Build(", tee)
+        self.assertIn("GetSystemTime(", tee)
+        close = extract_braced_function(tee, "void BootLogTee::Close(")
+        self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
@@ -327,7 +451,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # registry is documented game-thread-only (server_context.h) and BroadcasterUnlisten takes
         # no lock (echovr.exe 0x140f8df20). The shutdown thread now hands that work to Update()
         # through MainThreadHandoff; its own fallback must skip the registry.
-        source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        source = gameserver_text()
         # Comment-stripped (#123): extract_braced_function strips comments for
         # every caller, so a commented-out call site with a decoy real
         # statement nearby can't satisfy these regexes — a raw substring
@@ -363,12 +487,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # only calls EchoVR::BroadcasterUnlisten when the live owner equals the recorded one, so with
         # the owner null every unregister silently skipped the game and only cleared the struct. No
         # C++ test links gameserver.cpp, so the wiring is pinned here.
-        source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        source = gameserver_text()
         # Comment-stripped (#123): same reasoning as the #44 sensor above — a
         # commented-out RecordBroadcasterOwner call with a `owner = nullptr;`
         # decoy nearby can't satisfy the substring these regexes look for,
         # because extract_braced_function strips comments before returning.
-        register = extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks(")
+        callbacks = (ROOT / "src/runtime/server/gameserver_callbacks.cpp").read_text()
+        register = extract_braced_function(callbacks, "void GameServerLib::RegisterBroadcasterCallbacks(")
         record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
         first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
@@ -380,7 +505,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # broadcaster (the lobby's), or the guard rejects every handle again.
         listen = extract_braced_function(source, "uint16_t ListenForBroadcasterMessage(")
         self.assertRegex(listen, r"BroadcasterListen\(\s*lobby->broadcaster\s*,")
-        unregister = extract_braced_function(source, "void GameServerLib::UnregisterAllCallbacks(")
+        unregister = extract_braced_function(callbacks, "void GameServerLib::UnregisterAllCallbacks(")
         self.assertRegex(unregister, r"liveOwner\s*=\s*lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
         helper_source = (ROOT / "src/runtime/server/callback_unregistration.cpp").read_text()
         helper = extract_braced_function(helper_source, "EchoVR::Broadcaster* RecordBroadcasterOwner(")

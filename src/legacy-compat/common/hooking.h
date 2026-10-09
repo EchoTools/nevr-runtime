@@ -3,11 +3,8 @@
 //
 // src/legacy/ is frozen and may not be edited, but it is NOT self-contained:
 // src/legacy/gamepatches/patches.cpp:8 spells `#include "common/hooking.h"`,
-// which used to resolve to src/common/hooking.h through the global src/ include
-// path. Verified from the compiler's own dependency graph, not by reading:
-//   ninja -C build/<preset> -t deps | grep gamepatcheslegacy | grep src/common
-//
-// That header now lives at src/core/hooking.h. Rather
+// which needs a common/hooking.h on the include path. The header lives at
+// src/core/hooking.h. Rather
 // than edit a frozen file, this directory is added to gamepatcheslegacy's
 // include path alone (root CMakeLists.txt), so the frozen spelling keeps
 // resolving and nothing else in the tree can see it.

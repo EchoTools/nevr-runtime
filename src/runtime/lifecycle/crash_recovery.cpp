@@ -29,14 +29,12 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
-// N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) has
-// always lived here; its setjmp PRODUCER (GameMainWrapperHook) and this shared
-// jmp_buf used to live in mode_patches.cpp, coupled across the file boundary by
-// an `extern`. A setjmp in one translation unit and its matching longjmp in
+// N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
+// its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
+// this file. A setjmp in one translation unit and its matching longjmp in
 // another, communicating through a global, is exactly the seam that reads as
-// "which file owns crash recovery?" and answers it in two places. Both halves now
-// live in this file; the definition is here and mode_patches.cpp no longer knows
-// about it.
+// "which file owns crash recovery?" and answers it in two places. The
+// definition is here and mode_patches.cpp does not know about it.
 jmp_buf g_gameLoopJmpBuf;
 volatile bool g_gameLoopJmpBufValid = false;
 
@@ -75,7 +73,7 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit; the
   // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
-  // and is the one to restart it. (The hold used to apply to clients too, so a closed client kept
+  // and is the one to restart it. (A hold on clients would leave a closed client
   // running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
   if (!g_isServer) {
@@ -93,9 +91,9 @@ static VOID GameMainWrapperHook(INT64 arg1) {
 
 void InstallGameMainHook() {
   // Hook game main wrapper — longjmp recovery on crash keeps server alive
-  GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
   OriginalGameMainWrapper =
-      (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
   // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
   if (BootLogTee::InBootPhase()) {

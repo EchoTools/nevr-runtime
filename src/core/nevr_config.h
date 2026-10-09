@@ -64,7 +64,10 @@ class NevrConfig {
 
   /// Typed getters. `path` is dotted, e.g. "services.serverdb". Return nullopt
   /// when the path is absent or the scalar cannot be converted to the type.
-  std::optional<std::string> GetString(const std::string& path) const;
+  /// When `hadUnsetBare` is non-null it is set to whether the scalar referenced a bare ${VAR} that
+  /// is not set (its text stays in the returned value as written). That is exact: a literal "${"
+  /// written with the $${ escape, or inside a set variable's value, does not count.
+  std::optional<std::string> GetString(const std::string& path, bool* hadUnsetBare = nullptr) const;
   std::optional<bool> GetBool(const std::string& path) const;
   std::optional<std::int64_t> GetInt(const std::string& path) const;
   std::optional<double> GetFloat(const std::string& path) const;
@@ -85,8 +88,9 @@ class NevrConfig {
   std::vector<std::string> unsetBareVars_;
 };
 
-/// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The one
-/// boolean-scalar rule shared by config.yaml reads and the flat-key consumers.
+/// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list
+/// flags and the flat-key consumers use it; NevrConfig::GetBool also falls back to yaml-cpp's
+/// boolean spellings.
 std::optional<bool> ParseBool(const std::string& s);
 
 }  // namespace nevr
