@@ -269,6 +269,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_bridge_connection_lines_carry_the_connection_label(self):
+        # Issue #48: only close/disconnect lines named the connection (config/login/matchmaker); the
+        # open, login-injected and game-connected lines gave the bare number.
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        for anchor in ("Proxy: game connected (conn=", "login injected xpid=", "Remote open (conn=",
+                       "could not percent-encode URL credentials"):
+            starts = [m.start() for m in re.finditer(re.escape(anchor), source)]
+            self.assertTrue(starts, anchor)
+            for start in starts:
+                statement = source[start:source.index(");", start)]
+                self.assertIn("ConnLabel(", statement, f"{anchor!r} logs a bare connection number")
+
     def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
         # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
         # A failure is Warning or higher; an observe-only hook that fails to attach is a Warning too.
