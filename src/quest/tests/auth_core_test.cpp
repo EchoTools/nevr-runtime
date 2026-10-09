@@ -1136,6 +1136,47 @@ TEST(the_bound_on_unanswered_codes_holds_across_a_failed_code_request_and_the_re
   prompt_board::Withdraw();
 }
 
+// Shows nothing (as when the file cannot be written and the game text is refused) but concludes on
+// the game text, so the board says what happened.
+class ShowsNothing : public LinkPresenter {
+ public:
+  explicit ShowsNothing(LogSink log) : game_(std::move(log)) {}
+  intptr_t Present(const LoginPrompt&) override { return 0; }
+  void Clear() override { game_.Clear(); }
+  void Conclude(LoginOutcome outcome) override { game_.Conclude(outcome); }
+
+ private:
+  GameTextPresenter game_;
+};
+
+TEST(codes_nobody_could_show_count_toward_the_bound_and_the_player_is_told_none_could_be_shown) {
+  prompt_board::Withdraw();
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  LogCapture log;
+  DeviceHandler(http, 0, kT0 + 3600);
+  ShowsNothing presenter(log.Sink());
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(50);  // recovery periods
+  CHECK(WaitUntil([&] { return BoardText() == std::string(kNoCodeShownText); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));
+  CHECK_EQ(http.Count("poll"), 0);
+  CHECK(s.Get().readiness == Readiness::Failed);
+  // One "asked to sign in" per code, none for the round that only found the bound reached.
+  size_t asked = 0;
+  for (size_t at = log.All().find("-> awaiting_user"); at != std::string::npos;
+       at = log.All().find("-> awaiting_user", at + 1)) {
+    ++asked;
+  }
+  CHECK_EQ(asked, size_t(Session::kMaxUnansweredCodes));
+  CHECK_EQ(log.Count(LogLevel::Warning, "(0 shown)"), size_t(1));
+  s.Stop();
+  prompt_board::Withdraw();
+}
+
 TEST(the_game_text_presenter_concludes_with_the_signed_in_notice_or_the_timed_out_text) {
   prompt_board::Withdraw();
   LogCapture log;
@@ -1147,7 +1188,10 @@ TEST(the_game_text_presenter_concludes_with_the_signed_in_notice_or_the_timed_ou
   p.Conclude(LoginOutcome::TimedOut);
   CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));
   CHECK(mode == prompt_board::Mode::kPrompt);
-  for (const char* text : {kSignedInText, kTimedOutText}) {
+  p.Conclude(LoginOutcome::NoCodeShown);
+  CHECK_EQ(BoardText(&mode), std::string(kNoCodeShownText));
+  CHECK(mode == prompt_board::Mode::kPrompt);
+  for (const char* text : {kSignedInText, kTimedOutText, kNoCodeShownText}) {
     for (const std::string& line : SplitLines(text)) CHECK(line.size() <= prompt_board::kMaxLineChars);
   }
   p.Clear();

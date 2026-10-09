@@ -258,6 +258,57 @@ void ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame() {
   UpdateEntry()(Obj(g_game), 16);
 }
 
+// A notice only ever replaces a prompt: on a screen that shows the game's own text it is not applied,
+// whether the board was busy at the failure (a) or a second notice follows a first (b).
+void ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt() {
+  // (a) Busy board at the failure, a notice published: the next frame applies nothing.
+  Publish(kNotice, board::Mode::kNotice);
+  board::BeginWriteForTest();
+  FailLocally(g_game);
+  board::EndWriteForTest();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  // (b) Kept with a notice up, then another notice (a second sign-in): still the game's text.
+  board::Withdraw();
+  Publish(kNotice, board::Mode::kNotice);
+  FailLocally(g_game);
+  Publish("Signed in to EchoVRCE.\nAgain.", board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  // A prompt still goes up there, and a notice may then replace it.
+  Publish(Prompt("NOTE1-CODE"));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code NOTE1-CODE");
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+}
+
+// A new local failure that the error hook could not take up (its writer flag was held) is the game's
+// own text in a followed block: it is taken up from there, not dropped as another writer's.
+void ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate() {
+  Publish(Prompt("MISS1-CODE"));
+  FailLocally(g_game);  // followed, prompt on screen
+  QCHECK(Line(g_game, 2) == "and enter the code MISS1-CODE");
+  const lp::Counts before = lp::CurrentCounts();
+  QCHECK(lp::HoldBlockWriterForTest());
+  FailLocally(g_game);  // the game writes its message again; the hook cannot take it up now
+  lp::ReleaseBlockWriterForTest();
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  QCHECK(lp::CurrentCounts().busy == before.busy + 1);
+  UpdateEntry()(Obj(g_game), 16);  // the board did not change; the block did
+  QCHECK(BlockOf(g_game)[0] == 1);
+  QCHECK(Line(g_game, 0) == "Sign in to play: on a phone or computer, open");
+  QCHECK(Line(g_game, 2) == "and enter the code MISS1-CODE");
+  QCHECK(lp::CurrentCounts().not_ours == before.not_ours);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+}
+
 void AWithdrawnBoardKeepsNoCode() {
   Publish(Prompt("WIPE1-CODE"));
   QCHECK(board::NonZeroTextBytesForTest() == Prompt("WIPE1-CODE").size());
@@ -379,6 +430,8 @@ int main() {
   ServerMessagesAndLoggedInRemovalsAreNeverReplaced();
   ABlockThatDoesNotHoldTheGameMessageIsNotWritten();
   ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame();
+  ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt();
+  ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();

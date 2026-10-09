@@ -31,6 +31,7 @@ static_assert(sizeof(kLine1) - 1 <= prompt_board::kMaxLineChars, "line 1 fits th
 static_assert(sizeof(kLine4) - 1 <= prompt_board::kMaxLineChars, "line 4 fits the game's line");
 static_assert(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity, "the signed-in notice fits the board");
 static_assert(sizeof(kTimedOutText) - 1 <= prompt_board::kCapacity, "the timed-out text fits the board");
+static_assert(sizeof(kNoCodeShownText) - 1 <= prompt_board::kCapacity, "the no-code text fits the board");
 
 const char* ModeName(prompt_board::Mode mode) {
   return mode == prompt_board::Mode::kNotice ? "notice" : "prompt";
@@ -110,9 +111,11 @@ void GameTextPresenter::Conclude(LoginOutcome outcome) {
   if (outcome == LoginOutcome::SignedIn) {
     // Only a screen that shows a prompt is changed: a later login failure shows the game's own text.
     Publish(kSignedInText, prompt_board::Mode::kNotice, "signed_in");
-  } else {
+  } else if (outcome == LoginOutcome::TimedOut) {
     // Shown at every later login failure: no code is coming until the game restarts.
     Publish(kTimedOutText, prompt_board::Mode::kPrompt, "timed_out");
+  } else {
+    Publish(kNoCodeShownText, prompt_board::Mode::kPrompt, "no_code_shown");
   }
 }
 

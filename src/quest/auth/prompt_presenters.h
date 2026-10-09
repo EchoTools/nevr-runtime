@@ -24,12 +24,14 @@
 namespace nevr::quest_auth {
 
 // What the game's login-error screen says once the player has signed in (refreshes a screen that
-// shows a prompt; Mode::kNotice), and once the bound on unanswered codes is reached
-// (Mode::kPrompt). Nothing on this branch hands the new sign-in to a login the game is already
-// running, and the game may quit after a failed login (QuitOnError), so the player restarts; the
-// cached sign-in then logs in.
+// shows a prompt; Mode::kNotice), and once the bound on unanswered codes is reached (Mode::kPrompt):
+// kTimedOutText when a code was shown, kNoCodeShownText when none could be. The new sign-in is
+// stored in the credential cache and served by QuestTokenAuth::Token(); nothing hands it to a login
+// the game is already running, and the game may quit after a failed login (QuitOnError), so the
+// player is told to restart.
 inline constexpr char kSignedInText[] = "Signed in to EchoVRCE.\nRestart the game to finish.";
 inline constexpr char kTimedOutText[] = "Sign-in timed out.\nRestart the game to try again.";
+inline constexpr char kNoCodeShownText[] = "No sign-in code could be shown.\nRestart the game to try again.";
 
 // The four lines the game's login-error text shows, '\n'-separated, each at most
 // prompt_board::kMaxLineChars characters (the game truncates longer lines). The URL is shown
