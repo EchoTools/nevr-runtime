@@ -7,6 +7,8 @@
 //   - a player joins (the live entrant count is non-zero): Cancel, the swallowed request is dropped;
 //   - a shutdown is pending (Ctrl+C, a shutdown command): Cancel, the process is exiting anyway;
 //   - the TTL elapses: Release, the caller issues the return to lobby it swallowed.
+// After a Release the game's queued callback has not run yet and its next tick asks again; those
+// requests proceed until a player has been seen, so one empty session spends one TTL, not many.
 // A TTL of 0 means no hold at all: every request proceeds, which is the behaviour without this
 // feature. Pure: no clock, no game memory, no logging.
 
@@ -17,7 +19,8 @@ namespace ReturnToLobbyHold {
 
 enum class RequestVerdict {
   Proceed,  // issue the return to lobby now
-  Hold,     // swallow it; Poll decides later
+  Hold,       // swallow it, the first request of a new hold; Poll decides later
+  HoldAgain,  // swallow it, a repeat of the request already held (the game asks every tick)
 };
 
 enum class PollVerdict {
@@ -55,19 +58,27 @@ class Policy {
   void SetTtlMs(uint64_t ttlMs) { ttlMs_ = ttlMs; }
   uint64_t TtlMs() const { return ttlMs_; }
   bool Holding() const { return holding_; }
+  /// TTL 0 and nothing held: Poll has nothing to decide and must cost nothing.
+  bool Idle() const { return !holding_ && ttlMs_ == 0; }
   uint64_t HeldSinceMs() const { return heldSinceMs_; }
+  /// Requests swallowed by the current (or just-ended) hold, repeats included.
+  uint64_t HeldRequests() const { return heldRequests_; }
 
   RequestVerdict OnReturnRequested(uint64_t nowMs, uint64_t liveEntrants, bool shutdownPending) {
+    if (liveEntrants != 0) released_ = false;
     if (ttlMs_ == 0 || shutdownPending) return RequestVerdict::Proceed;
     if (liveEntrants != 0) return RequestVerdict::Proceed;  // a session with players ending is the normal path
-    if (!holding_) {
-      holding_ = true;
-      heldSinceMs_ = nowMs;
-    }
+    if (released_) return RequestVerdict::Proceed;
+    ++heldRequests_;
+    if (holding_) return RequestVerdict::HoldAgain;
+    holding_ = true;
+    heldSinceMs_ = nowMs;
+    heldRequests_ = 1;
     return RequestVerdict::Hold;
   }
 
   PollVerdict Poll(uint64_t nowMs, uint64_t liveEntrants, bool shutdownPending) {
+    if (liveEntrants != 0) released_ = false;
     if (!holding_) return PollVerdict::Keep;
     if (shutdownPending || liveEntrants != 0) {
       holding_ = false;
@@ -75,6 +86,7 @@ class Policy {
     }
     if (nowMs - heldSinceMs_ >= ttlMs_) {
       holding_ = false;
+      released_ = true;
       return PollVerdict::Release;
     }
     return PollVerdict::Keep;
@@ -84,6 +96,16 @@ class Policy {
   uint64_t ttlMs_ = 0;
   bool holding_ = false;
   uint64_t heldSinceMs_ = 0;
+  uint64_t heldRequests_ = 0;
+  bool released_ = false;
 };
+
+/// Polls only when there is something to decide: at TTL 0 (the default) neither callback is
+/// called, so the feature being off costs the game thread nothing.
+template <typename CountEntrants, typename ShutdownPending>
+PollVerdict PollIfActive(Policy& policy, uint64_t nowMs, CountEntrants countEntrants, ShutdownPending shutdownPending) {
+  if (policy.Idle()) return PollVerdict::Keep;
+  return policy.Poll(nowMs, countEntrants(), shutdownPending());
+}
 
 }  // namespace ReturnToLobbyHold

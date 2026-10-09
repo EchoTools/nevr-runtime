@@ -4,7 +4,9 @@
 
 #include <cstdint>
 
-// The runtime's one way to schedule the game's return to lobby (#58). With no TTL configured
+// The runtime's way to schedule the game's return to lobby for a session that ended (#58); the
+// failed-level-load reset in state_machine.cpp and the NEVR_ScheduleReturnToLobby export (an
+// explicit request from a caller) call the game function directly and are never held. With no TTL configured
 // (network.empty_server_ttl_seconds: 0, the default) every request goes straight to the game's
 // NetGameScheduleReturnToLobby, as before. With a TTL, a request made while the session has no
 // accepted entrants is held for up to the TTL (decisions: return_to_lobby_hold.h).

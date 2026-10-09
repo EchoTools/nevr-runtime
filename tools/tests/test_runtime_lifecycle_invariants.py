@@ -418,6 +418,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(glue, r"memcmp\(target, kPrologue")
         self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
 
+    def test_ttl_hold_is_dropped_when_the_detour_is_not_installed_and_logs_once_per_hold(self):
+        # Issue #310: a failed detour must leave no TTL behind (the runtime's own CODE_ENDED return
+        # would still be held), and the game's per-tick re-request must not log per tick.
+        glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
+        configure = extract_braced_function(glue, "bool Configure(")
+        self.assertRegex(configure, r"if \(!armed\)[^}]*SetTtlMs\(0\)")
+        poll = extract_braced_function(glue, "void Poll(")
+        self.assertIn("PollIfActive(g_policy", poll, "Poll must stay a no-op at TTL 0")
+        self.assertNotIn("LiveEntrants()", poll)
+        request = extract_braced_function(glue, "void Request(")
+        self.assertRegex(request, r"RequestVerdict::Hold\)\s*\{\s*Log\(")
+
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
