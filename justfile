@@ -1724,13 +1724,14 @@ verify:
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
         exit 1
     fi
-    # S7b — flat-map structural gate: exactly 30 entries. Adding or removing a
+    # S7b — flat-map structural gate: exactly 31 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
     # reminder to also add a test for the new mapping. The 29 entries measured in
-    # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16).
+    # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16) and
+    # nevr_empty_server_ttl_s (#58).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 30 ]; then
-        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 30." >&2
+    if [ "$N133_S7B" -ne 31 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 31." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2

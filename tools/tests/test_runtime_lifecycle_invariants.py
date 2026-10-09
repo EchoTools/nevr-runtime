@@ -303,6 +303,22 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
+        # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
+        # directly) and the game thread polls the hold once per Update.
+        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        call = extract_braced_function(server, "static void CallScheduleReturnToLobby(")
+        self.assertIn("ReturnToLobby::Request(", call)
+        self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
+        update = extract_braced_function(server, "VOID GameServerLib::Update(")
+        self.assertRegex(update.lstrip("{ \n"), r"^ReturnToLobby::Poll\(\)")
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        self.assertRegex(boot, r"ReturnToLobby::Configure\(")
+        glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
+        self.assertIn("0x1A89F0", glue)
+        self.assertRegex(glue, r"memcmp\(target, kPrologue")
+        self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The

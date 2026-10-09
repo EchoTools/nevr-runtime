@@ -21,6 +21,7 @@ set(PATCHES_SOURCES
     "patch/broadcaster_hook_stats.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
+    "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
@@ -88,6 +89,8 @@ set(PATCHES_HEADERS
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/return_to_lobby.h"
+    "lifecycle/return_to_lobby_hold.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
@@ -596,7 +599,8 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
