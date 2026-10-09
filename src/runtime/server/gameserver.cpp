@@ -18,6 +18,7 @@
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/registration_envelope.h"
 #include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
@@ -1001,30 +1002,17 @@ void GameServerLib::RegisterTcpCallbacks() {
     }
     if (externalIp.empty()) externalIp = internalIp;
 
-    gameservice::v1::Envelope envelope;
-    auto* registration = envelope.mutable_game_server_registration();
-    registration->set_login_session_id(GuidToUuidString(LoginSession::Get()));
-    registration->set_server_id(static_cast<uint64_t>(state.serverId));
-    registration->set_internal_ip_address(externalIp);
-    registration->set_port(static_cast<uint32_t>(broadcasterPort));
-    registration->set_region(state.regionId);
-    registration->set_version_lock(state.versionLock);
-    registration->set_time_step_usecs(state.defaultTimeStepUsecs);
-    // N112: enrich the version field with commit hash and build type.
-    // GIT_DESCRIBE already provides the richest single string (tag + commits
-    // since tag + short hash + dirty flag); appending the full commit hash
-    // and build type makes the field actionable for both human operators and
-    // automated deployment verification.
-    {
-      const BuildIdentity::Info& id = BuildIdentity::Get();
-      std::string ver = id.git_describe;
-      ver += " (";
-      ver += id.git_commit;
-      ver += " ";
-      ver += id.build_type;
-      ver += ")";
-      registration->set_version(ver);
-    }
+    const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
+    GameServer::RegistrationParams params;
+    params.loginSessionId = GuidToUuidString(LoginSession::Get());
+    params.serverId = static_cast<uint64_t>(state.serverId);
+    params.externalIp = externalIp;
+    params.port = static_cast<uint32_t>(broadcasterPort);
+    params.regionId = state.regionId;
+    params.versionLock = state.versionLock;
+    params.timeStepUsecs = state.defaultTimeStepUsecs;
+    params.version = GameServer::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+    const gameservice::v1::Envelope envelope = GameServer::BuildRegistrationEnvelope(params);
 
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for re-registration");
@@ -1557,26 +1545,17 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   if (externalIp.empty()) externalIp = internalIp;
 
   // Build protobuf registration request
-  gameservice::v1::Envelope envelope;
-  auto* registration = envelope.mutable_game_server_registration();
-  registration->set_login_session_id(GuidToUuidString(LoginSession::Get()));
-  registration->set_server_id(static_cast<uint64_t>(serverId));
-  registration->set_internal_ip_address(externalIp);  // public-facing IP
-  registration->set_port(static_cast<uint32_t>(broadcasterPort));
-  registration->set_region(regionId);
-  registration->set_version_lock(versionLock);
-  registration->set_time_step_usecs(state.defaultTimeStepUsecs);
-  // N112: enriched version string — same format as the re-registration path.
-  {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
-    std::string ver = id.git_describe;
-    ver += " (";
-    ver += id.git_commit;
-    ver += " ";
-    ver += id.build_type;
-    ver += ")";
-    registration->set_version(ver);
-  }
+  const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
+  GameServer::RegistrationParams params;
+  params.loginSessionId = GuidToUuidString(LoginSession::Get());
+  params.serverId = static_cast<uint64_t>(serverId);
+  params.externalIp = externalIp;  // public-facing IP
+  params.port = static_cast<uint32_t>(broadcasterPort);
+  params.regionId = regionId;
+  params.versionLock = versionLock;
+  params.timeStepUsecs = state.defaultTimeStepUsecs;
+  params.version = GameServer::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  const gameservice::v1::Envelope envelope = GameServer::BuildRegistrationEnvelope(params);
 
   if (!SendProtobufEnvelope(this, envelope)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for initial registration");
