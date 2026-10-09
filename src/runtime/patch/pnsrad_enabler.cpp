@@ -29,6 +29,7 @@
 
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/provider_identity.h"
+#include "runtime/hook/process_memory.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
@@ -153,17 +154,6 @@ static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
  * Memory patching
  * -------------------------------------------------------------------- */
 
-static bool PatchMemory(void* addr, const void* data, size_t len, DWORD* outError = nullptr) {
-    DWORD oldProtect;
-    if (!VirtualProtect(addr, len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        if (outError) *outError = GetLastError();
-        return false;
-    }
-    std::memcpy(addr, data, len);
-    VirtualProtect(addr, len, oldProtect, &oldProtect);
-    return true;
-}
-
 /// Lowercase hex dump — same shape as asset_cdn.cpp's BytesToHex, kept local
 /// since this is the only file in this pair that needs it for variable-length
 /// (2 or 6 byte) expected/actual prologue dumps.
@@ -228,7 +218,7 @@ static void PatchMatchmakingHost(uintptr_t base) {
     auto* image = reinterpret_cast<uint8_t*>(base);
     DWORD err = 0;
     const MatchmakerHostPatch::Result result = MatchmakerHostPatch::Apply(
-        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return PatchMemory(dst, src, len, &err); });
+        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
     switch (result) {
     case MatchmakerHostPatch::Result::Patched:
         Log(EchoVR::LogLevel::Info,
@@ -349,7 +339,7 @@ static int s_pnsradOk = 0;
 static int s_pnsradFail = 0;
 
 /* Apply one NOP patch, counting and reporting every outcome including the
- * previously-silent PatchMemory failure. */
+ * PatchMemory failure. */
 static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen,
                            size_t nopLen, const char* what, unsigned rva) {
     if (!nevr::ValidatePrologue(site, expected, expLen)) {
@@ -362,7 +352,7 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
     uint8_t nops[8];
     for (size_t i = 0; i < nopLen && i < sizeof(nops); i++) nops[i] = 0x90;
     DWORD err = 0;
-    if (PatchMemory(site, nops, nopLen, &err)) {
+    if (ProcessMemcpy(site, nops, nopLen, &err)) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad patched %s at +0x%x", what, rva);
         s_pnsradOk++;
     } else {
@@ -390,7 +380,7 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
     }
     const auto code = ReturnConstant(kOvrProviderSymbol);
     DWORD err = 0;
-    if (PatchMemory(site, code.data(), code.size(), &err)) {
+    if (ProcessMemcpy(site, code.data(), code.size(), &err)) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad UserProviderID now returns OVR at +0x%x",
             static_cast<unsigned>(kPnsradUserProviderIdRva));
         s_pnsradOk++;
@@ -482,7 +472,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSOVR);
         if (std::memcmp(p, "pnsovr", 6) == 0) {
             DWORD err = 0;
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsovr\" -> \"pnsrad\" rva=0x%x",
                     (unsigned)STR_PNSOVR);
                 patched++;
@@ -505,7 +495,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSDEMO);
         if (std::memcmp(p, "pnsdemo", 7) == 0) {
             DWORD err = 0;
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsdemo\" -> \"pnsrad\" rva=0x%x",
                     (unsigned)STR_PNSDEMO);
                 patched++;
@@ -531,7 +521,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         } else if (nevr::ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
             uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
             DWORD err = 0;
-            if (PatchMemory(p, nops, sizeof(nops), &err)) {
+            if (ProcessMemcpy(p, nops, sizeof(nops), &err)) {
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] pnsrad patched OVR branch rva=0x%x (bypasses OVR platform branch)",
                     (unsigned)OVR_BRANCH);

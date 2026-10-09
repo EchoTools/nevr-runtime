@@ -117,6 +117,8 @@ services:
 # ---------------------------------------------------------------------------
 
 network:
+  # empty_server_ttl_seconds: 0   # 0 (default) = off. Seconds an empty server holds its return to
+  #                               # lobby before the process exits; docs/reference/empty-server-ttl.md
   # Internal IP address to advertise for LAN / same-host connections.
   # Use when the auto-detected IP is wrong (multi-homed hosts, Docker, VPNs).
   # Absent: auto-detected from the first non-loopback interface.

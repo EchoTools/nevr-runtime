@@ -58,6 +58,8 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"internal_ip", "network.internal_ip"},
       {"upnp", "network.upnp"},
       {"upnp_port", "network.upnp_port"},
+      // #58 — seconds an empty server holds its return to lobby; 0 (default) holds nothing.
+      {"nevr_empty_server_ttl_s", "network.empty_server_ttl_seconds"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level

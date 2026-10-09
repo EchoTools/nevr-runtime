@@ -80,8 +80,8 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
   return root.dump();
 }
 
-// WriteLogHook removed — log filtering, timestamps, and noise suppression
-// are now handled by the log_filter plugin via CLog::PrintfImpl hook.
+// Log filtering, timestamps, and noise suppression are handled by the
+// log_filter plugin via the CLog::PrintfImpl hook, not here.
 
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
