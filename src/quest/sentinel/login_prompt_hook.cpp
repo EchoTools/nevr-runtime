@@ -96,6 +96,12 @@ std::atomic<bool> g_latchArmed{false};
 std::atomic<bool> g_latchDead{false};
 std::atomic<std::uint64_t> g_latchHash{0};
 std::atomic<CR15NetGameOpaque*> g_latchSelf{nullptr};
+// A sequence counter around this hook's own writes of the block (odd while one is in progress): the block then
+// holds our text, whole or in part, and the page-enable hook must not take a half-written block for a genuine
+// error. It also covers a hook that began reading before the write began.
+std::atomic<std::uint32_t> g_writeSeq{0};
+void BeginOwnWrite() noexcept { g_writeSeq.fetch_add(1, std::memory_order_acq_rel); }
+void EndOwnWrite() noexcept { g_writeSeq.fetch_add(1, std::memory_order_acq_rel); }
 
 // FNV-1a over the whole error block; never 0 (0 means "no latch").
 std::uint64_t HashBlock(const unsigned char* block) noexcept {
@@ -121,6 +127,33 @@ void ArmLatch(CR15NetGameOpaque* self, const unsigned char* block) noexcept {
 }
 
 const unsigned char* BlockOfConst(const CR15NetGameOpaque* self) noexcept;
+
+// The same hash read from another thread while the game thread may write the block: relaxed atomic loads of
+// each byte (no lock, no allocation). A read that overlaps a write is a mismatch at worst, which lets the
+// game's call through: the safe side.
+std::uint64_t HashLiveBlock(const unsigned char* block) noexcept {
+  std::uint64_t h = 0xcbf29ce484222325ULL;
+  for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) {
+    h ^= __atomic_load_n(block + i, __ATOMIC_RELAXED);
+    h *= 0x100000001b3ULL;
+  }
+  return h == 0 ? 1 : h;
+}
+
+// Whether the error block, read now, still holds what the latch says. The latch flag itself is only
+// recomputed on the game thread (Update, or right after the error text hook), so a genuine error written by
+// the game's unhooked SetErrorMessage in this very frame would otherwise still look like our text.
+bool LatchHoldsLive() noexcept {
+  const std::uint32_t before = g_writeSeq.load(std::memory_order_acquire);
+  if ((before & 1U) != 0) return true;  // our own write in progress
+  const CR15NetGameOpaque* self = g_latchSelf.load(std::memory_order_relaxed);
+  const std::uint64_t hash = g_latchHash.load(std::memory_order_relaxed);
+  if (self == nullptr || hash == 0) return false;
+  const bool same = HashLiveBlock(BlockOfConst(self)) == hash;
+  if (same) return true;
+  // A mismatch while one of our own writes began or finished in the meantime is our write, not a genuine one.
+  return g_writeSeq.load(std::memory_order_acquire) != before;
+}
 std::int32_t State(const CR15NetGameOpaque* self) noexcept;
 
 void RecheckLatch(CR15NetGameOpaque* self) noexcept {
@@ -250,21 +283,25 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
   const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
   if (read == board::ReadResult::kCopied && mode == board::Mode::kPrompt) {
     LayOut(g_written, text);
+    BeginOwnWrite();
     CopyBlock(block, g_written);
     g_kind = Kind::kPrompt;
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
     ArmLatch(self, block);
+    EndOwnWrite();
   } else if (read == board::ReadResult::kCopied && mode == board::Mode::kNotice && gate::IsReady()) {
     // The player signed in while this attempt was in flight, and the attempt failed with the game's local
     // text: the screen says so, because RETRY on it now logs in with the new sign-in. (Only once the login
     // may proceed: a RETRY before that is held back by the page-enable hook and would strand the player.)
     LayOut(g_written, text);
+    BeginOwnWrite();
     CopyBlock(block, g_written);
     g_kind = Kind::kNotice;
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
     ArmLatch(self, block);
+    EndOwnWrite();
   } else {
     // Nothing to show yet (or the board was busy): the game's text stays, and the
     // instance is followed so that a prompt published later still reaches this screen. A notice that is
@@ -351,6 +388,7 @@ bool Refresh(CR15NetGameOpaque* self) noexcept {
   }  // a notice on a screen with the game's own text, or an empty board there: nothing to change
   bool rewrote = false;
   if (read != board::ReadResult::kBusy) {  // busy: next frame
+    BeginOwnWrite();
     if (!SameBlock(block, g_written)) {
       CopyBlock(block, g_written);
       g_refreshed.fetch_add(1, std::memory_order_relaxed);
@@ -364,6 +402,7 @@ bool Refresh(CR15NetGameOpaque* self) noexcept {
     } else {
       ClearLatch();
     }
+    EndOwnWrite();
   }
   Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);
@@ -419,9 +458,10 @@ void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const v
     // Not ready: the login this RETRY started cannot succeed yet. The same word the login prerequisites read.
     const bool loggingIn = actor == ui::kLoggingInPage && !gate::IsReady();
     if (errorPage || loggingIn) {
-      // The record's own shape: the node is the record plus 0x20. A mismatch means this is not the record
-      // measured, so the game's call goes ahead.
-      if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset) {
+      // The record's own shape: the node is the record plus 0x20, and the block still holds our text, read
+      // now. Otherwise this is not the record measured, or the game just wrote a genuine error: the game's
+      // call goes ahead.
+      if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset && LatchHoldsLive()) {
         (errorPage ? g_errorPageDropped : g_loggingInPageDropped).fetch_add(1, std::memory_order_relaxed);
         // The attempt whose page was skipped must fail, even if the gate turns ready before it is checked: it
         // would otherwise log in on a screen that has no way to show it.
@@ -546,6 +586,7 @@ bool LatchArmedForTest() noexcept { return g_latchArmed.load(std::memory_order_a
 void ResetLatchForTest() noexcept {
   g_latchDead.store(false, std::memory_order_relaxed);
   g_latchSelf.store(nullptr, std::memory_order_relaxed);
+  g_writeSeq.store(0, std::memory_order_relaxed);
   gate::ClearPoison();  // the gate's readiness is the caller's to set
   ClearLatch();
 }

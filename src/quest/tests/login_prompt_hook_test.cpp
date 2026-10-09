@@ -831,6 +831,28 @@ void ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds() {
   lp::ResetLatchForTest();
 }
 
+// Failure caught (#239 review L1): a genuine error the game writes with the unhooked SetErrorMessage in the same
+// frame as the page enable. The latch flag is only recomputed on the game thread, so it still said "armed"; the
+// error page for that error was dropped. The enable hook now checks the live block against the latch.
+void AGenuineErrorWrittenInTheSameFrameIsNotDropped() {
+  PromptOnScreen("LIVE1-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  unsigned char saved[layout::kErrorBlockBytes];
+  std::memcpy(saved, BlockOf(g_game), sizeof(saved));
+  const lp::Counts before = lp::CurrentCounts();
+  FakeSetDelimitedErrorMessage(Obj(g_game), "Lobby is full");  // the game's writer the hooks do not see; no Update yet
+  QCHECK(lp::LatchArmedForTest());                              // the flag has not caught up
+  QCHECK(Enabled(ui::kErrorDisplayPage));                       // but the live block says otherwise: through
+  QCHECK(Enabled(ui::kFatalErrorDisplayPage));
+  QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped);
+  QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed + 2);
+  std::memcpy(BlockOf(g_game), saved, sizeof(saved));  // and with our text back in the block it is held again
+  QCHECK(!Enabled(ui::kErrorDisplayPage));
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -863,6 +885,7 @@ int main() {
   WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled();
   TheLatchOutlivesLoginFailedAndDiesAtLoadingGlobal();
   AGenuineErrorTextPassesThrough();
+  AGenuineErrorWrittenInTheSameFrameIsNotDropped();
   WithoutAPromptOnScreenNothingIsHeldBack();
   ANoticeWaitsForTheLoginToBeAbleToProceed();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();

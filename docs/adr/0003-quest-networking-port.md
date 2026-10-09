@@ -222,7 +222,10 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   hook writes a prompt or a notice into the error block, cleared as soon as the block holds anything else
   (checked after every write the error text hook sees and on every Update call), and dead for good when
   the game reaches "loading global" (state 4). It does not depend on the followed instance, which is dropped
-  when the game leaves "login failed". The hook may run on a task-scheduler worker thread
+  when the game leaves "login failed". The latch flag is recomputed only on the game thread, so the hook also
+  hashes the live block against the latched hash (lock-free, bracketed by a sequence counter around the
+  sentinel's own writes) before it skips anything: a genuine error the game's unhooked `SetErrorMessage`
+  wrote in the same frame is never dropped. The hook may run on a task-scheduler worker thread
   (`CScriptCS::UpdateScripts` may use `CComponentSystem::TaskedUpdate`), so it reads atomics only; the
   records at other pages go to the game unchanged.
 - The Update and error text hooks run on one thread: each `CncaGame::RunLoop` iteration calls `CR15Game::Update` (vtable
