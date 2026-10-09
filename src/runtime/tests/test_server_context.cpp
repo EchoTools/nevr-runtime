@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -142,4 +143,110 @@ TEST(ServerContextEntrants, UninitializedAndTerminatedReadAsEmpty) {
   context.Terminate();
   EXPECT_EQ(context.GetEntrantCount(), 0U);
   EXPECT_EQ(context.GetEntrant(0), nullptr);
+}
+
+// Smite entrant resolution (issue #119). The game maps a GUID to an entrant slot through the
+// lobby's player-session array (lobby+0xC8, stride 0x28, GUID at +8), not through
+// entrant->userId (echovr.exe AcceptPlayersSuccessCBHost 0x140603e20).
+namespace {
+
+using Slot = EchoVR::Lobby::PlayerSessionSlot;
+
+GUID MakeGuid(uint8_t seed) {
+  GUID guid{};
+  guid.Data1 = 0x11110000U + seed;
+  guid.Data2 = static_cast<uint16_t>(0x2200 + seed);
+  guid.Data3 = static_cast<uint16_t>(0x3300 + seed);
+  for (int i = 0; i < 8; i++) guid.Data4[i] = static_cast<uint8_t>(seed + i);
+  return guid;
+}
+
+Slot MakeSlot(const GUID& guid) {
+  Slot slot{};
+  slot.guid = guid;
+  return slot;
+}
+
+void AttachSessions(EchoVR::Lobby& lobby, std::vector<Slot>& sessions) {
+  lobby.playerSessions = sessions.empty() ? nullptr : sessions.data();
+  lobby.playerSessionCount = sessions.size();
+}
+
+}  // namespace
+
+TEST(ServerContextSmite, ResolvesGuidToSessionSlotIndex) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22), MakeEntrant(33)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeSlot(MakeGuid(2)), MakeSlot(MakeGuid(3))};
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  uint64_t slot = 99;
+  ASSERT_TRUE(context.FindEntrantSlotBySession(MakeGuid(3), slot));
+  EXPECT_EQ(slot, 2U);
+  ASSERT_TRUE(context.FindEntrantSlotBySession(MakeGuid(1), slot));
+  EXPECT_EQ(slot, 0U);
+}
+
+TEST(ServerContextSmite, UnknownGuidIsNotFound) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1))};
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  uint64_t slot = 99;
+  EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(9), slot));
+  EXPECT_EQ(slot, 99U);
+}
+
+TEST(ServerContextSmite, EntrantUserIdBytesDoNotMatch) {
+  // The old lookup compared the GUID with entrant->userId. A session GUID equal to those bytes must
+  // not resolve through the entrant array.
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1))};
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  GUID asUserId{};
+  std::memcpy(&asUserId, &entrants[0].userId, sizeof(GUID));
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  uint64_t slot = 0;
+  EXPECT_FALSE(context.FindEntrantSlotBySession(asUserId, slot));
+}
+
+TEST(ServerContextSmite, SlotBeyondLiveEntrantsIsNotReturned) {
+  // A stale session slot past the entrant count must not name a slot the game would index out of range.
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeSlot(MakeGuid(2))};
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  uint64_t slot = 0;
+  EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(2), slot));
+}
+
+TEST(ServerContextSmite, AbsentSessionArrayIsNotFound) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  Attach(lobby, entrants);
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  uint64_t slot = 0;
+  EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(1), slot));
 }

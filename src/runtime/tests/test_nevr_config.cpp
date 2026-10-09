@@ -225,10 +225,29 @@ TEST(NevrConfig, AuthServerKeyRequiredRefUnsetFailsLoud) {
   }
 }
 
-TEST(NevrConfig, BareRequiredVarUnsetThrows) {
+// An unset bare ${VAR} keeps its text and does not fail the load (#137): on a client
+// a throw would drop every plugin over one value. ${VAR:?msg} still throws.
+TEST(NevrConfig, BareVarUnsetKeepsLiteralText) {
   UnsetEnv("NEVR_TEST_BARE");
-  EXPECT_THROW(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE}\"\n"),
-               nevr::NevrConfigError);
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"pre-${NEVR_TEST_BARE}-post\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "pre-${NEVR_TEST_BARE}-post");
+}
+
+TEST(NevrConfig, BareVarUnsetInPluginArgKeepsPlugins) {
+  UnsetEnv("NEVR_TEST_BARE_ARG");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n  - name: alpha\n    args:\n      template: \"${NEVR_TEST_BARE_ARG}\"\n  - name: beta\n");
+  ASSERT_EQ(cfg.Plugins().size(), 2u);
+  EXPECT_EQ(cfg.Plugins()[0].args.at("template"), "${NEVR_TEST_BARE_ARG}");
+}
+
+TEST(NevrConfig, BareVarSetStillResolves) {
+  SetEnv("NEVR_TEST_BARE_SET", "value");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_SET}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "value");
+  UnsetEnv("NEVR_TEST_BARE_SET");
 }
 
 // $${ is a literal ${: no variable is looked up, so an unset one can't fail the load.
