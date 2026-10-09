@@ -84,6 +84,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("graph_host"), "services.graph");
   EXPECT_EQ(FlatKeyToYamlPath("graphservice_host"), "services.graph_service");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_socket_uri"), "services.socket_uri");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_allow_offline_server"), "services.allow_offline_server");  // #16
   // identity / auth (S4a — ws_bridge login injection; S4b — gameserver auth POST)
   EXPECT_EQ(FlatKeyToYamlPath("nevr_discord_id"), "identity.discord_id");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_password"), "auth.password");
