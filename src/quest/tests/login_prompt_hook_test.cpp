@@ -519,6 +519,31 @@ void ARewriteInLoginFailedSendsOneErrorEvent() {
   lp::SetQuitOnErrorForTest(nullptr);
 }
 
+// Failure caught (#239 review L2): a prompt published in the failure frame. The game sends its own error event
+// for the failure; the Update hook then rewrote the block for the prompt and sent a second one in the same
+// frame. The failure counts as the last event; the rewrite's event waits out the spacing.
+void APromptPublishedInTheFailureFrameDoesNotSendASecondErrorEvent() {
+  board::Withdraw();
+  lp::SetClockForTest(&FakeClock);
+  lp::SetQuitOnErrorForTest(&FakeQuitOnError);
+  g_quitCalls = 0;
+  g_now += 1000 * kMs;
+  FailLocally(g_game);  // nothing on the board: the game's text stays; the game sends its own event
+  Publish(Prompt("FRAME-CODE"));
+  UpdateEntry()(Obj(g_game), 16);  // same instant: the block is rewritten, the event waits
+  QCHECK(Line(g_game, 2) == "and enter the code FRAME-CODE");
+  QCHECK(g_quitCalls == 0);
+  g_now += 10 * kMs;
+  UpdateEntry()(Obj(g_game), 16);  // still inside the spacing
+  QCHECK(g_quitCalls == 0);
+  g_now += 60 * kMs;
+  UpdateEntry()(Obj(g_game), 16);  // a frame later: the screen is told once
+  QCHECK(g_quitCalls == 1 && g_quitSawLine2 == "and enter the code FRAME-CODE");
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetQuitOnErrorForTest(nullptr);
+}
+
 // An event is due only while the followed instance is in "login failed": if the game left that state
 // before the spacing passed, nothing is sent, and a later failure does not inherit the old request.
 void NoErrorEventAfterTheGameLeftLoginFailed() {
@@ -879,6 +904,7 @@ int main() {
   ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate();
   ASecondLocalFailureWhileAlreadyInLoginFailedGetsThePromptToo();
   ARewriteInLoginFailedSendsOneErrorEvent();
+  APromptPublishedInTheFailureFrameDoesNotSendASecondErrorEvent();
   NoErrorEventAfterTheGameLeftLoginFailed();
   AnUnresolvedErrorEventIsCountedAndNotCalled();
   NoErrorEventForAnInstanceThatIsNotFollowed();

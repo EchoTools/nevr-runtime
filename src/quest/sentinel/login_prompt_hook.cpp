@@ -317,7 +317,10 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
       g_kept.fetch_add(1, std::memory_order_relaxed);
     }
   }
-  g_resendPending.store(false, std::memory_order_relaxed);  // the game sends its own error event for this failure
+  // The game sends its own error event for this failure right after this call, in this frame: it counts as the
+  // last event, so a prompt published within the frame (rewritten by Update) does not send a second.
+  g_resendPending.store(false, std::memory_order_relaxed);
+  g_lastResendNs.store(g_clock.load(std::memory_order_relaxed)(), std::memory_order_relaxed);
   g_object.store(self, std::memory_order_release);
   Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);

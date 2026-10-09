@@ -197,7 +197,7 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   counts `_text_not_local`).
 - After a rewrite while the instance is in -94 the Update hook calls `CR15NetGame::QuitOnError` once
   so the status script copies the new text to the screen: at most once per change, not within 50 ms of
-  the previous call (longer than a loop iteration, so never twice in one frame), only for the followed
+  the previous call or the failure's own error event (longer than a loop iteration, so never twice in one frame), only for the followed
   instance and only while it is still in -94, from the game thread. `QuitOnError` is not a GOT
   target; the install proves it (the module's build ID, then its first four instructions, then
   `base + 0x12713f8`) and logs `quit_on_error` in `login_prompt_install`. The extra call also ends
