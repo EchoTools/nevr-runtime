@@ -152,12 +152,18 @@ def merged_pr(gh, root, branch, tip):
     """({number, headRefName, headRefOid}, None) when a MERGED PR carries this tip, else (None, why).
 
     The PR is looked up by the local branch name, by every origin branch that points at the tip (a
-    branch pushed under another name), and by the tip's sha. "ours" says the PR's head ref is one of
-    those names: a PR found only by the sha can be another agent's branch that merged this work, and
-    its head ref is not ours to delete. It carries the tip when its head is the
+    branch pushed under another name), and by the tip's sha. "ours" says the PR's head ref is this
+    worktree's own branch or that branch's configured upstream (branch.<name>.merge on origin), and
+    nothing else: another agent's branch can sit at the same tip or carry this work in a PR found by
+    the sha, and its head ref is not ours to delete. It carries the tip when its head is the
     tip, or a later commit that has the tip as an ancestor (someone merged main into the PR branch
     and pushed it; the local copy never had that commit).
     """
+    own_refs = {branch}
+    upstream = git("config", "--get", f"branch.{branch}.merge", cwd=root, check=False).stdout.strip()
+    remote = git("config", "--get", f"branch.{branch}.remote", cwd=root, check=False).stdout.strip()
+    if upstream.startswith("refs/heads/") and remote == "origin":
+        own_refs.add(upstream.removeprefix("refs/heads/"))
     names = [branch]
     points = git("for-each-ref", "--points-at", tip, "--format=%(refname:lstrip=3)", "refs/remotes/origin",
                  cwd=root, check=False).stdout.split()
@@ -178,7 +184,7 @@ def merged_pr(gh, root, branch, tip):
             continue
         if head == tip or git("merge-base", "--is-ancestor", tip, head, cwd=root, check=False).returncode == 0:
             return {"number": pr["number"], "head_ref": pr["headRefName"], "head_oid": head,
-                    "ours": pr["headRefName"] in names}, None
+                    "ours": pr["headRefName"] in own_refs}, None
     if prs:
         return None, "merged PR(s) " + ",".join(f"#{p['number']}" for p in prs) + " do not contain the tip"
     return None, "no merged PR"
@@ -232,12 +238,25 @@ def assess(wt, root, base, gh, ledger_text):
     return reasons, facts
 
 
+def protected_branches(gh):
+    """Branches no PR data may make deletable: main, master and the repo's default branch."""
+    names = {"main", "master"}
+    try:
+        r = subprocess.run([gh, "repo", "view", "--json", "defaultBranchRef"], text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=60)
+        if r.returncode == 0:
+            names.add(json.loads(r.stdout or "{}")["defaultBranchRef"]["name"])
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        pass  # main and master are still refused
+    return names
+
+
 def remote_branch_tip(root, branch):
     out = git("ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=root).stdout.split()
     return out[0] if out else None
 
 
-def apply_one(wt, facts, root, ledger, log):
+def apply_one(wt, facts, root, ledger, log, protected=("main", "master")):
     path, branch, tip = wt["path"], wt["branch"], facts["tip"]
     rel = facts["worktree"]
     if wt["locked"] is not None:
@@ -260,6 +279,9 @@ def apply_one(wt, facts, root, ledger, log):
             rtip = remote_branch_tip(root, remote)
             if rtip is None:
                 note.append(f"origin branch {remote} already gone")
+            elif remote in protected:
+                note.append(f"origin branch {remote} refused: {remote} is the default branch")
+                print(f"      refused: {remote} is the default branch; it is never deleted")
             elif not facts["pr_ours"]:
                 note.append(f"origin branch {remote} kept (not this worktree's branch)")
             elif rtip == facts["pr_head_oid"]:
@@ -310,6 +332,7 @@ def main():
     log.write(action="start", mode=mode, base=base, base_sha=base_sha, owner_filter=args.owner)
     print(f"reap-merged ({mode}) against {base} = {base_sha[:12]}")
 
+    protected = protected_branches(gh)
     reap, kept, failed = [], [], 0
     for wt in list_worktrees(root):
         if not os.path.realpath(wt["path"]).startswith(os.path.realpath(wt_dir) + os.sep):
@@ -330,7 +353,7 @@ def main():
         print("      ignored files that go with it: " + (", ".join(facts["ignored"]) or "(none)"))
         if args.apply:
             try:
-                print("      done: " + "; ".join(apply_one(wt, facts, root, ledger, log)))
+                print("      done: " + "; ".join(apply_one(wt, facts, root, ledger, log, protected)))
             except (RuntimeError, subprocess.CalledProcessError) as e:
                 failed += 1
                 detail = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) else str(e)
