@@ -7,6 +7,7 @@
 #include "runtime/hook/process_memory.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/boot_log_tee.h"
 
 /// <summary>
 /// Helper function to apply a memory patch at a specific offset from the game base address.
@@ -46,9 +47,18 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
     // detour passes through, so no call site can forget. Warning, not Debug: a
     // missing hook is an operator-actionable degradation, and this fires ONLY on
     // failure — a healthy boot, where every hook installs, adds no new line.
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed",
-        name ? name : "(unnamed)", target, Hooking::LastAttachError());
+    // While boot runs, DllMain still holds the loader lock and Log() would enter the game
+    // logger once EchoVR::WriteLog is resolved (#92), so the report goes through BootLogTee.
+    const char* const shown = name ? name : "(unnamed)";
+    if (BootLogTee::InBootPhase()) {
+      BootLogTee::TeeFprintf(
+          "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed\n",
+          shown, target, Hooking::LastAttachError());
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed",
+          shown, target, Hooking::LastAttachError());
+    }
   }
   return ok;
 }

@@ -137,6 +137,9 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   g_testLogMessages.emplace_back(buffer);
 }
 
+// boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
+const CHAR* GetRunId() { return "test-run"; }
+
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
 

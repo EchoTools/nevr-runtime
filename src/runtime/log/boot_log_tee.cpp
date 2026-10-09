@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,10 @@
 // ---------------------------------------------------------------------------
 
 static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
+
+// True from Init() to Close(), whether or not the file opened: the boot phase is
+// defined by the loader lock being held, not by the file being writable.
+static std::atomic<bool> g_boot_phase{false};
 
 // ---------------------------------------------------------------------------
 // JSON escape — writes directly into a caller-provided buffer
@@ -62,6 +67,7 @@ done:
 // ---------------------------------------------------------------------------
 
 void BootLogTee::Init() {
+    g_boot_phase.store(true, std::memory_order_release);
     // Get the EXE directory
     char exe_path[MAX_PATH];
     DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
@@ -172,7 +178,10 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     // Failure is silent — nothing to do with a failed write at boot time
 }
 
+bool BootLogTee::InBootPhase() { return g_boot_phase.load(std::memory_order_acquire); }
+
 void BootLogTee::Close() {
+    g_boot_phase.store(false, std::memory_order_release);
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);
         g_boot_handle = INVALID_HANDLE_VALUE;
