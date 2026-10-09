@@ -235,6 +235,26 @@ bool ServerContext::FindEntrantSlotBySession(const GUID& session, uint64_t& slot
   return false;
 }
 
+uint64_t ServerContext::CountAcceptedEntrants() const {
+  std::shared_lock lock(m_stateMutex);
+
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
+    return 0;
+  }
+  const auto& entrants = m_lobby->entrantData;
+  const auto* sessions = m_lobby->playerSessions;
+  if (!sessions || !entrants.items) {
+    return 0;
+  }
+  constexpr uint64_t kJoinStateAccepted = 4;
+  const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
+  uint64_t accepted = 0;
+  for (uint64_t i = 0; i < limit; i++) {
+    if (sessions[i].joinState == kJoinStateAccepted) accepted++;
+  }
+  return accepted;
+}
+
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {
   std::unique_lock lock(m_stateMutex);
   m_serverDbPeer = peer;

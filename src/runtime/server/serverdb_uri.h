@@ -43,9 +43,8 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
                                                     std::string_view password);
 
 // Removes one literal "key=value" query parameter from `uri`, wherever it sits
-// in the query string, and reinserts a correct separator (issue #116). The
-// previous ws_bridge.cpp inline version always treated the character before a
-// match as removable, which deleted the URI's own '?' whenever the parameter
+// in the query string, and reinserts a correct separator (issue #116). Always
+// treating the character before a match as removable would delete the URI's own '?' whenever the parameter
 // was first in the query (e.g. "base?format=evr&discordid=1" ->
 // "basediscordid=1", concatenating path and query with no separator).
 // Handles, and only acts on, an exact boundary match (preceded by '?', '&', or

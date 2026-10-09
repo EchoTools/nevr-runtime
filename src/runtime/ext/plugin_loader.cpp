@@ -397,8 +397,8 @@ void LoadPlugins() {
   std::stable_sort(staged.begin(), staged.end(), capsOrder);
 
   // Log the sorted order so an operator can see the load sequence: one INFO
-  // summary naming the order, with the full per-item detail at DEBUG — the
-  // per-item line used to also be INFO, which was a near-duplicate of the
+  // summary naming the order, with the full per-item detail at DEBUG — an
+  // INFO per-item line would near-duplicate the
   // per-plugin "Loaded: ..." INFO confirmation below once each plugin's init
   // succeeds (Rule 12: INFO is summary, DEBUG is narrative).
   {

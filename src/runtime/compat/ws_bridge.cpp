@@ -583,7 +583,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       }
       // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
       // server for the list again; the reply rebuilds the roster (a friend added on the website
-      // used to stay invisible until the next login).
+      // would otherwise stay invisible until the next login).
       if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
         uint64_t friendId = 0;
         if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
@@ -757,13 +757,13 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
-  // Host facts, MEASURED. Every value in this block used to be a literal —
-  // "cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores, 8 logical,
-  // 16384 MB total, 8192 used — sent as though read from the machine. That is
+  // Host facts, MEASURED. No value in this block is a literal ("cpu":"Wine",
+  // "video_card":"Wine D3D12", 4 physical cores, 8 logical, 16384 MB total,
+  // 8192 used would be sent as though read from the machine). That is
   // worse than sending nothing: absent data is visibly absent, while invented
   // data is indistinguishable from a reading and gets acted on.
   //
-  // Fields this process cannot honestly determine are now sent EMPTY or 0
+  // Fields this process cannot honestly determine are sent EMPTY or 0
   // rather than guessed. video_card and dedicated_gpu_memory have no truthful
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
@@ -934,8 +934,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, static_cast<void*>(&gameWs));
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -946,10 +946,10 @@ void InstallWebSocketBridge() {
               ix::WebSocket* gameWsPtr = &gameWs;
 
               // N61: register an independent callback for each matchmaker
-              // connection on the shared remote. Previously matchmaker relied
-              // entirely on the login connection's callback — when login
-              // disconnected and B2/N54 nulled that callback, all matchmaker
-              // server→game message routing silently died.
+              // connection on the shared remote. Relying on the login
+              // connection's callback alone fails: when login
+              // disconnects and B2/N54 nulls that callback, all matchmaker
+              // server→game message routing silently dies.
               g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
                   [pairPtr, gameWsPtr, connIdx,
                    remoteAddress = static_cast<const ix::WebSocket*>(g_loginRemoteWs.get())](const ix::WebSocketMessagePtr& rmsg) {
@@ -1023,8 +1023,8 @@ void InstallWebSocketBridge() {
                 // Allocation failure in the encoder: connect without URL credentials
                 // (Bearer path below) rather than put an unencoded secret on the wire.
                 Log(EchoVR::LogLevel::Error,
-                    "[NEVR.WS] conn=%d could not percent-encode URL credentials; connecting without them",
-                    connIdx);
+                    "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
+                    connIdx, ConnLabel(connIdx));
               }
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
@@ -1145,7 +1145,8 @@ void InstallWebSocketBridge() {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
                       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
-                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
+                          g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
@@ -1218,8 +1219,8 @@ void InstallWebSocketBridge() {
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, ConnLabel(connIdx), loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -1424,8 +1425,8 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
-                static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
+                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
                 LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
