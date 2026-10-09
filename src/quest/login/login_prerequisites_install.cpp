@@ -146,7 +146,7 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 
 }  // namespace
 
-PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready) noexcept {
+PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept {
   const std::lock_guard<std::mutex> lock(InstallMutex());
   if (g_installed.load(std::memory_order_acquire)) return g_result_storage;
   const std::uintptr_t base = image.base;
@@ -173,7 +173,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.accessors += Install(hooks.accessors[7], kUserProofGetNonceHook, T::kUserProofGetNonce, base) ? 1 : 0;
 
   result.substitute = SubstitutionAllowed(result.accessors, api.message_is_error != nullptr);
-  ConfigurePrerequisites(api, result.substitute, ready);
+  ConfigurePrerequisites(api, result.substitute, ready, reset);
 
   result.callbacks += Install(hooks.callbacks[0], kOrgCallbackHook, T::kOrgScopedIdCallback, base) ? 1 : 0;
   result.callbacks += Install(hooks.callbacks[1], kUserCallbackHook, T::kLoggedInUserCallback, base) ? 1 : 0;

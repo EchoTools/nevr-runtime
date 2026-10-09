@@ -195,9 +195,10 @@ if(TARGET nevr_quest_got_hook)
     login/login_prerequisites_install.cpp login/login_standin.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
-  add_executable(login_rewrite_test tests/login_rewrite_test.cpp)
+  add_executable(login_rewrite_test tests/login_rewrite_test.cpp login/login_standin.cpp)
   target_link_libraries(login_rewrite_test PRIVATE nevr_quest_login)
   target_compile_options(login_rewrite_test PRIVATE -Wall -Wextra -Werror)
+  target_compile_definitions(login_rewrite_test PRIVATE NEVR_QUEST_TESTING)
 
   # Install-code host test (partial install, idempotency, gating). Linked against the whole login
   # archive so the install, its thunks and the backend are present.
@@ -205,9 +206,10 @@ if(TARGET nevr_quest_got_hook)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
   target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
 
-  add_executable(login_standin_test tests/login_standin_test.cpp)
+  add_executable(login_standin_test tests/login_standin_test.cpp login/login_standin.cpp)
   target_link_libraries(login_standin_test PRIVATE nevr_quest_login)
   target_compile_options(login_standin_test PRIVATE -Wall -Wextra -Werror)
+  target_compile_definitions(login_standin_test PRIVATE NEVR_QUEST_TESTING)
 
   # Never run: the frames sensor in tests/quest reads it. It links the whole archive so the
   # login handler and everything it calls are present at final addresses.

@@ -21,7 +21,7 @@
 // Translation units. A frame that is live while game code runs must be personality-free
 // (quest/sentinel/callback_thunk.h), so the work is split by whether it calls into the game:
 //   login_apply.cpp    built -fno-exceptions: everything that calls the game (Observe,
-//                      ApplyFieldsAtomically, RewriteLogin, RewriteAndSend). No try/catch;
+//                      ApplyFieldsAtomically, RewriteLogin, FinishLogin). No try/catch;
 //                      an allocation failure there is expected to raise std::bad_alloc from
 //                      libc++'s operator new, uncaught (out of memory only).
 //   login_rewrite.cpp  exceptions enabled: Compose and ComposePlan. They call no game code, run
@@ -341,6 +341,14 @@ inline SendDecision DecideSend(const WireCheck& wire) noexcept {
   return wire.Unsafe() ? SendDecision::FailClosed : SendDecision::SendOriginal;
 }
 
+// What the login send hook does after FinishLogin. Portable so it is host-tested; RunLogin
+// (login_hook.cpp) adds the device-only vtable guard on the deferred-failure branch.
+enum class RunAction { SendOriginal, DeferFailure, Withhold };
+inline RunAction ChooseRunAction(SendDecision decision, bool deferred_failure_available) noexcept {
+  if (decision == SendDecision::SendOriginal) return RunAction::SendOriginal;
+  return deferred_failure_available ? RunAction::DeferFailure : RunAction::Withhold;
+}
+
 // The game's prerequisite state the send gate may put back, so a later attempt asks Oculus again.
 // Implemented by login_hook.cpp over the proven globals (0x70e3e0, 0x70e470) and by host fakes.
 // Every method is called on the OVR pump thread inside the login send hook, the thread on which
@@ -355,8 +363,19 @@ class PrerequisiteState {
   // Writes `name` (truncated to the 36-byte buffer, zero-filled) over the stand-in after a NEVR
   // login, so the crash report name and party records carry the NEVR name, not a placeholder.
   virtual void SetUserName(const char* name) = 0;
+  // The org-id global 0x70e3e0 currently holds the stand-in (read directly, no vtable call: the
+  // not-ready reset path has no live CNSOVRUser).
+  virtual bool OrgIdIsStandIn() const = 0;
   // Writes kRefetchOrgId to 0x70e3e0: LogInInternal re-fetches the org id (0x1ec980).
   virtual void ResetOrgIdToRefetch() = 0;
+  // The decimal org-id text buffer 0x70e458 (CNSOVRUser::OfflineID, 0x1ede20) holds the stand-in.
+  virtual bool OfflineIdIsStandIn() const = 0;
+  // Writes the decimal of `account_id` into 0x70e458 so OfflineID() matches the NEVR AccountID()
+  // after a rewrite (the game writes this buffer only on a successful org-id fetch, never on the
+  // rewrite path).
+  virtual void SetOfflineIdText(std::uint64_t account_id) = 0;
+  // Clears 0x70e458 to "" on a reset; the game refills it on its next successful org-id fetch.
+  virtual void ResetOfflineId() = 0;
 };
 
 struct FinishResult {
@@ -365,6 +384,8 @@ struct FinishResult {
   bool reset_org_id = false;
   bool reset_user_name = false;
   bool renamed_user = false;
+  bool reset_offline_id = false;
+  bool renamed_offline_id = false;
 };
 
 // Runs after RewriteLogin, before the send (login_apply.cpp, -fno-exceptions). Reads the wire,
@@ -376,6 +397,19 @@ struct FinishResult {
 // One record (event "quest_login_send") with the decision, the outcome and the wire flags.
 FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteState& state, Outcome outcome,
                          LogFn log);
+
+// Clears any stand-in the game is currently holding in its globals back to the game's re-fetch
+// markers (org id -> -1, OfflineID decimal -> "", user name -> "?"). Run on a login attempt where a
+// NEVR login is NOT ready, so a stand-in issued by an earlier ready attempt that the game then
+// failed on its own path (never reaching the hooked send) does not persist in OfflineID() or the
+// party records. A real Oculus value is never a stand-in, so a working-Oculus device is untouched.
+// Returns which globals it reset. The token CString cannot be reset safely and is left; see the ADR.
+struct HeldReset {
+  bool org_id = false;
+  bool offline_id = false;
+  bool user_name = false;
+};
+HeldReset ResetHeldStandIns(PrerequisiteState& state) noexcept;
 
 // Phase 1 (login_apply.cpp, calls the game): what the later phases need to know about the game's
 // state. Plain data; nothing in it refers back to the game.
@@ -437,8 +471,6 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
 // server's reply (libpnsovr 0x383a60-0x383a8c); a mismatch drops the success. It therefore
 // stays installed after the send. `send(context)` is called exactly once, last, whatever the
 // outcome.
-using SendFn = void (*)(void* context);
-Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
-                       const BuildInfo& build, LogFn log, SendFn send, void* context);
+
 
 }  // namespace QuestLogin

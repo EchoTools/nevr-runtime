@@ -118,6 +118,8 @@ inline constexpr std::uint64_t kLogWindowMs = 60000;
 
 // True when a real NEVR login is ready (IdentitySource::Ready). nullptr => never stand in.
 using ReadyFn = bool (*)() noexcept;
+// Resets any stand-in the game currently holds (login_hook), called on a not-ready callback.
+using ResetFn = void (*)() noexcept;
 
 // The game's test for a transient Oculus error, on the error message text (see above). Exposed for
 // the host test.
@@ -141,7 +143,7 @@ bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept;
 // Publishes the API, generates the stand-ins and turns the handlers on. `substitute` comes from
 // SubstitutionAllowed; `ready` gates every stand-in. Until this is called every handler passes
 // straight through and logs nothing. Call once, before the callback hooks are installed.
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready) noexcept;
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset) noexcept;
 
 // Ends the current login attempt: resets the transient budgets and the log windows, so the next
 // attempt gets its own. The login send hook calls it on every send decision.
@@ -186,6 +188,6 @@ struct PrerequisiteInstall {
   int requests = 0;   // of 4
   bool substitute = false;
 };
-PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready) noexcept;
+PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept;
 
 }  // namespace QuestLogin

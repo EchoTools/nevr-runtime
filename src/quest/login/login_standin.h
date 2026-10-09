@@ -23,19 +23,26 @@ namespace QuestLogin::StandIn {
 void Generate() noexcept;
 
 std::uint64_t OrgId() noexcept;       // neither 0 nor -1
+const char* OrgIdText() noexcept;     // OrgId() as decimal "%llu" (the game's OfflineID form)
 const char* AccessToken() noexcept;   // 40 lowercase hex characters
 const char* Nonce() noexcept;         // 32 lowercase hex characters
 const char* OculusId() noexcept;      // "player-" + 8 hex: shorter than the game's 36-byte buffer
 
 bool IsOrgId(std::uint64_t value) noexcept;
+bool IsOrgIdText(const char* value) noexcept;  // value equals OrgIdText()
 bool IsAccessToken(const char* value) noexcept;
 bool IsNonce(const char* value) noexcept;
 // Compares at most `capacity` bytes of a NUL-terminated or full fixed buffer (the game's 0x70e470).
 bool IsOculusId(const char* value, std::size_t capacity = 64) noexcept;
 
-// Test support: fixes the stand-ins to known values (any later Generate keeps them).
+// Test support: compiled only into test binaries (NEVR_QUEST_TESTING); the production library has
+// neither symbol (tools/tests/test_quest_standin_testonly.py proves it). ResetForTest unpublishes,
+// which would make every predicate false and so disable the send gate -- it must never ship.
+#if defined(NEVR_QUEST_TESTING)
+// Fixes the stand-ins to known values (any later Generate keeps them).
 void SetForTest(std::uint64_t org, const char* token, const char* nonce, const char* oculus_id) noexcept;
-// Test support: back to the unpublished state, so the next Generate draws fresh values.
+// Back to the unpublished state, so the next Generate draws fresh values.
 void ResetForTest() noexcept;
+#endif
 
 }  // namespace QuestLogin::StandIn

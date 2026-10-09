@@ -4,6 +4,7 @@
 // rules and a fake CNSOVRUser whose account id comes from a virtual AccountID().
 
 #include "quest/login/login_rewrite.h"
+#include "quest/login/login_prerequisites.h"
 #include "quest/login/login_standin.h"
 
 #include <cstdint>
@@ -619,8 +620,8 @@ void TestAccountIdStaysInstalledAfterSend() {
   SendProbe probe;
   probe.user = &user;
   probe.json = &json;
-  QCHECK(QuestLogin::RewriteAndSend(user, json, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe) ==
-         QuestLogin::Outcome::Rewritten);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  ProbeSend(&probe);  // the send hook's `original`, called last as RunLogin does
   QCHECK(probe.calls == 1);
   QCHECK(probe.wire_at_send == kNevrAccount);
   QCHECK(At(probe.json_at_send, "access_token") == "NEVR-TOKEN-SECRET");
@@ -646,8 +647,8 @@ void TestSendHappensOnceEvenWhenTheRewriteFails() {
     SendProbe probe;
     probe.user = &user;
     probe.json = &json;
-    QCHECK(QuestLogin::RewriteAndSend(user, json, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe) !=
-           QuestLogin::Outcome::Rewritten);
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) != QuestLogin::Outcome::Rewritten);
+    ProbeSend(&probe);
     QCHECK(probe.calls == 1);
     QCHECK(probe.json_at_send == before);
     QCHECK(probe.wire_at_send == 5551234);
@@ -679,8 +680,8 @@ void TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId() {
     SendProbe probe;
     probe.user = &user;
     probe.json = &second;
-    const QuestLogin::Outcome out =
-        QuestLogin::RewriteAndSend(user, second, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe);
+    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog);
+    ProbeSend(&probe);
     if (out == QuestLogin::Outcome::Rewritten) std::fprintf(stderr, "variant %s was rewritten\n", names[variant]);
     QCHECK(out != QuestLogin::Outcome::Rewritten);
     QCHECK(probe.calls == 1);
@@ -971,6 +972,7 @@ class FakePrereqState final : public QuestLogin::PrerequisiteState {
  public:
   std::uint64_t org = 0;
   char name[0x24] = {};
+  char offline[21] = {};
   bool UserNameIsStandIn() const override { return QuestLogin::StandIn::IsOculusId(name, sizeof(name)); }
   void ResetUserNameToRefetch() override {
     std::memset(name, 0, sizeof(name));
@@ -980,7 +982,13 @@ class FakePrereqState final : public QuestLogin::PrerequisiteState {
     std::memset(name, 0, sizeof(name));
     for (std::size_t i = 0; i + 1 < sizeof(name) && n[i] != '\0'; ++i) name[i] = n[i];
   }
+  bool OrgIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgId(org); }
   void ResetOrgIdToRefetch() override { org = ~std::uint64_t{0}; }
+  bool OfflineIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgIdText(offline); }
+  void SetOfflineIdText(std::uint64_t account_id) override {
+    std::snprintf(offline, sizeof(offline), "%llu", static_cast<unsigned long long>(account_id));
+  }
+  void ResetOfflineId() override { std::memset(offline, 0, sizeof(offline)); }
 };
 
 // FinishLogin: a rewritten login with a clean wire sends and renames a stood-in user; a stand-in on
@@ -1063,6 +1071,243 @@ void TestFinishLoginGate() {
         QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
     QCHECK(r.decision == QuestLogin::SendDecision::FailClosed && r.wire.account_id_unreadable);
   }
+  // A declined login whose JSON nonce is a stand-in is refused on the nonce alone.
+  {
+    FakeUser user;
+    user.global_account_id = 5551234;
+    FakeJson json;
+    json.SetString("access_token", "OCULUS-TOKEN");
+    json.SetString("nonce", QuestLogin::StandIn::Nonce());
+    FakePrereqState st;
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    QCHECK(r.wire.nonce_stand_in);
+  }
+  // Rewritten with a stood-in OfflineID decimal -> sent, and OfflineID is rewritten to the NEVR id's
+  // decimal (so CNSOVRUser::OfflineID() no longer returns the stand-in).
+  {
+    FakeUser user;
+    user.global_account_id = kNevrAccount;
+    FakeJson json;
+    json.SetString("access_token", "NEVR-TOKEN-SECRET");
+    json.SetString("nonce", "real-nonce");
+    FakePrereqState st;
+    std::snprintf(st.offline, sizeof(st.offline), "%llu",
+                  static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));  // the stand-in decimal
+    QCHECK(st.OfflineIdIsStandIn());
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    QCHECK(r.renamed_offline_id);
+    QCHECK(std::string(st.offline) == std::to_string(kNevrAccount));
+  }
+  // Declined with a stood-in OfflineID decimal -> refused on the wire org id and OfflineID cleared.
+  {
+    FakeUser user;
+    user.global_account_id = QuestLogin::StandIn::OrgId();
+    FakeJson json;
+    FakePrereqState st;
+    st.org = QuestLogin::StandIn::OrgId();
+    std::snprintf(st.offline, sizeof(st.offline), "%llu",
+                  static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    QCHECK(r.reset_offline_id && st.offline[0] == '\0');
+  }
+}
+
+// End-to-end: the four prerequisite callbacks (login_prerequisites.h) run over a fake Platform SDK
+// and write the game's globals, then the gate (FinishLogin) reads those globals as the wire. One
+// FakeGame backs both the callbacks (through UserAccess/JsonAccess/PrerequisiteState views) and the
+// SDK, so a value a callback stands in is the value the gate sees. Proves the seam: the stand-ins
+// the callbacks write are exactly the ones the gate recognises, across repeated attempts.
+namespace flow {
+struct FakeGame {
+  std::uint64_t org = 0;        // 0x70e3e0
+  char name[0x24] = {};         // 0x70e470
+  char offline[21] = {};        // 0x70e458
+  std::string token;            // the CString GotUserProofCB copies into the login JSON
+  std::string nonce;            // from the proof
+  bool errored = false;         // the current message is an Oculus error
+};
+FakeGame* g_game = nullptr;
+
+// The fake SDK the accessor hooks wrap. One message in flight; errored decides IsError.
+bool RealIsError(const void* m) { return static_cast<const FakeGame*>(m)->errored; }
+const void* RealGetError(const void* m) { return static_cast<const FakeGame*>(m)->errored ? m : nullptr; }
+int RealCode(const void*) { return 2006; }
+int RealHttp(const void*) { return 401; }
+const char* RealErrMsg(const void*) { return ""; }
+// On an error these are never called (the hooks short-circuit); on success they return "" so the
+// hooks treat them as unusable and stand in (models a device whose Oculus answers are empty).
+const char* RealGetString(const void*) { return ""; }
+const void* RealGetOrgScopedId(const void*) { return nullptr; }
+std::uint64_t RealOrgGetId(const void*) { return 0; }
+const void* RealGetUser(const void*) { return nullptr; }
+const char* RealOculusId(const void*) { return ""; }
+const void* RealGetUserProof(const void*) { return nullptr; }
+const char* RealNonce(const void*) { return ""; }
+
+void OrgCb(void*, void* m) {
+  if (QuestLogin::OnMessageIsError(&RealIsError, m)) {
+    g_game->org = ~std::uint64_t{0};
+    return;
+  }
+  g_game->org = QuestLogin::OnOrgScopedIdGetId(&RealOrgGetId, QuestLogin::OnMessageGetOrgScopedId(&RealGetOrgScopedId, m));
+  std::snprintf(g_game->offline, sizeof(g_game->offline), "%llu", static_cast<unsigned long long>(g_game->org));
+}
+void UserCb(void*, void* m) {
+  if (QuestLogin::OnMessageIsError(&RealIsError, m)) return;
+  const char* id = QuestLogin::OnUserGetOculusId(&RealOculusId, QuestLogin::OnMessageGetUser(&RealGetUser, m));
+  std::memset(g_game->name, 0, sizeof(g_game->name));
+  for (std::size_t i = 0; i + 1 < sizeof(g_game->name) && id[i] != '\0'; ++i) g_game->name[i] = id[i];
+}
+void TokenCb(void*, void* m) {
+  g_game->token = QuestLogin::OnMessageIsError(&RealIsError, m)
+                      ? "?"
+                      : QuestLogin::OnMessageGetString(&RealGetString, m);
+}
+void ProofCb(void*, void* m) {
+  g_game->nonce = QuestLogin::OnMessageIsError(&RealIsError, m)
+                      ? ""
+                      : QuestLogin::OnUserProofGetNonce(&RealNonce, QuestLogin::OnMessageGetUserProof(&RealGetUserProof, m));
+}
+void Deliver(QuestLogin::Prerequisite which, QuestLogin::GameCallback cb) {
+  QuestLogin::OnPrerequisiteCallback(which, cb, nullptr, g_game);
+}
+
+// Views over the one FakeGame.
+class GameUser final : public QuestLogin::UserAccess {
+ public:
+  explicit GameUser(FakeGame& g) : g_(g) {}
+  bool Provider(std::uint64_t& c) const override { c = QuestLogin::kPlatformOvrOrg; return true; }
+  bool WireAccountId(std::uint64_t& id) const override { id = g_.org; return true; }
+  bool SetAccountId(std::uint64_t id) override { g_.org = id; return true; }
+  bool RestoreAccountId() override { return true; }
+ private:
+  FakeGame& g_;
+};
+class GamePrereq final : public QuestLogin::PrerequisiteState {
+ public:
+  explicit GamePrereq(FakeGame& g) : g_(g) {}
+  bool UserNameIsStandIn() const override { return QuestLogin::StandIn::IsOculusId(g_.name, sizeof(g_.name)); }
+  void ResetUserNameToRefetch() override { std::memset(g_.name, 0, sizeof(g_.name)); g_.name[0] = '?'; }
+  void SetUserName(const char* n) override {
+    std::memset(g_.name, 0, sizeof(g_.name));
+    for (std::size_t i = 0; i + 1 < sizeof(g_.name) && n[i] != '\0'; ++i) g_.name[i] = n[i];
+  }
+  bool OrgIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgId(g_.org); }
+  void ResetOrgIdToRefetch() override { g_.org = ~std::uint64_t{0}; }
+  bool OfflineIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgIdText(g_.offline); }
+  void SetOfflineIdText(std::uint64_t id) override {
+    std::snprintf(g_.offline, sizeof(g_.offline), "%llu", static_cast<unsigned long long>(id));
+  }
+  void ResetOfflineId() override { std::memset(g_.offline, 0, sizeof(g_.offline)); }
+ private:
+  FakeGame& g_;
+};
+}  // namespace flow
+
+void TestEndToEndFlow() {
+  using namespace flow;
+  FakeGame game;
+  g_game = &game;
+  const QuestLogin::OvrErrorApi api{&RealIsError, &RealGetError, &RealCode, &RealHttp, &RealErrMsg};
+  auto ReadyTrue = +[]() noexcept { return true; };
+  auto ReadyFalse = +[]() noexcept { return false; };
+
+  // Attempt 1: NEVR ready, Oculus errors every prerequisite -> the callbacks stand in, and the gate
+  // reads those exact stand-ins. The rewrite then replaces the wire with the NEVR identity and the
+  // login is SENT; OfflineID and the name are rewritten to the NEVR values.
+  QuestLogin::ResetPrerequisitesForTest();
+  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/true, ReadyTrue, nullptr);
+  game.errored = true;
+  Deliver(QuestLogin::Prerequisite::OrgScopedId, &OrgCb);
+  Deliver(QuestLogin::Prerequisite::LoggedInUser, &UserCb);
+  Deliver(QuestLogin::Prerequisite::AccessToken, &TokenCb);
+  Deliver(QuestLogin::Prerequisite::UserProof, &ProofCb);
+  QuestLogin::EndPrerequisiteAttempt();
+  QCHECK(QuestLogin::StandIn::IsOrgId(game.org));             // the callback wrote the stand-in...
+  QCHECK(QuestLogin::StandIn::IsOculusId(game.name, sizeof(game.name)));
+  QCHECK(QuestLogin::StandIn::IsAccessToken(game.token.c_str()));
+  {
+    GameUser user(game);
+    FakeJson json;  // the login JSON GotUserProofCB built, then the rewrite
+    json.SetString("access_token", game.token.c_str());
+    json.SetString("nonce", game.nonce.c_str());
+    FakeSource source;
+    source.identity = MakeIdentity();  // Ready: a real NEVR identity
+    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    QCHECK(out == QuestLogin::Outcome::Rewritten);
+    GamePrereq st(game);
+    const QuestLogin::FinishResult r = QuestLogin::FinishLogin(user, json, st, out, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);  // the wire is the NEVR identity
+    QCHECK(game.org == kNevrAccount);                              // SetAccountId wrote it
+    QCHECK(std::string(game.offline) == std::to_string(kNevrAccount));
+    QCHECK(std::string(game.name) == "Pilot");
+  }
+
+  // Attempt 2: NEVR not ready. The callbacks stand in nothing (the real error passes through), and
+  // the not-ready reset clears any stand-in still held from a prior attempt.
+  FakeGame game2;
+  g_game = &game2;
+  game2.org = QuestLogin::StandIn::OrgId();  // left over from a prior ready attempt the game failed
+  std::memcpy(game2.name, QuestLogin::StandIn::OculusId(), std::strlen(QuestLogin::StandIn::OculusId()));
+  std::snprintf(game2.offline, sizeof(game2.offline), "%llu", static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
+  bool reset_ran = false;
+  static bool* s_reset = &reset_ran;
+  static FakeGame* s_game2 = &game2;
+  auto Reset = +[]() noexcept {
+    GamePrereq st(*s_game2);
+    QuestLogin::ResetHeldStandIns(st);
+    *s_reset = true;
+  };
+  QuestLogin::ResetPrerequisitesForTest();
+  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/true, ReadyFalse, Reset);
+  game2.errored = true;
+  Deliver(QuestLogin::Prerequisite::OrgScopedId, &OrgCb);  // not ready -> game's own error path + reset
+  QCHECK(reset_ran);
+  QCHECK(game2.org == ~std::uint64_t{0});                  // reset to the re-fetch marker
+  QCHECK(game2.offline[0] == '\0');
+  QCHECK(game2.name[0] == '?');
+  g_game = nullptr;
+}
+
+// ChooseRunAction: send a clean login; on a refusal drive the deferred failure when its entry is
+// available, else withhold.
+void TestChooseRunAction() {
+  using QuestLogin::ChooseRunAction;
+  using QuestLogin::RunAction;
+  using QuestLogin::SendDecision;
+  QCHECK(ChooseRunAction(SendDecision::SendOriginal, true) == RunAction::SendOriginal);
+  QCHECK(ChooseRunAction(SendDecision::SendOriginal, false) == RunAction::SendOriginal);
+  QCHECK(ChooseRunAction(SendDecision::FailClosed, true) == RunAction::DeferFailure);
+  QCHECK(ChooseRunAction(SendDecision::FailClosed, false) == RunAction::Withhold);
+}
+
+// ResetHeldStandIns clears exactly the globals that hold a stand-in, leaving real values alone.
+void TestResetHeldStandIns() {
+  QuestLogin::StandIn::SetForTest(0x99ULL, "t", "n", "player-xy");
+  {  // all three held -> all three reset
+    FakePrereqState st;
+    st.org = QuestLogin::StandIn::OrgId();
+    std::memcpy(st.name, "player-xy", 10);
+    std::snprintf(st.offline, sizeof(st.offline), "%llu", static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
+    const QuestLogin::HeldReset r = QuestLogin::ResetHeldStandIns(st);
+    QCHECK(r.org_id && r.offline_id && r.user_name);
+    QCHECK(st.org == ~std::uint64_t{0} && st.name[0] == '?' && st.offline[0] == '\0');
+  }
+  {  // real values -> nothing reset
+    FakePrereqState st;
+    st.org = 7777ULL;
+    std::memcpy(st.name, "RealName", 9);
+    std::snprintf(st.offline, sizeof(st.offline), "7777");
+    const QuestLogin::HeldReset r = QuestLogin::ResetHeldStandIns(st);
+    QCHECK(!r.org_id && !r.offline_id && !r.user_name);
+    QCHECK(st.org == 7777ULL && std::string(st.name) == "RealName");
+  }
 }
 
 }  // namespace
@@ -1071,6 +1316,9 @@ int main() {
   TestDecideSendReadsTheWire();
   TestOculusIdMemoryHandlesTheStandIn();
   TestFinishLoginGate();
+  TestChooseRunAction();
+  TestResetHeldStandIns();
+  TestEndToEndFlow();
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();

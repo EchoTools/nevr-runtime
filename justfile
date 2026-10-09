@@ -508,12 +508,12 @@ test-quest-shared:
     # also link the prerequisite handlers and the stand-ins (both -fno-exceptions as on the device),
     # because the send gate and the end-to-end flow test drive them together with the rewrite.
     for f in login/login_apply login/login_prerequisites login/login_standin; do
-        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
             "src/quest/$f.cpp" -o "$out/$(basename "$f").o"
     done
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
         src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -isystem "$json_inc" \
         "$out/login_apply.o" "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/login/login_rewrite.cpp \
         src/runtime/compat/login_profile.cpp \
@@ -523,7 +523,7 @@ test-quest-shared:
     # Quest login prerequisites: the handler bodies driven through a fake Platform SDK and the game's
     # four callbacks. The install (login_prerequisites_install.cpp) needs libpnsovr.so for real slots;
     # build-android compiles it and test-quest-hooks-pinned resolves its slots in the real library.
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc -isystem "$json_inc" \
         "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/tests/login_prerequisites_test.cpp \
         -o "$out/login_prerequisites_test"
@@ -542,8 +542,9 @@ test-quest-shared:
         src/quest/tests/login_prerequisites_install_test.cpp \
         -o "$out/login_prerequisites_install_test" -ldl -pthread
     "$out/login_prerequisites_install_test"
-    # The per-process stand-ins and their predicates.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc \
+    # The per-process stand-ins and their predicates. NEVR_QUEST_TESTING exposes SetForTest/ResetForTest,
+    # which exist only in the test build.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
     "$out/login_standin_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
@@ -947,7 +948,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_reap_merged tools.tests.test_check_quest_static_init tools.tests.test_executable_scripts -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_reap_merged tools.tests.test_check_quest_static_init tools.tests.test_executable_scripts tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
