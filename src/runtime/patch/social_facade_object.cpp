@@ -204,6 +204,24 @@ std::uint32_t g_partyDataShared = 0;
 std::uint32_t g_memberDataShared = 0;
 std::string g_lastShared;
 
+// The game checks a member index only against the member count and then indexes g_memberJson
+// (CR15NetGame::PartyMemberData, +0x248), so no more members than slots may be reported. The server
+// controls how many members the party model holds; the view the slots read is cut to the array size.
+std::atomic<std::uint32_t> g_membersClamped{0};  // times the reported member count changed while over the cap
+
+void ClampMembersToJsonSlots(SocialParty::View& view) {
+  static std::size_t s_lastDropped = 0;  // game thread only (PublishView runs from Update)
+  const std::size_t dropped = view.members.size() > kMemberJsonSlots ? view.members.size() - kMemberJsonSlots : 0;
+  if (dropped != 0) view.members.erase(view.members.begin() + kMemberJsonSlots, view.members.end());
+  if (dropped == s_lastDropped) return;
+  s_lastDropped = dropped;
+  if (dropped == 0) return;
+  g_membersClamped.fetch_add(1, std::memory_order_relaxed);
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.SOCIAL] party has %zu members; reporting %zu to the game (its member JSON array holds %zu)",
+      kMemberJsonSlots + dropped, kMemberJsonSlots, kMemberJsonSlots);
+}
+
 std::shared_ptr<const SocialParty::View> CurrentView() {
   std::lock_guard<std::mutex> guard(g_viewMutex);
   return g_view;
@@ -221,6 +239,7 @@ void PublishView() {
     self.name = view.selfName.empty() ? std::to_string(view.selfId) : view.selfName;
     view.members.push_back(self);
   }
+  ClampMembersToJsonSlots(view);
   auto next = std::make_shared<const SocialParty::View>(std::move(view));
   std::lock_guard<std::mutex> guard(g_viewMutex);
   g_retiredViews[g_retiredNext] = g_view;
@@ -1196,6 +1215,7 @@ void* Object() {
 std::uint32_t TestInitializeCallCount() { return g_initializeCalls.load(std::memory_order_relaxed); }
 std::uint32_t TestShutdownCallCount() { return g_shutdownCalls.load(std::memory_order_relaxed); }
 std::uint32_t TestMaxUsers() { return g_maxUsers; }
+std::uint32_t TestMembersClamped() { return g_membersClamped.load(std::memory_order_relaxed); }
 const void* TestCallbacksSource() { return g_callbacksSource; }
 #endif
 

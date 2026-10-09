@@ -201,7 +201,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     moduleCtx.config_get = &NevrCfgGetFlat;
     SetModuleContext(&moduleCtx);
 
-    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
+    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, MSXML6 pass-through hook.
     // Must load before any network-using code. Statically linked (2026-08-02).
     {
       uint32_t apiVer = platform_compat_ApiVersion();
