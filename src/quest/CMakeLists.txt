@@ -93,6 +93,12 @@ if(TARGET nevr_quest_got_hook)
   target_link_libraries(login_rewrite_test PRIVATE nevr_quest_login)
   target_compile_options(login_rewrite_test PRIVATE -Wall -Wextra -Werror)
 
+  # Install-code host test (partial install, idempotency, gating). Linked against the whole login
+  # archive so the install, its thunks and the backend are present.
+  add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
+  target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
+  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
+
   # Never run: the frames sensor in tests/quest reads it. It links the whole archive so the
   # login handler and everything it calls are present at final addresses.
   add_executable(login_frames_probe tests/login_frames_probe.cpp)

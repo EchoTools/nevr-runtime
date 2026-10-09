@@ -439,6 +439,20 @@ test-quest-shared:
         src/quest/tests/login_prerequisites_test.cpp \
         -o "$out/login_prerequisites_test"
     "$out/login_prerequisites_test"
+    # The install against a host with no libpnsovr.so loaded: fully partial, fail-safe, idempotent.
+    # The thunk-defining TU and the backend are -fno-exceptions (callback_thunk.h); the test too.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel -c \
+        src/quest/login/login_prerequisites_install.cpp -o "$out/login_prerequisites_install.o"
+    for f in got_hook hook_report; do
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel -c \
+            "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
+    done
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
+        "$out/login_prerequisites.o" "$out/login_prerequisites_install.o" \
+        "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
+        src/quest/tests/login_prerequisites_install_test.cpp \
+        -o "$out/login_prerequisites_install_test" -ldl -pthread
+    "$out/login_prerequisites_install_test"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,

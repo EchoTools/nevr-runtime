@@ -146,7 +146,7 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 
 }  // namespace
 
-PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image) noexcept {
+PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready) noexcept {
   const std::lock_guard<std::mutex> lock(InstallMutex());
   if (g_installed.load(std::memory_order_acquire)) return g_result_storage;
   const std::uintptr_t base = image.base;
@@ -159,6 +159,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image) n
   api.message_get_error = ReadBound<const void* (*)(const void*)>(image, T::kMessageGetError);
   api.error_get_code = ReadBound<int (*)(const void*)>(image, T::kErrorGetCode);
   api.error_get_http_code = ReadBound<int (*)(const void*)>(image, T::kErrorGetHttpCode);
+  api.error_get_message = ReadBound<const char* (*)(const void*)>(image, T::kErrorGetMessage);
 
   // The accessors first: they pass through unless a login callback has claimed the message, and
   // no callback can claim one before ConfigurePrerequisites below.
@@ -172,7 +173,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image) n
   result.accessors += Install(hooks.accessors[7], kUserProofGetNonceHook, T::kUserProofGetNonce, base) ? 1 : 0;
 
   result.substitute = result.accessors == 8 && api.message_is_error != nullptr;
-  ConfigurePrerequisites(api, result.substitute);
+  ConfigurePrerequisites(api, result.substitute, ready);
 
   result.callbacks += Install(hooks.callbacks[0], kOrgCallbackHook, T::kOrgScopedIdCallback, base) ? 1 : 0;
   result.callbacks += Install(hooks.callbacks[1], kUserCallbackHook, T::kLoggedInUserCallback, base) ? 1 : 0;
@@ -192,7 +193,17 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image) n
                        {"accessors", result.accessors},
                        {"requests", result.requests},
                        {"substitution", result.substitute ? "on" : "off"},
+                       {"ready_gated", ready != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});
+  // Two values the rewrite never touches stay synthesized after a ready login and can leak to paths
+  // outside SendLogInRequest (matchmaker queue URLs read the access-token CString; the user-name
+  // buffer 0x70e470 feeds CrashReportUserName and party member records). Say so once at install.
+  if (result.substitute) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_login_prerequisites_residual",
+                        {{"access_token", "matchmaker_queue_urls"},
+                         {"user_name_buffer", "crash_report_and_party_records"},
+                         {"org_id", "overwritten_by_rewrite_before_send"}});
+  }
   g_result_storage = result;
   g_installed.store(true, std::memory_order_release);
   return result;
