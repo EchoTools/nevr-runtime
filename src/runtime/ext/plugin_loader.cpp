@@ -274,29 +274,29 @@ class PluginLoadRun {
 
   // LoadLibrary with the restricted search; null on failure (the caller reports it).
   static HMODULE LoadModule(const std::string& path, const char* filename) {
-  /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
-   *
-   * The risk was never loading OUR dll — we pass a full path. It is how ITS
-   * dependencies resolve: with dwFlags=0 the search order starts at the
-   * application directory, so a dll dropped next to echovr.exe can satisfy a
-   * dependency ahead of the real one. These flags restrict the search to the
-   * loaded dll's own directory plus System32.
-   *
-   * Not hypothetical: N89 was a stale dll sitting in plugins/ silently taking
-   * over the log filter for entire runs. That was an accident; the same directory
-   * and the same loader are what an attacker would use deliberately.
-   *
-   * The flags require an absolute path (we have one). If the OS rejects them we
-   * log and fall back rather than failing to load — but we say so, because a
-   * silent fallback would defeat the whole point. */
-  HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
-                                   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
-  if (!hPlugin && GetLastError() == ERROR_INVALID_PARAMETER) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
-        "default search order (hardening inactive for this load)", filename);
-    hPlugin = LoadLibraryA(path.c_str());
+    /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
+     *
+     * The risk was never loading OUR dll — we pass a full path. It is how ITS
+     * dependencies resolve: with dwFlags=0 the search order starts at the
+     * application directory, so a dll dropped next to echovr.exe can satisfy a
+     * dependency ahead of the real one. These flags restrict the search to the
+     * loaded dll's own directory plus System32.
+     *
+     * Not hypothetical: N89 was a stale dll sitting in plugins/ silently taking
+     * over the log filter for entire runs. That was an accident; the same directory
+     * and the same loader are what an attacker would use deliberately.
+     *
+     * The flags require an absolute path (we have one). If the OS rejects them we
+     * log and fall back rather than failing to load — but we say so, because a
+     * silent fallback would defeat the whole point. */
+    HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!hPlugin && GetLastError() == ERROR_INVALID_PARAMETER) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
+          "default search order (hardening inactive for this load)", filename);
+      hPlugin = LoadLibraryA(path.c_str());
   }
     return hPlugin;
   }
@@ -411,26 +411,26 @@ class PluginLoadRun {
 
   // Stable-sort by capability priority and log the resulting load order.
   void SortAndLogOrder() {
-  // Pass 2: stable-sort by capability priority (config order preserved within
-  // a band), then init each plugin in that order.
-  std::stable_sort(staged.begin(), staged.end(), [](const StagedPlugin& a, const StagedPlugin& b) {
-    // Lower `priority` loads first; the stable sort keeps config order within a band.
-    return CapsLoadPriority(a.caps) < CapsLoadPriority(b.caps);
-  });
+    // Pass 2: stable-sort by capability priority (config order preserved within
+    // a band), then init each plugin in that order.
+    std::stable_sort(staged.begin(), staged.end(), [](const StagedPlugin& a, const StagedPlugin& b) {
+      // Lower `priority` loads first; the stable sort keeps config order within a band.
+      return CapsLoadPriority(a.caps) < CapsLoadPriority(b.caps);
+    });
 
-  // Log the sorted order so an operator can see the load sequence: one INFO
-  // summary naming the order, with the full per-item detail at DEBUG — an
-  // INFO per-item line would near-duplicate the
-  // per-plugin "Loaded: ..." INFO confirmation below once each plugin's init
-  // succeeds (Rule 12: INFO is summary, DEBUG is narrative).
-  {
-    std::string order;
-    for (size_t i = 0; i < staged.size(); i++) {
-      if (i > 0) order += ", ";
-      order += staged[i].item.name;
-    }
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PLUGIN] load order (priority-sorted): %s", order.c_str());
+    // Log the sorted order so an operator can see the load sequence: one INFO
+    // summary naming the order, with the full per-item detail at DEBUG — an
+    // INFO per-item line would near-duplicate the
+    // per-plugin "Loaded: ..." INFO confirmation below once each plugin's init
+    // succeeds (Rule 12: INFO is summary, DEBUG is narrative).
+    {
+      std::string order;
+      for (size_t i = 0; i < staged.size(); i++) {
+        if (i > 0) order += ", ";
+        order += staged[i].item.name;
+      }
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PLUGIN] load order (priority-sorted): %s", order.c_str());
   }
   for (size_t i = 0; i < staged.size(); i++) {
     const StagedPlugin& s = staged[i];
@@ -447,67 +447,67 @@ class PluginLoadRun {
 
   // Init each staged plugin in order; record the outcome in `report` and `g_plugins`.
   void InitStaged(const NvrGameContext& ctx) {
-  // A plugin may keep what get_plugin_info returned from inside its init: no
-  // push_back below may move the ones already loaded.
-  g_plugins.reserve(g_plugins.size() + staged.size());
-  for (const StagedPlugin& s : staged) {
-    const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
-                          s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
-    int result = 0;
-    switch (s.initKind) {
-      case PluginInitKind::Ex:     result = s.initExFn(&ctx, s.item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: result = s.initFn(&ctx); break;
-      case PluginInitKind::None:   break;  // no init export — plugin still loads
-    }
-    if (result != 0) {
-      FreeLibrary(s.hModule);
-      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
-                     report[s.planIndex]);
-      continue;
-    }
-
-    // N84: re-verify hooked addresses after this plugin's init may have installed its own detours.
-    // A plugin that re-hooked an address this runtime already owns undoes our patch there, so that
-    // is fatal on a server.
-    if (s.initKind != PluginInitKind::None) {
-      const int collisions = HookGuard::VerifyAll(s.item.file.c_str());
-      if (collisions > 0) {
-        ServerFatal("Plugin %s re-hooked %d address(es) this runtime already owns "
-                    "— our patches at those addresses are no longer applied",
-                    s.item.file.c_str(), collisions);
+    // A plugin may keep what get_plugin_info returned from inside its init: no
+    // push_back below may move the ones already loaded.
+    g_plugins.reserve(g_plugins.size() + staged.size());
+    for (const StagedPlugin& s : staged) {
+      const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
+                            s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
+      int result = 0;
+      switch (s.initKind) {
+        case PluginInitKind::Ex:     result = s.initExFn(&ctx, s.item.args_json.c_str()); break;
+        case PluginInitKind::Legacy: result = s.initFn(&ctx); break;
+        case PluginInitKind::None:   break;  // no init export — plugin still loads
       }
-    }
+      if (result != 0) {
+        FreeLibrary(s.hModule);
+        FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
+                       report[s.planIndex]);
+        continue;
+      }
 
-    const NvrLoadedPluginInfo loadedInfo = {
-        s.info.name, s.info.description,
-        s.info.version_major, s.info.version_minor, s.info.version_patch,
-        s.apiVersion, s.caps};
-    g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps, loadedInfo,
-                         s.initFn, s.onFrameFn,
-                         s.onStateChangeFn, s.shutdownFn, s.path});
-    {
-      PluginManifestEntry& r = report[s.planIndex];
-      r.loaded = true;
-      r.error.clear();
-      r.version_major = s.info.version_major;
-      r.version_minor = s.info.version_minor;
-      r.version_patch = s.info.version_patch;
-      r.api_version = s.apiVersion;
-      r.capabilities = s.caps;
-    }
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s via %s",
-        s.info.name,
-        s.info.version_major, s.info.version_minor, s.info.version_patch,
-        s.apiVersion, s.caps,
-        s.caps == NEVR_PLUGIN_CAP_UNDECLARED ? " UNDECLARED" : "",
-        initVia);
-    if (s.caps == NEVR_PLUGIN_CAP_UNDECLARED) {
+      // N84: re-verify hooked addresses after this plugin's init may have installed its own detours.
+      // A plugin that re-hooked an address this runtime already owns undoes our patch there, so that
+      // is fatal on a server.
+      if (s.initKind != PluginInitKind::None) {
+        const int collisions = HookGuard::VerifyAll(s.item.file.c_str());
+        if (collisions > 0) {
+          ServerFatal("Plugin %s re-hooked %d address(es) this runtime already owns "
+                      "— our patches at those addresses are no longer applied",
+                      s.item.file.c_str(), collisions);
+        }
+      }
+
+      const NvrLoadedPluginInfo loadedInfo = {
+          s.info.name, s.info.description,
+          s.info.version_major, s.info.version_minor, s.info.version_patch,
+          s.apiVersion, s.caps};
+      g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps, loadedInfo,
+                           s.initFn, s.onFrameFn,
+                           s.onStateChangeFn, s.shutdownFn, s.path});
+      {
+        PluginManifestEntry& r = report[s.planIndex];
+        r.loaded = true;
+        r.error.clear();
+        r.version_major = s.info.version_major;
+        r.version_minor = s.info.version_minor;
+        r.version_patch = s.info.version_patch;
+        r.api_version = s.apiVersion;
+        r.capabilities = s.caps;
+      }
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PLUGIN] %s declares no capabilities (pre-v3 or omitted). It is not "
-          "known whether it affects gameplay; treat as unknown, not as harmless.",
-          s.info.name);
-    }
+          "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s via %s",
+          s.info.name,
+          s.info.version_major, s.info.version_minor, s.info.version_patch,
+          s.apiVersion, s.caps,
+          s.caps == NEVR_PLUGIN_CAP_UNDECLARED ? " UNDECLARED" : "",
+          initVia);
+      if (s.caps == NEVR_PLUGIN_CAP_UNDECLARED) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PLUGIN] %s declares no capabilities (pre-v3 or omitted). It is not "
+            "known whether it affects gameplay; treat as unknown, not as harmless.",
+            s.info.name);
+      }
   }
   }
 };
