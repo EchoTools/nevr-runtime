@@ -230,6 +230,19 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CR15NetGame::QuitOnError, which the login prompt hook calls (not a hook target): its symbol is defined at
+  // the pinned address and its first four instructions are the ones the install proves before using it.
+  if (DynamicSymbolValue(r15, pinned::kQuitOnErrorSymbol) != pinned::kQuitOnErrorVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kQuitOnErrorSymbol,
+                 static_cast<unsigned long long>(pinned::kQuitOnErrorVaddr));
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kQuitOnErrorVaddr, pinned::kQuitOnErrorCode,
+                  sizeof(pinned::kQuitOnErrorCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15NetGame::QuitOnError: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "got_pinned_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

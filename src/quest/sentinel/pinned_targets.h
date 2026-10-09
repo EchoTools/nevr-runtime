@@ -79,6 +79,20 @@ using CR15NetGameUpdateSig = void(CR15NetGameOpaque* self, std::uint64_t arg);
 struct LibR15NetGameUpdateTag {};
 using LibR15NetGameUpdateThunk = CallbackThunk<LibR15NetGameUpdateTag, CR15NetGameUpdateSig>;
 
+// NRadEngine::NRadGame::CR15NetGame::QuitOnError(), defined in libr15 at 0x12713f8 (member: `this` in
+// x0, no other argument, no return value; exported, so it is also in .dynsym). It is the game's own
+// error event: with the game space present (CR15Game+0x7af0) it sends the component event whose
+// handler makes the UI status script copy the error block into its text elements again. The login
+// prompt hook calls it when it has rewritten the block while the game sits in "login failed", so a new
+// code reaches the screen. It is not hooked and has no GOT slot of its own to pin (its only slot is the
+// GLOB_DAT of an InvokeExclusiveUpdate instantiation), so it is reached the way the install proves it:
+// the module's build ID, then the function's first four instructions, then base + this address.
+inline constexpr const char* kQuitOnErrorSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame11QuitOnErrorEv";
+inline constexpr std::uint64_t kQuitOnErrorVaddr = 0x12713f8;
+// stp x19, x30, [sp, #-16]!; mov x19, x0; ldr x0, [x0, #8]; ldr x8, [x19, #0x2da0].
+inline constexpr std::uint32_t kQuitOnErrorCode[4] = {0xa9bf7bf3, 0xaa0003f3, 0xf9400400, 0xf956d268};
+using QuitOnErrorSig = void(CR15NetGameOpaque* self);
+
 // CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
 namespace game_layout {
 // EState at offset 0: SwitchTo (0x125b8b4) compares `ldr w0, [x0]` with the new state and stores

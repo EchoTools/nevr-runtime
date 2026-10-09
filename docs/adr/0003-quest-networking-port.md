@@ -150,8 +150,10 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
   (`0x1289168`), whose only caller is `~CR15NetGame` (`0x128824c`), whose only caller is
   `CR15Game::ShutdownEngine` (`0x11f4fe4`): a "login failed -> logged out" line is the engine
   shutting down.
-- Not known from the ELF: which screen renders the error block and whether the UI re-reads it
-  while that screen is up (the assets decide).
+- The login-failed page's status script (`lib674f3b71da94770c.so`) copies the error block
+  (`CR15NetErrorMessageExpression`, `0x23225d0`) into its four text elements only on the game's error
+  event (`delegate_onnetgameerror`, sent from `CR15NetGame::QuitOnError` `0x12713f8`); a block
+  rewritten afterwards is not on the screen until that event is sent again.
 - So the prompt must also work if the game quits after the failure: the player starts the game
   again. A code the player had not used is then gone (nothing polls it any more) and the new start
   shows a new one, in the game text and in `device_login.txt`; a sign-in that finished before the
@@ -190,6 +192,13 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   failure the error hook could not take up (its writer flag was held), or one the error hook did
   not take up because the game was not logging in at that moment (already in -94; that call also
   counts `_text_not_local`).
+- After a rewrite while the instance is in -94 the Update hook calls `CR15NetGame::QuitOnError` once
+  so the status script copies the new text to the screen: at most once per change, not within 50 ms of
+  the previous call (longer than a loop iteration, so never twice in one frame), only for the followed
+  instance and only while it is still in -94, from the game thread. `QuitOnError` is not a GOT
+  target; the install proves it (the module's build ID, then its first four instructions, then
+  `base + 0x12713f8`) and logs `quit_on_error` in `login_prompt_install`. The extra call also ends
+  multiplayer once more (`Ending multiplayer`) and clears flag bits at `+0x2da0`; it switches no state.
 - Both hooks run on one thread: each `CncaGame::RunLoop` iteration calls `CR15Game::Update` (vtable
   slot `0x408`) four times, with the arguments 0 to 3 (`0x17ec5ec`, `0x17ec5fc`, `0x17ec610`,
   `0x17ec624`). Only the call with argument 0 updates the login providers (`cbz x1` at
@@ -200,9 +209,9 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- Neither hook logs or takes a lock. Their eight counters are `login_prompt_text_shown`,
-  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours` and the two
-  thunks' fault counters; installing logs one `login_prompt_install` line (or `skipped` when the
+- Neither hook logs or takes a lock. Their ten counters are `login_prompt_text_shown`,
+  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the two
+  thunks' fault counters, `_error_resent` and `_error_resend_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
 
 Exposure of the device code. It is shown to the player by design and is written to

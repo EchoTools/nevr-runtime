@@ -402,7 +402,7 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A nearly full reporter table (two slots left, the hook needs eight): the counters are refused,
+  // A nearly full reporter table (two slots left, the hook needs ten): the counters are refused,
   // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
   constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
@@ -436,6 +436,137 @@ void CounterRefusalIsLoudAndInstallReportsBothSlots() {
   QCHECK(CountLines("\"result\":\"failed\"") == 1);
 }
 
+// ---- the error event (D2) -------------------------------------------------------------------------
+
+int g_quitCalls = 0;
+CR15NetGameOpaque* g_quitSelf = nullptr;
+std::string g_quitSawLine2;  // what the block held when the event was sent
+void FakeQuitOnError(CR15NetGameOpaque* self) noexcept {
+  ++g_quitCalls;
+  g_quitSelf = self;
+  g_quitSawLine2 = Line(g_game, 2);
+}
+std::int64_t g_now = 1'000'000'000;
+std::int64_t FakeClock() noexcept { return g_now; }
+constexpr std::int64_t kMs = 1'000'000;
+
+// Failure caught (#239 smoke): a code published after the failure was written into the block, but the
+// status script copies the block to the screen only on the game's error event, so the player still saw the
+// old text. A rewrite in "login failed" is followed by one event, after the new text is in the block, once
+// per change, and never twice within a frame.
+void ARewriteInLoginFailedSendsOneErrorEvent() {
+  board::Withdraw();
+  lp::SetClockForTest(&FakeClock);
+  lp::SetQuitOnErrorForTest(&FakeQuitOnError);
+  g_quitCalls = 0;
+  Publish(Prompt("EVT1-CODE"));
+  FailLocally(g_game);  // the game sends its own error event for this failure: the hook sends none
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 0);
+  const lp::Counts before = lp::CurrentCounts();
+
+  g_now += 100 * kMs;
+  Publish(Prompt("EVT2-CODE"));  // the code ran out: a new one
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 1 && g_quitSelf == Obj(g_game));
+  QCHECK(g_quitSawLine2 == "and enter the code EVT2-CODE");  // the text was already there
+  QCHECK(lp::CurrentCounts().resent == before.resent + 1);
+  for (int i = 0; i < 3; ++i) UpdateEntry()(Obj(g_game), 16);  // the rest of the iteration, same instant
+  QCHECK(g_quitCalls == 1);
+
+  // A change 10 ms later waits for the spacing, then goes out once.
+  g_now += 10 * kMs;
+  Publish(Prompt("EVT3-CODE"));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 1);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 1);  // still inside the spacing
+  g_now += 60 * kMs;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 2 && g_quitSawLine2 == "and enter the code EVT3-CODE");
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 2);
+  g_now += 200 * kMs;  // time passes with no change: at most one event per change
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 2);
+  QCHECK(lp::CurrentCounts().resent == before.resent + 2);
+
+  // The notice that replaces the prompt after a sign-in is a change too; withdrawing restores the game's
+  // text and is another.
+  g_now += 100 * kMs;
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 3);
+  g_now += 100 * kMs;
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 4 && Line(g_game, 0) == kLocal);
+  lp::SetQuitOnErrorForTest(nullptr);
+}
+
+// An event is due only while the followed instance is in "login failed": if the game left that state
+// before the spacing passed, nothing is sent, and a later failure does not inherit the old request.
+void NoErrorEventAfterTheGameLeftLoginFailed() {
+  lp::SetQuitOnErrorForTest(&FakeQuitOnError);
+  g_quitCalls = 0;
+  board::Withdraw();
+  Publish(Prompt("EVT4-CODE"));
+  FailLocally(g_game);
+  g_now += 100 * kMs;
+  Publish(Prompt("EVT5-CODE"));
+  UpdateEntry()(Obj(g_game), 16);  // a change: the event goes out
+  QCHECK(g_quitCalls == 1);
+  g_now += 1 * kMs;
+  Publish(Prompt("EVT6-CODE"));
+  UpdateEntry()(Obj(g_game), 16);  // another change 1 ms later: pending, inside the spacing
+  QCHECK(g_quitCalls == 1);
+  SetState(g_game, 3);  // the game leaves "login failed" before the spacing passed
+  g_now += 100 * kMs;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 1);
+  SetState(g_game, layout::kStateLoginFailed);  // back in it (a later failure): the old request is gone
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_quitCalls == 1);
+  board::Withdraw();
+  lp::SetQuitOnErrorForTest(nullptr);
+}
+
+// Failure caught: a build where QuitOnError could not be proven crashing the game, or the miss going
+// unseen. Nothing is called, the block is still rewritten, and the miss is counted.
+void AnUnresolvedErrorEventIsCountedAndNotCalled() {
+  lp::SetQuitOnErrorForTest(nullptr);
+  board::Withdraw();
+  Publish(Prompt("EVT6-CODE"));
+  FailLocally(g_game);
+  const lp::Counts before = lp::CurrentCounts();
+  g_now += 100 * kMs;
+  Publish(Prompt("EVT7-CODE"));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code EVT7-CODE");
+  QCHECK(lp::CurrentCounts().resend_unavailable == before.resend_unavailable + 1);
+  QCHECK(lp::CurrentCounts().resent == before.resent);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+}
+
+// The event is sent for the followed instance only.
+void NoErrorEventForAnInstanceThatIsNotFollowed() {
+  lp::SetQuitOnErrorForTest(&FakeQuitOnError);
+  g_quitCalls = 0;
+  board::Withdraw();
+  Publish(Prompt("EVT8-CODE"));
+  FailLocally(g_game);
+  std::memcpy(g_other.bytes, g_game.bytes, sizeof(g_other.bytes));
+  g_now += 100 * kMs;
+  Publish(Prompt("EVT9-CODE"));
+  UpdateEntry()(Obj(g_other), 16);
+  QCHECK(g_quitCalls == 0);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  g_quitCalls = 0;
+  lp::SetQuitOnErrorForTest(nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -458,6 +589,10 @@ int main() {
   ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt();
   ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate();
   ASecondLocalFailureWhileAlreadyInLoginFailedGetsThePromptToo();
+  ARewriteInLoginFailedSendsOneErrorEvent();
+  NoErrorEventAfterTheGameLeftLoginFailed();
+  AnUnresolvedErrorEventIsCountedAndNotCalled();
+  NoErrorEventForAnInstanceThatIsNotFollowed();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();

@@ -1,8 +1,10 @@
 #include "login_prompt_hook.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "hook_install.h"
 #include "hook_log.h"
@@ -27,6 +29,24 @@ std::atomic<std::uint64_t> g_kept{0};
 std::atomic<std::uint64_t> g_notLocal{0};
 std::atomic<std::uint64_t> g_busy{0};
 std::atomic<std::uint64_t> g_notOurs{0};
+std::atomic<std::uint64_t> g_resent{0};
+std::atomic<std::uint64_t> g_resendUnavailable{0};
+
+// The error event: CR15NetGame::QuitOnError, resolved by Install() (null until then, and on a host).
+std::atomic<QuitFn> g_quit{nullptr};
+// A rewrite of the block while the game sits in "login failed" is followed by one error event, so the
+// UI status script copies the new text again; pending until it is sent. Events are spaced by at least
+// kResendSpacingNs, which is longer than a game-loop iteration (CR15NetGame::Update runs up to four
+// times per iteration): at most one event per change, never two in one frame.
+constexpr std::int64_t kResendSpacingNs = 50'000'000;
+std::atomic<bool> g_resendPending{false};
+std::atomic<std::int64_t> g_lastResendNs{0};
+std::int64_t SteadyNs() noexcept {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+using ClockFn = std::int64_t (*)() noexcept;
+std::atomic<ClockFn> g_clock{&SteadyNs};
 
 // The instance whose error block this hook follows: one whose login failed with a local text while
 // it was logging in. The pointer is only compared with the `this` the game passes to Update; it is
@@ -132,6 +152,7 @@ void Drop(CR15NetGameOpaque* self) noexcept {
   if (g_object.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
     Wipe(g_written, sizeof(g_written));
     g_kind = Kind::kGame;
+    g_resendPending.store(false, std::memory_order_relaxed);
   }
 }
 
@@ -177,6 +198,7 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
       g_kept.fetch_add(1, std::memory_order_relaxed);
     }
   }
+  g_resendPending.store(false, std::memory_order_relaxed);  // the game sends its own error event for this failure
   g_object.store(self, std::memory_order_release);
   Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);
@@ -184,12 +206,13 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
 
 // Keeps the followed instance's block current. Runs on each CR15NetGame::Update call (up to four per
 // game-loop iteration), before the game's own.
-void Refresh(CR15NetGameOpaque* self) noexcept {
+// Returns true when it rewrote the block.
+bool Refresh(CR15NetGameOpaque* self) noexcept {
   const bool leftLoginFailed = State(self) != layout::kStateLoginFailed;
-  if (g_writing.test_and_set(std::memory_order_acquire)) return;  // the other writer: next frame
+  if (g_writing.test_and_set(std::memory_order_acquire)) return false;  // the other writer: next frame
   if (g_object.load(std::memory_order_acquire) != self) {  // dropped or replaced meanwhile
     g_writing.clear(std::memory_order_release);
-    return;
+    return false;
   }
   unsigned char* block = Block(self);
   // Nothing to do while the board and the block are as last left (checked on every call: the game
@@ -197,7 +220,7 @@ void Refresh(CR15NetGameOpaque* self) noexcept {
   if (!leftLoginFailed && board::Version() == g_applied.load(std::memory_order_relaxed) &&
       SameBlock(block, g_written)) {
     g_writing.clear(std::memory_order_release);
-    return;
+    return false;
   }
   bool follow = true;
   if (leftLoginFailed) {
@@ -220,7 +243,7 @@ void Refresh(CR15NetGameOpaque* self) noexcept {
   if (!follow) {
     Drop(self);
     g_writing.clear(std::memory_order_release);
-    return;
+    return false;
   }
   char text[board::kCapacity + 1];
   board::Mode mode = board::Mode::kPrompt;
@@ -236,19 +259,47 @@ void Refresh(CR15NetGameOpaque* self) noexcept {
     CopyBlock(g_written, g_saved);  // withdrawn: the game's own message again
     g_kind = Kind::kGame;
   }  // a notice on a screen with the game's own text, or an empty board there: nothing to change
+  bool rewrote = false;
   if (read != board::ReadResult::kBusy) {  // busy: next frame
     if (!SameBlock(block, g_written)) {
       CopyBlock(block, g_written);
       g_refreshed.fetch_add(1, std::memory_order_relaxed);
+      rewrote = true;
     }
     g_applied.store(version, std::memory_order_relaxed);
   }
   Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);
+  return rewrote;
+}
+
+// Sends the pending error event for the followed instance when it is still in "login failed" and the last
+// one was at least kResendSpacingNs ago. On the game's thread, inside the Update hook.
+void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
+  if (!g_resendPending.load(std::memory_order_relaxed)) return;
+  if (State(self) != layout::kStateLoginFailed || g_object.load(std::memory_order_acquire) != self) {
+    g_resendPending.store(false, std::memory_order_relaxed);  // the screen is gone: nothing to re-read
+    return;
+  }
+  const std::int64_t now = g_clock.load(std::memory_order_relaxed)();
+  const std::int64_t last = g_lastResendNs.load(std::memory_order_relaxed);
+  if (last != 0 && now - last < kResendSpacingNs) return;  // next frame
+  const QuitFn quit = g_quit.load(std::memory_order_acquire);
+  g_resendPending.store(false, std::memory_order_relaxed);
+  if (quit == nullptr) {
+    g_resendUnavailable.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  g_lastResendNs.store(now, std::memory_order_relaxed);
+  g_resent.fetch_add(1, std::memory_order_relaxed);
+  quit(self);
 }
 
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
-  if (self != nullptr && self == g_object.load(std::memory_order_acquire)) Refresh(self);
+  if (self != nullptr && self == g_object.load(std::memory_order_acquire)) {
+    if (Refresh(self)) g_resendPending.store(true, std::memory_order_relaxed);
+    ResendErrorEvent(self);
+  }
   original(self, arg);
 }
 
@@ -280,6 +331,8 @@ bool RegisterCounters() noexcept {
       {"login_prompt_block_not_ours", &g_notOurs, sentinel::ReportKind::kFaults},
       {"login_prompt_error_thunk_faults", &ErrorThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"login_prompt_update_thunk_faults", &UpdateThunk::FaultCounter(), sentinel::ReportKind::kFaults},
+      {"login_prompt_error_resent", &g_resent, sentinel::ReportKind::kCalls},
+      {"login_prompt_error_resend_unavailable", &g_resendUnavailable, sentinel::ReportKind::kFaults},
   };
   int registered = 0;
   for (const Entry& e : entries) registered += sentinel::RegisterReportCounter(e.name, e.value, e.kind) ? 1 : 0;
@@ -291,6 +344,26 @@ bool RegisterCounters() noexcept {
   return true;
 }
 
+// Proves libr15's QuitOnError is the pinned build's (build ID, then its first four instructions) and
+// publishes it. The error event is optional: without it the prompt still reaches the screen at the next
+// failure, so a refusal is counted at the first rewrite and logged here once.
+const char* ResolveQuitOnError() noexcept {
+  sentinel::ElfImage image;
+  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
+  char id[64] = {};
+  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
+  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) return "build_id_mismatch";
+  const unsigned char* fn = reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kQuitOnErrorVaddr;
+  if (std::memcmp(fn, sentinel::pinned::kQuitOnErrorCode, sizeof(sentinel::pinned::kQuitOnErrorCode)) != 0) {
+    return "prologue_mismatch";
+  }
+  QuitFn quit = nullptr;
+  static_assert(sizeof(quit) == sizeof(fn), "function pointer size");
+  std::memcpy(&quit, &fn, sizeof(quit));
+  g_quit.store(quit, std::memory_order_release);
+  return "resolved";
+}
+
 bool Install() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
@@ -300,10 +373,12 @@ bool Install() noexcept {
       sentinel::InstallThunk<UpdateThunk>(g_updateHook, sentinel::pinned::LibR15NetGameUpdate());
   const bool ok = error == sentinel::GotStatus::kOk && update == sentinel::GotStatus::kOk;
   const bool any = error == sentinel::GotStatus::kOk || update == sentinel::GotStatus::kOk;
+  const char* const quit = ResolveQuitOnError();
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "login_prompt_install",
                       {{"result", ok ? "installed" : (any ? "partial" : "failed")},
                        {"error_text", sentinel::GotStatusName(error)},
-                       {"update", sentinel::GotStatusName(update)}});
+                       {"update", sentinel::GotStatusName(update)},
+                       {"quit_on_error", quit}});
   return ok;
 }
 
@@ -321,13 +396,23 @@ void ArmForTest() noexcept {
   UpdateThunk::Arm(kNetGameUpdateHook);
 }
 
+void SetQuitOnErrorForTest(QuitFn quit) noexcept {
+  g_quit.store(quit, std::memory_order_release);
+  g_resendPending.store(false, std::memory_order_relaxed);
+  g_lastResendNs.store(0, std::memory_order_relaxed);
+}
+void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept {
+  g_clock.store(clock != nullptr ? clock : &SteadyNs, std::memory_order_relaxed);
+}
+
 bool HoldBlockWriterForTest() noexcept { return !g_writing.test_and_set(std::memory_order_acquire); }
 void ReleaseBlockWriterForTest() noexcept { g_writing.clear(std::memory_order_release); }
 
 Counts CurrentCounts() noexcept {
   return {g_shown.load(std::memory_order_relaxed),    g_refreshed.load(std::memory_order_relaxed),
           g_kept.load(std::memory_order_relaxed),     g_notLocal.load(std::memory_order_relaxed),
-          g_busy.load(std::memory_order_relaxed),     g_notOurs.load(std::memory_order_relaxed)};
+          g_busy.load(std::memory_order_relaxed),     g_notOurs.load(std::memory_order_relaxed),
+          g_resent.load(std::memory_order_relaxed),   g_resendUnavailable.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::login_prompt

@@ -36,11 +36,13 @@
  *     unless it holds one of the local login-failure texts again, which becomes the game's text to
  *     follow and gets the prompt: a new failure the error hook could not take up (its writer flag
  *     was held), or one it did not take up because the game was not logging in at that moment
- *     (already in "login failed"; that call also counts login_prompt_text_not_local). Whether the UI re-reads the
- *     block while the error screen is up is not known from the binary; the next login failure
- *     writes the current text either way.
+ *     (already in "login failed"; that call also counts login_prompt_text_not_local). The status
+ *     script copies the block into its text elements only on the game's error event, so after a
+ *     rewrite the hook sends that event once (CR15NetGame::QuitOnError, pinned_targets.h), at most
+ *     once per change and not within 50 ms of the last one, from the game's thread. Install()
+ *     proves the function (build ID, first four instructions) and logs "quit_on_error".
  *
- * It never logs on the game's call path. Its eight counters (hook_report.h), registered by
+ * It never logs on the game's call path. Its ten counters (hook_report.h), registered by
  * RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
  *   login_prompt_text_refreshed     the followed block was rewritten or restored after a change
@@ -53,13 +55,17 @@
  *   login_prompt_block_not_ours     the block did not hold the game's message at the failure, or
  *                                   another writer changed it later: nothing written, not followed
  *   login_prompt_error_thunk_faults / login_prompt_update_thunk_faults  a thunk had no original
+ *   login_prompt_error_resent       the block was rewritten while the game sat in "login failed" and
+ *                                   the game's error event (CR15NetGame::QuitOnError) was sent once so
+ *                                   the status script copies the new text to the screen
+ *   login_prompt_error_resend_unavailable  an event was due and QuitOnError was not resolved
  *
  * Integration surface. The sentinel's own entry.cpp installs the hooks, but nothing in it creates
  * QuestTokenAuth, so there the board stays empty and the game's text always passes through. A
  * startup sequence that links token auth into the same shared object and creates it
  * (QuestTokenAuth::Create, whose presenters publish to the board) calls, in this order:
  *   1. RegisterCounters()  before sentinel::StartReporter. Returns false, after one JSON line, when
- *                          the reporter refused any of the eight.
+ *                          the reporter refused any of the ten.
  *   2. InstallIfCounted(<result of 1>)  after QuestTokenAuth::Create; nothing else needs
  *                          attaching. Skips, with one JSON line, when the counters were refused;
  *                          otherwise Install(). Both slots are in
@@ -81,8 +87,9 @@ namespace nevr_quest::login_prompt {
 
 using ErrorThunk = sentinel::pinned::LibR15SetDelimitedErrorMessageThunk;
 using UpdateThunk = sentinel::pinned::LibR15NetGameUpdateThunk;
+using QuitFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
 
-inline constexpr int kCounterCount = 8;
+inline constexpr int kCounterCount = 10;
 
 // Registers the counters. Call before sentinel::StartReporter. Returns false, having logged one
 // line {"event":"login_prompt_counters","result":"refused",...}, when any was refused.
@@ -101,6 +108,11 @@ bool InstallIfCounted(bool countersRegistered) noexcept;
 // through the thunks' OriginalOut() and calls their EntryFn() directly.
 void ArmForTest() noexcept;
 
+// Test support: the function the hook calls as CR15NetGame::QuitOnError (null: unavailable), and the
+// monotonic clock (nanoseconds) it spaces those calls with (null: the steady clock).
+void SetQuitOnErrorForTest(QuitFn quit) noexcept;
+void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept;
+
 // Test support: takes / gives back the hooks' single-writer flag, as the other hook would hold it.
 // Returns false when it was already taken. Nothing in production calls these.
 bool HoldBlockWriterForTest() noexcept;
@@ -108,7 +120,7 @@ void ReleaseBlockWriterForTest() noexcept;
 
 // The counters' current values, in the order of the comment above.
 struct Counts {
-  std::uint64_t shown, refreshed, kept, not_local, busy, not_ours;
+  std::uint64_t shown, refreshed, kept, not_local, busy, not_ours, resent, resend_unavailable;
 };
 Counts CurrentCounts() noexcept;
 
