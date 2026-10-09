@@ -367,9 +367,10 @@ if(BUILD_TESTING)
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
       tests/test_failure_detail.cpp
+      tests/test_login_session.cpp
       server/serverdb_uri.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)

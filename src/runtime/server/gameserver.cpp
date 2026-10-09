@@ -26,6 +26,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
+#include "core/login_session.h"
 #include "core/build_identity.h"  // N112: NEVR build identity
 #include "runtime/server/messages.h"
 
@@ -1019,7 +1020,7 @@ void GameServerLib::RegisterTcpCallbacks() {
 
     gameservice::v1::Envelope envelope;
     auto* registration = envelope.mutable_game_server_registration();
-    registration->set_login_session_id(GuidToUuidString(g_loginSessionId));
+    registration->set_login_session_id(GuidToUuidString(LoginSession::Get()));
     registration->set_server_id(static_cast<uint64_t>(state.serverId));
     registration->set_internal_ip_address(externalIp);
     registration->set_port(static_cast<uint32_t>(broadcasterPort));
@@ -1569,7 +1570,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Build protobuf registration request
   gameservice::v1::Envelope envelope;
   auto* registration = envelope.mutable_game_server_registration();
-  registration->set_login_session_id(GuidToUuidString(g_loginSessionId));
+  registration->set_login_session_id(GuidToUuidString(LoginSession::Get()));
   registration->set_server_id(static_cast<uint64_t>(serverId));
   registration->set_internal_ip_address(externalIp);  // public-facing IP
   registration->set_port(static_cast<uint32_t>(broadcasterPort));
