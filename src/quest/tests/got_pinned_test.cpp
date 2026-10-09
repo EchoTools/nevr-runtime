@@ -124,6 +124,8 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
     }
   }
   return 0;
+}
+
 // `text` is a whole NUL-terminated string in the file (a NUL before and after it).
 bool HoldsString(const std::vector<char>& file, const char* text) {
   std::string needle(1, '\0');
