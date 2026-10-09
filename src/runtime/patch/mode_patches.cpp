@@ -145,7 +145,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
         "The engine-flags offset or mask no longer matches this build of echovr.exe.");
   }
 
-  // WriteLog hook removed — log_filter plugin now owns CLog::PrintfImpl.
+  // No WriteLog hook here — the log_filter plugin owns CLog::PrintfImpl.
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
@@ -767,8 +767,8 @@ VOID PatchBlockOculusSDK() {
   // second detour on the same two addresses loses. MinHook allows one detour per
   // target. So the Oculus filter here never installs — but it is moot on a
   // headless server anyway (the OVR SDK is never loaded), and DllLoadHook's own
-  // hook does not do Oculus blocking. PatchDetour now reports the failure with its
-  // reason (N126/N128); this log used to claim "Installed" unconditionally.
+  // hook does not do Oculus blocking. PatchDetour reports the failure with its
+  // reason (N126/N128), so this log must not claim "Installed" unconditionally.
   // Proper fix (flagged, not done): fold the ovrplatform filter into DllLoadHook's
   // HookedLoadLibraryW so one hook serves both, or drop these as redundant.
   //

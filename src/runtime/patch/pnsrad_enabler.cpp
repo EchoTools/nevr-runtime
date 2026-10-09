@@ -351,7 +351,7 @@ static int s_pnsradOk = 0;
 static int s_pnsradFail = 0;
 
 /* Apply one NOP patch, counting and reporting every outcome including the
- * previously-silent PatchMemory failure. */
+ * PatchMemory failure. */
 static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen,
                            size_t nopLen, const char* what, unsigned rva) {
     if (!nevr::ValidatePrologue(site, expected, expLen)) {

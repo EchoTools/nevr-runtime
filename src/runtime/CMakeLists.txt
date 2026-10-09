@@ -54,6 +54,7 @@ set(PATCHES_SOURCES
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
+    "server/gameserver_callbacks.cpp"
     "server/registration_envelope.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
@@ -75,7 +76,9 @@ set(PATCHES_HEADERS
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
     "lifecycle/system_module_loader.h"
+    "log/boot_lines.h"
     "log/boot_log_tee.h"
+    "log/boot_replay.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
@@ -126,6 +129,7 @@ set(PATCHES_HEADERS
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
+    "server/gameserver_internal.h"
     "server/registration_envelope.h"
     "server/server_context.h"
     "server/websocket_client.h"
@@ -199,7 +203,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -376,12 +380,15 @@ if(BUILD_TESTING)
 
     # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
     # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
+    # test_boot_replay.cpp (#5, header-only log/boot_lines.h and log/boot_replay.h) rides in this executable.
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
       tests/test_failure_detail.cpp
+      tests/test_boot_replay.cpp
+      tests/test_login_session.cpp
       server/serverdb_uri.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_boot_replay.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)

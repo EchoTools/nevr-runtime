@@ -583,7 +583,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       }
       // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
       // server for the list again; the reply rebuilds the roster (a friend added on the website
-      // used to stay invisible until the next login).
+      // would otherwise stay invisible until the next login).
       if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
         uint64_t friendId = 0;
         if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
@@ -757,13 +757,13 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
-  // Host facts, MEASURED. Every value in this block used to be a literal —
-  // "cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores, 8 logical,
-  // 16384 MB total, 8192 used — sent as though read from the machine. That is
+  // Host facts, MEASURED. No value in this block is a literal ("cpu":"Wine",
+  // "video_card":"Wine D3D12", 4 physical cores, 8 logical, 16384 MB total,
+  // 8192 used would be sent as though read from the machine). That is
   // worse than sending nothing: absent data is visibly absent, while invented
   // data is indistinguishable from a reading and gets acted on.
   //
-  // Fields this process cannot honestly determine are now sent EMPTY or 0
+  // Fields this process cannot honestly determine are sent EMPTY or 0
   // rather than guessed. video_card and dedicated_gpu_memory have no truthful
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
@@ -946,10 +946,10 @@ void InstallWebSocketBridge() {
               ix::WebSocket* gameWsPtr = &gameWs;
 
               // N61: register an independent callback for each matchmaker
-              // connection on the shared remote. Previously matchmaker relied
-              // entirely on the login connection's callback — when login
-              // disconnected and B2/N54 nulled that callback, all matchmaker
-              // server→game message routing silently died.
+              // connection on the shared remote. Relying on the login
+              // connection's callback alone fails: when login
+              // disconnects and B2/N54 nulls that callback, all matchmaker
+              // server→game message routing silently dies.
               g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
                   [pairPtr, gameWsPtr, connIdx,
                    remoteAddress = static_cast<const ix::WebSocket*>(g_loginRemoteWs.get())](const ix::WebSocketMessagePtr& rmsg) {

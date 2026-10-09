@@ -121,7 +121,7 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 
 /* Address resolution comes from nevr_common.h — nevr::ResolveVA_Checked for
    init-time setup, nevr::ResolveVA_Unchecked for the one Shutdown site that
-   needs it (N96). This file used to carry its own file-static pair. */
+   needs it (N96). This file carries no file-static copy of either. */
 
 #ifdef _WIN32
 
@@ -289,11 +289,9 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * Timer precision improves from ~15.6ms to ~0.5ms on Windows 10 1803+.
  * Falls back to standard timer on older Windows.
  *
- * N26 flagged the comment that used to sit here as "doubly false": it claimed
- * server_timing hooks this function later with WSAPoll-based event-driven recv
- * and chains on top. server_timing's Init had zero call sites, so no hook was
- * ever installed, so there is no such hook. This hook is the only owner of
- * CPrecisionSleep::Wait.
+ * No other hook chains on this function (N26): server_timing's Init has no
+ * call sites, so no WSAPoll-based event-driven recv hook is installed on top.
+ * This hook is the only owner of CPrecisionSleep::Wait.
  *
  * Note it does NOT run in server mode at all (N86, measured: zero entries over a
  * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
@@ -326,16 +324,11 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
-    // This block used to be a second, divergent copy of the dispatch, and it
-    // hard-coded `gctx.flags = NEVR_HOST_IS_SERVER` with the comment "always
-    // server at this point". That was exactly inverted: hook_liveness.cpp:18
-    // records this hook as "CLIENT ONLY — never runs on a server". So the
-    // one path that runs ONLY on a client told every plugin and module that it
-    // was running on a server. N86 measured the truth and added the dispatcher
-    // below, but left this copy asserting the opposite.
-    //
-    // Calling the shared dispatcher fixes the flags and gives the client path
-    // the rate limit and re-entrancy guard the server path already had.
+    // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as
+    // "CLIENT ONLY — never runs on a server"), so a hard-coded
+    // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
+    // was running on a server. The shared dispatcher derives the flags and gives
+    // the client path the rate limit and re-entrancy guard the server path has.
     Frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {

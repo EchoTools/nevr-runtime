@@ -50,7 +50,7 @@ extern EchoVR::Json* g_earlyConfigPtr;
 
 /// <summary>
 /// Allow RedirectServiceUrl to act. Called once from RunDeferredRuntimeBootstrap
-/// at the point g_earlyConfigPtr used to become non-null, because redirect
+/// at the point g_earlyConfigPtr would become non-null, because redirect
 /// resolution is the FIRST access to the lazily loaded config.yaml singleton and
 /// must not happen before the bootstrap (see RedirectServiceUrl).
 /// </summary>
