@@ -469,7 +469,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `RemoteLogSetv3`; every matchmaker send but `MatchmakerStatusRequest`, the `PingResponse` included;
    `SNSConfigRequestv2` on the config connection) and never delivers an Unrequire to a connection with
    nothing outstanding; such an Unrequire is dropped and counted (`Stats::droppedUnrequires`). The service
-   pairs an Unrequire with `ChannelInfoResponse`, `DocumentSuccess`, `UpdateProfileSuccess`, config replies
+   pairs an Unrequire with `LoginFailure` (every login failure is a `LoginFailure` frame and then a standalone
+   Unrequire), `ChannelInfoResponse`, `DocumentSuccess`, `UpdateProfileSuccess`, config replies
    and its own `LobbyPingRequest`; it sends the Unrequire as a frame of its own from a concurrent goroutine,
    so frames interleave and the router queues, per paired message, the connection that message went to and
    gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,

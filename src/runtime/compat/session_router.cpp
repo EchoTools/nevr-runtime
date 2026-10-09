@@ -147,10 +147,11 @@ bool RequestRaisesRequireCount(Role role, uint64_t symbol) {
   return false;
 }
 
-// The replies the service follows with an STcpConnectionUnrequireEvent of its own (a login reply carries its
-// Unrequire inside the same frame; a config reply's comes on the config remote).
+// The replies the service follows with an STcpConnectionUnrequireEvent of its own frame (a successful login
+// reply carries its Unrequire inside the same frame; a config reply's comes on the config remote). A login
+// failure is sent as SendEvrUnrequire: the LoginFailure frame, then a standalone Unrequire.
 bool PairsWithUnrequire(uint64_t symbol) {
-  return symbol == EvrCodec::kSymChannelInfoResponse || symbol == EvrCodec::kSymDocumentSuccess ||
+  return symbol == EvrCodec::kSymLoginFailure || symbol == EvrCodec::kSymChannelInfoResponse || symbol == EvrCodec::kSymDocumentSuccess ||
          symbol == EvrCodec::kSymUpdateProfileSuccess || symbol == EvrCodec::kSymLobbyPingRequest;
 }
 

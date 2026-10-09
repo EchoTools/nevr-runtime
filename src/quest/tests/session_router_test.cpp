@@ -954,6 +954,30 @@ void TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
 
+// Failure caught (#239 second review M1): nakama sends every login failure as a LoginFailure frame and then a
+// standalone Unrequire. With LoginFailure missing from the messages the router pairs with an Unrequire, that
+// Unrequire was dropped and the login request stayed outstanding, so a later Unrequire nothing was owed (after
+// a document nobody asked for) went through and wrapped the game's count.
+void TestALoginFailureAndItsUnrequireLowerTheLoginCount() {
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  std::string failure;
+  for (int i = 0; i < 3; ++i) failure.append(8, '\0');  // the three u64 fields; the status is not read here
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failure + "text"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // the login's: delivered
+  QCHECK(rig.games.Sent().size() == 2);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+  // The login count is back to zero: an Unrequire after a document nobody asked for is dropped.
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  QCHECK(rig.games.Sent().size() == 3);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+}
+
 // The config connection has a remote of its own; its Unrequire follows the same rule with its own count.
 void TestConfigConnectionUnrequireNeverExceedsItsRequests() {
   Rig rig;
@@ -1277,6 +1301,7 @@ int main() {
   TestUnflaggedRequestsDoNotCountAndAnExtraUnrequireIsDropped();
   TestConfigConnectionUnrequireNeverExceedsItsRequests();
   TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount();
+  TestALoginFailureAndItsUnrequireLowerTheLoginCount();
   TestUnknownFirstFrameKeepsTheProvisionalRole();
   TestReconnectedLoginConnectionTakesOverTheSession();
   TestLoginReplyWithoutALoginConnectionIsDropped();
