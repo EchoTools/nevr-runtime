@@ -21,6 +21,17 @@ QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth:
   return QuestLogin::IdentityStatus::Ok;
 }
 
+SessionRouter::LoginGate TokenIdentitySource::GateFor(const nevr::quest_auth::Snapshot& snap) noexcept {
+  switch (Classify(snap)) {
+    case QuestLogin::IdentityStatus::Ok:
+      return SessionRouter::LoginGate::Ready;
+    case QuestLogin::IdentityStatus::NotReady:
+      return SessionRouter::LoginGate::Awaiting;
+    default:
+      return SessionRouter::LoginGate::Refused;
+  }
+}
+
 QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out) {
   if (!snapshot_) {
     ready_.Set(false);

@@ -58,6 +58,14 @@ class FakeGames : public GameTransport {
     sent.push_back({game, std::string(frame), binary});
     return SendResult::Sent;
   }
+  void SetHeld(GameId game, bool held) override {
+    std::lock_guard<std::mutex> lock(mutex);
+    holds.emplace_back(game, held);
+  }
+  std::vector<std::pair<GameId, bool>> Holds() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return holds;
+  }
   void Close(GameId game, uint16_t code, std::string_view reason) override {
     if (onClose) onClose(game);
     std::lock_guard<std::mutex> lock(mutex);
@@ -74,6 +82,7 @@ class FakeGames : public GameTransport {
   std::mutex mutex;
   std::vector<SentFrame> sent;
   std::vector<CloseRecord> closes;
+  std::vector<std::pair<GameId, bool>> holds;
   std::vector<SendResult> script;  // consumed one per Send call; empty means Sent
   int sendCalls = 0;
   std::function<void(GameId)> onClose;
@@ -853,7 +862,7 @@ void TestReconnectedLoginConnectionTakesOverTheSession() {
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameClose(2);  // the login connection goes
-  rig.router->OnGameOpen(4);   // the game's new login connection: provisionally a matchmaker
+  rig.router->OnGameOpen(4);   // the game's new login connection: the session has no login connection, so it is one
   rig.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
   QCHECK(rig.remotes.Opens().size() == 2);  // it rides the live session: no second login remote
   rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
@@ -918,6 +927,155 @@ void TestLoginConnectionWithSharersKeepsItsRole() {
   QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 2);
 }
 
+// Failure caught: a second connection that names itself the login (LogInRequestv2) while the first login
+// connection is still open leaving the old one in charge of the login replies.
+void TestLoginRequestOnAnotherConnectionTakesOverFromALiveLogin() {
+  Rig rig;
+  OpenThree(rig);  // config 1, login 2, matchmaker 3
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameOpen(4);  // a live login exists: provisionally a matchmaker
+  rig.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  QCHECK(rig.remotes.Opens().size() == 2);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 2);
+  if (sent.size() == 2) {
+    QCHECK(sent[0].id == 4);  // the new login connection
+    QCHECK(sent[1].id == 3);  // lobby: the newest matchmaker connection (the demoted game 2 is older)
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A held login: the login connection waits for the account instead of failing.
+
+struct Gate {
+  std::atomic<int> value{static_cast<int>(LoginGate::Awaiting)};
+  void Set(LoginGate g) { value = static_cast<int>(g); }
+  LoginGateFn Fn() {
+    return [this]() { return static_cast<LoginGate>(value.load()); };
+  }
+};
+
+// Failure caught: the login connection opening a remote (and so failing 1011) while no account exists.
+// The held connection gets no remote, no close, the transport is told to keep it open, and what the game
+// sends meanwhile waits in order; when the account is there the remote opens and the frames follow.
+void TestHeldLoginOpensWhenTheAccountAppears() {
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);  // config: not held, opens
+  rig.router->OnGameOpen(2);  // login: held
+  QCHECK(rig.remotes.Opens().size() == 1 && rig.remotes.Opens()[0].role == Role::Config);
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  const auto holds = rig.games.Holds();
+  QCHECK(holds.size() == 1 && holds[0].first == 2 && holds[0].second);
+  QCHECK(rig.logs.Has("(login) held"));
+  const std::string loginRequest = Msg(EvrCodec::kSymLoginRequest, "the-login");
+  const std::string next = Msg(EvrCodec::kSymConfigRequest, "after");
+  rig.router->OnGameFrame(2, loginRequest, true);
+  rig.router->OnGameFrame(2, next, true);
+  QCHECK(rig.router->GetStats().pendingFrames == 2);
+  rig.router->ReevaluateHeldLogins();  // still awaiting: nothing changes
+  QCHECK(rig.remotes.Opens().size() == 1 && rig.router->GetStats().heldRemotes == 1);
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 2);
+  RemoteId login = kNoRemote;
+  if (opens.size() == 2) {
+    QCHECK(opens[1].role == Role::Login && !opens[1].standaloneMatchmaker);
+    login = opens[1].remote;
+  }
+  QCHECK(rig.router->GetStats().heldRemotes == 0);
+  {
+    const auto released = rig.games.Holds();
+    QCHECK(!released.empty() && released.back() == std::make_pair(GameId(2), false));
+  }
+  rig.router->ReevaluateHeldLogins();  // idempotent: no second open
+  QCHECK(rig.remotes.Opens().size() == 2);
+  rig.router->OnRemoteOpen(login);
+  const auto sent = rig.remotes.Sent();
+  QCHECK(sent.size() == 2);
+  if (sent.size() == 2) QCHECK(sent[0].data == loginRequest && sent[1].data == next);
+  QCHECK(rig.games.Closes().empty());
+  // Replies reach the login connection once the session is up.
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 2);
+}
+
+// Failure caught: the hold being applied to every connection. A config connection with no account still
+// fails at once (its remote cannot start): 1011, and the held login is untouched.
+void TestConfigConnectionStillFailsFastWhileTheLoginIsHeld() {
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.remotes.openResult = false;  // what the bridge answers when there is no account token
+  rig.router->OnGameOpen(1);
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1 && closes[0].id == 1 && closes[0].code == kCloseInternalError);
+  rig.router->OnGameOpen(2);
+  QCHECK(rig.remotes.Opens().size() == 1);  // the login did not call Open
+  QCHECK(rig.games.Closes().size() == 1);
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  rig.router->OnGameOpen(3);  // a matchmaker riding the held session is not held itself
+  for (const auto& h : rig.games.Holds()) QCHECK(h.first == 2);
+}
+
+// Failure caught: a held login that is never released when the sign-in expires or fails: the game would wait
+// forever on a connection that can never log in. The hold ends with a close and the session is forgotten.
+void TestHeldLoginIsClosedWhenTheAccountIsRefused() {
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  gate.Set(LoginGate::Refused);
+  rig.router->ReevaluateHeldLogins();
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1 && closes[0].id == 2 && closes[0].code == kCloseInternalError);
+  QCHECK(rig.router->GetStats().heldRemotes == 0);
+  QCHECK(rig.remotes.Opens().size() == 1);  // never opened
+  QCHECK(rig.router->GetStats().nextConnIdx == 1);  // the next connection is a login again
+}
+
+// Failure caught: the game's login connection reconnecting while the account is still awaited. The
+// replacement is the login connection of the same held session: held again, one remote, opened once.
+void TestReplacementLoginConnectionIsHeldOnTheSameSession() {
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  rig.router->OnGameClose(2);
+  rig.router->OnGameOpen(3);
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  {
+    const auto held = rig.games.Holds();
+    QCHECK(!held.empty() && held.back() == std::make_pair(GameId(3), true));
+  }
+  QCHECK(rig.games.Closes().empty());
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(rig.remotes.Opens().size() == 2);
+}
+
+// The Quest and PC wiring without a gate never holds anything.
+void TestNoGateNeverHolds() {
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  QCHECK(rig.remotes.Opens().size() == 2 && rig.router->GetStats().heldRemotes == 0);
+  QCHECK(rig.games.Holds().empty());
+  rig.router->ReevaluateHeldLogins();
+}
+
 }  // namespace
 
 int main() {
@@ -958,6 +1116,12 @@ int main() {
   TestLoginReplyWithoutALoginConnectionIsDropped();
   TestProvisionalLoginThatSendsConfigIsMoved();
   TestLoginConnectionWithSharersKeepsItsRole();
+  TestLoginRequestOnAnotherConnectionTakesOverFromALiveLogin();
+  TestHeldLoginOpensWhenTheAccountAppears();
+  TestConfigConnectionStillFailsFastWhileTheLoginIsHeld();
+  TestHeldLoginIsClosedWhenTheAccountIsRefused();
+  TestReplacementLoginConnectionIsHeldOnTheSameSession();
+  TestNoGateNeverHolds();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

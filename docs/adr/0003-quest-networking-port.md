@@ -426,6 +426,20 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    outstanding-request count. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
    `TestServerFramesRouteByRole` pin this.
 
+   **A held login.** Before the player signs in there is no account token, and the login
+   connection (silent, long-lived: the game fails over to "service unavailable" after three failed
+   connects) must not fail. `Options::loginGate` answers Awaiting, Ready or Refused
+   (`TokenIdentitySource::GateFor`, kept current by the token-auth poll as a lock-free atomic).
+   While it answers Awaiting the router creates the login session's record but does not open its
+   remote (`Stats::heldRemotes`), tells the transport `GameTransport::SetHeld`, and queues what the
+   game sends in order. `LoopbackGameServer` exempts a held connection from `idleFirstFrameMs`
+   (pings are still answered) and restarts that clock when the hold ends. `ReevaluateHeldLogins`
+   (via `IntegratedBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
+   Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
+   never held: with no token their remote cannot start and they close with 1011 at once. A
+   connection opened while the login session has no live login connection is the login connection of
+   that session (held again if the account is still awaited).
+
    **Login injection is mutually exclusive with the game's own login.** The router injects a
    LoginRequest (and, separately, a friend-list subscribe after LoginSuccess) only when the
    wiring sets `Options::buildLogin` (and `subscribeFriendList`); both are off by default. The PC

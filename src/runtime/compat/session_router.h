@@ -22,6 +22,12 @@
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
 //   * remote end (close or error): every game socket on that session is closed and the session is
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
+//   * a held login: while the wiring says the account the login needs is still being obtained
+//     (Options::loginGate answers Awaiting) the login connection's remote is not opened, and the connection
+//     is neither failed nor closed. GameTransport::SetHeld tells the transport to keep it open. When the gate
+//     answers Ready the remote opens and the frames the game queued meanwhile follow; when it answers Refused
+//     the hold ends with a close. Config and matchmaker connections are never held: with no account they fail
+//     at once.
 //   * limits: an oversized frame, an unbounded wait for a remote that never opens and a transport that
 //     never drains are each ended with a named close code and one log line, never silently dropped.
 //
@@ -78,6 +84,12 @@ bool IsLoginSessionReply(uint64_t symbol);
 class GameTransport {
  public:
   virtual ~GameTransport() = default;
+  // The router holds this connection open while it waits for an account (see Options::loginGate): the
+  // transport must not close it for sending nothing. `held == false` ends the exemption. Optional.
+  virtual void SetHeld(GameId game, bool held) {
+    (void)game;
+    (void)held;
+  }
   virtual SendResult Send(GameId game, std::string_view frame, bool binary) = 0;
   // Must not block on the router. May be called from any thread, never with the router lock held.
   virtual void Close(GameId game, uint16_t code, std::string_view reason) = 0;
@@ -108,6 +120,13 @@ using LogSink = std::function<void(LogLevel level, const std::string& line)>;
 // not available (no token, no configured credentials). The router never fabricates one.
 using LoginFrameBuilder = std::function<std::optional<std::string>()>;
 
+// Whether the account a login needs is available. Awaiting: not yet (the player has not signed in); the
+// login connection is held. Ready: it is. Refused: it will not be (the sign-in expired or failed).
+enum class LoginGate { Ready, Awaiting, Refused };
+// Called with the router lock held, from OnGameOpen/OnGameFrame/ReevaluateHeldLogins: it must be a lock-free
+// read of a flag the wiring keeps current (never the token session itself), and must not call the router.
+using LoginGateFn = std::function<LoginGate()>;
+
 struct Limits {
   std::size_t maxFrameBytes = 4u * 1024u * 1024u;       // one WebSocket message, either direction
   std::size_t maxPendingFrames = 256;                   // game frames waiting for a remote to open
@@ -123,6 +142,7 @@ struct Limits {
 struct Options {
   Limits limits;
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
+  LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
   LogSink log;                        // null: logging off
 };
@@ -132,6 +152,7 @@ struct Stats {
   std::size_t remotes = 0;
   std::size_t pendingFrames = 0;  // across all remotes
   std::size_t outboundBytes = 0;  // to remotes and to games
+  std::size_t heldRemotes = 0;    // login remotes waiting for the account (not opened yet)
   int nextConnIdx = 0;
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
@@ -159,6 +180,11 @@ class Router {
   void OnRemoteError(RemoteId remote, int status, std::string_view what);
   void OnRemoteWritable(RemoteId remote);
 
+  // Re-reads Options::loginGate for every held login: Ready opens the remote, Refused ends the hold with a
+  // close (kCloseInternalError). Call it whenever the wiring changes the gate's answer. Idempotent, cheap
+  // when nothing is held, safe from any thread.
+  void ReevaluateHeldLogins();
+
   // Ends every session and closes every socket. Idempotent.
   void Shutdown();
 
@@ -185,6 +211,8 @@ class Router {
   };
   struct Remote {
     int ownerConn = -1;  // connIdx of the connection that created it
+    RemoteOpenRequest request;  // what Open was (or will be) called with
+    bool deferred = false;      // a held login: Open has not been called yet
     bool open = false;
     bool loginPending = false;  // open event seen, login builder running
     bool loginSent = false;
@@ -201,6 +229,8 @@ class Router {
   void FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx);
   void CloseGameLocked(GameId game, uint16_t code, const char* why, Effects& fx);
   void AttachLocked(GameId game, Game& g, Effects& fx);
+  bool GateAwaitingLocked() const;
+  Role ProvisionalRoleLocked() const;
   void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();

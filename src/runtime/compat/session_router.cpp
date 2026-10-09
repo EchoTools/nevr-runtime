@@ -144,6 +144,7 @@ struct Router::Effects {
   std::vector<GameId> drainGames;
   std::vector<std::pair<RemoteId, uint16_t>> remoteCloses;
   std::vector<GameClose> gameCloses;
+  std::vector<std::pair<GameId, bool>> holds;  // SetHeld calls
 };
 
 Router::Router(GameTransport* games, RemoteTransport* remotes, Options options)
@@ -157,6 +158,7 @@ void Router::Log(Effects& fx, LogLevel level, std::string line) {
 
 void Router::Run(Effects& fx) {
   for (const auto& entry : fx.logs) options_.log(entry.first, entry.second);
+  for (const auto& hold : fx.holds) games_->SetHeld(hold.first, hold.second);
   for (const RemoteId remote : fx.drainRemotes) DrainRemote(remote);
   for (const GameId game : fx.drainGames) DrainGame(game);
   for (const RemoteOpenRequest& request : fx.opens) {
@@ -321,10 +323,22 @@ void Router::FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::stri
 
 // ---- game side ---------------------------------------------------------------------------------
 
+// The role a connection that has sent nothing yet is given: by connection order, except that a connection
+// opened while the login session has no live login connection is that connection (the game reconnected it).
+Role Router::ProvisionalRoleLocked() const {
+  if (connectionCount_ == 0) return Role::Config;
+  if (connectionCount_ == 1) return Role::Login;
+  if (loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0 && !OnLoginSessionLocked(loginGame_)) {
+    return Role::Login;
+  }
+  return Role::Matchmaker;
+}
+
 // Gives `g` (whose connIdx and role are set) its remote: matchmaker connections share the login session
 // when one is live; every other connection, and a matchmaker with no session to share, opens its own.
 void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
-  if (g.role == Role::Matchmaker && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
+  const bool sessionLive = loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0;
+  if (sessionLive && g.role == Role::Matchmaker) {
     g.remote = loginRemote_;
     activeGame_ = game;
     Log(fx, LogLevel::Info,
@@ -332,23 +346,59 @@ void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
             g.connIdx, Ull(loginRemote_)));
     return;
   }
+  if (sessionLive && g.role == Role::Login) {
+    // A login connection on a session that is already live (the game reconnected its login connection, or a
+    // connection the router took for a matchmaker turned out to be the login): it takes over the session's
+    // login role; the previous login connection, if still open, rides the session as a matchmaker.
+    const GameId previous = loginGame_;
+    if (previous != kNoGame && previous != game) {
+      const auto pit = gameTable_.find(previous);
+      if (pit != gameTable_.end()) {
+        pit->second.role = Role::Matchmaker;
+        fx.holds.emplace_back(previous, false);
+      }
+    }
+    g.remote = loginRemote_;
+    loginGame_ = game;
+    const bool held = remoteTable_.at(loginRemote_).deferred;
+    if (held) fx.holds.emplace_back(game, true);
+    Log(fx, LogLevel::Info,
+        Fmt("[router] game=%llu conn=%d (login) takes over login session remote=%llu%s", Ull(game), g.connIdx,
+            Ull(loginRemote_), held ? " (held: waiting for the account)" : ""));
+    return;
+  }
   const RemoteId remote = nextRemote_++;
   Remote r;
   r.ownerConn = g.connIdx;
+  r.request.remote = remote;
+  r.request.connIdx = g.connIdx;
+  r.request.role = g.role;
+  r.request.standaloneMatchmaker = (g.role == Role::Matchmaker);
+  // Only the login connection is held: it is silent until the game has an account to log in with, and a
+  // config or matchmaker connection with no account must fail at once (the game reconnects those).
+  const bool hold = g.role == Role::Login && GateAwaitingLocked();
+  r.deferred = hold;
+  const RemoteOpenRequest request = r.request;
   remoteTable_.emplace(remote, std::move(r));
   g.remote = remote;
   if (g.role == Role::Login) {
     loginRemote_ = remote;
     loginGame_ = game;
   }
-  RemoteOpenRequest request;
-  request.remote = remote;
-  request.connIdx = g.connIdx;
-  request.role = g.role;
-  request.standaloneMatchmaker = (g.role == Role::Matchmaker);
+  if (hold) {
+    fx.holds.emplace_back(game, true);
+    Log(fx, LogLevel::Info,
+        Fmt("[router] game=%llu conn=%d (login) held: remote=%llu opens when the account is available", Ull(game),
+            g.connIdx, Ull(remote)));
+    return;
+  }
   fx.opens.push_back(request);
   Log(fx, LogLevel::Info,
       Fmt("[router] game=%llu conn=%d (%s) opened remote=%llu", Ull(game), g.connIdx, RoleName(g.role), Ull(remote)));
+}
+
+bool Router::GateAwaitingLocked() const {
+  return options_.loginGate && options_.loginGate() == LoginGate::Awaiting;
 }
 
 // Lets go of the remote `g` holds so it can be given another. A matchmaker only shares the login session; a
@@ -398,26 +448,12 @@ void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& 
     return;
   }
   if (loginGame_ == game) loginGame_ = kNoGame;
+  if (provisional == Role::Login) fx.holds.emplace_back(game, false);
   g.role = observed;
   Log(fx, LogLevel::Info,
       Fmt("[router] game=%llu conn=%d first frame symbol=0x%016llx: %s -> %s", Ull(game), g.connIdx, Ull(symbol),
           RoleName(provisional), RoleName(observed)));
-  if (observed == Role::Login && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
-    // A login on a session that is already live (the game reconnected its login connection): the new
-    // connection takes over the session's login role; the old login connection, if still open, rides it.
-    const GameId previous = loginGame_;
-    if (previous != kNoGame) {
-      const auto pit = gameTable_.find(previous);
-      if (pit != gameTable_.end()) pit->second.role = Role::Matchmaker;
-    }
-    g.remote = loginRemote_;
-    loginGame_ = game;
-    Log(fx, LogLevel::Info,
-        Fmt("[router] game=%llu conn=%d (login) takes over login session remote=%llu", Ull(game), g.connIdx,
-            Ull(loginRemote_)));
-  } else {
-    AttachLocked(game, g, fx);
-  }
+  AttachLocked(game, g, fx);
   RecomputeActiveLocked();
 }
 
@@ -429,7 +465,7 @@ void Router::OnGameOpen(GameId game) {
       fx.gameCloses.push_back({game, kCloseGoingAway, "router shut down"});
     } else if (gameTable_.count(game) != 0) {
       Log(fx, LogLevel::Error, Fmt("[router] duplicate open for game=%llu ignored", Ull(game)));
-    } else if (const Role next = connectionCount_ == 0 ? Role::Config : (connectionCount_ == 1 ? Role::Login : Role::Matchmaker);
+    } else if (const Role next = ProvisionalRoleLocked();
                next == Role::Matchmaker && LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
       Log(fx, LogLevel::Warning,
           Fmt("[router] game=%llu refused: %zu matchmaker connections are already open", Ull(game),
@@ -675,6 +711,37 @@ void Router::OnRemoteWritable(RemoteId remote) {
   DrainRemote(remote);
 }
 
+void Router::ReevaluateHeldLogins() {
+  Effects fx;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (shutdown_ || !options_.loginGate) return;
+    const LoginGate gate = options_.loginGate();
+    if (gate == LoginGate::Awaiting) return;
+    std::vector<RemoteId> held;
+    for (const auto& entry : remoteTable_) {
+      if (entry.second.deferred) held.push_back(entry.first);
+    }
+    std::sort(held.begin(), held.end());
+    for (const RemoteId id : held) {
+      const auto rit = remoteTable_.find(id);
+      if (rit == remoteTable_.end()) continue;
+      if (gate == LoginGate::Ready) {
+        rit->second.deferred = false;
+        fx.opens.push_back(rit->second.request);
+        for (const auto& entry : gameTable_) {
+          if (entry.second.remote == id) fx.holds.emplace_back(entry.first, false);
+        }
+        Log(fx, LogLevel::Info, Fmt("[router] remote=%llu: the account is available; opening the held login", Ull(id)));
+      } else {
+        // The sign-in expired or failed: the hold ends with a close, so the game sees a failed connect.
+        FailSessionLocked(id, kCloseInternalError, "the account the login needs will not be available", false, fx);
+      }
+    }
+  }
+  Run(fx);
+}
+
 void Router::Shutdown() {
   Effects fx;
   {
@@ -704,6 +771,7 @@ Stats Router::GetStats() const {
   stats.games = gameTable_.size();
   stats.remotes = remoteTable_.size();
   for (const auto& entry : remoteTable_) {
+    if (entry.second.deferred) ++stats.heldRemotes;
     stats.pendingFrames += entry.second.pending.size();
     stats.outboundBytes += entry.second.out.bytes;
   }

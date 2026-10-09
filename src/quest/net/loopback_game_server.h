@@ -23,7 +23,7 @@
 //
 // Every log line is one JSON object with an "event" field (written with nlohmann::json):
 //   router_listener  action listening | lost | restored | restore_failed | stopped | start_failed
-//   router_game_conn action accepted | rejected | upgraded | upgrade_refused | closing | ended
+//   router_game_conn action accepted | rejected | upgraded | upgrade_refused | closing | held | released | ended
 // A rejected or refused connection carries a fixed "reason" token; an ended one carries the reason, whether
 // it was upgraded and how long it lived. The listener is probed every listenerCheckMs: a listening socket
 // that was closed underneath this class, replaced by another file at the same number, or is no longer
@@ -112,6 +112,10 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   // SessionRouter::GameTransport
   SessionRouter::SendResult Send(SessionRouter::GameId game, std::string_view frame, bool binary) override;
   void Close(SessionRouter::GameId game, uint16_t code, std::string_view reason) override;
+  // A held connection (the login connection waiting for the player to sign in) is exempt from the
+  // idle-before-first-frame close; the clock restarts when the hold ends. It is still answered to pings and
+  // closed by the router, the peer or Stop().
+  void SetHeld(SessionRouter::GameId game, bool held) override;
 
  private:
   struct Conn;

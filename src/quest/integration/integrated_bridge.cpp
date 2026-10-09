@@ -37,6 +37,7 @@ IntegratedBridge::IntegratedBridge(Config config)
   SessionRouter::Options options;
   options.limits = config_.limits;
   options.buildLogin = nullptr;  // the game's own rewritten LoginRequest is the login (see the header)
+  options.loginGate = config_.loginGate;
   options.subscribeFriendList = config_.subscribeFriendList;
   options.log = config_.log;
   router_ = std::make_unique<SessionRouter::Router>(games_tap_.get(), remotes_tap_.get(), options);

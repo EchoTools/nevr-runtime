@@ -317,6 +317,142 @@ void TestNoJwtMeansNoSessionAndTheGameSocketCloses() {
   bridge.Stop();
 }
 
+// The gate and the account the identity callback answers with, driven by the test like the token-auth poll.
+struct Account {
+  std::mutex mutex;
+  std::string jwt;
+  std::atomic<int> gate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
+  std::string Jwt() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return jwt;
+  }
+  void Set(const std::string& value, SessionRouter::LoginGate g) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      jwt = value;
+    }
+    gate = static_cast<int>(g);
+  }
+};
+
+IntegratedBridge::Config MakeHeldConfig(FakeConnector* connector, Observed* seen, Account* account) {
+  IntegratedBridge::Config c = MakeConfig(connector, seen, "");
+  c.identity = [account] {
+    Identity id;
+    id.jwt = account->Jwt();
+    id.serverKey = "";
+    return id;
+  };
+  c.loginGate = [account] { return static_cast<SessionRouter::LoginGate>(account->gate.load()); };
+  c.loopback.idleFirstFrameMs = 300;
+  return c;
+}
+
+// The #239 smoke sequence end to end: no account at boot, so the config connection fails and the login
+// connection is held (open past the idle window, answered to pings, no remote). The player signs in: the
+// remote opens with the new token, the game's login goes through, and the NEW config connection the game
+// opens afterwards gets its own remote while the login session's profile reply reaches the login connection.
+void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  IntegratedBridge bridge(MakeHeldConfig(&connector, &seen, &account));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LoopbackUri());
+
+  Client bootConfig(port);
+  QCHECK(bootConfig.Upgrade(path));
+  bootConfig.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  bool bootEof = false;
+  const std::string closeFrame = BuildCloseFrame(SessionRouter::kCloseInternalError, "remote could not be started");
+  QCHECK(bootConfig.Read(closeFrame.size(), 3000, &bootEof) == closeFrame);  // fail-fast: 1011, as before
+  QCHECK(connector.Calls() == 0);
+
+  Client login(port);
+  QCHECK(login.Upgrade(path));
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(900));  // three idle windows
+  login.Write(BuildMaskedFrame(Opcode::Ping, "pp", kMask));
+  const std::string pong = BuildFrame(Opcode::Pong, "pp");
+  QCHECK(login.Read(pong.size()) == pong);
+  QCHECK(connector.Calls() == 0);
+
+  account.Set("JWT-SIGNED-IN", SessionRouter::LoginGate::Ready);
+  bridge.ReevaluateLoginGate();
+  QCHECK(connector.WaitConnects(1));
+  {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    QCHECK(connector.requests.size() == 1);
+    if (!connector.requests.empty()) {
+      QCHECK(connector.requests[0].headers.size() == 1 && connector.requests[0].headers[0].value == "Bearer JWT-SIGNED-IN");
+    }
+  }
+  const std::string gameLogin = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "game-own-login");
+  login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
+  FakeConnection* loginConn = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    if (connector.connections.empty()) return false;
+    loginConn = connector.connections[0];
+    return !loginConn->Sent().empty();
+  }));
+  if (loginConn == nullptr) return;
+  QCHECK(loginConn->Sent()[0] == gameLogin);
+  const std::string success = EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, 4242);
+  loginConn->Push(success);
+  const std::string successWire = BuildFrame(Opcode::Binary, success);
+  QCHECK(login.Read(successWire.size()) == successWire);
+
+  Client config(port);  // the connection the game opens after login
+  QCHECK(config.Upgrade(path));
+  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c2"), kMask));
+  QCHECK(connector.WaitConnects(2));
+  FakeConnection* configConn = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    if (connector.connections.size() < 2) return false;
+    configConn = connector.connections[1];
+    return !configConn->Sent().empty();
+  }));
+  if (configConn == nullptr) return;
+  QCHECK(configConn->Sent()[0] == EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c2"));
+
+  const std::string profile = EvrCodec::BuildMessage(EvrCodec::kSymLoggedInUserProfileSuccess, "profile");
+  loginConn->Push(profile);
+  const std::string profileWire = BuildFrame(Opcode::Binary, profile);
+  QCHECK(login.Read(profileWire.size()) == profileWire);  // the login connection's, not the newest socket's
+  const std::string configReply = EvrCodec::BuildMessage(0xb9cdaf586f7bd012ULL, "config");
+  configConn->Push(configReply);
+  const std::string configWire = BuildFrame(Opcode::Binary, configReply);
+  QCHECK(config.Read(configWire.size()) == configWire);
+  bool configGotProfile = false;
+  config.Read(1, 200, &configGotProfile);
+  QCHECK(!configGotProfile);
+  bridge.Stop();
+}
+
+// A sign-in that fails ends the hold: the login connection is closed (1011).
+void TestHeldLoginIsClosedWhenSignInFails() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  IntegratedBridge bridge(MakeHeldConfig(&connector, &seen, &account));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LoopbackUri());
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(login.Upgrade(path));
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  account.Set("", SessionRouter::LoginGate::Refused);
+  bridge.ReevaluateLoginGate();
+  const std::string closeFrame = BuildCloseFrame(SessionRouter::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  QCHECK(connector.Calls() == 0);
+  bridge.Stop();
+}
+
 void TestPlaintextRemoteUriDoesNotStart() {
   FakeConnector connector;
   Observed seen;
@@ -340,6 +476,8 @@ int main() {
   TestLoginRelayTapAndSideChannel();
   TestUpgradeWithoutTheTokenIsRefused();
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
+  TestHeldLoginSurvivesUntilSignInThenRoutesByRole();
+  TestHeldLoginIsClosedWhenSignInFails();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
   if (quest_test::Failures() != 0) {

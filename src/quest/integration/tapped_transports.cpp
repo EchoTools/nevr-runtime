@@ -13,6 +13,8 @@ void TappedGameTransport::Close(SessionRouter::GameId game, std::uint16_t code, 
   inner_->Close(game, code, reason);
 }
 
+void TappedGameTransport::SetHeld(SessionRouter::GameId game, bool held) { inner_->SetHeld(game, held); }
+
 bool TappedRemoteTransport::Open(const SessionRouter::RemoteOpenRequest& request) {
   if (request.role == SessionRouter::Role::Login && !request.standaloneMatchmaker) {
     // A new login session: nothing may be sent on it until the service accepts the login.

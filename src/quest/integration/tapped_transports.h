@@ -28,6 +28,7 @@ class TappedGameTransport final : public SessionRouter::GameTransport {
 
   SessionRouter::SendResult Send(SessionRouter::GameId game, std::string_view frame, bool binary) override;
   void Close(SessionRouter::GameId game, std::uint16_t code, std::string_view reason) override;
+  void SetHeld(SessionRouter::GameId game, bool held) override;
 
  private:
   SessionRouter::GameTransport* inner_;

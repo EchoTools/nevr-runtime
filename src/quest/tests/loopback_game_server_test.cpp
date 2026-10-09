@@ -140,8 +140,9 @@ struct Rig {
   std::vector<std::string> logs;
   std::unique_ptr<LoopbackGameServer> server;
   std::unique_ptr<Router> router;
+  std::atomic<int> gate{static_cast<int>(LoginGate::Awaiting)};  // the login gate of a gated rig
   explicit Rig(std::size_t maxMessage = 1u << 20, std::size_t maxWrite = 8u << 20, int idleFirstFrameMs = 30000,
-               const std::function<void(LoopbackGameServer::Config&)>& tweak = nullptr) {
+               const std::function<void(LoopbackGameServer::Config&)>& tweak = nullptr, bool gated = false) {
     LoopbackGameServer::Config cfg;
     cfg.maxMessageBytes = maxMessage;
     cfg.maxWriteBufferBytes = maxWrite;
@@ -158,6 +159,11 @@ struct Rig {
     options.limits.maxOutboundBytes = 64u << 20;  // the slow-reader test queues ~24 MB behind a full socket
     options.buildLogin = []() { return std::optional<std::string>(EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "L")); };
     options.log = cfg.log;
+    if (gated) {
+      // The Quest wiring: the game's own login is the login (no injection), held until the player signs in.
+      options.buildLogin = nullptr;
+      options.loginGate = [this]() { return static_cast<LoginGate>(gate.load()); };
+    }
     router = std::make_unique<Router>(server.get(), &remotes, options);
     server->Attach(router.get());
   }
@@ -532,6 +538,100 @@ void TestSilentUpgradedConnectionsAreClosed() {
   QCHECK(rig.server->IdleClosed() == 1);
 }
 
+
+// Failure caught (#239): the login connection, silent until the player signs in, being closed by the
+// idle-before-first-frame rule (or failed) while the code is on screen. A held connection stays open past
+// the idle window and is answered to pings; the config connection beside it is not held; when the account
+// appears the remote opens and frames flow both ways; the idle rule applies again from the release.
+void TestHeldLoginConnectionSurvivesTheIdleWindow() {
+  Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400, nullptr, /*gated=*/true);
+  const uint16_t port = rig.server->Start();
+  Client config(port), login(port);
+  QCHECK(Upgrade(rig, config));
+  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));  // the config remote opened
+  QCHECK(Upgrade(rig, login));
+  QCHECK(rig.WaitForRecord("router_game_conn", "held"));
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 2.5x the idle window
+  QCHECK(rig.server->IdleClosed() == 0);
+  login.Write(BuildMaskedFrame(Opcode::Ping, "pp", kMask));
+  const std::string pong = BuildFrame(Opcode::Pong, "pp");
+  QCHECK(login.Read(pong.size()) == pong);  // still open, and answered
+  {
+    std::lock_guard<std::mutex> lock(rig.remotes.mutex);
+    QCHECK(rig.remotes.opens.size() == 1);  // no login remote yet
+  }
+  // The game queues its login while it waits; it is delivered, in order, once the remote opens.
+  const std::string loginRequest = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "the-login");
+  login.Write(BuildMaskedFrame(Opcode::Binary, loginRequest, kMask));
+  rig.gate = static_cast<int>(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
+  RemoteId remote = kNoRemote;
+  {
+    std::lock_guard<std::mutex> lock(rig.remotes.mutex);
+    if (rig.remotes.opens.size() == 2) {
+      QCHECK(rig.remotes.opens[1].role == Role::Login);
+      remote = rig.remotes.opens[1].remote;
+    }
+  }
+  QCHECK(rig.WaitForRecord("router_game_conn", "released"));
+  rig.router->OnRemoteOpen(remote);
+  QCHECK(rig.remotes.WaitFor([&] {
+    for (const auto& s : rig.remotes.sent) {
+      if (s.first == remote && s.second == loginRequest) return true;
+    }
+    return false;
+  }));
+  const std::string reply = EvrCodec::BuildMessage(EvrCodec::kSymLoginSuccess, std::string(32, '\0'));
+  rig.router->OnRemoteFrame(remote, reply, true);
+  const std::string wire = BuildFrame(Opcode::Binary, reply);
+  QCHECK(login.Read(wire.size()) == wire);
+  QCHECK(rig.server->IdleClosed() == 0);
+  QCHECK(rig.Count("router_game_conn", "closing", "idle_before_first_frame") == 0);
+}
+
+// Failure caught: the hold never ending the idle exemption's clock. A connection released while it has
+// still sent nothing is idle-closed one window after the release (not at once, not never).
+void TestReleasedConnectionIsIdleClosedFromTheRelease() {
+  Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/500, nullptr, /*gated=*/true);
+  const uint16_t port = rig.server->Start();
+  Client config(port), login(port);
+  QCHECK(Upgrade(rig, config));
+  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  QCHECK(Upgrade(rig, login));
+  QCHECK(rig.WaitForRecord("router_game_conn", "held"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(800));  // longer than the window while held
+  rig.gate = static_cast<int>(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(rig.WaitForRecord("router_game_conn", "released"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));  // well inside a window counted from the release
+  QCHECK(rig.server->IdleClosed() == 0);
+  bool eof = false;
+  login.Read(1, 100, &eof);
+  QCHECK(!eof);
+  QCHECK(login.WaitEof(2500));  // a window after the release it is idle-closed
+  QCHECK(rig.server->IdleClosed() == 1);
+}
+
+// Failure caught: a sign-in that failed leaving the held connection open for ever. The refusal closes it
+// (1011) and the connection ends.
+void TestHeldLoginIsClosedWhenTheAccountIsRefused() {
+  Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400, nullptr, /*gated=*/true);
+  const uint16_t port = rig.server->Start();
+  Client config(port), login(port);
+  QCHECK(Upgrade(rig, config));
+  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  QCHECK(Upgrade(rig, login));
+  QCHECK(rig.WaitForRecord("router_game_conn", "held"));
+  rig.gate = static_cast<int>(LoginGate::Refused);
+  rig.router->ReevaluateHeldLogins();
+  const std::string expected = BuildCloseFrame(SessionRouter::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(expected.size()) == expected);
+  QCHECK(login.WaitEof());
+}
+
 // ---- records and the listener -----------------------------------------------------------------------
 
 // Failure caught (#240): the game's connections reaching the listener and ending with no line saying they
@@ -744,6 +844,9 @@ int main() {
   TestStopClosesEverything();
   TestUpgradeNeedsTheToken();
   TestSilentUpgradedConnectionsAreClosed();
+  TestHeldLoginConnectionSurvivesTheIdleWindow();
+  TestReleasedConnectionIsIdleClosedFromTheRelease();
+  TestHeldLoginIsClosedWhenTheAccountIsRefused();
   TestEveryConnectionIsRecorded();
   TestListenerClosedUnderneathIsReportedAndRestored();
   TestListenerThatStopsListeningIsReportedAndRestored();

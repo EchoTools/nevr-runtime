@@ -64,6 +64,9 @@ struct Runtime {
   bool stopPoll = false;
   std::unique_ptr<quest_net::CurlWsConnector> connector;
   std::atomic<IntegratedBridge*> bridge{nullptr};
+  // The router's login gate, kept current by the token-auth poll (TokenIdentitySource::GateFor); the router
+  // reads it with its lock held, so it is a plain atomic. Awaiting until the first poll says otherwise.
+  std::atomic<int> loginGate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
   std::atomic<unsigned> bridgePort{0};
   std::string loopbackUri;  // "ws://127.0.0.2:<port>/<token>/"; written once before the redirect is installed
   std::unique_ptr<TokenIdentitySource> identity;
@@ -132,6 +135,11 @@ void PollTokenAuthState() {
     // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
     // token that ran out without a readiness change.
     if (rt.identity) rt.identity->Observe(snap);
+    // The held login connection opens when the account appears and closes when it will not (router gate).
+    const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
+    if (rt.loginGate.exchange(gate) != gate) {
+      if (IntegratedBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
+    }
     if (static_cast<int>(snap.readiness) != last) {
       last = static_cast<int>(snap.readiness);
       const bool bad = snap.readiness == nevr::quest_auth::Readiness::Failed ||
@@ -339,6 +347,7 @@ class ProductionSteps final : public Steps {
     config.subscribeFriendList = rt.socialWanted;
     config.connector = rt.connector.get();
     config.log = RouterLog();
+    config.loginGate = [] { return static_cast<SessionRouter::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
     config.identity = [serverKey] {
       quest_net::Identity id;
       nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
@@ -371,7 +380,9 @@ class ProductionSteps final : public Steps {
     }
     port_ = port;
     rt.loopbackUri = bridge->LoopbackUri();
-    rt.bridge.store(bridge.release(), std::memory_order_release);  // leaked: threads and hooks outlive statics
+    IntegratedBridge* const published = bridge.release();
+    rt.bridge.store(published, std::memory_order_release);  // leaked: threads and hooks outlive statics
+    published->ReevaluateLoginGate();  // a gate change that raced the publication
     rt.bridgePort.store(port, std::memory_order_release);
     return true;
   }

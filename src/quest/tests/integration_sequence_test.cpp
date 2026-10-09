@@ -426,6 +426,26 @@ void TestIdentitySourceAnswers() {
   QCHECK(empty.Fetch(none) == QuestLogin::IdentityStatus::NotReady);
 }
 
+// #239: the router holds the login connection exactly while Fetch would say NotReady, opens it when Fetch
+// says Ok, and refuses it in every state that needs a new sign-in. Failure caught: a gate that disagrees with
+// the login rewrite (a held connection nobody will ever release, or a login let through with no token).
+void TestLoginGateFollowsTheIdentityAnswer() {
+  using nevr::quest_auth::Readiness;
+  using SessionRouter::LoginGate;
+  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser}) {
+    QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Awaiting);
+    QCHECK(TokenIdentitySource::GateFor(Snap(r, "", 0, "p")) == LoginGate::Awaiting);
+  }
+  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "tok", 4242, "p")) == LoginGate::Ready);
+  for (Readiness r : {Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
+    QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Refused);
+  }
+  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "", 4242, "p")) == LoginGate::Refused);  // token ran out
+  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "tok", 0, "p")) == LoginGate::Refused);
+  static_assert(noexcept(TokenIdentitySource::GateFor(std::declval<const nevr::quest_auth::Snapshot&>())),
+                "GateFor must be noexcept");
+}
+
 // #240 fail-closed: the login prerequisites stand in for an Oculus answer only while Ready() is true, and
 // IdentitySource's default Ready() is false. The production source's Ready() is one load of a flag that
 // Observe (token-auth state changes) and Fetch keep equal to (Classify(state) == Ok).
@@ -653,6 +673,7 @@ int main() {
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
+  TestLoginGateFollowsTheIdentityAnswer();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();

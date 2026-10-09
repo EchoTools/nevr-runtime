@@ -146,6 +146,8 @@ struct LoopbackGameServer::Conn {
   std::string writeBuf;
   bool closeRequested = false;
   bool blocked = false;  // Send returned WouldBlock; owe the router an OnGameWritable
+  std::atomic<bool> held{false};            // exempt from the idle-before-first-frame close (SetHeld)
+  std::atomic<long long> releasedAtNs{0};   // steady-clock ns when the hold last ended; 0 = never held
   std::chrono::steady_clock::time_point closeDeadline;
 };
 
@@ -523,8 +525,15 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       endReason = "handshake_timed_out";
       break;
     }
-    if (handshaken && !sawDataFrame && !closing &&
-        std::chrono::steady_clock::now() - upgradedAt > std::chrono::milliseconds(config_.idleFirstFrameMs)) {
+    // The idle clock starts at the upgrade, or when a hold ended if that was later.
+    auto idleSince = upgradedAt;
+    const long long releasedNs = conn->releasedAtNs.load();
+    if (releasedNs != 0) {
+      const auto released = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(releasedNs));
+      if (released > idleSince) idleSince = released;
+    }
+    if (handshaken && !sawDataFrame && !closing && !conn->held.load() &&
+        std::chrono::steady_clock::now() - idleSince > std::chrono::milliseconds(config_.idleFirstFrameMs)) {
       ++idleClosed_;
       nlohmann::json record = Record(kConnEvent, "closing");
       record["conn"] = id;
@@ -732,6 +741,23 @@ SendResult LoopbackGameServer::Send(GameId game, std::string_view frame, bool bi
   }
   Poke(conn->wake[1]);  // the connection thread adds POLLOUT and finishes the write
   return SendResult::Sent;
+}
+
+void LoopbackGameServer::SetHeld(GameId game, bool held) {
+  const std::shared_ptr<Conn> conn = Find(game);
+  if (!conn) return;
+  if (held) {
+    conn->held.store(true);
+  } else {
+    conn->releasedAtNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count());
+    conn->held.store(false);
+  }
+  nlohmann::json record = Record(kConnEvent, held ? "held" : "released");
+  record["conn"] = game;
+  Log(LogLevel::Info, Dump(record));
+  Poke(conn->wake[1]);
 }
 
 void LoopbackGameServer::Close(GameId game, uint16_t code, std::string_view reason) {
