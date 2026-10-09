@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <mutex>
@@ -631,11 +632,11 @@ static std::string GetDefaultLogDir() {
 static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
     if (g_config.file_jsonl) {
         std::string line = "{\"ts\":\"";
-        line += ts;
+        JsonEscape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
         line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
         line += GetRunId();
         line += "\",\"level\":\"";
-        line += lvl;
+        JsonEscape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
         line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
         JsonEscape::AppendTo(line, message, len);
         line += "\"}\n";
@@ -653,14 +654,21 @@ static void WriteFileRecord(const char* ts, const char* lvl, const char* message
     }
 }
 
-/* #5: at the main log's first open, replay this run's nevr-boot.jsonl lines into it, so boot and
- * runtime events are one stream. The boot file stays where it is: it is the crash spool and is never
- * deleted. Only the last 1 MiB is read (the file accumulates every run). Not called on rotation. */
+/* How many of this run's nevr-boot.jsonl lines are already in the main log (#5). */
+static size_t g_boot_lines_replayed = 0;
+
+/* #5: replay this run's nevr-boot.jsonl lines that are not yet in the main log, so boot and runtime
+ * events are one stream. Called at the main log's first open and once more just before the boot tee
+ * closes (BuiltinLogFilter::ReplayBootTail); not on rotation. The boot file stays where it is: it is
+ * the crash spool and is never deleted. Only the last 1 MiB is read (the file accumulates every run). */
 static void ReplayBootLines() {
     const char* path = BootLogTee::Path();
     if (path == nullptr || path[0] == '\0' || !g_log_file) return;
     FILE* in = std::fopen(path, "rb");
-    if (!in) return;
+    if (!in) {
+        BlfLog("boot log %s is not readable (errno=%d); its lines are not replayed into this log", path, errno);
+        return;
+    }
     constexpr long kTailBytes = 1024 * 1024;
     std::fseek(in, 0, SEEK_END);
     const long size = std::ftell(in);
@@ -674,7 +682,8 @@ static void ReplayBootLines() {
         const size_t nl = contents.find('\n');
         contents.erase(0, nl == std::string::npos ? contents.size() : nl + 1);
     }
-    const std::vector<BootReplay::Line> lines = BootReplay::ParseRun(contents, GetRunId());
+    const std::vector<BootReplay::Line> lines = BootReplay::ParseRun(contents, GetRunId(), g_boot_lines_replayed);
+    g_boot_lines_replayed += lines.size();
     for (const BootReplay::Line& line : lines) {
         WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
                         /*fromBoot=*/true);
@@ -701,6 +710,11 @@ static void InitFileLogging() {
 
     OpenLogFile();
     ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
+}
+
+void BuiltinLogFilter::ReplayBootTail() {
+    std::lock_guard<std::mutex> lock(g_file_mutex);
+    ReplayBootLines();
 }
 
 static void ShutdownFileLogging() {

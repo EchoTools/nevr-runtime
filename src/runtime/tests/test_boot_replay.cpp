@@ -47,6 +47,23 @@ TEST(BootReplay, ReplaysOnlyThisRunInFileOrder) {
   EXPECT_EQ(lines[1].msg, "second \x1b[0m ctl") << "escapes round-trip";
 }
 
+// The boot tee keeps writing after the main log opens; the second replay (just before the tee
+// closes) must add only the lines written since the first, and never repeat one.
+TEST(BootReplay, SkipsTheLinesAlreadyReplayed) {
+  std::string file = Record("2026-10-09T02:00:00.001Z", "run-2", "one") +
+                     Record("2026-10-09T01:00:00.000Z", "other", "someone else") +
+                     Record("2026-10-09T02:00:00.002Z", "run-2", "two");
+  const auto first = BootReplay::ParseRun(file, "run-2");
+  ASSERT_EQ(first.size(), 2U);
+  file += Record("2026-10-09T02:00:00.003Z", "run-2", "three") + Record("2026-10-09T02:00:00.004Z", "run-2", "four");
+  const auto rest = BootReplay::ParseRun(file, "run-2", first.size());
+  ASSERT_EQ(rest.size(), 2U);
+  EXPECT_EQ(rest[0].msg, "three");
+  EXPECT_EQ(rest[1].msg, "four");
+  EXPECT_TRUE(BootReplay::ParseRun(file, "run-2", 4).empty());
+  EXPECT_TRUE(BootReplay::ParseRun(file, "run-2", 99).empty());
+}
+
 TEST(BootReplay, SkipsLinesItCannotPlace) {
   const std::string file = std::string("not json\n") + "[1,2,3]\n" + "\n" +
                            "{\"run\":\"run-2\",\"level\":\"info\",\"msg\":\"no ts\"}\n" +
