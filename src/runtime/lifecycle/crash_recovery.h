@@ -53,6 +53,11 @@ void InstallConsoleCtrlHandler();
 /// is no handler behind us to hand the event to.
 void RearmConsoleCtrlHandler();
 
+/// #241: GameServerLib::Initialize ran, so the game's teardown can reach
+/// GameServerLib::Terminate. Until this is called a console event is handled
+/// directly (clean exit 0) instead of deferred to a teardown that never ends.
+void NotifyGameServerLibStarted();
+
 /// N87: TRUE once a console CTRL+C/close/break event has been observed. Read by
 /// GameServerLib::Terminate to exit cleanly at the end of the game's own
 /// teardown, instead of letting the game fault in the client-side teardown that

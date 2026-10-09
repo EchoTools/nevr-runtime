@@ -459,6 +459,21 @@ TEST(ServiceMapDefaults, NoFileYieldsTheEmbeddedDefaults) {
   EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_server_key").value_or(""), "default-server-key");
 }
 
+// #244: an unset bare ${VAR} keeps its text in the config value. For a service key that text is not a
+// value: a client falls back to the embedded default, a server (no defaults) gets nothing.
+TEST(ServiceMapDefaults, UnsetBareVarFallsBackToTheEmbeddedDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_UNSET_KEY_244}\"\n");
+  EXPECT_EQ(cfg.GetString("auth.http_key").value_or(""), "${NEVR_TEST_UNSET_KEY_244}");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, EmbeddedDefaults(), "nevr_http_key").value_or(""),
+            "default-http-key");
+}
+
+TEST(ServiceMapDefaults, UnsetBareVarYieldsNothingWhenThereIsNoDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_UNSET_KEY_244}\"\n");
+  const nevr_cfg::FlatDefaults none;
+  EXPECT_FALSE(nevr_cfg::LookupFlatWithDefaults(cfg, none, "nevr_http_key").has_value());
+}
+
 TEST(ServiceMapDefaults, ConfigYamlValueOverridesTheDefault) {
   const auto cfg = nevr::NevrConfig::LoadFromString(
       "services:\n  socket_uri: \"wss://file.example/ws\"\nauth:\n  http_key: file-key\n");
