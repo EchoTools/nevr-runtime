@@ -15,6 +15,7 @@
 
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
+#include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
@@ -51,8 +52,16 @@ static bool ReadUPnPConfig(NevRUPnPConfig& out) {
     return true;
 }
 
+// The server whose session the empty-server TTL (return_to_lobby.h) counts entrants of.
+static std::atomic<GameServerLib*> g_activeServerLib{nullptr};
+
+static uint64_t AcceptedEntrantsNow() {
+    GameServerLib* lib = g_activeServerLib.load(std::memory_order_acquire);
+    return lib != nullptr ? lib->GetContext().CountAcceptedEntrants() : 0;
+}
+
 static void CallScheduleReturnToLobby() {
-    if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
+    if (g_pGame) ReturnToLobby::Request(g_pGame);
 }
 
 #include "core/logging.h"
@@ -858,6 +867,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   // it, and we exit cleanly in Terminate() below.
   RearmConsoleCtrlHandler();
   NotifyGameServerLibStarted();
+  g_activeServerLib.store(this, std::memory_order_release);
+  ReturnToLobby::SetEntrantCounter(&AcceptedEntrantsNow);
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -1052,11 +1063,12 @@ void GameServerLib::UnregisterAllCallbacks() {
 }
 
 VOID GameServerLib::Terminate() {
+  g_activeServerLib.store(nullptr, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] terminating game server");
   m_context->Terminate();
 
   // N87: on the CTRL+C path this is the last point at which the server-visible
-  // work is provably finished — "[NSLOBBY] unregistering", "[WEBSOCKET]
+  // work is provably finished — "[NSLOBBY] unregistering", "[NEVR.SERVERDB]
   // Disconnected from ServerDB (code: 1000, Normal closure)" and
   // "[NEVR.GAMESERVER] Unregistered game server" are all logged above this line.
   // Everything the game does after this is client-side teardown (level unload,
@@ -1079,6 +1091,9 @@ static bool s_wasConnectedToServerDb = false;
 static bool s_exitPending = false;
 
 VOID GameServerLib::Update() {
+  // #58: end a held return to lobby (empty-server TTL) on the game thread, before anything else.
+  ReturnToLobby::Poll();
+
   // GH #44: run the graceful-shutdown thread's EndSession + Unregister here, on
   // the game thread that owns the callback registry. Once it has run the server
   // is unregistered and about to exit; skip the rest of the frame rather than
