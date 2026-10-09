@@ -189,6 +189,24 @@ class ReapMergedTest(unittest.TestCase):
         self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "with-merge").stdout.strip(), "")
         self.assertIn("origin branch with-merge deleted", result.stdout)
 
+    def test_another_agents_merged_pr_that_carries_the_tip_never_costs_its_origin_branch(self):
+        # #310: a merged PR found only by the tip's sha can be someone else's branch that merged this
+        # work. It proves the work landed; it does not make its head ref ours to delete.
+        wt = self.add_worktree("mine", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        other = self.tmp / "other"
+        git(self.tmp, "clone", "-q", str(self.origin), str(other))
+        git(other, "checkout", "-q", "-b", "theirs", "origin/mine")
+        git(other, "commit", "-q", "--allow-empty", "-m", "their work on top of mine", "--no-gpg-sign")
+        git(other, "push", "-q", "origin", "theirs:refs/heads/theirs")
+        head = git(other, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["theirs"] = [{"number": 21, "headRefOid": head, "state": "MERGED", "commits": [tip]}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists(), "the work did land, so the worktree is redundant")
+        self.assertIn("theirs", git(self.main, "ls-remote", "--heads", "origin", "theirs").stdout)
+        self.assertIn("origin branch theirs kept (not this worktree's branch)", result.stdout)
+
     def test_origin_branch_pushed_after_the_pr_merged_is_kept(self):
         wt = self.add_worktree("pushed-later", push=True)
         tip = git(wt, "rev-parse", "HEAD").stdout.strip()

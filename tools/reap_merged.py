@@ -152,7 +152,9 @@ def merged_pr(gh, root, branch, tip):
     """({number, headRefName, headRefOid}, None) when a MERGED PR carries this tip, else (None, why).
 
     The PR is looked up by the local branch name, by every origin branch that points at the tip (a
-    branch pushed under another name), and by the tip's sha. It carries the tip when its head is the
+    branch pushed under another name), and by the tip's sha. "ours" says the PR's head ref is one of
+    those names: a PR found only by the sha can be another agent's branch that merged this work, and
+    its head ref is not ours to delete. It carries the tip when its head is the
     tip, or a later commit that has the tip as an ancestor (someone merged main into the PR branch
     and pushed it; the local copy never had that commit).
     """
@@ -175,7 +177,8 @@ def merged_pr(gh, root, branch, tip):
         if pr.get("state") != "MERGED" or not head:
             continue
         if head == tip or git("merge-base", "--is-ancestor", tip, head, cwd=root, check=False).returncode == 0:
-            return {"number": pr["number"], "head_ref": pr["headRefName"], "head_oid": head}, None
+            return {"number": pr["number"], "head_ref": pr["headRefName"], "head_oid": head,
+                    "ours": pr["headRefName"] in names}, None
     if prs:
         return None, "merged PR(s) " + ",".join(f"#{p['number']}" for p in prs) + " do not contain the tip"
     return None, "no merged PR"
@@ -198,7 +201,7 @@ def assess(wt, root, base, gh, ledger_text):
     if branch:
         pr, why = merged_pr(gh, root, branch, tip)
     facts.update(ancestor_of_base=anc, merged_pr=pr["number"] if pr else None, pr_head_ref=pr["head_ref"] if pr else None,
-                 pr_head_oid=pr["head_oid"] if pr else None, pr_note=why)
+                 pr_head_oid=pr["head_oid"] if pr else None, pr_ours=pr["ours"] if pr else False, pr_note=why)
     if not anc and pr is None:
         reasons.append(f"not merged: tip {tip[:12]} is not in {base} and {why or 'no branch'}")
 
@@ -257,6 +260,8 @@ def apply_one(wt, facts, root, ledger, log):
             rtip = remote_branch_tip(root, remote)
             if rtip is None:
                 note.append(f"origin branch {remote} already gone")
+            elif not facts["pr_ours"]:
+                note.append(f"origin branch {remote} kept (not this worktree's branch)")
             elif rtip == facts["pr_head_oid"]:
                 p = git("push", "origin", f":refs/heads/{remote}", cwd=root)
                 print((p.stdout + p.stderr).strip())
