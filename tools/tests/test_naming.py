@@ -1,5 +1,6 @@
-"""docs/standards/naming.md, enforced: the `Nvr` plugin/module ABI spelling is a frozen set, and the
-mixed-case spellings of the project name do not spread."""
+"""docs/standards/naming.md, enforced: the `Nvr` plugin/module ABI spelling is a frozen set that does not
+grow, and a non-canonical spelling of the project name does not appear in any file or identifier that does
+not already carry it. Both sets are written out below on purpose: changing one is a visible edit here."""
 from __future__ import annotations
 
 import pathlib
@@ -8,50 +9,52 @@ import subprocess
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-ABI_HEADERS = ("src/extension/plugin_interface.h", "src/extension/module_interface.h")
-NVR = re.compile(r"\bNvr[A-Z][A-Za-z0-9_]*")
-# Spellings that are not ABI symbols: the prose name of the lifecycle, a wildcard in a comment, and the
-# exports of the test plugin DLL. The set only shrinks.
-NVR_NON_ABI = frozenset({"NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount",
-                         "NvrTestPluginGetInitCount"})
-MIXED = re.compile(r"nEVR|NeVR|NEvR|NEVr|neVR|nEvr")
-# Frozen code and vendored trees are out of scope; so are binary and generated files.
+# `Nvr` followed by a capital, not preceded by a letter; the _fn/_t typedef suffixes are folded away.
+NVR = re.compile(r"(?<![A-Za-z])Nvr[A-Z][A-Za-z0-9_]*")
+# Any spelling of the name made of the letters n-e-v-r in some case, not preceded by a letter.
+ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
+CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+# These files define the anti-patterns themselves.
+SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
 EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/")
-TEXT_SUFFIXES = {".cpp", ".h", ".hpp", ".c", ".cc", ".py", ".sh", ".md", ".txt", ".cmake", ".yaml", ".yml",
-                 ".json", ".def", ".rc", ".in", ".conf", ".go"}
-# Files that already carry a mixed-case spelling in prose, a comment or a certificate subject.
-# The list only shrinks; a new file is not added to it.
-MIXED_CASE_FILES = frozenset({
-    "README.md",
-    "certs/code-signing.conf",
-    "certs/generate-ca.sh",
-    "certs/intermediate-ca.conf",
-    "certs/root-ca.conf",
-    "cmake/codesign/sign.sh",
-    "docs/standards/naming.md",
-    "plugins/common/include/address_registry.h",
-    "plugins/example/README.md",
-    "plugins/example/src/plugin.cpp",
-    "src/extension/plugin_interface.h",
-    "src/runtime/compat/ws_bridge.cpp",
-    "tools/tests/test_naming.py",
+
+# The published plugin/module C ABI (src/extension/) and everything that names it. Nothing is added.
+FROZEN_NVR = frozenset({
+    "NvrGameContext", "NvrHostFlags", "NvrLoadedPluginInfo", "NvrModuleApiVersion",
+    "NvrModuleApiVersionSupported", "NvrModuleContext", "NvrModuleGetApiVersion", "NvrModuleHostFlags",
+    "NvrModuleInit", "NvrModuleOnFrame", "NvrModuleOnGameStateChange", "NvrModuleShutdown",
+    "NvrPluginCapabilities", "NvrPluginGetApiVersion", "NvrPluginGetCapabilities", "NvrPluginGetInfo",
+    "NvrPluginInfo", "NvrPluginInit", "NvrPluginInitEx", "NvrPluginOnFrame", "NvrPluginOnGameStateChange",
+    "NvrPluginShutdown",
+    # Not ABI symbols: a wildcard in a comment, the prose name of the lifecycle, and the exports of the
+    # test plugin DLL (src/runtime/tests/plugin_onframe_test_dll.cpp).
+    "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
 })
+# Existing non-canonical spellings, per file and exact token. The map only shrinks.
+LEGACY_SPELLINGS = {
+    "README.md": {"nEVR"},
+    "certs/code-signing.conf": {"nEVR"},
+    "certs/generate-ca.sh": {"nEVR"},
+    "certs/intermediate-ca.conf": {"nEVR"},
+    "certs/root-ca.conf": {"nEVR"},
+    "cmake/codesign/sign.sh": {"nEVR"},
+    "plugins/common/include/address_registry.h": {"nEVR"},
+    "plugins/example/README.md": {"nEVR"},
+    "plugins/example/src/plugin.cpp": {"nEVR"},
+    "src/extension/plugin_interface.h": {"nEVR"},
+    "src/runtime/compat/ws_bridge.cpp": {"nEVR"},
+    "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
+    "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
+    "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
+}
 
 
-def frozen_abi_names():
-    """Every Nvr name the two ABI headers define, with the _fn/_t typedef suffixes folded away."""
-    names = set()
-    for header in ABI_HEADERS:
-        for token in NVR.findall((REPO / header).read_text(encoding="utf-8")):
-            names.add(re.sub(r"(_fn|_t)$", "", token))
-    return names
-
-
-def tracked_text_files():
-    out = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], check=True, capture_output=True,
-                         text=True).stdout
+def project_files():
+    """Tracked and untracked-but-not-ignored text files, so a new file is checked before it is added."""
+    out = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                         check=True, capture_output=True, text=True).stdout
     for path in (p for p in out.split("\0") if p):
-        if path.startswith(EXCLUDED_PREFIXES) or pathlib.PurePosixPath(path).suffix not in TEXT_SUFFIXES:
+        if path.startswith(EXCLUDED_PREFIXES) or path in SELF:
             continue
         try:
             yield path, (REPO / path).read_text(encoding="utf-8")
@@ -59,27 +62,43 @@ def tracked_text_files():
             continue
 
 
-class NamingTest(unittest.TestCase):
-    def test_the_abi_headers_define_a_nonempty_nvr_set(self):
-        self.assertGreaterEqual(len(frozen_abi_names()), 20, "the sensor reads almost nothing from the ABI headers")
+def noncanonical(text):
+    return {m.group() for m in ANY_CASE.finditer(text) if not CANONICAL.match(m.group())}
 
-    def test_no_nvr_identifier_exists_outside_the_frozen_abi_set(self):
-        frozen = frozen_abi_names() | NVR_NON_ABI
+
+class NamingTest(unittest.TestCase):
+    def test_the_scan_sees_the_tree(self):
+        files = dict(project_files())
+        self.assertGreater(len(files), 300, "the sensor is reading almost nothing")
+        self.assertIn("src/extension/plugin_interface.h", files)
+
+    def test_no_nvr_identifier_outside_the_frozen_set(self):
         stray = {}
-        for path, text in tracked_text_files():
-            for name in {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - frozen:
-                stray.setdefault(name, []).append(path)
+        for path, text in project_files():
+            for token in {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)} - FROZEN_NVR:
+                stray.setdefault(token, []).append(path)
         self.assertEqual(stray, {}, "`Nvr` is the frozen plugin/module ABI spelling; new names use Nevr/NEVR_ "
                          "(docs/standards/naming.md)")
 
-    def test_mixed_case_project_spellings_do_not_spread(self):
-        offenders = [path for path, text in tracked_text_files()
-                     if MIXED.search(text) and path not in MIXED_CASE_FILES]
-        self.assertEqual(offenders, [], "nEVR/NeVR/NEvR: use NEVR, Nevr or nevr (docs/standards/naming.md)")
+    def test_every_frozen_nvr_name_is_still_used(self):
+        used = set()
+        for _, text in project_files():
+            used |= {re.sub(r"(_fn|_t)$", "", t) for t in NVR.findall(text)}
+        self.assertEqual(sorted(FROZEN_NVR - used), [], "remove names that no longer exist from FROZEN_NVR")
 
-    def test_every_listed_mixed_case_file_still_has_one(self):
-        present = {path for path, text in tracked_text_files() if MIXED.search(text)}
-        self.assertEqual(sorted(MIXED_CASE_FILES - present), [], "remove cleaned files from MIXED_CASE_FILES")
+    def test_no_new_noncanonical_spelling(self):
+        offenders = {}
+        for path, text in project_files():
+            extra = noncanonical(text) - LEGACY_SPELLINGS.get(path, set())
+            if extra:
+                offenders[path] = sorted(extra)
+        self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
+
+    def test_every_legacy_spelling_is_still_present(self):
+        files = dict(project_files())
+        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()
+                if tokens - noncanonical(files.get(p, ""))}
+        self.assertEqual(gone, {}, "remove cleaned entries from LEGACY_SPELLINGS")
 
 
 if __name__ == "__main__":
