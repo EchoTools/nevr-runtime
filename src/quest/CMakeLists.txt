@@ -72,6 +72,8 @@ if(TARGET nevr_quest_got_hook)
     login/login_rewrite.cpp
     login/login_hook.cpp
     login/login_apply.cpp
+    login/login_prerequisites.cpp
+    login/login_prerequisites_install.cpp
     "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
   target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
@@ -79,9 +81,12 @@ if(TARGET nevr_quest_got_hook)
   # Every frame that is live while game code runs is built without exception support, so it
   # carries no personality or LSDA (the contract in sentinel/callback_thunk.h): the thunk
   # handler and install code (login_hook.cpp) and everything that calls the game
-  # (login_apply.cpp). login_rewrite.cpp keeps exceptions; it calls no game code and
-  # returns before the next game call.
-  set_source_files_properties(login/login_hook.cpp login/login_apply.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+  # (login_apply.cpp), and the login-prerequisite handlers and their install
+  # (login_prerequisites.cpp, login_prerequisites_install.cpp), which run inside the game's OVR
+  # callbacks. login_rewrite.cpp keeps exceptions; it calls no game code and returns before the
+  # next game call.
+  set_source_files_properties(login/login_hook.cpp login/login_apply.cpp login/login_prerequisites.cpp
+    login/login_prerequisites_install.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
   add_executable(login_rewrite_test tests/login_rewrite_test.cpp)

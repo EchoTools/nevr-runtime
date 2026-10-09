@@ -348,9 +348,50 @@ original, and on a non-null handle calls `TryInstallLoginHook(source, build)`; a
 `ModuleNotLoaded` result means another module was opened and the install is retried on the
 next `dlopen`. The handler must not throw and must not block. The install needs an
 `IdentitySource` backed by token auth: until it answers `Ok` the Oculus login is left
-unchanged. `SendLogInRequest` is reached only after the Oculus org-id fetch and
-`ovr_User_GetUserProof` succeed (`0x1edca0`, `0x1ece10`); if the Oculus services do not answer
-for this app the hook never fires.
+unchanged. `SendLogInRequest` is reached only after the game holds four Oculus answers (below);
+`TryInstallLoginHook` installs the hooks that measure and, when needed, supply them.
+
+### Login prerequisites
+
+`CNSOVRUser::LogInInternal` (`0x1ec634`) and, for a pending login, `UpdateInternal` (`0x1ed9e8`)
+call `ovr_User_GetUserProof` only when the org-id global `0x70e3e0` is neither 0 nor -1, the
+user-name buffer `0x70e470` is neither `"?"` (string `0x61d3cb`) nor empty, and the
+`CNSLoggedInUserAccessToken` string is neither `"?"` nor shorter than two bytes. A pending login
+that `UpdateInternal` sees with -1, `"?"` user or `"?"` token fails with "One or more prerequisites
+are missing" (string `0x556b40`, `0x1edb54`); an empty user or token waits. `GotUserProofCB`
+(`0x1ed578`) then calls `SendLogInRequest` through `vtable+0x8` (`0x1ed9c4`), or fails the login with
+500 on an error. The three values are fetched by `RadPluginMain` (`0x206960`, `0x2069bc`, `0x206a00`),
+which `CSysModule::Load` calls through `dlsym` (`libr15.so` `0x2a9e20c`, `0x2a9e224`) after the `dlopen`
+at `0x2a9e1ec` returns, and again by `LogInInternal` when one is missing.
+
+| Prerequisite | Callback (GLOB_DAT slot) | Success path reads | Error path |
+| --- | --- | --- | --- |
+| org-scoped id | `SCallbacks::GotLoggedInUserOrgIdCb` `0x1ece60` (`0x6e2f10`) | `ovr_OrgScopedID_GetID(ovr_Message_GetOrgScopedID(msg))` into `0x70e3e0` | -1 |
+| logged-in user | `SCallbacks::GotLoggedInUserCb` `0x1ecfe4` (`0x6e48a8`) | `ovr_User_GetOculusID(ovr_Message_GetUser(msg))` into `0x70e470` | nothing written |
+| access token | `SCallbacks::GotLoggedInUserAccessTokenCb` `0x1ed1c0` (`0x6e43f0`) | `ovr_Message_GetString(msg)` | `"?"` |
+| user proof | `CNSOVRUser::GotUserProofCB` `0x1ed578` (`0x6e4340`) | `ovr_UserProof_GetNonce(ovr_Message_GetUserProof(msg))` | login fails, 500 |
+
+Every registration of these callbacks reads its GLOB_DAT slot, and every callback reads the answer
+only through Platform SDK imports (JUMP_SLOTs), so `src/quest/login/login_prerequisites.h`,
+`login_prerequisites.cpp` and `login_prerequisites_install.cpp` hook the four callback slots,
+the eight accessors and the four request functions
+(`login_prerequisite_targets.h`; `just test-quest-hooks-pinned` resolves all of them in the pinned
+`libpnsovr.so`). The callback handler asks the real `ovr_Message_IsError` first, claims the message
+for the duration of the game's callback, and the accessor handlers act only on the claimed message
+(or the handle its real accessor returned): an Oculus error makes `ovr_Message_IsError` answer false
+and the accessors return a synthesized value; a usable real answer passes through unchanged; an
+unusable one (null, empty, `"?"`, an id of 0 or -1) is replaced. The game's own success path then
+writes its globals and continues. The synthesized values are not credentials; the login rewrite
+replaces `accountid`, `access_token`, `nonce` and `displayname`. Substitution is enabled only when
+all eight accessor hooks are installed; otherwise the callback hooks only measure.
+
+Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
+`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
+`quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
+that is never answered shows as a request with no callback. No record carries a token, nonce, user
+name or id value. The install logs one `quest_login_prerequisites_install` summary. Measured on the
+host against a fake Platform SDK (`src/quest/tests/login_prerequisites_test.cpp`); not run on a
+device.
 
 CJson behaviour for a write, in `libpnsovr.so` (the code the rewrite calls): the setter walks the
 `|`-separated path (`0x35ba84`, which branches to `0x364bdc`), and when a parent exists and is

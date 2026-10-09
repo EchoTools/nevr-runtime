@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 
+#include "quest/login/login_prerequisites.h"
 #include "quest/sentinel/callback_thunk.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_install.h"
@@ -392,6 +393,9 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
     g_published.store(nullptr, std::memory_order_release);
     return refuse(InstallState::HookFailed, "got_backend");
   }
+  // The four Oculus answers the game needs before it calls SendLogInRequest; installed here so
+  // they are in place before RadPluginMain issues the first requests. Logs its own summary.
+  InstallLoginPrerequisites(image);
   const LogKv fields[] = {{"op", "install", 0}, {"state", "installed", 0}, {"slot", "CNSUser::SendLogInRequest", 0}};
   log(Level::Info, "quest_login_install", fields, 3);
   return InstallState::Installed;

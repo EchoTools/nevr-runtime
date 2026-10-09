@@ -40,9 +40,11 @@
 //          throw and must not block (the game thread is inside module loading).
 //   Needs  an IdentitySource that answers from token auth. Until it is Ok the hook leaves
 //          the Oculus login unchanged; a NotReady answer is retried on the next login.
-// SendLogInRequest is reached only after the Oculus org-id fetch and ovr_User_GetUserProof
-// succeed (libpnsovr 0x1edca0, 0x1ece10); if the Oculus services do not answer for this app
-// the hook never fires.
+// SendLogInRequest is reached only after the game holds an Oculus org id, user name and access
+// token and ovr_User_GetUserProof succeeds (libpnsovr 0x1edca0, 0x1ece10). A successful install
+// also installs the login-prerequisite hooks (login_prerequisites.h), which log each of the four
+// Oculus answers and give the game a synthesized one when Oculus does not answer usably, so the
+// game reaches this hook on a device whose Oculus services refuse it.
 
 #include "quest/login/login_rewrite.h"
 
