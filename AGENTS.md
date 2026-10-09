@@ -73,7 +73,7 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -128,7 +128,7 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 ### Shared Libraries (static)
 
 Split by **what the knowledge is**, not by who uses it. A single directory named
-"common" used to hold all three — the classic junk drawer.
+"common" holding all three is the classic junk drawer.
 
 - **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
   (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
@@ -151,7 +151,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 - **`src/legacy-compat/`** — two forwarding headers, existing solely because
   `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
-  `common/nevr_plugin_interface.h` out of the old shared directory.
+  `common/nevr_plugin_interface.h` out of a shared `common/` directory.
   Scoped to that
   one target. Delete with `src/legacy/`.
 
@@ -433,9 +433,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 ---
 
 The content after this separator is `CPP-MINGW-ADDENDUM` — binding rules
-for cross-compiling C++ Windows DLLs with mingw-w64.  It was previously a
-separate document in a private repository; inlining it here ensures every
-agent reads it (it is required reading per the pre-read gate above).
+for cross-compiling C++ Windows DLLs with mingw-w64.  It is inlined here
+so that every agent reads it (it is required reading per the pre-read gate above).
 
 ---
 
