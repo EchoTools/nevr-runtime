@@ -234,6 +234,20 @@ TEST(NevrConfig, BareVarUnsetKeepsLiteralText) {
   EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "pre-${NEVR_TEST_BARE}-post");
 }
 
+// One name per unset variable however often it is referenced: the load logs one warning per entry.
+TEST(NevrConfig, UnsetBareVarIsReportedOncePerName) {
+  UnsetEnv("NEVR_TEST_BARE_ONCE");
+  UnsetEnv("NEVR_TEST_BARE_TWICE");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_BARE_ONCE}\"\n  loginservice: \"${NEVR_TEST_BARE_ONCE}/${NEVR_TEST_BARE_TWICE}\"\n");
+  EXPECT_EQ(cfg.UnsetBareVars(), (std::vector<std::string>{"NEVR_TEST_BARE_ONCE", "NEVR_TEST_BARE_TWICE"}));
+  SetEnv("NEVR_TEST_BARE_ONCE", "x");
+  SetEnv("NEVR_TEST_BARE_TWICE", "y");
+  EXPECT_TRUE(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_ONCE}\"\n").UnsetBareVars().empty());
+  UnsetEnv("NEVR_TEST_BARE_ONCE");
+  UnsetEnv("NEVR_TEST_BARE_TWICE");
+}
+
 TEST(NevrConfig, BareVarUnsetInPluginArgKeepsPlugins) {
   UnsetEnv("NEVR_TEST_BARE_ARG");
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
