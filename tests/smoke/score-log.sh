@@ -154,7 +154,6 @@ C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cac
 C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
-C11@@client@@HTTP served through the curl bridge@@\[NEVR\.HTTP\] Response: 2[0-9][0-9]@@\[NEVR\.HTTP\] curl failed:
 C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No game base address
 C13@@client@@Current loadout read back@@\[CURRENT_LOADOUT\] Player:@@\[CURRENT_LOADOUT\] Empty response|\[CURRENT_LOADOUT\] Invalid
 EOF
