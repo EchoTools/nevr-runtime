@@ -142,20 +142,14 @@ WASAPI capture:
    four distinct export names resolve to the same address, so a body-hook
    cannot tell which name the game meant to call.
 
-   There is already a precedent for exactly this trap in the codebase,
-   documented and currently silently broken: `EchoVR::GetProcAddress`
-   (`src/runtime/lifecycle/initialize.cpp:331`) and `CSysDLL_GetSymbolHook`
-   (`initialize.cpp:83`) are two separate `PatchDetour`/`Hooking::Attach`
-   installs targeting the *same* address (`0x1400eaef0`, per the file's own
-   N128 comment) — the game's one symbol-resolution function, used both for
-   module DLL loading and for provider dispatch (the same function
-   `NRadEngine::CPlatformService::MicRead` calls to resolve `"MicRead"` on
-   a provider handle, per the ReVault trace above). MinHook allows one
-   detour per target; whichever installs first wins — `CSysDLL_GetSymbolHook`
-   does, so `GetProcAddressHook`'s RadPluginShutdown crash-avoidance has
-   never once run, on any boot. The N128 comment already names the correct
-   fix ("fold the RadPluginShutdown check into CSysDLL_GetSymbolHook") —
-   the mic provider needs the same shape of fix for the same reason.
+   The same trap applies to `0x1400eaef0`, the game's one symbol-resolution
+   function, used both for module DLL loading and for provider dispatch (the
+   function `NRadEngine::CPlatformService::MicRead` calls to resolve
+   `"MicRead"` on a provider handle, per the ReVault trace above). MinHook
+   allows one detour per target, so `CSysDLL_GetSymbolHook`
+   (`src/runtime/lifecycle/initialize.cpp`) is the only detour on it and also
+   carries the server-only RadPluginShutdown guard. The mic provider needs the
+   same shape of fix for the same reason.
 
    **Correct design:** extend `CSysDLL_GetSymbolHook` itself (it already
    wins the one-detour slot on `0x1400eaef0`). When `dll_handle` is
