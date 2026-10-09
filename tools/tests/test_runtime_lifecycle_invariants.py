@@ -326,6 +326,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_both_registration_sites_use_the_shared_envelope_builder(self):
+        # Issue #46: the initial registration and the post-reconnect re-registration built the same
+        # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
+        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
+        self.assertNotIn("mutable_game_server_registration()", server)
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
