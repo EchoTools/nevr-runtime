@@ -269,6 +269,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_bridge_connection_lines_carry_the_connection_label(self):
+        # Issue #48: only close/disconnect lines named the connection (config/login/matchmaker); the
+        # open, login-injected and game-connected lines gave the bare number.
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        for anchor in ("Proxy: game connected (conn=", "login injected xpid=", "Remote open (conn=",
+                       "could not percent-encode URL credentials"):
+            starts = [m.start() for m in re.finditer(re.escape(anchor), source)]
+            self.assertTrue(starts, anchor)
+            for start in starts:
+                statement = source[start:source.index(");", start)]
+                self.assertIn("ConnLabel(", statement, f"{anchor!r} logs a bare connection number")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
