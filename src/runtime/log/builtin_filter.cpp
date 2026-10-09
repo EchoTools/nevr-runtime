@@ -1074,9 +1074,9 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     EmitLine(level, buf, emit_len);
 
     if (g_config.passthrough_to_engine && orig_PrintfImpl) {
-        /* N89: max_line_length used to apply ONLY to our JSONL file. The
-         * passthrough below re-sent the ORIGINAL fmt+varargs, so the game
-         * reformatted the FULL line to console — which is what
+        /* N89: max_line_length must apply to the console too, not ONLY to our
+         * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
+         * reformat the FULL line to console — which is what
          * launch-server.sh captures. Measured: two `[NSUSER] saved ...` profile
          * dumps (5600 and 8192 bytes) were 30.5% of an entire server log while
          * max_line_length was 500. The setting silently did nothing for the
