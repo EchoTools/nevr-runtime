@@ -131,6 +131,46 @@ bool IsLoginSessionReply(uint64_t symbol) {
   }
 }
 
+bool RequestRaisesRequireCount(uint64_t symbol) {
+  switch (symbol) {
+    case EvrCodec::kSymLoginRequest:
+    case EvrCodec::kSymLoggedInUserProfileRequest:
+    case EvrCodec::kSymDocumentRequest:
+    case EvrCodec::kSymOtherUserProfileRequest:
+    case EvrCodec::kSymUpdateProfile:
+    case EvrCodec::kSymServerProfileUpdateRequest:
+    case EvrCodec::kSymConfigRequest:
+    case EvrCodec::kSymMatchmakerStatusRequest:
+    case EvrCodec::kSymFindSessionRequest:
+    case EvrCodec::kSymCreateSessionRequest:
+    case EvrCodec::kSymJoinSessionRequest:
+    case EvrCodec::kSymDirectoryRequest:
+    case EvrCodec::kSymPendingSessionCancel:
+    case EvrCodec::kSymPlayerSessionsRequest:
+      return true;
+    default:
+      return false;
+  }
+}
+
+namespace {
+
+constexpr uint32_t kMaxRequireCount = 1000;  // a connection whose Unrequires never come cannot count for ever
+
+// Calls fn(symbol, index) for every message in `frame` (a WebSocket message can carry several, back to back).
+template <class Fn>
+void ForEachMessage(const std::string& frame, Fn fn) {
+  std::size_t offset = 0;
+  for (std::size_t index = 0;; ++index) {
+    EvrCodec::Message message;
+    if (EvrCodec::ReadMessage(frame, offset, &message) != EvrCodec::ReadStatus::Ok) return;
+    fn(message.symbol, index);
+    offset += EvrCodec::kHeaderSize + static_cast<std::size_t>(message.length);
+  }
+}
+
+}  // namespace
+
 // Work recorded under the lock and executed after it is released.
 struct Router::Effects {
   struct GameClose {
@@ -225,6 +265,7 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     lastReplyTarget_ = kNoGame;
+    pendingPairTarget_ = kNoGame;
     connectionCount_ = 1;  // the game's next connection is a login
   }
   Log(fx, LogLevel::Warning,
@@ -269,28 +310,74 @@ void Router::RecomputeActiveLocked() {
   }
 }
 
-// Picks the game connection a frame from the login session's remote is delivered to, by what the frame is:
+// Counts the requests in a game frame that raise the connection's outstanding-request count. Only connections
+// on the shared login session are counted: a config connection has a remote of its own.
+void Router::CountRequirementsLocked(Game& g, const std::string& frame) {
+  if (g.remote == kNoRemote || g.remote != loginRemote_) return;
+  ForEachMessage(frame, [&g](uint64_t symbol, std::size_t) {
+    if (RequestRaisesRequireCount(symbol) && g.required < kMaxRequireCount) ++g.required;
+  });
+}
+
+// The connection a standalone STcpConnectionUnrequireEvent is delivered to. The service sends one for each
+// request that raised a count, on its own frame, so frames from concurrent service goroutines interleave and
+// the message before an Unrequire is not necessarily the one it belongs to. So it goes to a connection that
+// has a request outstanding: the login connection first, then the newest connection with a count. With none
+// outstanding it belongs to a message the service started itself: the pair a ping request brought, else the
+// connection that got the last message.
+GameId Router::ClaimUnrequireLocked() {
+  if (OnLoginSessionLocked(loginGame_) && gameTable_.at(loginGame_).required > 0) return loginGame_;
+  GameId best = kNoGame;
+  int newest = -1;
+  for (const auto& entry : gameTable_) {
+    if (entry.second.required > 0 && OnLoginSessionLocked(entry.first) && entry.second.connIdx > newest) {
+      newest = entry.second.connIdx;
+      best = entry.first;
+    }
+  }
+  if (best != kNoGame) return best;
+  if (OnLoginSessionLocked(pendingPairTarget_)) {
+    const GameId target = pendingPairTarget_;
+    pendingPairTarget_ = kNoGame;
+    return target;
+  }
+  if (OnLoginSessionLocked(lastReplyTarget_)) return lastReplyTarget_;
+  return OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
+}
+
+// Picks the game connection a frame from the login session's remote is delivered to, by what the frame is
+// (its first message; later Unrequires in the same frame belong to the messages before them in it):
 //   * an answer to a login-connection request: the login connection (libpnsovr drops these on any other
 //     peer), and nowhere else if that connection is gone;
-//   * STcpConnectionUnrequireEvent: the connection that received the reply before it (it lowers that
-//     connection's outstanding-request count), else the login connection;
+//   * STcpConnectionUnrequireEvent: ClaimUnrequireLocked;
 //   * anything else (lobby traffic): the newest matchmaker connection, else the login connection.
-GameId Router::RouteLoginSessionFrameLocked(uint64_t symbol) {
-  if (IsLoginSessionReply(symbol)) {
-    lastReplyTarget_ = OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
-    return lastReplyTarget_;
-  }
-  if (symbol == EvrCodec::kSymConnectionUnrequire) {
-    if (OnLoginSessionLocked(lastReplyTarget_)) return lastReplyTarget_;
-    return OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
-  }
+GameId Router::RouteLoginSessionFrameLocked(const std::string& frame) {
+  const uint64_t symbol = EvrCodec::FirstSymbol(frame);
+  std::size_t unrequires = 0;
+  ForEachMessage(frame, [&unrequires](uint64_t s, std::size_t index) {
+    if (index > 0 && s == EvrCodec::kSymConnectionUnrequire) ++unrequires;
+  });
   GameId target = kNoGame;
-  if (OnLoginSessionLocked(activeGame_) && gameTable_.at(activeGame_).role == Role::Matchmaker) {
-    target = activeGame_;
-  } else if (OnLoginSessionLocked(loginGame_)) {
-    target = loginGame_;
+  if (symbol == EvrCodec::kSymConnectionUnrequire) {
+    target = ClaimUnrequireLocked();
+    if (target != kNoGame && gameTable_.at(target).required > 0) --gameTable_.at(target).required;
+  } else {
+    if (IsLoginSessionReply(symbol)) {
+      target = OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
+    } else if (OnLoginSessionLocked(activeGame_) && gameTable_.at(activeGame_).role == Role::Matchmaker) {
+      target = activeGame_;
+    } else if (OnLoginSessionLocked(loginGame_)) {
+      target = loginGame_;
+    }
+    lastReplyTarget_ = target;
+    if (symbol == EvrCodec::kSymLobbyPingRequest) pendingPairTarget_ = target;
   }
-  lastReplyTarget_ = target;
+  // Unrequires that arrive inside this frame belong to the frame's own messages: they lower the count of the
+  // connection the frame goes to, never below zero.
+  if (target != kNoGame) {
+    Game& g = gameTable_.at(target);
+    g.required = g.required > unrequires ? g.required - static_cast<uint32_t>(unrequires) : 0;
+  }
   return target;
 }
 
@@ -421,8 +508,10 @@ bool Router::ReleaseRemoteLocked(GameId game, Game& g, Effects& fx) {
     loginRemote_ = kNoRemote;
     loginGame_ = kNoGame;
     lastReplyTarget_ = kNoGame;
+    pendingPairTarget_ = kNoGame;
     connectionCount_ = 1;
   }
+  g.required = 0;  // the requests it sent went with the remote it leaves
   remoteTable_.erase(g.remote);
   fx.remoteCloses.emplace_back(g.remote, static_cast<uint16_t>(1000));
   g.remote = kNoRemote;
@@ -508,6 +597,7 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
         CloseGameLocked(game, kCloseGoingAway, "session record missing", fx);
       } else {
         Remote& r = rit->second;
+        CountRequirementsLocked(git->second, frame);
         auto data = std::make_shared<const std::string>(std::move(frame));
         if (r.open) {
           PushToRemoteLocked(remoteId, r, std::move(data), binary, fx);
@@ -539,6 +629,7 @@ void Router::OnGameClose(GameId game) {
     gameTable_.erase(it);
     if (loginGame_ == game) loginGame_ = kNoGame;
     if (lastReplyTarget_ == game) lastReplyTarget_ = kNoGame;
+    if (pendingPairTarget_ == game) pendingPairTarget_ = kNoGame;
     if (activeGame_ == game) {
       // Lobby traffic goes to the newest matchmaker connection still on the session.
       RecomputeActiveLocked();
@@ -652,7 +743,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
       if (remoteTable_.count(remote) != 0) {
         GameId target = kNoGame;
         if (remote == loginRemote_) {
-          target = RouteLoginSessionFrameLocked(symbol);
+          target = RouteLoginSessionFrameLocked(frame);
         } else {
           for (const auto& entry : gameTable_) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
@@ -755,6 +846,7 @@ void Router::Shutdown() {
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     lastReplyTarget_ = kNoGame;
+    pendingPairTarget_ = kNoGame;
     connectionCount_ = 0;
     Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
                                 fx.gameCloses.size()));

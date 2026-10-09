@@ -452,9 +452,16 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    (`CNSUser::ProfileSuccessCB` and the other login-peer checks), so login and profile replies,
    document and other-user-profile replies and the login settings (`IsLoginSessionReply`) go to the
    login connection, and are dropped (counted, logged) when it is gone. Lobby traffic goes to the newest
-   matchmaker connection, falling back to the login connection. An `STcpConnectionUnrequireEvent` goes
-   to the connection that received the reply before it, because it lowers that connection's
-   outstanding-request count. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
+   matchmaker connection, falling back to the login connection. An `STcpConnectionUnrequireEvent` lowers the outstanding-request
+   count of the connection it arrives on, and the service sends it as a frame of its own after the reply,
+   from concurrent goroutines, so frames interleave and the message before it is not necessarily its
+   request. The router counts the requests each connection sends on the shared login session
+   (`RequestRaisesRequireCount`: `LogInRequestv2`, the profile, document, other-user-profile, update
+   requests, `SNSConfigRequestv2` and the lobby requests; the lobby requests are counted without proof that
+   each sets the require flag) and gives each Unrequire to a connection with a request outstanding, the
+   login connection first, never taking a count below zero. An Unrequire inside a batched frame lowers the
+   count of the connection the frame goes to. With nothing outstanding the Unrequire belongs to a message
+   the service started itself (the pair of a `LobbyPingRequest`, else the last message's connection). `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
    `TestServerFramesRouteByRole` pin this.
 
    **A held login.** Before the player signs in there is no account token, and the login

@@ -59,6 +59,16 @@ inline constexpr uint64_t kSymServerProfileUpdateSuccess = 0xd299785ba56b9c75ULL
 inline constexpr uint64_t kSymServerProfileUpdateFailure = 0xd28c6c51aa7b9d63ULL;
 // Lowers the connection's outstanding-request count on the peer it arrives on.
 inline constexpr uint64_t kSymConnectionUnrequire = 0x43e6963ac76beee4ULL;          // STcpConnectionUnrequireEvent
+// Requests that raise the connection's outstanding-request count (libr15 `SConnection+0x154` bits 2-9, raised
+// by a Send with the require flag), so the service's STcpConnectionUnrequireEvent for each has to reach the
+// connection that sent it. LogInRequestv2, SNSConfigRequestv2 and the lobby requests above are the others.
+inline constexpr uint64_t kSymLoggedInUserProfileRequest = 0xfb772a4221fc8d70ULL;
+inline constexpr uint64_t kSymDocumentRequest = 0xfcced6f169822bb8ULL;              // SNSDocumentRequestv2
+inline constexpr uint64_t kSymOtherUserProfileRequest = 0x1231172031050cb2ULL;
+inline constexpr uint64_t kSymUpdateProfile = 0x6d54a19a3ff24415ULL;                // SNSUpdateProfile
+inline constexpr uint64_t kSymServerProfileUpdateRequest = 0xd2986849b36b9c72ULL;   // SNSUserServerProfileUpdateRequest
+// A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
+inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
 
 // The friend-list subscribe the bridge sends after LoginSuccess (payload ignored by the server).
 inline constexpr uint64_t kSymFriendListSubscribe = 0xcdc02fd1dbee3aaaULL;

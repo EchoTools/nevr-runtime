@@ -16,7 +16,7 @@
 //   * server-to-game routing on the shared login session is by role, never to whichever socket spoke last:
 //     replies to login-connection requests (and the settings that follow a login) go to the login
 //     connection, lobby traffic to the newest matchmaker connection, and an STcpConnectionUnrequireEvent to
-//     the connection that received the reply before it.
+//     a connection with a request outstanding (the login connection first; see ClaimUnrequireLocked).
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
@@ -83,6 +83,8 @@ enum class SendResult {
 Role ClassifyFirstFrame(uint64_t symbol);
 // True for the server-to-game messages that answer a request made on the login connection.
 bool IsLoginSessionReply(uint64_t symbol);
+// True for the game-to-server requests that raise the connection's outstanding-request count.
+bool RequestRaisesRequireCount(uint64_t symbol);
 
 class GameTransport {
  public:
@@ -211,6 +213,7 @@ class Router {
     RemoteId remote = kNoRemote;  // kNoRemote once its session ended
     bool closing = false;         // a close was issued; waiting for the transport's OnGameClose
     bool classified = false;      // the first data frame has named the role
+    uint32_t required = 0;        // requests sent on the shared login session that await their Unrequire
     Outbox out;
   };
   struct Remote {
@@ -239,7 +242,9 @@ class Router {
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();
   bool OnLoginSessionLocked(GameId id) const;
-  GameId RouteLoginSessionFrameLocked(uint64_t symbol);
+  GameId RouteLoginSessionFrameLocked(const std::string& frame);
+  GameId ClaimUnrequireLocked();
+  void CountRequirementsLocked(Game& g, const std::string& frame);
   std::size_t LiveMatchmakersLocked() const;
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
   void Log(Effects& fx, LogLevel level, std::string line);
@@ -261,6 +266,7 @@ class Router {
   GameId loginGame_ = kNoGame;
   GameId activeGame_ = kNoGame;   // the newest matchmaker connection on the login session
   GameId lastReplyTarget_ = kNoGame;  // where the last non-Unrequire login-session frame went
+  GameId pendingPairTarget_ = kNoGame;  // where a service-initiated message that brings its own Unrequire went
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;
   bool shutdown_ = false;
