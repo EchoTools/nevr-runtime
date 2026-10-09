@@ -1,15 +1,22 @@
 name: Build
 
-# Build only when a release is created (drafted). The toolchain is reinstalled
-# from scratch every run (~29 billed minutes) and push/PR fired it on every
-# merge — a 21-second burst of 6 merges cost ~175 min. Local dev already gates
-# via `just`; GitHub only builds the release artifact.
+# Builds and runs `just verify` on every non-draft pull request, and builds the release artifact
+# when a release is created (drafted). The toolchain is reinstalled from scratch every run (~29
+# billed minutes), so a push to main does not trigger it (a burst of 6 merges cost ~175 min), a new
+# push to a PR cancels that PR's run still in flight, and a draft PR is skipped until it is ready.
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   release:
     types: [created]
 
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
+    if: github.event_name == 'release' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     # The current toolchain, the same one development uses (#81): Arch's MinGW-w64 GCC and headers
     # from pacman, not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread

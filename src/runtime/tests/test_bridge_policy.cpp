@@ -36,6 +36,21 @@ TEST(BridgePolicy, OnlyExplicitTruthyValuesOptIn) {
   EXPECT_FALSE(BridgePolicy::IsTruthy("maybe"));
 }
 
+// #245: the spelling rule is config.yaml's, which is case-insensitive.
+TEST(BridgePolicy, TruthySpellingsAreCaseInsensitive) {
+  for (const char* v : {"Yes", "YES", "ON", "On", "tRuE"}) EXPECT_TRUE(BridgePolicy::IsTruthy(v)) << v;
+  for (const char* v : {"No", "OFF", "False"}) EXPECT_FALSE(BridgePolicy::IsTruthy(v)) << v;
+}
+
+TEST(BridgePolicy, OnlyAnUnparseableValueIsReportedAsUnrecognized) {
+  EXPECT_TRUE(BridgePolicy::IsUnrecognized("maybe"));
+  EXPECT_TRUE(BridgePolicy::IsUnrecognized("ture"));
+  EXPECT_FALSE(BridgePolicy::IsUnrecognized("Yes"));
+  EXPECT_FALSE(BridgePolicy::IsUnrecognized("off"));
+  EXPECT_FALSE(BridgePolicy::IsUnrecognized(""));
+  EXPECT_FALSE(BridgePolicy::IsUnrecognized(nullptr));
+}
+
 // The key is read through the flat-key table, so a config.yaml `services.allow_offline_server: true`
 // reaches the decision.
 TEST(BridgePolicy, ConfigKeyIsReadFromServicesAllowOfflineServer) {
