@@ -3,7 +3,7 @@
 // the HTTP upgrade handshake and an incremental frame decoder/encoder. Pure byte logic: no sockets, no
 // threads, no logging, no Android headers, so every partial-read and malformed-input case is a host test.
 //
-// The game dials ws://127.0.0.1:<port> exactly as it dials the community service on PCVR, so it speaks the
+// The game dials ws://127.0.0.2:<port> exactly as it dials the community service on PCVR, so it speaks the
 // client half of this protocol (that it does so on Quest is the ADR 0003 premise "Quest and PCVR run the
 // same game networking code"; the Quest binary's handshake bytes are not captured yet).
 //
