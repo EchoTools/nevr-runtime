@@ -135,22 +135,49 @@ def is_build_output(entry):
     return entry.startswith(IGNORED_OK) or any(p in entry for p in IGNORED_OK_PARTS)
 
 
-def merged_pr(gh, branch, tip):
-    """(number, None) when a MERGED PR has exactly this tip as its head; else (None, why)."""
+def gh_prs(gh, *args):
+    """The JSON list `gh pr list` prints for the arguments, or (None, why)."""
     try:
-        r = subprocess.run([gh, "pr", "list", "--head", branch, "--state", "merged", "--limit", "10",
-                            "--json", "number,headRefOid,state"],
+        r = subprocess.run([gh, "pr", "list", *args, "--state", "merged", "--limit", "10",
+                            "--json", "number,headRefName,headRefOid,state"],
                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"gh unavailable: {e}"
     if r.returncode != 0:
         return None, f"gh failed: {r.stderr.strip()}"
-    prs = json.loads(r.stdout or "[]")
+    return json.loads(r.stdout or "[]"), None
+
+
+def merged_pr(gh, root, branch, tip):
+    """({number, headRefName, headRefOid}, None) when a MERGED PR carries this tip, else (None, why).
+
+    The PR is looked up by the local branch name, by every origin branch that points at the tip (a
+    branch pushed under another name), and by the tip's sha. It carries the tip when its head is the
+    tip, or a later commit that has the tip as an ancestor (someone merged main into the PR branch
+    and pushed it; the local copy never had that commit).
+    """
+    names = [branch]
+    points = git("for-each-ref", "--points-at", tip, "--format=%(refname:lstrip=3)", "refs/remotes/origin",
+                 cwd=root, check=False).stdout.split()
+    names += [n for n in points if n not in names and n != "HEAD"]
+    prs, why = [], None
+    for name in names:
+        found, why = gh_prs(gh, "--head", name)
+        if found is None:
+            return None, why
+        prs += found
+    found, why = gh_prs(gh, "--search", tip)
+    if found is None:
+        return None, why
+    prs += found
     for pr in prs:
-        if pr.get("state") == "MERGED" and pr.get("headRefOid") == tip:
-            return pr["number"], None
+        head = pr.get("headRefOid")
+        if pr.get("state") != "MERGED" or not head:
+            continue
+        if head == tip or git("merge-base", "--is-ancestor", tip, head, cwd=root, check=False).returncode == 0:
+            return {"number": pr["number"], "head_ref": pr["headRefName"], "head_oid": head}, None
     if prs:
-        return None, "merged PR(s) " + ",".join(f"#{p['number']}" for p in prs) + " have a different head than the tip"
+        return None, "merged PR(s) " + ",".join(f"#{p['number']}" for p in prs) + " do not contain the tip"
     return None, "no merged PR"
 
 
@@ -169,8 +196,9 @@ def assess(wt, root, base, gh, ledger_text):
     anc = git("merge-base", "--is-ancestor", tip, base, cwd=root, check=False).returncode == 0
     pr, why = (None, None)
     if branch:
-        pr, why = merged_pr(gh, branch, tip)
-    facts.update(ancestor_of_base=anc, merged_pr=pr, pr_note=why)
+        pr, why = merged_pr(gh, root, branch, tip)
+    facts.update(ancestor_of_base=anc, merged_pr=pr["number"] if pr else None, pr_head_ref=pr["head_ref"] if pr else None,
+                 pr_head_oid=pr["head_oid"] if pr else None, pr_note=why)
     if not anc and pr is None:
         reasons.append(f"not merged: tip {tip[:12]} is not in {base} and {why or 'no branch'}")
 
@@ -225,14 +253,18 @@ def apply_one(wt, facts, root, ledger, log):
         log.write(action="branch-delete-local", worktree=rel, branch=branch, tip=tip)
         note.append("local branch deleted")
         if facts["merged_pr"] is not None:
-            rtip = remote_branch_tip(root, branch)
-            if rtip == tip:
-                p = git("push", "origin", f":refs/heads/{branch}", cwd=root)
+            remote = facts["pr_head_ref"]
+            rtip = remote_branch_tip(root, remote)
+            if rtip is None:
+                note.append(f"origin branch {remote} already gone")
+            elif rtip == facts["pr_head_oid"]:
+                p = git("push", "origin", f":refs/heads/{remote}", cwd=root)
                 print((p.stdout + p.stderr).strip())
-                log.write(action="branch-delete-origin", worktree=rel, branch=branch, tip=tip, pr=facts["merged_pr"])
-                note.append("origin branch deleted")
+                log.write(action="branch-delete-origin", worktree=rel, branch=remote, tip=rtip, pr=facts["merged_pr"])
+                note.append(f"origin branch {remote} deleted")
             else:
-                note.append(f"origin branch kept (origin has {rtip[:12] if rtip else 'none'}, not the tip)")
+                note.append(f"origin branch {remote} kept (origin has {rtip[:12]}, not the merged head "
+                            f"{facts['pr_head_oid'][:12]})")
         else:
             note.append("origin branch kept (no merged PR proves it)")
     row = (f"| {rel}" + (f" + branch {branch}" if branch else "") + f" (tip {tip[:12]}) | {facts['owners'][0]} | "
