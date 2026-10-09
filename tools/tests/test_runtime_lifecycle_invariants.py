@@ -314,6 +314,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_telemetry_disconnect_cancels_the_bearer_refresh_before_stopping(self):
+        # Issue #254: stop() joins ixwebsocket's thread, so a 401 mint (up to the 10 s HTTP timeout)
+        # started during the stop would stall Disconnect.
+        source = strip_comments((ROOT / "src/runtime/server/telemetry_streamer.cpp").read_text())
+        body = extract_braced_function(source, "void TelemetryStreamer::Disconnect(")
+        self.assertLess(body.index("m_bearerAuth.Cancel()"), body.index("m_ws->stop()"))
+
+    def test_game_main_hook_has_no_c_style_casts(self):
+        # Issue #254 (CPP-MINGW addendum: no C-style casts).
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void InstallGameMainHook(")
+        self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
