@@ -29,6 +29,11 @@ typedef bool (*LoadFilter)(const wchar_t* lower_path);
  * Applies to every LoadLibrary variant and every dwFlags value. */
 void AddLoadFilter(const char* name, LoadFilter filter);
 
+/* The Oculus Platform SDK predicate: true when the FILE NAME of `lower_path` (the part after the
+ * last '\\' or '/') contains "ovrplatform", e.g. libovrplatform64_1.dll. A folder named like that
+ * does not match, so a library under such a directory is not refused. */
+bool IsOculusPlatformPath(const wchar_t* lower_path);
+
 /* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests). */
 bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by);
 
