@@ -1630,11 +1630,11 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
 thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage`, `CR15NetGame::Update` and
 `CR15UIPage2EnablePageNode::Enter` slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
-prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
+prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` and `CSysHttp::CreateConnection` redirect on libr15;
 (10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
 installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:
-clock 2, redirect 10, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
-prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 64 of the reporter's 96
+clock 2, redirect 12, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
+prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 66 of the reporter's 96
 slots (`integration_hooks_test` runs the sequence against the real registration functions). The production identity source answers the prerequisites'
 `IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed

@@ -16,7 +16,7 @@
 //
 // The caller's contract (nothing in this directory calls these; the sentinel does):
 //   1. RegisterRedirectCounters() before sentinel::StartReporter (the reporter refuses a
-//      registration after it starts; 10 of the reporter's counter slots, hook_report.h).
+//      registration after it starts; 12 of the reporter's counter slots, hook_report.h).
 //   2. InstallRedirectHooks(config, intern, bridge) from the sentinel's ELF constructor, early enough to precede
 //      CR15NetGame::Initialize, which reads config_host and configservice_host (libr15.so
 //      0x1286060). A value the game read before the slot was hooked stays as the game parsed it. That
