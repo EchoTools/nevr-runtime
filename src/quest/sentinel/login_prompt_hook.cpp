@@ -464,11 +464,11 @@ struct PageLogSlot {
 PageLogSlot g_pageLog[kPageLogSlots];
 std::atomic<std::uint64_t> g_pageLogFull{0};
 
-const char* KnownPageName(std::uint64_t page) noexcept {
+const ui::PageName* KnownPage(std::uint64_t page) noexcept {
   for (const ui::PageName& known : ui::kPageNames) {
-    if (known.id == page) return known.name;
+    if (known.id == page) return &known;
   }
-  return "unknown";
+  return nullptr;
 }
 
 void NotePageEnter(std::uint64_t page, bool latchArmed) noexcept {
@@ -485,9 +485,11 @@ void NotePageEnter(std::uint64_t page, bool latchArmed) noexcept {
     if (last != kPageLogNever && now - last < kPageLogSpacingNs) return;
     if (!slot.lastNs.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
     char hex[19];
+    const ui::PageName* known = KnownPage(page);
     sentinel::LogFields(sentinel::LogLevel::kInfo, "ui_page_enter",
                         {{"page", sentinel::HexString(hex, page)},
-                         {"name", KnownPageName(page)},
+                         {"name", known != nullptr ? known->name : "unknown"},
+                         {"name_basis", known != nullptr ? known->basis : "none"},
                          {"enters", slot.enters.exchange(0, std::memory_order_relaxed)},
                          {"latch_armed", latchArmed ? 1 : 0}});
     return;
