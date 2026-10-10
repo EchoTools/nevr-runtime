@@ -291,6 +291,7 @@ class ProductionSteps final : public Steps {
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
+  bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
@@ -404,9 +405,8 @@ class ProductionSteps final : public Steps {
 
   bool InstallRedirect() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
-    nevr_quest::redirect::InstallOptions options{nevr_quest::redirect::PinnedTargets(), sentinel::FindLoadedImage,
-                                                 &InternBridgeAware, &BridgeProbe};
-    const nevr_quest::redirect::InstallReport report = nevr_quest::redirect::InstallRedirectHooksWith(cfg, options);
+    const nevr_quest::redirect::InstallReport report =
+        nevr_quest::redirect::InstallRedirectHooks(cfg, &InternBridgeAware, &BridgeProbe);
     detail_ = report.featureEnabled ? sentinel::GotStatusName(report.libr15) : "feature_off_or_allocation_failure";
     return report.featureEnabled && (report.libr15 == sentinel::GotStatus::kOk ||
                                      report.libr15 == sentinel::GotStatus::kAlreadyInstalled);
