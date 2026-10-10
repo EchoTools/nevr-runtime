@@ -204,7 +204,7 @@ count() { grep -c "$1" "$run_log" || test $? -eq 1; }
 echo "=== game log: $run_log ==="
 echo "logged_in=$(count 'to logged in') in_game=$(count 'to in game') invalid_header=$(count 'invalid header') service_unavailable=$(count 'Service is unavailable')"
 if grep -q 'built-in defaults embedded in this build: (none)' "$run_log"; then
-  echo "FAIL: this DLL embeds no service endpoints (built from a defaults file with no values); the run cannot be judged" >&2
+  echo "FAIL: this DLL embeds no service endpoints (its boot log says built-in defaults: (none)); the run cannot be judged" >&2
   exit 1
 fi
 if [[ $(count 'to logged in') -eq 0 ]]; then

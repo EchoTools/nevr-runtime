@@ -70,14 +70,18 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         action = source(".github/actions/write-public-defaults/action.yml")
         self.assertIn("config/public-defaults.env", action)
         self.assertIn("exit 1", action)  # an unset variable fails the run
-        for relative in (".github/workflows/build.yml", ".github/workflows/defender-scan.yml"):
+        for relative in (".github/workflows/build.yml", ".github/workflows/defender-scan.yml",
+                         ".github/workflows/android.yml"):
             text = source(relative)
             self.assertIn("./.github/actions/write-public-defaults", text, relative)
             for name in ("NEVR_SOCKET_URI", "NEVR_HTTP_URI", "NEVR_PUBLIC_API_KEY", "NEVR_PUBLIC_SOCKET_KEY"):
                 self.assertIn("vars." + name, text, f"{relative} must read {name} from the Actions variables")
             self.assertNotRegex(text, r"secrets\.NEVR_", relative)
-        configure = text.index("cmake --preset") if "cmake --preset" in text else len(text)
-        self.assertLess(text.index("write-public-defaults"), configure)
+            # The file has to exist before the step that configures the build.
+            code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+            builds = [marker for marker in ("cmake --preset", "just test-android") if marker in code]
+            self.assertTrue(builds, relative)
+            self.assertLess(code.index("write-public-defaults"), min(code.index(m) for m in builds), relative)
 
     def test_build_reads_only_the_defaults_file_never_dotenv_or_the_environment(self):
         module = source("cmake/nevr_builtin_defaults.cmake")
