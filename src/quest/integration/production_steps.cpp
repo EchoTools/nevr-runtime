@@ -183,10 +183,10 @@ std::uint64_t SteadySeconds() {
 // The shared redirect policy answers the bare "ws://127.0.0.1:<port>" for a redirected game URL, which the
 // game cannot reach (libr15 dials a non-loopback interface for 127.0.0.1) and which has no access token. The pool receives the tokened URI instead (docs/adr/0003,
 // "Integration"). Only the exact bare value is replaced; anything else is interned as it is.
-nevr_runtime::lifecycle::InternResult InternBridgeAware(std::string_view value) {
+nevr::lifecycle::InternResult InternBridgeAware(std::string_view value) {
   Runtime& rt = R();
   const unsigned port = rt.bridgePort.load(std::memory_order_acquire);
-  return nevr_runtime::lifecycle::InternStableCStr(ReplaceBareBridgeUri(value, port, rt.loopbackUri));
+  return nevr::lifecycle::InternStableCStr(ReplaceBareBridgeUri(value, port, rt.loopbackUri));
 }
 
 nevr_quest::redirect::BridgeState BridgeProbe() {
@@ -295,6 +295,7 @@ class ProductionSteps final : public Steps {
   bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
+  bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -343,6 +344,12 @@ class ProductionSteps final : public Steps {
     });
     detail_ = "launched";
     return true;
+  }
+
+  bool InstallObbSkip(bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallObbSkipHook(countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {

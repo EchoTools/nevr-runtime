@@ -13,7 +13,7 @@ SCRIPT = REPO / "tools" / "naming_inventory.py"
 
 FILES = {
     "src/runtime/a.h": "namespace GameServer {\n}\nnamespace nevr::lifecycle {\n}\n// the n" "EVR brand\n",
-    "src/runtime/b.cpp": 'namespace Nevr::Lifecycle {\n}\nvoid f() { Log("[TELEMETRY.DIAG] x"); Log("[NEVR.WS] y"); }\n',
+    "src/runtime/b.cpp": 'namespace Nevr::' 'Lifecycle {\n}\nvoid f() { Log("[TELEMETRY.DIAG] x"); Log("[NEVR.WS] y"); }\n',
     "src/runtime/c.h": "namespace EchoVR {\n}\nnamespace nevr_cfg {\n}\n",
     "src/runtime/CMakeLists.txt": ('add_library(platform_compat STATIC a.cpp)\nadd_library(nevr_core STATIC b.cpp)\n'
                                    'add_executable(thing_test t.cpp)\n'
@@ -41,7 +41,7 @@ class NamingInventoryTest(unittest.TestCase):
         out = self.inventory()
         self.assertIn("src/runtime/a.h:1  GameServer", out)
         self.assertIn("src/runtime/a.h:5  n" "EVR", out)  # spelled in two pieces: the sensor scans this file too
-        self.assertIn("src/runtime/b.cpp:1  Nevr::Lifecycle", out)
+        self.assertIn("src/runtime/b.cpp:1  Nevr::" "Lifecycle", out)  # two pieces: test_naming scans this file
         self.assertIn("src/runtime/b.cpp:3  [TELEMETRY.DIAG]", out)
         self.assertIn("src/runtime/CMakeLists.txt:1  platform_compat", out)
         self.assertIn("src/runtime/CMakeLists.txt:4  GIT_COMMIT_HASH", out)

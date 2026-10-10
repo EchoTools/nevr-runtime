@@ -19,10 +19,10 @@ CHAR g_customConfigPath[MAX_PATH] = {};
 
 namespace {
 
-using nevr_runtime::lifecycle::test::FailInternAtAccessor;
-using nevr_runtime::lifecycle::test::ResetAccessorInputs;
-using nevr_runtime::lifecycle::test::SetAccessorInputs;
-using nevr_runtime::lifecycle::test::ThrowAtAccessor;
+using nevr::lifecycle::test::FailInternAtAccessor;
+using nevr::lifecycle::test::ResetAccessorInputs;
+using nevr::lifecycle::test::SetAccessorInputs;
+using nevr::lifecycle::test::ThrowAtAccessor;
 
 constexpr const char* kConfig = R"YAML(
 version: "1"
@@ -353,7 +353,7 @@ TEST(StableStringPoolAccessors, EveryCAccessorTerminatesOnInternFailureWithRedac
 // the real pool to its count limit through an accessor and checks the counts the
 // pool itself reports.
 TEST(StableStringPoolAccessors, RealPoolCountLimitTerminatesThroughTheAccessorBoundary) {
-  constexpr unsigned kLimit = static_cast<unsigned>(nevr_runtime::lifecycle::kStableStringMaxCount);
+  constexpr unsigned kLimit = static_cast<unsigned>(nevr::lifecycle::kStableStringMaxCount);
   std::size_t liveBytes = 0;
   for (unsigned port = 1; port <= kLimit; ++port) {
     liveBytes += std::string("ws://127.0.0.1:" + std::to_string(port)).size() + 1;  // payload plus NUL
