@@ -81,7 +81,7 @@ bool ReadAtOffset(const void* module, uintptr_t offset, std::array<BYTE, Size>* 
 
 }  // namespace
 
-bool GameImageGuard::IsSupportedGameModule(const void* module) noexcept {
+bool nevr_game_image_guard::IsSupportedGameModule(const void* module) noexcept {
   if (module == nullptr) return false;
 
   std::array<BYTE, sizeof(IMAGE_DOS_HEADER)> dos_bytes{};
@@ -142,7 +142,7 @@ bool GameImageGuard::IsSupportedGameModule(const void* module) noexcept {
   return true;
 }
 
-void GameImageGuard::RequireSupportedGameModule(HMODULE module) noexcept {
+void nevr_game_image_guard::RequireSupportedGameModule(HMODULE module) noexcept {
   if (IsSupportedGameModule(module)) return;
   TerminateProcess(GetCurrentProcess(), kUnsupportedImageExitCode);
   RaiseFailFastException(nullptr, nullptr, 0);
@@ -153,7 +153,7 @@ void GameImageGuard::RequireSupportedGameModule(HMODULE module) noexcept {
 #endif
 }
 
-void GameImageGuard::RunWithSupportedGameModule(HMODULE module,
+void nevr_game_image_guard::RunWithSupportedGameModule(HMODULE module,
                                                 void (*initialize)(HMODULE)) noexcept {
   RequireSupportedGameModule(module);
   if (initialize != nullptr) initialize(module);
