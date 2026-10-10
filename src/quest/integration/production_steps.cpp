@@ -280,7 +280,7 @@ class ProductionSteps final : public Steps {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "config_loaded",
                         {{"status", "ok"}, {"redirect", cfg.effective.redirect ? 1 : 0},
                          {"bridge", cfg.effective.bridge ? 1 : 0}, {"login", cfg.effective.login ? 1 : 0},
-                         {"social", cfg.effective.social ? 1 : 0},
+                         {"social", cfg.effective.social ? 1 : 0}, {"presence_names", cfg.effective.presenceNames ? 1 : 0},
                          {"socket_uri", nevr_quest::SourceName(cfg.socketUri.source)},
                          {"http_uri", nevr_quest::SourceName(cfg.httpUri.source)},
                          {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
@@ -422,7 +422,8 @@ class ProductionSteps final : public Steps {
 
   bool InstallSocial() override {
     const char* detail = "unknown";
-    const bool ok = nevr_quest::integration::InstallSocialHook(&detail);
+    const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
+                                                              sentinel::ActiveConfig().effective.presenceNames);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
