@@ -273,7 +273,11 @@ void TracedSet(void* self, const void* json) noexcept {
   char text[512];
   unsigned long long size = sizeof(text);
   if (encode(json, text, &size, 1, "") != 0 || size >= sizeof(text)) {
-    LogFields(LogLevel::kWarn, "rich_presence_set", {{"result", "encode_failed"}});
+    // A document the encoder cannot read out fails the same way on every Set: one line, then silence until
+    // a Set reads out again (its text changes the key).
+    if (g_lastSetKey.exchange(2, std::memory_order_relaxed) != 2) {
+      LogFields(LogLevel::kWarn, "rich_presence_set", {{"result", "encode_failed"}});
+    }
     return;
   }
   text[size] = '\0';

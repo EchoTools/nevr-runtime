@@ -255,7 +255,9 @@ unsigned FakeCount(const void*) { return g_countAnswer; }
 const char* FakeName(const void*, unsigned) { return g_nameAnswer; }
 void FakeSet(void*, const void*) { ++g_setCalls; }
 const char* g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
+bool g_encodeFails = false;
 unsigned FakeEncodeJson(const void*, char* out, unsigned long long* size, unsigned, const char*) {
+  if (g_encodeFails) return 9;
   const std::size_t n = std::strlen(g_encodeText);
   std::memcpy(out, g_encodeText, n);
   *size = n;
@@ -418,6 +420,32 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
   g_destinationAnswer = -1;
   g_countAnswer = 0;
   g_nameAnswer = "Social Lobby";
+}
+
+// An encoder that fails on every Set is one line, and a Set that reads out again is logged as usual.
+void TestPresenceEncodeFailureIsLoggedOnce() {
+  ResetPresenceForTest();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  using SetFn = void (*)(void*, const void*);
+  SetFn set;
+  const std::uintptr_t w = SlotOf(object, kRichPresenceSlotSet);
+  std::memcpy(&set, &w, sizeof(w));
+  int document = 0;
+  g_lines.clear();
+  g_encodeFails = true;
+  for (int i = 0; i < 5; ++i) set(&object, &document);
+  QCHECK(CountLines("\"result\":\"encode_failed\"") == 1);
+  g_encodeFails = false;
+  set(&object, &document);
+  QCHECK(CountLines("\"event\":\"rich_presence_set\",\"json\"") == 1);
+  g_encodeFails = true;  // failing again after a good read is a new episode
+  set(&object, &document);
+  set(&object, &document);
+  QCHECK(CountLines("\"result\":\"encode_failed\"") == 2);
+  g_encodeFails = false;
 }
 
 // #393 (a2): with the feature on and no destination found by the game, the table answers by the game type of the
@@ -599,6 +627,7 @@ int main() {
   TestPresenceWrappersPassThroughAndLogOnChange();
   TestPresenceThroughThunk();
   TestPresenceTarget();
+  TestPresenceEncodeFailureIsLoggedOnce();
   TestPresenceNameTable();
   TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone();
   sentinel::SetLogSink(previous);
