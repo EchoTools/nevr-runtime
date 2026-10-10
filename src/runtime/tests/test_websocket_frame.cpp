@@ -31,8 +31,8 @@ TEST(WebSocketFrame, PreservesPayloadsThatShareTheirFirstEightBytes) {
   std::string frame = Encode(messageId, first);
   Append(frame, Encode(messageId, second));
 
-  const auto parsed = GameServer::ParseServerDbFrame(frame, 10);
-  ASSERT_EQ(parsed.status, GameServer::WebSocketFrameStatus::Complete);
+  const auto parsed = nevr_game_server::ParseServerDbFrame(frame, 10);
+  ASSERT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::Complete);
   ASSERT_EQ(parsed.messages.size(), 2U);
   EXPECT_EQ(parsed.messages[0].payload, std::vector<UINT8>(first.begin(), first.end()));
   EXPECT_EQ(parsed.messages[1].payload, std::vector<UINT8>(second.begin(), second.end()));
@@ -46,8 +46,8 @@ TEST(WebSocketFrame, PreservesIdenticalConsecutiveMessagesAndZeroThroughSevenByt
     Append(frame, Encode(0xAABBCCDD, payload));
   }
 
-  const auto parsed = GameServer::ParseServerDbFrame(frame, 20);
-  ASSERT_EQ(parsed.status, GameServer::WebSocketFrameStatus::Complete);
+  const auto parsed = nevr_game_server::ParseServerDbFrame(frame, 20);
+  ASSERT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::Complete);
   ASSERT_EQ(parsed.messages.size(), 16U);
   for (size_t index = 0; index < parsed.messages.size(); ++index) {
     const size_t payloadLength = index / 2;
@@ -62,8 +62,8 @@ TEST(WebSocketFrame, ParsesConcatenatedMessagesInWireOrder) {
   Append(frame, Encode(1, "first"));
   Append(frame, Encode(2, "second"));
 
-  const auto parsed = GameServer::ParseServerDbFrame(frame, 10);
-  ASSERT_EQ(parsed.status, GameServer::WebSocketFrameStatus::Complete);
+  const auto parsed = nevr_game_server::ParseServerDbFrame(frame, 10);
+  ASSERT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::Complete);
   ASSERT_EQ(parsed.messages.size(), 3U);
   EXPECT_EQ(parsed.messages[0].msgId, 3U);
   EXPECT_EQ(parsed.messages[1].msgId, 1U);
@@ -72,25 +72,25 @@ TEST(WebSocketFrame, ParsesConcatenatedMessagesInWireOrder) {
 
 TEST(WebSocketFrame, BoundsShortTruncatedAndInvalidFrames) {
   for (size_t size = 0; size < kHeaderSize; ++size) {
-    const auto parsed = GameServer::ParseServerDbFrame(std::string(size, '\0'), 10);
-    EXPECT_EQ(parsed.status, GameServer::WebSocketFrameStatus::TooShort) << "size=" << size;
+    const auto parsed = nevr_game_server::ParseServerDbFrame(std::string(size, '\0'), 10);
+    EXPECT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::TooShort) << "size=" << size;
     EXPECT_TRUE(parsed.messages.empty());
   }
 
   std::string truncatedHeader = Encode(1, "data");
   truncatedHeader.resize(kHeaderSize - 1);
-  EXPECT_EQ(GameServer::ParseServerDbFrame(truncatedHeader, 10).status,
-            GameServer::WebSocketFrameStatus::TooShort);
+  EXPECT_EQ(nevr_game_server::ParseServerDbFrame(truncatedHeader, 10).status,
+            nevr_game_server::WebSocketFrameStatus::TooShort);
 
   std::string truncatedPayload = Encode(2, "data");
   truncatedPayload.pop_back();
-  const auto payloadResult = GameServer::ParseServerDbFrame(truncatedPayload, 10);
-  EXPECT_EQ(payloadResult.status, GameServer::WebSocketFrameStatus::TruncatedPayload);
+  const auto payloadResult = nevr_game_server::ParseServerDbFrame(truncatedPayload, 10);
+  EXPECT_EQ(payloadResult.status, nevr_game_server::WebSocketFrameStatus::TruncatedPayload);
   EXPECT_EQ(payloadResult.errorMessageId, 2U);
 
   std::string invalidMagic(kHeaderSize, '\0');
-  const auto magicResult = GameServer::ParseServerDbFrame(invalidMagic, 10);
-  EXPECT_EQ(magicResult.status, GameServer::WebSocketFrameStatus::InvalidMagic);
+  const auto magicResult = nevr_game_server::ParseServerDbFrame(invalidMagic, 10);
+  EXPECT_EQ(magicResult.status, nevr_game_server::WebSocketFrameStatus::InvalidMagic);
 }
 
 TEST(WebSocketFrame, DropsOversizedPayloadWithoutLosingFollowingValidFrame) {
@@ -98,8 +98,8 @@ TEST(WebSocketFrame, DropsOversizedPayloadWithoutLosingFollowingValidFrame) {
   std::string frame = Encode(9, oversized);
   Append(frame, Encode(10, "valid"));
 
-  const auto parsed = GameServer::ParseServerDbFrame(frame, 10);
-  EXPECT_EQ(parsed.status, GameServer::WebSocketFrameStatus::OversizedMessage);
+  const auto parsed = nevr_game_server::ParseServerDbFrame(frame, 10);
+  EXPECT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::OversizedMessage);
   ASSERT_EQ(parsed.messages.size(), 1U);
   EXPECT_EQ(parsed.messages[0].msgId, 10U);
   EXPECT_EQ(parsed.messages[0].payload, std::vector<UINT8>({'v', 'a', 'l', 'i', 'd'}));
@@ -110,8 +110,8 @@ TEST(WebSocketFrame, EnforcesQueueLimitWithoutReorderingAcceptedMessages) {
   Append(frame, Encode(2, "two"));
   Append(frame, Encode(3, "three"));
 
-  const auto parsed = GameServer::ParseServerDbFrame(frame, 2);
-  EXPECT_EQ(parsed.status, GameServer::WebSocketFrameStatus::QueueLimit);
+  const auto parsed = nevr_game_server::ParseServerDbFrame(frame, 2);
+  EXPECT_EQ(parsed.status, nevr_game_server::WebSocketFrameStatus::QueueLimit);
   ASSERT_EQ(parsed.messages.size(), 2U);
   EXPECT_EQ(parsed.messages[0].msgId, 1U);
   EXPECT_EQ(parsed.messages[1].msgId, 2U);

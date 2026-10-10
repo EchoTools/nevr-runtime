@@ -380,7 +380,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
         server = gameserver_text()
         acquire = extract_braced_function(server, "std::string AcquireServerDbToken(")
-        self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
+        self.assertRegex(acquire, r"nevr_serverdb_auth::RunSerializedMint\s*\(")
         helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")
 
@@ -457,7 +457,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
         # gameserver_serverdb.cpp holds the initial registration, gameserver_callbacks.cpp the re-registration.
         server = strip_comments(gameserver_text())
-        self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
+        self.assertEqual(len(re.findall(r"nevr_game_server::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)
 
     def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
@@ -540,7 +540,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # because extract_braced_function strips comments before returning.
         callbacks = (ROOT / "src/runtime/server/gameserver_callbacks.cpp").read_text()
         register = extract_braced_function(callbacks, "void GameServerLib::RegisterBroadcasterCallbacks(")
-        record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
+        record = re.search(r"\bnevr_game_server::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
         first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
         self.assertIsNotNone(first_listen, "subject vanished: no ListenForBroadcasterMessage calls")

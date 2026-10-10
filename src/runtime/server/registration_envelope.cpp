@@ -1,6 +1,6 @@
 #include "runtime/server/registration_envelope.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 std::string FormatRegistrationVersion(std::string_view gitDescribe, std::string_view gitCommit,
                                       std::string_view buildType) {
@@ -27,4 +27,4 @@ gameservice::v1::Envelope BuildRegistrationEnvelope(const RegistrationParams& pa
   return envelope;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

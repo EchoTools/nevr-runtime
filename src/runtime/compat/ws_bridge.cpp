@@ -985,7 +985,7 @@ void InstallWebSocketBridge() {
             {
               const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
               const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-              std::optional<std::string> withCredentials = ServerDbUri::BuildBridgeCredentialUri(
+              std::optional<std::string> withCredentials = nevr_serverdb_uri::BuildBridgeCredentialUri(
                   remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
                   cfgPassword ? std::string_view(cfgPassword) : std::string_view());
               if (withCredentials) {
@@ -1005,10 +1005,10 @@ void InstallWebSocketBridge() {
             // carries it before the credentials block above appends
             // discordid/password. A naive "delete the preceding
             // ? or &" deleted the URI's only '?' and glued the path to the
-            // remaining query. ServerDbUri::RemoveQueryParam handles leading/
+            // remaining query. nevr_serverdb_uri::RemoveQueryParam handles leading/
             // middle/trailing/sole position correctly; see its own tests.
             if (connIdx >= 2) {
-              remoteUrl = ServerDbUri::RemoveQueryParam(remoteUrl, "format=evr");
+              remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
               const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
                   "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
               Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());

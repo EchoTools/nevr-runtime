@@ -9,7 +9,7 @@
 #include <mutex>
 #include <string>
 
-namespace ServerDbAuth {
+namespace nevr_serverdb_auth {
 
 inline std::string RunSerializedMint(const std::function<std::string()>& mint) {
   static std::mutex mintMutex;
@@ -17,4 +17,4 @@ inline std::string RunSerializedMint(const std::function<std::string()>& mint) {
   return mint();
 }
 
-}  // namespace ServerDbAuth
+}  // namespace nevr_serverdb_auth

@@ -35,7 +35,7 @@ Entrant MakeEntrant(uint64_t accountId) {
 
 TEST(ServerContextEntrants, JoinAfterInitializeIsVisible) {
   EchoVR::Lobby lobby{};
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
   ASSERT_EQ(context.GetEntrantCount(), 0U);
@@ -52,7 +52,7 @@ TEST(ServerContextEntrants, LeaveAfterInitializeIsVisible) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22), MakeEntrant(33)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
   ASSERT_EQ(context.GetEntrantCount(), 3U);
@@ -70,7 +70,7 @@ TEST(ServerContextEntrants, SlotReusedByAnotherPlayerReportsTheNewPlayer) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -84,7 +84,7 @@ TEST(ServerContextEntrants, ReturnsTheGameElementNotACopy) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -99,7 +99,7 @@ TEST(ServerContextEntrants, ElementStrideMatchesTheBinary) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(1), MakeEntrant(2)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -117,7 +117,7 @@ TEST(ServerContextEntrants, FreedArrayReadsAsEmpty) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -131,7 +131,7 @@ TEST(ServerContextEntrants, UninitializedAndTerminatedReadAsEmpty) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
 
   EXPECT_EQ(context.GetEntrantCount(), 0U);
   EXPECT_EQ(context.GetEntrant(0), nullptr);
@@ -192,7 +192,7 @@ TEST(ServerContextSmite, ResolvesGuidToSessionSlotIndex) {
   std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeSlot(MakeGuid(2)), MakeSlot(MakeGuid(3))};
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -209,7 +209,7 @@ TEST(ServerContextSmite, UnknownGuidIsNotFound) {
   std::vector<Slot> sessions = {MakeSlot(MakeGuid(1))};
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -227,7 +227,7 @@ TEST(ServerContextSmite, EntrantUserIdBytesDoNotMatch) {
   AttachSessions(lobby, sessions);
   GUID asUserId{};
   std::memcpy(&asUserId, &entrants[0].userId, sizeof(GUID));
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -243,7 +243,7 @@ TEST(ServerContextSmite, SlotBeyondEntrantArrayIsNotReturned) {
   std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeSlot(MakeGuid(2))};
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -258,7 +258,7 @@ TEST(ServerContextSmite, NilGuidDoesNotMatchADepartedSlot) {
   std::vector<Slot> sessions = {MakeDepartedSlot(GUID{}), MakeSlot(MakeGuid(2))};
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -276,7 +276,7 @@ TEST(ServerContextSmite, SlotThatIsNotAcceptedIsNotReturned) {
   sessions[0].joinState = 2;  // add pending
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
@@ -293,7 +293,7 @@ TEST(ServerContextSmite, AcceptedEntrantCountIgnoresEmptyAndPendingSlots) {
   sessions[3].joinState = 2;  // add pending
   Attach(lobby, entrants);
   AttachSessions(lobby, sessions);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   EXPECT_EQ(context.CountAcceptedEntrants(), 0U) << "not initialized";
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
@@ -307,7 +307,7 @@ TEST(ServerContextSmite, AbsentSessionArrayIsNotFound) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11)};
   Attach(lobby, entrants);
-  GameServer::ServerContext context;
+  nevr_game_server::ServerContext context;
   context.Initialize(&lobby, nullptr);
   context.FinalizeInitialization();
 
