@@ -1,6 +1,7 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_dsp.h"
+#include "runtime/patch/mic_policy.h"
 
 #include <gtest/gtest.h>
 
@@ -455,3 +456,15 @@ TEST(MicComBalance, SuccessfulSOkAndSFalseRequireUninitializeButChangedModeDoesN
 }
 
 }  // namespace
+
+// #402: the WASAPI provider answers the game's Mic* lookups under Wine/Proton only; on native Windows the
+// game's own mic path stays, and the boot line says which.
+TEST(MicProviderPolicy, InstalledUnderWineAndNotOnNativeWindows) {
+  EXPECT_TRUE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/true));
+  EXPECT_FALSE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/false));
+}
+
+TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
+  EXPECT_STREQ(nevr_mic_policy::BootLine(true), "[NEVR.MIC] provider installed: Wine\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(false), "[NEVR.MIC] provider not installed: native Windows\n");
+}

@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
+#include "runtime/patch/mic_policy.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
 #include "runtime/patch/resource_override.h"
@@ -26,6 +27,7 @@
 #include "core/globals.h"
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "core/system_info.h"
 #include "abi/echovr_functions.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/binary_bug_fixes.h"
@@ -91,8 +93,12 @@ static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 // provider handle. So the mic exports are intercepted HERE, by name, against
 // pnsrad.dll's module handle specifically — never by hooking pnsrad's own
 // stub bodies.
+// Decided once, before the GetSymbol hook is enabled (see where it is installed): the provider answers only
+// under Wine/Proton (mic_policy.h, #402).
+static bool g_micProviderInstalled = false;
+
 static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name) {
-  if (!symbol_name) return nullptr;
+  if (!symbol_name || !g_micProviderInstalled) return nullptr;
   uintptr_t pnsradBase = nevr_pnsrad_enabler::GetModuleBase();
   if (pnsradBase == 0 || reinterpret_cast<uintptr_t>(dll_handle) != pnsradBase) return nullptr;
 
@@ -343,6 +349,8 @@ static VOID InitializeAfterGameImageGuard() {
   PatchProviderPrefixOvrOrg();
 
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing CSysDLL hooks...\n");
+  g_micProviderInstalled = nevr_mic_policy::ShouldInstallProvider(nevr_system_info::Get().IsWine());
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_mic_policy::BootLine(g_micProviderInstalled));
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
