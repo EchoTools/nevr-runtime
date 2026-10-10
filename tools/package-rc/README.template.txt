@@ -22,9 +22,10 @@ Uninstall
        powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the same bin\win10 folder>"
   This puts your original BugSplat64.dll and a legacy dbgcore.dll back. The backup files stay.
 
-Unsigned
-  This DLL is not code-signed. Windows Defender or SmartScreen may warn about it or quarantine it.
-  The SHA-256 of BugSplat64.dll is in SHA256SUMS; compare it with the value you were given.
+Signing
+  SIGNING.txt in this package says whether the files are code-signed, and which. A file that is
+  not signed may be flagged by Windows Defender or SmartScreen. The SHA-256 of BugSplat64.dll is in
+  SHA256SUMS; compare it with the value you were given.
 
 Logs
   The runtime writes its log under %LOCALAPPDATA%\EchoVR\logs. When you report a problem, send the

@@ -1,5 +1,8 @@
 # nEVR runtime @VERSION@ (release candidate @RC@)
 
+**@SIGNING_STATE@.** @SIGNING_DETAIL@ The Quest APK is debug-signed with the same key as earlier test builds, which
+is a sideload signature, not a code-signing certificate.
+
 Commit `@COMMIT@`. Two artifacts, built the same way from the same commit:
 
 | file | what |
@@ -26,7 +29,7 @@ with no `nevr-quest.json`.
   earlier test builds; a different key needs an uninstall first, which clears the app's data).
 
 ## Notes
-- The Windows DLL is **unsigned**: Defender or SmartScreen may warn about it.
+- Signing state of the Windows files: the line at the top and `SIGNING.txt` in the zip.
 - The Windows log is `%LOCALAPPDATA%\EchoVR\logs\nevr-*.jsonl`; the Quest log is
   `/sdcard/Android/data/com.readyatdawn.r15/files/nevr-sentinel.log`.
 - Version string in both artifacts: `@VERSION@`.
