@@ -14,7 +14,7 @@
 
 #include "runtime/log/url_diagnostics.h"
 
-namespace FailureDetail {
+namespace nevr_failure_detail {
 
 // How many payload bytes DescribeRegistrationRejection quotes.
 inline constexpr size_t kPayloadPreviewBytes = 64;
@@ -96,4 +96,4 @@ inline std::string WithCause(std::string_view base, std::string_view reason) {
   return out;
 }
 
-}  // namespace FailureDetail
+}  // namespace nevr_failure_detail

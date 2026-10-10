@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-namespace EarlyQuitLockout {
+namespace nevr_early_quit_lockout {
 
 // What the countdown should be once the setter has run.
 struct Countdown {
@@ -33,4 +33,4 @@ inline Countdown AfterSetPenalty(std::int64_t incomingTs, std::int64_t storedTs,
 // while the countdown has seconds left.
 inline bool CountdownActive(std::int64_t countdownSec) { return countdownSec > 0; }
 
-}  // namespace EarlyQuitLockout
+}  // namespace nevr_early_quit_lockout

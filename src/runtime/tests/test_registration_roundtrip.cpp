@@ -99,8 +99,8 @@ class FakeServerDb {
       return;
     }
     if (msg.type != ix::WebSocketMessageType::Message || !msg.binary) return;
-    const GameServer::ParsedWebSocketFrame parsed = GameServer::ParseServerDbFrame(msg.str, 16);
-    if (parsed.status != GameServer::WebSocketFrameStatus::Complete || parsed.messages.size() != 1) return;
+    const nevr_game_server::ParsedWebSocketFrame parsed = nevr_game_server::ParseServerDbFrame(msg.str, 16);
+    if (parsed.status != nevr_game_server::WebSocketFrameStatus::Complete || parsed.messages.size() != 1) return;
     gameservice::v1::Envelope envelope;
     if (!envelope.ParseFromArray(parsed.messages[0].payload.data(), static_cast<int>(parsed.messages[0].payload.size())) ||
         envelope.message_case() != gameservice::v1::Envelope::kGameServerRegistration) {
@@ -115,7 +115,7 @@ class FakeServerDb {
     gameservice::v1::Envelope reply;
     reply.mutable_game_server_registration_success()->set_server_id(registration_.server_id());
     reply.mutable_game_server_registration_success()->set_external_ip_address(registration_.internal_ip_address());
-    ws.sendBinary(EncodeFrame(GameServer::kProtobufMessageSymbol, reply.SerializeAsString()));
+    ws.sendBinary(EncodeFrame(nevr_game_server::kProtobufMessageSymbol, reply.SerializeAsString()));
     cv_.notify_all();
   }
 
@@ -129,8 +129,8 @@ class FakeServerDb {
   EchoVR::SymbolId frameSymbol_ = 0;
 };
 
-GameServer::RegistrationParams SampleParams() {
-  GameServer::RegistrationParams params;
+nevr_game_server::RegistrationParams SampleParams() {
+  nevr_game_server::RegistrationParams params;
   params.loginSessionId = "11111111-2222-3333-4444-555555555555";
   params.serverId = 4242;
   params.externalIp = "203.0.113.9";
@@ -138,15 +138,15 @@ GameServer::RegistrationParams SampleParams() {
   params.regionId = 0xAABBCCDDEEFF0011ULL;
   params.versionLock = 0x1122334455667788ULL;
   params.timeStepUsecs = 16667;
-  params.version = GameServer::FormatRegistrationVersion("v4.2.0-5-gabc1234", "abc1234", "Release");
+  params.version = nevr_game_server::FormatRegistrationVersion("v4.2.0-5-gabc1234", "abc1234", "Release");
   return params;
 }
 
 }  // namespace
 
 TEST(RegistrationEnvelope, CarriesEveryParameterAndAFormattedVersion) {
-  const GameServer::RegistrationParams params = SampleParams();
-  const gameservice::v1::Envelope envelope = GameServer::BuildRegistrationEnvelope(params);
+  const nevr_game_server::RegistrationParams params = SampleParams();
+  const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
   ASSERT_EQ(envelope.message_case(), gameservice::v1::Envelope::kGameServerRegistration);
   const auto& r = envelope.game_server_registration();
   EXPECT_EQ(r.login_session_id(), params.loginSessionId);
@@ -165,9 +165,9 @@ TEST(RegistrationRoundTrip, FakeServerDbReceivesTheRegistrationAndTheClientParse
 
   WebSocketClient client;
   std::mutex mutex;
-  std::vector<GameServer::ReceivedWebSocketMessage> received;
+  std::vector<nevr_game_server::ReceivedWebSocketMessage> received;
   client.SetMessageHandler([&](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
-    GameServer::ReceivedWebSocketMessage message;
+    nevr_game_server::ReceivedWebSocketMessage message;
     message.msgId = msgId;
     if (data != nullptr) message.payload.assign(static_cast<UINT8*>(data), static_cast<UINT8*>(data) + size);
     std::lock_guard<std::mutex> lock(mutex);
@@ -176,14 +176,14 @@ TEST(RegistrationRoundTrip, FakeServerDbReceivesTheRegistrationAndTheClientParse
   ASSERT_TRUE(client.Connect(serverDb.Uri().c_str(), "fake-token"));
 
   // Sent before the link is up, the registration is queued and flushed on connect; it is accepted either way.
-  const GameServer::RegistrationParams params = SampleParams();
-  const GameServer::ProtobufSendResult sent =
-      GameServer::SendProtobufEnvelope(client, GameServer::BuildRegistrationEnvelope(params));
-  ASSERT_TRUE(GameServer::IsProtobufSendAccepted(sent));
+  const nevr_game_server::RegistrationParams params = SampleParams();
+  const nevr_game_server::ProtobufSendResult sent =
+      nevr_game_server::SendProtobufEnvelope(client, nevr_game_server::BuildRegistrationEnvelope(params));
+  ASSERT_TRUE(nevr_game_server::IsProtobufSendAccepted(sent));
   ASSERT_TRUE(serverDb.WaitForRegistration()) << "ServerDB never received a registration";
 
   EXPECT_EQ(serverDb.Authorization(), "Bearer fake-token");
-  EXPECT_EQ(serverDb.FrameSymbol(), GameServer::kProtobufMessageSymbol);
+  EXPECT_EQ(serverDb.FrameSymbol(), nevr_game_server::kProtobufMessageSymbol);
   const auto registration = serverDb.Registration();
   EXPECT_EQ(registration.login_session_id(), params.loginSessionId);
   EXPECT_EQ(registration.server_id(), params.serverId);
@@ -204,7 +204,7 @@ TEST(RegistrationRoundTrip, FakeServerDbReceivesTheRegistrationAndTheClientParse
   }
   std::lock_guard<std::mutex> lock(mutex);
   ASSERT_EQ(received.size(), 1U) << "the client never delivered the registration success";
-  EXPECT_EQ(received[0].msgId, GameServer::kProtobufMessageSymbol);
+  EXPECT_EQ(received[0].msgId, nevr_game_server::kProtobufMessageSymbol);
   gameservice::v1::Envelope reply;
   ASSERT_TRUE(reply.ParseFromArray(received[0].payload.data(), static_cast<int>(received[0].payload.size())));
   ASSERT_EQ(reply.message_case(), gameservice::v1::Envelope::kGameServerRegistrationSuccess);

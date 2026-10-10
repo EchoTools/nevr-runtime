@@ -253,7 +253,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
         if (receivedMessages_.size() < 1024) queueCapacity = 1024 - receivedMessages_.size();
         LeaveCriticalSection(&receivedMessagesMutex_);
 
-        auto parsed = GameServer::ParseServerDbFrame(payload, queueCapacity);
+        auto parsed = nevr_game_server::ParseServerDbFrame(payload, queueCapacity);
         bool queueFull = false;
         EnterCriticalSection(&receivedMessagesMutex_);
         for (auto& received : parsed.messages) {
@@ -266,32 +266,32 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
         LeaveCriticalSection(&receivedMessagesMutex_);
 
         switch (parsed.status) {
-          case GameServer::WebSocketFrameStatus::Complete:
+          case nevr_game_server::WebSocketFrameStatus::Complete:
             break;
-          case GameServer::WebSocketFrameStatus::TooShort:
+          case nevr_game_server::WebSocketFrameStatus::TooShort:
             Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Received malformed binary message (too short: %zu bytes)",
                 payload.size());
             break;
-          case GameServer::WebSocketFrameStatus::InvalidMagic:
+          case nevr_game_server::WebSocketFrameStatus::InvalidMagic:
             Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Received binary frame with invalid magic at offset %zu",
                 parsed.errorOffset);
             break;
-          case GameServer::WebSocketFrameStatus::TruncatedHeader:
+          case nevr_game_server::WebSocketFrameStatus::TruncatedHeader:
             Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Truncated message header at offset %zu (%zu bytes remain)",
                 parsed.errorOffset, parsed.remainingLength);
             break;
-          case GameServer::WebSocketFrameStatus::TruncatedPayload:
+          case nevr_game_server::WebSocketFrameStatus::TruncatedPayload:
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.SERVERDB] Message length exceeds frame (msgId: 0x%llX, length: %llu, remaining: %zu)",
                 parsed.errorMessageId, static_cast<unsigned long long>(parsed.declaredLength),
                 parsed.remainingLength);
             break;
-          case GameServer::WebSocketFrameStatus::OversizedMessage:
+          case nevr_game_server::WebSocketFrameStatus::OversizedMessage:
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.SERVERDB] Dropped oversized message (msgId: 0x%llX, size: %llu bytes)",
                 parsed.errorMessageId, static_cast<unsigned long long>(parsed.declaredLength));
             break;
-          case GameServer::WebSocketFrameStatus::QueueLimit:
+          case nevr_game_server::WebSocketFrameStatus::QueueLimit:
             queueFull = true;
             break;
         }
@@ -343,7 +343,7 @@ VOID WebSocketClient::FlushPendingMessages() {
 }
 
 VOID WebSocketClient::ProcessReceivedMessages() {
-  std::vector<GameServer::ReceivedWebSocketMessage> messagesToProcess;
+  std::vector<nevr_game_server::ReceivedWebSocketMessage> messagesToProcess;
 
   EnterCriticalSection(&receivedMessagesMutex_);
   messagesToProcess.swap(receivedMessages_);
@@ -377,7 +377,7 @@ void WebSocketClient::TestSetTransportHandler(std::function<bool(const std::stri
   testTransportHandler_ = std::move(handler);
 }
 
-void WebSocketClient::TestEnqueueReceivedMessage(GameServer::ReceivedWebSocketMessage message) {
+void WebSocketClient::TestEnqueueReceivedMessage(nevr_game_server::ReceivedWebSocketMessage message) {
   EnterCriticalSection(&receivedMessagesMutex_);
   receivedMessages_.push_back(std::move(message));
   LeaveCriticalSection(&receivedMessagesMutex_);

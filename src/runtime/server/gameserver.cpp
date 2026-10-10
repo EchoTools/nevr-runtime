@@ -63,12 +63,12 @@ static uint64_t AcceptedEntrantsNow() {
 }
 
 void CallScheduleReturnToLobby() {
-    if (g_pGame) ReturnToLobby::Request(g_pGame);
+    if (g_pGame) nevr_return_to_lobby::Request(g_pGame);
 }
 
 #include "core/logging.h"
 
-using namespace GameServer;
+using namespace nevr_game_server;
 
 // D1/N78: this file defines no ::Log. A second strong definition of the same
 // mangled symbol as src/core/logging.cpp (both linked into BugSplat64.dll) is an
@@ -134,20 +134,20 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType,
       envelope.ByteSizeLong());
 
-  const GameServer::ProtobufSendResult result = GameServer::SendProtobufEnvelope(*wsClient, envelope);
-  if (result == GameServer::ProtobufSendResult::SerializationFailed) {
+  const nevr_game_server::ProtobufSendResult result = nevr_game_server::SendProtobufEnvelope(*wsClient, envelope);
+  if (result == nevr_game_server::ProtobufSendResult::SerializationFailed) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to serialize protobuf to binary");
     return false;
   }
-  if (result == GameServer::ProtobufSendResult::TransportRejected) {
+  if (result == nevr_game_server::ProtobufSendResult::TransportRejected) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] WebSocket transport rejected protobuf envelope");
     return false;
   }
-  if (result == GameServer::ProtobufSendResult::AcceptedQueued) {
+  if (result == nevr_game_server::ProtobufSendResult::AcceptedQueued) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.GAMESERVER] Protobuf accepted into disconnected queue; ServerDB delivery is unconfirmed");
   }
-  return GameServer::IsProtobufSendAccepted(result);
+  return nevr_game_server::IsProtobufSendAccepted(result);
 }
 
 // Extract slot index from message payload
@@ -214,8 +214,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   Log(EchoVR::LogLevel::Info,
       "[NEVR.GAMESERVER] Initialized game server (game thread %lu, broadcaster callbacks registered=%zu/%zu)",
       static_cast<unsigned long>(GetCurrentThreadId()),
-      GameServer::CountRegisteredBroadcasterCallbacks(registered), GameServer::kBroadcasterCallbackCount);
-  const std::string missing = GameServer::MissingBroadcasterCallbacks(registered);
+      nevr_game_server::CountRegisteredBroadcasterCallbacks(registered), nevr_game_server::kBroadcasterCallbackCount);
+  const std::string missing = nevr_game_server::MissingBroadcasterCallbacks(registered);
   if (!missing.empty()) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] broadcaster callbacks NOT registered: %s — those message types will not reach the "
@@ -232,7 +232,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   RearmConsoleCtrlHandler();
   NotifyGameServerLibStarted();
   g_activeServerLib.store(this, std::memory_order_release);
-  ReturnToLobby::SetEntrantCounter(&AcceptedEntrantsNow);
+  nevr_return_to_lobby::SetEntrantCounter(&AcceptedEntrantsNow);
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -271,7 +271,7 @@ static bool s_exitPending = false;
 
 VOID GameServerLib::Update() {
   // #58: end a held return to lobby (empty-server TTL) on the game thread, before anything else.
-  ReturnToLobby::Poll();
+  nevr_return_to_lobby::Poll();
 
   // GH #44: run the graceful-shutdown thread's EndSession + Unregister here, on
   // the game thread that owns the callback registry. Once it has run the server
@@ -379,22 +379,22 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
           self->ShutdownUnregisterOnGameThread();
         },
         kGameThreadHandoffTimeout);
-    const char* outcomeName = GameServer::MainThreadHandoffOutcomeName(outcome);
+    const char* outcomeName = nevr_game_server::MainThreadHandoffOutcomeName(outcome);
     switch (outcome) {
-      case GameServer::MainThreadHandoff::Outcome::kRan:
+      case nevr_game_server::MainThreadHandoff::Outcome::kRan:
         Log(EchoVR::LogLevel::Info,
             "[NEVR.GAMESERVER] shutdown unregister handoff=%s game_thread=%lu shutdown_thread=%lu", outcomeName,
             gameThreadId.load(), shutdownThreadId);
         break;
-      case GameServer::MainThreadHandoff::Outcome::kTaskThrew:
+      case nevr_game_server::MainThreadHandoff::Outcome::kTaskThrew:
         Log(EchoVR::LogLevel::Error,
             "[NEVR.GAMESERVER] shutdown unregister handoff=%s game_thread=%lu shutdown_thread=%lu — "
             "unregister threw on the game thread; exiting anyway",
             outcomeName, gameThreadId.load(), shutdownThreadId);
         break;
-      case GameServer::MainThreadHandoff::Outcome::kTimedOut:
-      case GameServer::MainThreadHandoff::Outcome::kCancelled:
-      case GameServer::MainThreadHandoff::Outcome::kBusy:
+      case nevr_game_server::MainThreadHandoff::Outcome::kTimedOut:
+      case nevr_game_server::MainThreadHandoff::Outcome::kCancelled:
+      case nevr_game_server::MainThreadHandoff::Outcome::kBusy:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] shutdown unregister handoff=%s timeout_ms=%lld shutdown_thread=%lu — game thread did "
             "not run it; ending session and unregistering from ServerDB on the shutdown thread, broadcaster "
@@ -426,13 +426,13 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 
 VOID GameServerLib::EndSession() {
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
-    return GameServer::SendProtobufEnvelope(*m_wsClient, envelope);
+    return nevr_game_server::SendProtobufEnvelope(*m_wsClient, envelope);
   };
-  const auto endResult = GameServer::EndActiveServerSession(
+  const auto endResult = nevr_game_server::EndActiveServerSession(
       *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); });
-  if (endResult.attempted && endResult.sendResult == GameServer::ProtobufSendResult::TransportRejected) {
+  if (endResult.attempted && endResult.sendResult == nevr_game_server::ProtobufSendResult::TransportRejected) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] CODE_ENDED transport rejected for EndSession");
-  } else if (endResult.sendResult == GameServer::ProtobufSendResult::AcceptedQueued) {
+  } else if (endResult.sendResult == nevr_game_server::ProtobufSendResult::AcceptedQueued) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.SERVER] CODE_ENDED was queued; ServerDB delivery is unconfirmed");
   }
 

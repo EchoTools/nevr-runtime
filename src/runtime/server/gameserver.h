@@ -37,8 +37,8 @@ class GameServerLib : public EchoVR::IServerLib {
   VOID RemovePlayerSession(GUID* playerUuid) override;
 
   // Context accessor for callback handlers
-  GameServer::ServerContext& GetContext() { return *m_context; }
-  const GameServer::ServerContext& GetContext() const { return *m_context; }
+  nevr_game_server::ServerContext& GetContext() { return *m_context; }
+  const nevr_game_server::ServerContext& GetContext() const { return *m_context; }
 
   // WebSocketClient accessor for SendProtobufEnvelope
   WebSocketClient& GetWsClient() { return *m_wsClient; }
@@ -53,7 +53,7 @@ class GameServerLib : public EchoVR::IServerLib {
   void BeginGracefulShutdown(bool registrationFailed);
 
  private:
-  std::unique_ptr<GameServer::ServerContext> m_context;
+  std::unique_ptr<nevr_game_server::ServerContext> m_context;
   std::unique_ptr<WebSocketClient> m_wsClient;
   std::unique_ptr<TelemetryStreamer> m_telemetry;
 
@@ -64,7 +64,7 @@ class GameServerLib : public EchoVR::IServerLib {
   // GH #44: the shutdown thread hands EndSession + Unregister to the game thread
   // through this; Update() services it. Declared before m_shutdownThread so it
   // outlives the thread that waits on it.
-  GameServer::MainThreadHandoff m_gameThreadHandoff;
+  nevr_game_server::MainThreadHandoff m_gameThreadHandoff;
 
   // Thread that registered the broadcaster callbacks (the game thread). The
   // callback registry is only safe on that thread; UnregisterAllCallbacks logs

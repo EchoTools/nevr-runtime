@@ -113,9 +113,9 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // The replacement is built from GetMatchmakerBridgePort() at call time: ws_bridge.cpp binds an
 // ephemeral port with retry (a fixed port collides with a still-releasing socket from a just-killed
 // process), so no compile-time constant exists.
-static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = MatchmakerHostPatch::kHostRva;
-static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = MatchmakerHostPatch::kHostSlotSize;
-static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = MatchmakerHostPatch::kHostExpected;
+static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = nevr_matchmaker_host_patch::kHostRva;
+static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = nevr_matchmaker_host_patch::kHostSlotSize;
+static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_host_patch::kHostExpected;
 
 // 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
@@ -217,33 +217,33 @@ static void PatchMatchmakingHost(uintptr_t base) {
     const uint16_t port = GetMatchmakerBridgePort();
     auto* image = reinterpret_cast<uint8_t*>(base);
     DWORD err = 0;
-    const MatchmakerHostPatch::Result result = MatchmakerHostPatch::Apply(
+    const nevr_matchmaker_host_patch::Result result = nevr_matchmaker_host_patch::Apply(
         image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
     switch (result) {
-    case MatchmakerHostPatch::Result::Patched:
+    case nevr_matchmaker_host_patch::Result::Patched:
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
             "\"%s\" -> \"ws://127.0.0.1:%u\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
             PNSRADMATCHMAKING_HOST_EXPECTED, static_cast<unsigned>(port));
         break;
-    case MatchmakerHostPatch::Result::NoPort:
+    case nevr_matchmaker_host_patch::Result::NoPort:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking matchmaker listener never bound a port — NOT "
             "patching (matchmaking will fail regardless)");
         break;
-    case MatchmakerHostPatch::Result::DoesNotFit:
+    case nevr_matchmaker_host_patch::Result::DoesNotFit:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking replacement does not fit the %zu-byte slot at +0x%x — NOT patched",
             PNSRADMATCHMAKING_HOST_SLOT_SIZE, static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA));
         break;
-    case MatchmakerHostPatch::Result::BytesMismatch:
+    case nevr_matchmaker_host_patch::Result::BytesMismatch:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking host patch skipped rva=0x%x reason=bytes_mismatch "
             "expected=\"%s\" actual=\"%.48s\"",
             static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA), PNSRADMATCHMAKING_HOST_EXPECTED,
             reinterpret_cast<const char*>(image + PNSRADMATCHMAKING_HOST_RVA));
         break;
-    case MatchmakerHostPatch::Result::WriteFailed:
+    case nevr_matchmaker_host_patch::Result::WriteFailed:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking PatchMemory FAILED rva=0x%x error=%lu — bytes matched "
             "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA, err);
@@ -367,7 +367,7 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
  * (runtime/patch/provider_identity.h has the measurement). Same accounting as the
  * NOP patches: validated first, every outcome counted and reported. */
 static void PnsradUserProviderIdPatch(uintptr_t base) {
-    using namespace ProviderIdentity;
+    using namespace nevr_provider_identity;
     uint8_t* site = reinterpret_cast<uint8_t*>(base + kPnsradUserProviderIdRva);
     if (!nevr::ValidatePrologue(site, kPnsradUserProviderIdExpected.data(), kPnsradUserProviderIdExpected.size())) {
         Log(EchoVR::LogLevel::Warning,
@@ -460,7 +460,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
  * Public API
  * ==================================================================== */
 
-void PnsradEnabler::Init(uintptr_t base_addr) {
+void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
 #ifdef _WIN32
     // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
     // "init complete" summary can show a baseline instead of a bare count.
@@ -574,7 +574,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
 #endif
 }
 
-void PnsradEnabler::Shutdown() {
+void nevr_pnsrad_enabler::Shutdown() {
 #ifdef _WIN32
     if (s_dllNotifCookie) {
         HMODULE ntdll = GetModuleHandleA("ntdll");
@@ -586,6 +586,6 @@ void PnsradEnabler::Shutdown() {
 #endif
 }
 
-uintptr_t PnsradEnabler::GetModuleBase() {
+uintptr_t nevr_pnsrad_enabler::GetModuleBase() {
     return s_pnsradModuleBase;
 }

@@ -14,5 +14,5 @@ VOID PatchDscProvider();
 /// CreateUser, SaveLocalData, LobbyFindSession, LobbyPlayerSessions and three
 /// Send() paths flow through it.  The other, GetUserIDString (echovr.exe
 /// 0x1401ba630, 22 distinct callers), has its own switch over the same string table
-/// and is not hooked; see PatchAddresses::GET_USER_ID_STRING.
+/// and is not hooked; see nevr_patch_addresses::GET_USER_ID_STRING.
 VOID PatchProviderPrefixOvrOrg();

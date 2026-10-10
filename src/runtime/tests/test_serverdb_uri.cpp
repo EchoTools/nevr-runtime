@@ -72,19 +72,19 @@ constexpr std::string_view kHostileValue = "p&ss=w#rd%25+ ?/@&guilds=999";
 }  // namespace
 
 TEST(ServerDbUri, EncodeQueryValueEncodesEverythingButUnreserved) {
-  EXPECT_EQ(ServerDbUri::EncodeQueryValue("AZaz09-._~"), "AZaz09-._~");
-  EXPECT_EQ(ServerDbUri::EncodeQueryValue("&=#%+ ?/@,"), "%26%3D%23%25%2B%20%3F%2F%40%2C");
-  EXPECT_EQ(ServerDbUri::EncodeQueryValue("\xC3\xA9"), "%C3%A9");
-  EXPECT_EQ(ServerDbUri::EncodeQueryValue(""), "");
+  EXPECT_EQ(nevr_serverdb_uri::EncodeQueryValue("AZaz09-._~"), "AZaz09-._~");
+  EXPECT_EQ(nevr_serverdb_uri::EncodeQueryValue("&=#%+ ?/@,"), "%26%3D%23%25%2B%20%3F%2F%40%2C");
+  EXPECT_EQ(nevr_serverdb_uri::EncodeQueryValue("\xC3\xA9"), "%C3%A9");
+  EXPECT_EQ(nevr_serverdb_uri::EncodeQueryValue(""), "");
 }
 
 TEST(ServerDbUri, EncodeQueryValueHonoursStringViewLengthNotTerminator) {
   const std::string backing = "ab&cd";
-  EXPECT_EQ(ServerDbUri::EncodeQueryValue(std::string_view(backing).substr(0, 3)), "ab%26");
+  EXPECT_EQ(nevr_serverdb_uri::EncodeQueryValue(std::string_view(backing).substr(0, 3)), "ab%26");
 }
 
 TEST(ServerDbUri, LegacyUriPercentEncodesPasswordExactly) {
-  const std::optional<std::string> uri = ServerDbUri::BuildLegacyUri(
+  const std::optional<std::string> uri = nevr_serverdb_uri::BuildLegacyUri(
       "ws://db.example:777/serverdb", "123456789", kHostileValue, "111,222", "us-east");
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri,
@@ -94,7 +94,7 @@ TEST(ServerDbUri, LegacyUriPercentEncodesPasswordExactly) {
 }
 
 TEST(ServerDbUri, LegacyUriRoundTripsHostileValuesWithoutFieldBleed) {
-  const std::optional<std::string> uri = ServerDbUri::BuildLegacyUri(
+  const std::optional<std::string> uri = nevr_serverdb_uri::BuildLegacyUri(
       "wss://db.example/serverdb", "123456789", kHostileValue, "111,222", "us-east,eu_west");
   ASSERT_TRUE(uri.has_value());
   const QueryMap pairs = ParseQuery(*uri);
@@ -111,7 +111,7 @@ TEST(ServerDbUri, LegacyUriRoundTripsHostileValuesWithoutFieldBleed) {
 // where an unencoded password injects a second guilds= and truncates at '#'.
 TEST(ServerDbUri, PasswordCannotInjectAParameterOrAFragment) {
   const std::optional<std::string> uri =
-      ServerDbUri::BuildLegacyUri("ws://h/s", "1", "a&guilds=999#tail", "111", "");
+      nevr_serverdb_uri::BuildLegacyUri("ws://h/s", "1", "a&guilds=999#tail", "111", "");
   ASSERT_TRUE(uri.has_value());
   const QueryMap pairs = ParseQuery(*uri);
   EXPECT_EQ(pairs.count("guilds"), 1u) << *uri;
@@ -121,7 +121,7 @@ TEST(ServerDbUri, PasswordCannotInjectAParameterOrAFragment) {
 
 TEST(ServerDbUri, HostileListElementsAreEncodedButCommasStayDelimiters) {
   const std::optional<std::string> uri =
-      ServerDbUri::BuildLegacyUri("ws://h/s", "1", "pw", "111,2&x=y", "a#b,c d");
+      nevr_serverdb_uri::BuildLegacyUri("ws://h/s", "1", "pw", "111,2&x=y", "a#b,c d");
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri, "ws://h/s?discord_id=1&password=pw&guilds=111,2%26x%3Dy&regions=a%23b,c%20d");
   const QueryMap pairs = ParseQuery(*uri);
@@ -134,7 +134,7 @@ TEST(ServerDbUri, HostileListElementsAreEncodedButCommasStayDelimiters) {
 // regionPattern ^[-A-Za-z0-9_]+$, guildPattern ^([0-9]+|any)$) is RFC 3986
 // unreserved, so the wire bytes for an already-working config do not change.
 TEST(ServerDbUri, ServerAcceptedValuesProduceTheSameBytesAsBefore) {
-  const std::optional<std::string> uri = ServerDbUri::BuildLegacyUri(
+  const std::optional<std::string> uri = nevr_serverdb_uri::BuildLegacyUri(
       "ws://db.example:777/serverdb", "123456789", "hunter2", "111,any,222", "us-east,eu_west");
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri,
@@ -143,20 +143,20 @@ TEST(ServerDbUri, ServerAcceptedValuesProduceTheSameBytesAsBefore) {
 }
 
 TEST(ServerDbUri, EmptyOptionalFieldsAreOmitted) {
-  EXPECT_EQ(ServerDbUri::BuildLegacyUri("ws://h/s", "1", "", "", ""), "ws://h/s?discord_id=1");
-  EXPECT_EQ(ServerDbUri::BuildLegacyUri("ws://h/s", "1", "", "", "r"), "ws://h/s?discord_id=1&regions=r");
-  EXPECT_EQ(ServerDbUri::BuildTokenRouteUri("wss://h/nevr", "", ""), "wss://h/nevr");
+  EXPECT_EQ(nevr_serverdb_uri::BuildLegacyUri("ws://h/s", "1", "", "", ""), "ws://h/s?discord_id=1");
+  EXPECT_EQ(nevr_serverdb_uri::BuildLegacyUri("ws://h/s", "1", "", "", "r"), "ws://h/s?discord_id=1&regions=r");
+  EXPECT_EQ(nevr_serverdb_uri::BuildTokenRouteUri("wss://h/nevr", "", ""), "wss://h/nevr");
 }
 
 TEST(ServerDbUri, BaseWithExistingQueryGetsAmpersandSeparator) {
-  EXPECT_EQ(ServerDbUri::BuildLegacyUri("ws://h/s?format=evr", "1", "a b", "", ""),
+  EXPECT_EQ(nevr_serverdb_uri::BuildLegacyUri("ws://h/s?format=evr", "1", "a b", "", ""),
             "ws://h/s?format=evr&discord_id=1&password=a%20b");
-  EXPECT_EQ(ServerDbUri::BuildTokenRouteUri("ws://h/s?", "", "r"), "ws://h/s?regions=r");
-  EXPECT_EQ(ServerDbUri::BuildTokenRouteUri("ws://h/s?x=1&", "g", ""), "ws://h/s?x=1&guilds=g");
+  EXPECT_EQ(nevr_serverdb_uri::BuildTokenRouteUri("ws://h/s?", "", "r"), "ws://h/s?regions=r");
+  EXPECT_EQ(nevr_serverdb_uri::BuildTokenRouteUri("ws://h/s?x=1&", "g", ""), "ws://h/s?x=1&guilds=g");
 }
 
 TEST(ServerDbUri, TokenRouteUriEncodesListsAndRoundTrips) {
-  const std::optional<std::string> uri = ServerDbUri::BuildTokenRouteUri("wss://h/nevr", "111,222", "a&b");
+  const std::optional<std::string> uri = nevr_serverdb_uri::BuildTokenRouteUri("wss://h/nevr", "111,222", "a&b");
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri, "wss://h/nevr?guilds=111,222&regions=a%26b");
   const QueryMap pairs = ParseQuery(*uri);
@@ -167,7 +167,7 @@ TEST(ServerDbUri, TokenRouteUriEncodesListsAndRoundTrips) {
 // The builder has no fixed buffer: a value longer than 1024 bytes is not truncated.
 TEST(ServerDbUri, LongValuesAreNotTruncated) {
   const std::string longRegions(2000, 'r');
-  const std::optional<std::string> uri = ServerDbUri::BuildLegacyUri("ws://h/s", "1", "pw", "", longRegions);
+  const std::optional<std::string> uri = nevr_serverdb_uri::BuildLegacyUri("ws://h/s", "1", "pw", "", longRegions);
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri, "ws://h/s?discord_id=1&password=pw&regions=" + longRegions);
 }
@@ -178,7 +178,7 @@ TEST(ServerDbUri, LongValuesAreNotTruncated) {
 
 TEST(ServerDbUri, BridgeCredentialsPercentEncodePasswordExactly) {
   const std::optional<std::string> uri =
-      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
+      nevr_serverdb_uri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri,
             "wss://g.example/ws?format=evr&discordid=123456789"
@@ -187,7 +187,7 @@ TEST(ServerDbUri, BridgeCredentialsPercentEncodePasswordExactly) {
 
 TEST(ServerDbUri, BridgeCredentialsRoundTripHostileValuesWithoutFieldBleed) {
   const std::optional<std::string> uri =
-      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
+      nevr_serverdb_uri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
   ASSERT_TRUE(uri.has_value());
   const QueryMap expected = {
       {"format", "evr"}, {"discordid", "123456789"}, {"password", std::string(kHostileValue)}};
@@ -198,8 +198,8 @@ TEST(ServerDbUri, BridgeCredentialsRoundTripHostileValuesWithoutFieldBleed) {
 // same decoded password for the same config value.
 TEST(ServerDbUri, BridgeAndServerDbPathsSendTheSamePasswordBytes) {
   const std::string password = "a+b%41;c&d#e";
-  const std::optional<std::string> bridge = ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "1", password);
-  const std::optional<std::string> serverDb = ServerDbUri::BuildLegacyUri("ws://h/ws", "1", password, "", "");
+  const std::optional<std::string> bridge = nevr_serverdb_uri::BuildBridgeCredentialUri("ws://h/ws", "1", password);
+  const std::optional<std::string> serverDb = nevr_serverdb_uri::BuildLegacyUri("ws://h/ws", "1", password, "", "");
   ASSERT_TRUE(bridge.has_value());
   ASSERT_TRUE(serverDb.has_value());
   const QueryMap bridgePairs = ParseQuery(*bridge);
@@ -211,9 +211,9 @@ TEST(ServerDbUri, BridgeAndServerDbPathsSendTheSamePasswordBytes) {
 }
 
 TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
-  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws?format=evr", "1", ""), "ws://h/ws?format=evr");
-  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "", "pw"), "ws://h/ws");
-  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "1", "pw"), "ws://h/ws?discordid=1&password=pw");
+  EXPECT_EQ(nevr_serverdb_uri::BuildBridgeCredentialUri("ws://h/ws?format=evr", "1", ""), "ws://h/ws?format=evr");
+  EXPECT_EQ(nevr_serverdb_uri::BuildBridgeCredentialUri("ws://h/ws", "", "pw"), "ws://h/ws");
+  EXPECT_EQ(nevr_serverdb_uri::BuildBridgeCredentialUri("ws://h/ws", "1", "pw"), "ws://h/ws?discordid=1&password=pw");
 }
 
 // --- RemoveQueryParam (issue #116) --------------------------------------
@@ -231,11 +231,11 @@ TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
 // reproduced via the real builder rather than a hand-typed string.
 TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
   const std::optional<std::string> withCredentials =
-      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", "pw");
+      nevr_serverdb_uri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", "pw");
   ASSERT_TRUE(withCredentials.has_value());
   ASSERT_EQ(*withCredentials, "wss://g.example/ws?format=evr&discordid=123456789&password=pw");
 
-  const std::string stripped = ServerDbUri::RemoveQueryParam(*withCredentials, "format=evr");
+  const std::string stripped = nevr_serverdb_uri::RemoveQueryParam(*withCredentials, "format=evr");
   EXPECT_EQ(stripped, "wss://g.example/ws?discordid=123456789&password=pw");
   // Must still parse as a URI with a '?' separating path from query — the bug
   // produced "wss://g.example/wsdiscordid=...", which is not.
@@ -250,28 +250,28 @@ TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
 // that stayed latent because the bug path is simply absent there, not
 // because of any favorable parameter ordering.
 TEST(ServerDbUri, RemoveQueryParamTrailing) {
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw&format=evr", "format=evr"),
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw&format=evr", "format=evr"),
             "wss://g.example/ws?discordid=1&password=pw");
 }
 
 TEST(ServerDbUri, RemoveQueryParamMiddle) {
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&format=evr&password=pw", "format=evr"),
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?discordid=1&format=evr&password=pw", "format=evr"),
             "wss://g.example/ws?discordid=1&password=pw");
 }
 
 TEST(ServerDbUri, RemoveQueryParamSoleParam) {
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?format=evr", "format=evr"), "wss://g.example/ws");
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?format=evr", "format=evr"), "wss://g.example/ws");
 }
 
 TEST(ServerDbUri, RemoveQueryParamAbsentIsNoOp) {
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw", "format=evr"),
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw", "format=evr"),
             "wss://g.example/ws?discordid=1&password=pw");
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws", "format=evr"), "wss://g.example/ws");
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws", "format=evr"), "wss://g.example/ws");
 }
 
 // A substring hit inside another key/value is not a boundary match — leave it
 // alone rather than mangling an unrelated parameter.
 TEST(ServerDbUri, RemoveQueryParamDoesNotMatchSubstring) {
-  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?xformat=evrx=1", "format=evr"),
+  EXPECT_EQ(nevr_serverdb_uri::RemoveQueryParam("wss://g.example/ws?xformat=evrx=1", "format=evr"),
             "wss://g.example/ws?xformat=evrx=1");
 }

@@ -31,7 +31,7 @@ purpose: a misconfigured VM must never read as a runtime regression.
 ## The rig
 
 The test never touches the guest's own install. It builds `C:\nevr-systest\`: a copy
-of `bin\win10` **without** `dbgcore.dll` (a legacy Echo Relay hijack DLL that NEVR
+of `bin\win10` **without** `dbgcore.dll` (a legacy Echo Relay hijack DLL that nEVR
 refuses to run beside) and without the stock `BugSplat64.dll`, junctions to the
 shared `_data`/`content`/`sourcedb`, and its own `_local\config.json`. That config
 points every service at `127.0.0.1:1` (connection refused), so the boot path runs
@@ -75,12 +75,12 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   interactive session (`tools/winvm/enum_windows.ps1`) for this reason.
 - `-noconsole` is rejected by the game unless `-headless` is also given (the dialog
   above is the legacy `dbgcore.dll` saying so).
-- A `dbgcore.dll` in the game directory is fatal to the NEVR runtime unless
+- A `dbgcore.dll` in the game directory is fatal to the nEVR runtime unless
   `-allow-dbgcore` is passed. `--with-legacy-dbgcore` reproduces that configuration.
 - The stock install was extracted one level too deep
   (`_data\_data\<version>\...`); the game then cannot find its packages. Preflight
   reports this and how to fix it (a directory junction).
-- `_local\config.json` is optional (issue #21): every NEVR setting is in `config.yaml`,
+- `_local\config.json` is optional (issue #21): every nEVR setting is in `config.yaml`,
   and a missing or unparseable `config.json` does not stop a server. When present it
   is searched at `bin\win10\_local`, `bin\_local` and `<install root>\_local` (in that
   order); a `config.json` at the install root itself is never read. The offline `boot`

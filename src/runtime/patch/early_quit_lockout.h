@@ -7,11 +7,11 @@
 
 #include <cstdint>
 
-namespace EarlyQuitLockout {
+namespace nevr_early_quit_lockout {
 
 // Hooks CR15NetGame::SetEarlyQuitPenaltyLevel and CR15NetEarlyQuitPenaltyExpression::operator(), and keeps bit
 // 1 of the feature flags. Each piece is installed only after its bytes are validated; a mismatch is logged
 // and that piece is skipped. Call after the hooking engine is up; logs through the boot tee (DllMain time).
 void Install(std::uintptr_t gameBase);
 
-}  // namespace EarlyQuitLockout
+}  // namespace nevr_early_quit_lockout

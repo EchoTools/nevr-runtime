@@ -7,7 +7,7 @@
 
 #include "runtime/server/server_context.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 using BroadcasterUnlisten = std::function<void(EchoVR::Broadcaster*, uint16_t)>;
 
@@ -40,4 +40,4 @@ size_t UnregisterBroadcasterCallbacks(EchoVR::Broadcaster* liveOwner,
                                       CallbackRegistry& callbacks,
                                       const BroadcasterUnlisten& unlisten);
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

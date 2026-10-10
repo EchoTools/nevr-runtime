@@ -2,7 +2,7 @@
 
 #include "gameservice/v1/gameservice.pb.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 SessionEndResult EndActiveServerSession(ServerContext& context,
                                         const EnvelopeSender& send,
@@ -39,4 +39,4 @@ SessionEndResult UnregisterRegisteredServer(ServerContext& context,
   return result;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

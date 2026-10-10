@@ -17,7 +17,7 @@
 #include "runtime/compat/social_roster.h"
 #include "runtime/patch/social_facade.h"
 
-namespace SocialFacade {
+namespace nevr_social_facade {
 namespace {
 
 using Slot = std::uintptr_t;
@@ -1294,4 +1294,4 @@ PartyStateForTest PartyForTest() {
 }
 #endif
 
-}  // namespace SocialFacade
+}  // namespace nevr_social_facade

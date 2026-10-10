@@ -10,7 +10,7 @@
 // login once the account has played a match. Accounts on community services start with no
 // stats, so the gate would stay shut for exactly the players who want to invite a friend.
 
-namespace PartyInviteGate {
+namespace nevr_party_invite_gate {
 
 constexpr const char* kFirstMatchPath = "npe|firstmatch|completed";
 constexpr std::uint64_t kErrorFirstMatchNotCompleted = 0x267b06d41014c304ULL;
@@ -32,4 +32,4 @@ void Install(std::uintptr_t gameBase);
 /// Its first bytes are then our jump, so a caller that validates the prologue itself must accept this.
 bool InviteHandlerTraced();
 
-}  // namespace PartyInviteGate
+}  // namespace nevr_party_invite_gate

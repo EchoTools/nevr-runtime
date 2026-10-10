@@ -210,7 +210,7 @@ def registry_constants() -> dict:
 
 def gamepatches_detour_targets() -> dict:
     """
-    VA -> constant name, for PatchAddresses:: constants that reach a detour
+    VA -> constant name, for nevr_patch_addresses:: constants that reach a detour
     installer. Deliberately coarse-but-bounded: a constant counts if it appears
     in the same file as PatchDetour/MH_CreateHook AND is assigned into a
     variable that one of those is called on. Over-inclusion is safe here (it can
@@ -223,7 +223,7 @@ def gamepatches_detour_targets() -> dict:
         if "PatchDetour" not in text and "MH_CreateHook" not in text:
             continue
         for m in re.finditer(
-            r"(\w+)\s*=\s*\([^;]*?PatchAddresses::(\w+)\s*\)\s*;", text, re.S
+            r"(\w+)\s*=\s*\([^;]*?nevr_patch_addresses::(\w+)\s*\)\s*;", text, re.S
         ):
             var, const = m.group(1), m.group(2)
             if const not in consts:
@@ -238,7 +238,7 @@ def runtime_detour_sites() -> dict:
     VA -> sorted list of "file: label", for every detour the runtime installs on a
     game address through an EchoVR:: function pointer (InstallBootDetour/PatchDetour
     on &EchoVR::X) or an inline VA (g_GameBaseAddress + (0x14... - 0x140000000)
-    in a file that calls MH_CreateHook), plus every PatchAddresses:: detour target
+    in a file that calls MH_CreateHook), plus every nevr_patch_addresses:: detour target
     (gamepatches_detour_targets()). Table-driven MH_CreateHook calls (an array of
     {name, va, detour} entries) are not matched here.
     """
@@ -260,10 +260,10 @@ def runtime_detour_sites() -> dict:
                 r"g_GameBaseAddress\)\s*\+\s*\(\s*(0x14[0-9A-Fa-f]+)\s*-\s*0x140000000\s*\)", text
             ):
                 found.setdefault(norm_va(int(m.group(1), 16)), []).append(f"{rel}: inline {m.group(1)}")
-    # A PatchAddresses:: constant detoured at the same address as an EchoVR:: pointer is the same
+    # A nevr_patch_addresses:: constant detoured at the same address as an EchoVR:: pointer is the same
     # collision: the constants are the other way this runtime names a game address.
     for va, const in gamepatches_detour_targets().items():
-        found.setdefault(va, []).append(f"{DETOUR_SCAN_ROOT}: PatchAddresses::{const}")
+        found.setdefault(va, []).append(f"{DETOUR_SCAN_ROOT}: nevr_patch_addresses::{const}")
     return {va: sorted(sites) for va, sites in found.items()}
 
 
@@ -275,7 +275,7 @@ _HOOK_TABLE_ROW = re.compile(
 
 
 def _va_names(text: str) -> dict:
-    """name -> normalized VA for every address constant a runtime file can name: PatchAddresses::
+    """name -> normalized VA for every address constant a runtime file can name: nevr_patch_addresses::
     (RVAs), address_registry (full VAs) and the file's own `constexpr uint64_t NAME = 0x14...;`."""
     names = dict(patch_address_constants())
     names.update(registry_constants())
@@ -436,7 +436,7 @@ def check_self_collision(failures, warnings, seen):
         seen.add(va)
         desc = (f"0x{va:X} is CALLED as EchoVR::{called[va]} "
                 f"(src/abi/echovr_functions.cpp) and DETOURED as "
-                f"PatchAddresses::{detoured[va]} (src/runtime/). "
+                f"nevr_patch_addresses::{detoured[va]} (src/runtime/). "
                 f"Our own calls re-enter our own hook.")
         if va in KNOWN_SELF_COLLISIONS:
             lid, why = KNOWN_SELF_COLLISIONS[va]
@@ -451,7 +451,7 @@ def check_double_detour(failures, warnings, seen):
     for va in sorted(set(gp) & set(pl)):
         seen.add(va)
         plugin, const = pl[va]
-        desc = (f"0x{va:X} is detoured by gamepatches (PatchAddresses::{gp[va]}) "
+        desc = (f"0x{va:X} is detoured by gamepatches (nevr_patch_addresses::{gp[va]}) "
                 f"and by plugin '{plugin}' ({const}). Separate MinHook instances "
                 f"do not share a hook table.")
         if va in KNOWN_DOUBLE_DETOURS:

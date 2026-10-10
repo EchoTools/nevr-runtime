@@ -120,7 +120,7 @@ std::string FireNode(bool addFriend, const std::string& user) {
   // first bytes are its jump, and calling the address goes through the trace, as the script node's
   // call does.
   void* handler = addFriend ? Checked(kAddFriendHandlerVA, kAddFriendHandlerPrologue, "add friend handler", &error)
-                  : PartyInviteGate::InviteHandlerTraced()
+                  : nevr_party_invite_gate::InviteHandlerTraced()
                       ? nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), kInviteHandlerVA)
                       : Checked(kInviteHandlerVA, kInviteHandlerPrologue, "friend invite handler", &error);
   auto* defer = reinterpret_cast<DeferredCallFn>(Checked(kDeferredCallVA, kDeferredCallPrologue, "deferred call", &error));
@@ -308,7 +308,7 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
   // prologue is our jump: call through our detour, which runs the original. Anything else is refused.
   void* dispatchTarget = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kDispatchEventVA);
   auto* dispatch = reinterpret_cast<DispatchEventFn>(
-      HookGuard::IsOurDetour(dispatchTarget) ? dispatchTarget
+      nevr_hook_guard::IsOurDetour(dispatchTarget) ? dispatchTarget
                                               : Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
   if (dispatch == nullptr) return error;
   if (cmd.action == "early_quit_countdown_active") {
@@ -415,7 +415,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     // The game's own handling of a join-failure code (PartyJoinFailedCB 0x140189590: 1 not found,
     // 2 timeout, 3 no permission, 4 locked, 5 full, 6 version, else unknown), without the bridge's
     // mapping of the game service's codes in between.
-    SocialFacade::FireJoinFailedForTest(static_cast<std::uint32_t>(cmd.number));
+    nevr_social_facade::FireJoinFailedForTest(static_cast<std::uint32_t>(cmd.number));
     return std::string();
   }
   if (cmd.action == "find_arena") {
@@ -582,7 +582,7 @@ nlohmann::json StateJson() {
   nlohmann::json out;
   out["ok"] = true;
   out["netgame"] = NetGame() != nullptr;
-  const SocialFacade::PartyStateForTest party = SocialFacade::PartyForTest();
+  const nevr_social_facade::PartyStateForTest party = nevr_social_facade::PartyForTest();
   out["party"] = {{"id", party.partyId},           {"room", party.roomId},
                   {"joining", party.joining},      {"joinable", party.joinable},
                   {"locked", party.locked},        {"join_policy", party.joinPolicy},
@@ -598,21 +598,21 @@ nlohmann::json StateJson() {
   for (std::uint32_t index = 0; nevr_social_roster::Global().IdAt(index, &id); ++index) {
     friends.push_back({{"id", id},
                        {"online", nevr_social_roster::Global().OnlineAt(index)},
-                       {"invitable", SocialFacade::FriendInvitableForTest(id)},
+                       {"invitable", nevr_social_facade::FriendInvitableForTest(id)},
                        {"text", nevr_social_roster::Global().StatusTextAt(index)},
                        {"party", nevr_social_roster::Global().PartyIdAt(index)}});
   }
   out["friends"] = friends;
   nlohmann::json recent = nlohmann::json::array();
-  for (const SocialFacade::RecentlyMetForTest& user : SocialFacade::RecentlyMetUsersForTest()) {
+  for (const nevr_social_facade::RecentlyMetForTest& user : nevr_social_facade::RecentlyMetUsersForTest()) {
     recent.push_back({{"id", user.id}, {"name", user.name}, {"status", user.status}, {"text", user.text},
                       {"invitable", user.invitable}, {"joinable", user.joinable}, {"party", user.partyId}});
   }
-  out["recently_met"] = {{"refreshing", SocialFacade::RecentlyMetRefreshingForTest()},
+  out["recently_met"] = {{"refreshing", nevr_social_facade::RecentlyMetRefreshingForTest()},
                          {"count", recent.size()},
                          {"users", recent}};
   nlohmann::json invites = nlohmann::json::array();
-  for (const SocialFacade::InviteForTest& invite : SocialFacade::InvitesForTest()) {
+  for (const nevr_social_facade::InviteForTest& invite : nevr_social_facade::InvitesForTest()) {
     invites.push_back({{"party", invite.partyId}, {"sender", invite.senderId}});
   }
   out["invites"] = invites;
@@ -671,7 +671,7 @@ nlohmann::json Handle(const std::string& line) {
       return {{"ok", true}};
     }
     case ScenarioProtocol::Op::kInjectPartyMember: {
-      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject " + cmd.notifyName + ": no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s party=%llu member=%llu", cmd.notifyName.c_str(),
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId));
@@ -687,7 +687,7 @@ nlohmann::json Handle(const std::string& line) {
       return {{"ok", true}};
     }
     case ScenarioProtocol::Op::kInjectPartyData: {
-      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject PartyDataNotify: no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyDataNotify party=%llu member=%llu bytes=%zu",
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId), cmd.value.size());

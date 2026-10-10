@@ -105,7 +105,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] loading custom config from: %s", configPath);
 
     // Get the config destination pointer (pGame + 0x63240)
-    using namespace PatchAddresses;
+    using namespace nevr_patch_addresses;
     EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
     // Call the game's internal JSON loader directly with our custom path
@@ -127,7 +127,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     // If it fails (config not next to exe), search parent directories.
     result = EchoVR::LoadLocalConfig(pGame);
 
-    using namespace PatchAddresses;
+    using namespace nevr_patch_addresses;
     EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
     if (configDest->root == NULL) {
       // Default loader failed — search parent directories for _local/config.json
@@ -181,7 +181,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   }
 
   // Store a reference to the local config from the game structure
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   g_localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
   // NEVR config keys now come from config.yaml (N133 S3), not the game JSON. The
@@ -192,7 +192,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   if (g_localConfig != NULL) {
     const CHAR* customCdnUrl = NevrCfgGetFlat("asset_cdn_url");
     if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
-      // AssetCDN::SetCustomCdnUrl(customCdnUrl);  // still inert — the use was
+      // nevr_asset_cdn::SetCustomCdnUrl(customCdnUrl);  // still inert — the use was
       // commented out long before the cutover; only the READ moved to config.yaml.
     }
 

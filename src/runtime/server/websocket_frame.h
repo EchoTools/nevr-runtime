@@ -7,7 +7,7 @@
 
 #include "abi/echovr.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 struct ReceivedWebSocketMessage {
   EchoVR::SymbolId msgId = 0;
@@ -37,4 +37,4 @@ struct ParsedWebSocketFrame {
 // preserved; queueLimit bounds accepted messages while malformed frames stop.
 ParsedWebSocketFrame ParseServerDbFrame(std::string_view frame, size_t queueLimit);
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

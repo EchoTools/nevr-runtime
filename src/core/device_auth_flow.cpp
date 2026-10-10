@@ -82,30 +82,30 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
       return none;
     }
 
-    const TokenAuth::DevicePollResponse response = ops.poll(code);
+    const nevr_token_auth::DevicePollResponse response = ops.poll(code);
     // The server deletes a verified code when it answers this poll, so a "verified" that arrives
     // after the deadline is still the player's login: it is taken. Anything else after the
     // deadline ends the code.
-    if (response.status != TokenAuth::DevicePollStatus::Verified && ops.now() >= deadline) {
+    if (response.status != nevr_token_auth::DevicePollStatus::Verified && ops.now() >= deadline) {
       timedOut();
       return none;
     }
 
     switch (response.status) {
-      case TokenAuth::DevicePollStatus::Verified: {
+      case nevr_token_auth::DevicePollStatus::Verified: {
         DeviceFlowResult ok;
         ok.verified = true;
         ok.response = response;
         return ok;
       }
-      case TokenAuth::DevicePollStatus::Expired:
+      case nevr_token_auth::DevicePollStatus::Expired:
         if (ops.renews_expired_codes) {
           log(LogLevel::Info, "[NEVR.AUTH] Device code expired before a sign-in; a new code will be requested");
         } else {
           log(LogLevel::Warning, "[NEVR.AUTH] Device code expired. Please restart to try again.");
         }
         return none;
-      case TokenAuth::DevicePollStatus::Pending:
+      case nevr_token_auth::DevicePollStatus::Pending:
         consecutiveErrors = 0;
         ++pollCount;
         if (pollCount % 10U == 0U) {
@@ -114,7 +114,7 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
                                    std::to_string(left.count()) + "s remaining)");
         }
         break;
-      case TokenAuth::DevicePollStatus::Error:
+      case nevr_token_auth::DevicePollStatus::Error:
         if (++consecutiveErrors >= ops.max_consecutive_poll_errors) {
           log(LogLevel::Warning,
               "[NEVR.AUTH] polling aborted after " + std::to_string(consecutiveErrors) + " consecutive errors");

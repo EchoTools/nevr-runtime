@@ -61,6 +61,9 @@ bool MicCaptureLifecycle::Start(uint32_t callerThread, const MicLifecycleOperati
   }
   lock.unlock();
 
+  // Every capture starts from an empty stream: audio read or polled while stopped must not make
+  // the new capture look like it already has a listening reader (#95).
+  if (ops.resetStream != nullptr) ops.resetStream(ops.context);
   if (!ops.startAudio(ops.context)) {
     lock.lock();
     EndTransition(lock);

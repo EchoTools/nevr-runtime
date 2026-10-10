@@ -236,10 +236,10 @@ void TelemetryStreamer::RunDiagnostics() {
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Base=%p", base);
 
   // --- Pointer chain ---
-  void** contextPtr = reinterpret_cast<void**>(base + GameOffsets::GAME_CONTEXT_OFFSET);
+  void** contextPtr = reinterpret_cast<void**>(base + nevr_game_offsets::GAME_CONTEXT_OFFSET);
   void* gameContext = *contextPtr;
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameContext=%p (base+0x%llX)", gameContext,
-      (unsigned long long)GameOffsets::GAME_CONTEXT_OFFSET);
+      (unsigned long long)nevr_game_offsets::GAME_CONTEXT_OFFSET);
 
   if (!gameContext) {
     Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] GameContext is NULL — game not initialized yet");
@@ -247,9 +247,9 @@ void TelemetryStreamer::RunDiagnostics() {
   }
 
   CHAR* ctxBase = reinterpret_cast<CHAR*>(gameContext);
-  void* netGame = *reinterpret_cast<void**>(ctxBase + GameOffsets::NETGAME_OFFSET);
+  void* netGame = *reinterpret_cast<void**>(ctxBase + nevr_game_offsets::NETGAME_OFFSET);
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] CR15NetGame=%p (ctx+0x%X)", netGame,
-      (unsigned)GameOffsets::NETGAME_OFFSET);
+      (unsigned)nevr_game_offsets::NETGAME_OFFSET);
 
   if (!netGame) {
     Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] CR15NetGame is NULL — not in game yet");
@@ -259,25 +259,25 @@ void TelemetryStreamer::RunDiagnostics() {
   CHAR* ngBase = reinterpret_cast<CHAR*>(netGame);
 
   // GameStateData
-  void* gsd = *reinterpret_cast<void**>(ngBase + GameOffsets::GAME_STATE_DATA_OFFSET);
+  void* gsd = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::GAME_STATE_DATA_OFFSET);
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStateData=%p (ng+0x%X)", gsd,
-      (unsigned)GameOffsets::GAME_STATE_DATA_OFFSET);
+      (unsigned)nevr_game_offsets::GAME_STATE_DATA_OFFSET);
 
   // Entity system pointers
-  void* handleResolver = *reinterpret_cast<void**>(ngBase + GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET);
-  void* worldObj = *reinterpret_cast<void**>(ngBase + GameOffsets::WORLD_OBJECT_OFFSET);
+  void* handleResolver = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET);
+  void* worldObj = *reinterpret_cast<void**>(ngBase + nevr_game_offsets::WORLD_OBJECT_OFFSET);
   void* entityMgr = nullptr;
   if (worldObj) {
-    entityMgr = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + GameOffsets::ENTITY_MANAGER_OFFSET);
+    entityMgr = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + nevr_game_offsets::ENTITY_MANAGER_OFFSET);
   }
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] HandleResolver=%p (ng+0x%X), World=%p (ng+0x%X), EntityMgr=%p (world+0x%X)",
-      handleResolver, (unsigned)GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET,
-      worldObj, (unsigned)GameOffsets::WORLD_OBJECT_OFFSET,
-      entityMgr, (unsigned)GameOffsets::ENTITY_MANAGER_OFFSET);
+      handleResolver, (unsigned)nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET,
+      worldObj, (unsigned)nevr_game_offsets::WORLD_OBJECT_OFFSET,
+      entityMgr, (unsigned)nevr_game_offsets::ENTITY_MANAGER_OFFSET);
 
   // --- Game function calls ---
   if (m_getSymbolHash) {
-    uint64_t statusHash = m_getSymbolHash(netGame, PropertyHash::GAME_STATUS);
+    uint64_t statusHash = m_getSymbolHash(netGame, nevr_property_hash::GAME_STATUS);
     int32_t statusEnum = MapGameStatus(statusHash);
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
         (unsigned long long)statusHash, statusEnum);
@@ -286,29 +286,29 @@ void TelemetryStreamer::RunDiagnostics() {
   }
 
   if (m_getFloatProperty) {
-    float clock = m_getFloatProperty(netGame, PropertyHash::GAME_CLOCK);
+    float clock = m_getFloatProperty(netGame, nevr_property_hash::GAME_CLOCK);
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameClock: %.2f", clock);
   }
 
   if (m_getIntProperty && gsd) {
-    int32_t blue = m_getIntProperty(gsd, PropertyHash::BLUE_POINTS);
-    int32_t orange = m_getIntProperty(gsd, PropertyHash::ORANGE_POINTS);
+    int32_t blue = m_getIntProperty(gsd, nevr_property_hash::BLUE_POINTS);
+    int32_t orange = m_getIntProperty(gsd, nevr_property_hash::ORANGE_POINTS);
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", blue, orange);
   }
 
   // --- Player count ---
-  uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + GameOffsets::PLAYER_COUNT_OFFSET);
+  uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + nevr_game_offsets::PLAYER_COUNT_OFFSET);
   if (playerCount > 16) playerCount = 16;
   Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] PlayerCount=%u (ng+0x%X)",
-      playerCount, (unsigned)GameOffsets::PLAYER_COUNT_OFFSET);
+      playerCount, (unsigned)nevr_game_offsets::PLAYER_COUNT_OFFSET);
 
   // --- Disc state ---
   if (gsd) {
     CHAR* gsdBase = reinterpret_cast<CHAR*>(gsd);
-    float* discPos = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_POS_OFFSET);
-    float* discVel = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_VEL_OFFSET);
-    float* discOri = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_ORIENT_OFFSET);
-    uint64_t bounce = *reinterpret_cast<uint64_t*>(gsdBase + GameOffsets::DISC_BOUNCE_OFFSET);
+    float* discPos = reinterpret_cast<float*>(gsdBase + nevr_game_offsets::DISC_POS_OFFSET);
+    float* discVel = reinterpret_cast<float*>(gsdBase + nevr_game_offsets::DISC_VEL_OFFSET);
+    float* discOri = reinterpret_cast<float*>(gsdBase + nevr_game_offsets::DISC_ORIENT_OFFSET);
+    uint64_t bounce = *reinterpret_cast<uint64_t*>(gsdBase + nevr_game_offsets::DISC_BOUNCE_OFFSET);
 
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Disc pos=(%.3f, %.3f, %.3f) vel=(%.3f, %.3f, %.3f)",
         discPos[0], discPos[1], discPos[2], discVel[0], discVel[1], discVel[2]);
@@ -326,12 +326,12 @@ void TelemetryStreamer::RunDiagnostics() {
 
   // --- Per-player info + entity resolution ---
   for (uint16_t i = 0; i < playerCount && i < 4; i++) {  // Log first 4 players max
-    CHAR* playerBase = ngBase + GameOffsets::PLAYER_ARRAY_OFFSET + i * GameOffsets::PLAYER_STRIDE;
-    uint16_t flags = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_FLAGS_OFFSET);
-    uint64_t accountId = *reinterpret_cast<uint64_t*>(playerBase + GameOffsets::PLAYER_ACCOUNT_ID_OFFSET);
-    char* name = playerBase + GameOffsets::PLAYER_DISPLAY_NAME_OFFSET;
-    uint16_t ping = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_PING_OFFSET);
-    uint16_t team = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_TEAM_INDEX_OFFSET);
+    CHAR* playerBase = ngBase + nevr_game_offsets::PLAYER_ARRAY_OFFSET + i * nevr_game_offsets::PLAYER_STRIDE;
+    uint16_t flags = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_FLAGS_OFFSET);
+    uint64_t accountId = *reinterpret_cast<uint64_t*>(playerBase + nevr_game_offsets::PLAYER_ACCOUNT_ID_OFFSET);
+    char* name = playerBase + nevr_game_offsets::PLAYER_DISPLAY_NAME_OFFSET;
+    uint16_t ping = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_PING_OFFSET);
+    uint16_t team = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_TEAM_INDEX_OFFSET);
 
     if (accountId == 0) continue;
 
@@ -403,17 +403,17 @@ void TelemetryStreamer::RunDiagnostics() {
 
     // Stats
     uint16_t teamRole = flags & 0x1F;
-    if (teamRole >= GameOffsets::STATS_TABLE_MAX_ENTRIES) {
+    if (teamRole >= nevr_game_offsets::STATS_TABLE_MAX_ENTRIES) {
       Log(EchoVR::LogLevel::Warning,
           "[TELEMETRY.DIAG]   Stats: teamRole=%u out of bounds (max=%u), clamping to 0",
-          teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES);
+          teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES);
       teamRole = 0;
     }
-    CHAR* statsBase = ngBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
-    uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_POINTS + 4);
-    uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_GOALS + 4);
-    uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_ASSISTS + 4);
-    uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_STUNS + 4);
+    CHAR* statsBase = ngBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
+    uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
+    uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
+    uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
+    uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
         points, goals, assists, stuns);
   }
@@ -435,13 +435,13 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   CHAR* base = EchoVR::g_GameBaseAddress;
   if (!base) return;
 
-  m_getSymbolHash = reinterpret_cast<GetSymbolHashFn>(base + GameFuncAddr::GET_SYMBOL_HASH);
-  m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + GameFuncAddr::GET_FLOAT_PROPERTY);
-  m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + GameFuncAddr::GET_INT_PROPERTY);
-  m_entityLookup = reinterpret_cast<EntityLookupFn>(base + GameFuncAddr::ENTITY_LOOKUP);
-  m_resolveEntityHandle = reinterpret_cast<ResolveEntityHandleFn>(base + GameFuncAddr::RESOLVE_ENTITY_HANDLE);
-  m_getBoneData = reinterpret_cast<GetBoneDataFn>(base + GameFuncAddr::GET_BONE_DATA);
-  m_getTransformComponent = reinterpret_cast<GetTransformComponentFn>(base + GameFuncAddr::GET_TRANSFORM_COMPONENT);
+  m_getSymbolHash = reinterpret_cast<GetSymbolHashFn>(base + nevr_game_func_addr::GET_SYMBOL_HASH);
+  m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + nevr_game_func_addr::GET_FLOAT_PROPERTY);
+  m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + nevr_game_func_addr::GET_INT_PROPERTY);
+  m_entityLookup = reinterpret_cast<EntityLookupFn>(base + nevr_game_func_addr::ENTITY_LOOKUP);
+  m_resolveEntityHandle = reinterpret_cast<ResolveEntityHandleFn>(base + nevr_game_func_addr::RESOLVE_ENTITY_HANDLE);
+  m_getBoneData = reinterpret_cast<GetBoneDataFn>(base + nevr_game_func_addr::GET_BONE_DATA);
+  m_getTransformComponent = reinterpret_cast<GetTransformComponentFn>(base + nevr_game_func_addr::GET_TRANSFORM_COMPONENT);
 
   m_funcPtrsResolved = true;
   Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Game function pointers resolved");
@@ -451,22 +451,22 @@ bool TelemetryStreamer::ResolveGamePointers() {
   CHAR* base = EchoVR::g_GameBaseAddress;
   if (!base) return false;
 
-  void** contextPtr = reinterpret_cast<void**>(base + GameOffsets::GAME_CONTEXT_OFFSET);
+  void** contextPtr = reinterpret_cast<void**>(base + nevr_game_offsets::GAME_CONTEXT_OFFSET);
   void* gameContext = *contextPtr;
   if (!gameContext) return false;
 
   CHAR* contextBase = reinterpret_cast<CHAR*>(gameContext);
-  m_netGame = *reinterpret_cast<void**>(contextBase + GameOffsets::NETGAME_OFFSET);
+  m_netGame = *reinterpret_cast<void**>(contextBase + nevr_game_offsets::NETGAME_OFFSET);
   if (!m_netGame) return false;
 
   CHAR* netGameBase = reinterpret_cast<CHAR*>(m_netGame);
-  m_gameStateData = *reinterpret_cast<void**>(netGameBase + GameOffsets::GAME_STATE_DATA_OFFSET);
+  m_gameStateData = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::GAME_STATE_DATA_OFFSET);
 
   // Entity system pointers
-  m_handleResolver = *reinterpret_cast<void**>(netGameBase + GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET);
-  void* worldObj = *reinterpret_cast<void**>(netGameBase + GameOffsets::WORLD_OBJECT_OFFSET);
+  m_handleResolver = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::ENTITY_HANDLE_RESOLVER_OFFSET);
+  void* worldObj = *reinterpret_cast<void**>(netGameBase + nevr_game_offsets::WORLD_OBJECT_OFFSET);
   if (worldObj) {
-    m_entityManager = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + GameOffsets::ENTITY_MANAGER_OFFSET);
+    m_entityManager = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + nevr_game_offsets::ENTITY_MANAGER_OFFSET);
   } else {
     m_entityManager = nullptr;
   }
@@ -498,75 +498,75 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
 
   // --- Game function calls (game thread only) ---
   if (m_getSymbolHash) {
-    snap->gameStatusHash = m_getSymbolHash(m_netGame, PropertyHash::GAME_STATUS);
+    snap->gameStatusHash = m_getSymbolHash(m_netGame, nevr_property_hash::GAME_STATUS);
   }
   if (m_getFloatProperty) {
-    snap->gameClock = m_getFloatProperty(m_netGame, PropertyHash::GAME_CLOCK);
+    snap->gameClock = m_getFloatProperty(m_netGame, nevr_property_hash::GAME_CLOCK);
   }
   if (m_getIntProperty && m_gameStateData) {
-    snap->bluePoints = m_getIntProperty(m_gameStateData, PropertyHash::BLUE_POINTS);
-    snap->orangePoints = m_getIntProperty(m_gameStateData, PropertyHash::ORANGE_POINTS);
+    snap->bluePoints = m_getIntProperty(m_gameStateData, nevr_property_hash::BLUE_POINTS);
+    snap->orangePoints = m_getIntProperty(m_gameStateData, nevr_property_hash::ORANGE_POINTS);
   }
 
   // --- Direct memory reads ---
 
   // Player count
-  snap->playerCount = *reinterpret_cast<uint16_t*>(netGameBase + GameOffsets::PLAYER_COUNT_OFFSET);
+  snap->playerCount = *reinterpret_cast<uint16_t*>(netGameBase + nevr_game_offsets::PLAYER_COUNT_OFFSET);
   if (snap->playerCount > 16) snap->playerCount = 16;
 
   // Player info array
   for (uint16_t i = 0; i < snap->playerCount; i++) {
-    CHAR* playerBase = netGameBase + GameOffsets::PLAYER_ARRAY_OFFSET + i * GameOffsets::PLAYER_STRIDE;
+    CHAR* playerBase = netGameBase + nevr_game_offsets::PLAYER_ARRAY_OFFSET + i * nevr_game_offsets::PLAYER_STRIDE;
     auto& info = snap->playerInfo[i];
 
-    info.flags = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_FLAGS_OFFSET);
-    info.accountId = *reinterpret_cast<uint64_t*>(playerBase + GameOffsets::PLAYER_ACCOUNT_ID_OFFSET);
-    std::memcpy(info.displayName, playerBase + GameOffsets::PLAYER_DISPLAY_NAME_OFFSET, 36);
+    info.flags = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_FLAGS_OFFSET);
+    info.accountId = *reinterpret_cast<uint64_t*>(playerBase + nevr_game_offsets::PLAYER_ACCOUNT_ID_OFFSET);
+    std::memcpy(info.displayName, playerBase + nevr_game_offsets::PLAYER_DISPLAY_NAME_OFFSET, 36);
     info.displayName[35] = '\0';
-    info.ping = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_PING_OFFSET);
-    info.teamIndex = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_TEAM_INDEX_OFFSET);
+    info.ping = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_PING_OFFSET);
+    info.teamIndex = *reinterpret_cast<uint16_t*>(playerBase + nevr_game_offsets::PLAYER_TEAM_INDEX_OFFSET);
   }
 
   // Player stats
   for (uint16_t i = 0; i < snap->playerCount; i++) {
     uint16_t teamRole = snap->playerInfo[i].flags & 0x1F;
-    if (teamRole >= GameOffsets::STATS_TABLE_MAX_ENTRIES) {
+    if (teamRole >= nevr_game_offsets::STATS_TABLE_MAX_ENTRIES) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.TELEMETRY] Stats: teamRole=%u out of bounds (max=%u) for player %u, clamping to 0",
-          teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES, i);
+          teamRole, nevr_game_offsets::STATS_TABLE_MAX_ENTRIES, i);
       teamRole = 0;
     }
-    CHAR* statsBase = netGameBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
+    CHAR* statsBase = netGameBase + nevr_game_offsets::STATS_BASE_OFFSET + teamRole * nevr_game_offsets::STATS_STRIDE;
     auto& s = snap->stats[i];
 
     // Each stat entry: [4B type][4B count][8B value] — we read the count field at offset +4
-    s.points = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_POINTS + 4);
-    s.goals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_GOALS + 4);
-    s.assists = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_ASSISTS + 4);
-    s.stuns = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_STUNS + 4);
-    s.blocks = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_BLOCKS + 4);
-    s.saves = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_SAVES + 4);
-    s.interceptions = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_INTERCEPTIONS + 4);
-    s.steals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_STEALS + 4);
-    s.catches = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_CATCHES + 4);
-    s.passes = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_PASSES + 4);
-    s.shotsTaken = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_SHOTS_TAKEN + 4);
-    s.possessionTime = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_POSSESSION_TIME + 4);
+    s.points = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POINTS + 4);
+    s.goals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_GOALS + 4);
+    s.assists = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_ASSISTS + 4);
+    s.stuns = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STUNS + 4);
+    s.blocks = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_BLOCKS + 4);
+    s.saves = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SAVES + 4);
+    s.interceptions = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_INTERCEPTIONS + 4);
+    s.steals = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_STEALS + 4);
+    s.catches = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_CATCHES + 4);
+    s.passes = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_PASSES + 4);
+    s.shotsTaken = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_SHOTS_TAKEN + 4);
+    s.possessionTime = *reinterpret_cast<uint32_t*>(statsBase + nevr_game_offsets::STAT_POSSESSION_TIME + 4);
   }
 
   // Disc state
-  std::memcpy(snap->discOrient, gsdBase + GameOffsets::DISC_ORIENT_OFFSET, sizeof(float) * 4);
-  std::memcpy(snap->discPos, gsdBase + GameOffsets::DISC_POS_OFFSET, sizeof(float) * 3);
-  std::memcpy(snap->discVel, gsdBase + GameOffsets::DISC_VEL_OFFSET, sizeof(float) * 3);
-  snap->discBounceCount = *reinterpret_cast<uint64_t*>(gsdBase + GameOffsets::DISC_BOUNCE_OFFSET);
+  std::memcpy(snap->discOrient, gsdBase + nevr_game_offsets::DISC_ORIENT_OFFSET, sizeof(float) * 4);
+  std::memcpy(snap->discPos, gsdBase + nevr_game_offsets::DISC_POS_OFFSET, sizeof(float) * 3);
+  std::memcpy(snap->discVel, gsdBase + nevr_game_offsets::DISC_VEL_OFFSET, sizeof(float) * 3);
+  snap->discBounceCount = *reinterpret_cast<uint64_t*>(gsdBase + nevr_game_offsets::DISC_BOUNCE_OFFSET);
 
   // Last score data
-  snap->lastScore.team = *reinterpret_cast<int16_t*>(gsdBase + GameOffsets::LAST_SCORE_TEAM_OFFSET);
-  snap->lastScore.pointAmount = *reinterpret_cast<uint16_t*>(gsdBase + GameOffsets::LAST_SCORE_POINT_AMOUNT_OFFSET);
-  snap->lastScore.discSpeed = *reinterpret_cast<float*>(gsdBase + GameOffsets::LAST_SCORE_DISC_SPEED_OFFSET);
-  snap->lastScore.distanceThrown = *reinterpret_cast<float*>(gsdBase + GameOffsets::LAST_SCORE_DISTANCE_THROWN_OFFSET);
-  snap->lastScore.assistPacked = *reinterpret_cast<uint32_t*>(gsdBase + GameOffsets::LAST_SCORE_ASSIST_PACKED_OFFSET);
-  snap->lastScore.scorerPacked = *reinterpret_cast<uint32_t*>(gsdBase + GameOffsets::LAST_SCORE_SCORER_PACKED_OFFSET);
+  snap->lastScore.team = *reinterpret_cast<int16_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_TEAM_OFFSET);
+  snap->lastScore.pointAmount = *reinterpret_cast<uint16_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_POINT_AMOUNT_OFFSET);
+  snap->lastScore.discSpeed = *reinterpret_cast<float*>(gsdBase + nevr_game_offsets::LAST_SCORE_DISC_SPEED_OFFSET);
+  snap->lastScore.distanceThrown = *reinterpret_cast<float*>(gsdBase + nevr_game_offsets::LAST_SCORE_DISTANCE_THROWN_OFFSET);
+  snap->lastScore.assistPacked = *reinterpret_cast<uint32_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_ASSIST_PACKED_OFFSET);
+  snap->lastScore.scorerPacked = *reinterpret_cast<uint32_t*>(gsdBase + nevr_game_offsets::LAST_SCORE_SCORER_PACKED_OFFSET);
 
   // Player transforms via entity system
   // For each player, resolve their entity and read transform component data.
@@ -765,7 +765,7 @@ void TelemetryStreamer::Run() {
 // ============================================================================
 
 int32_t TelemetryStreamer::MapGameStatus(uint64_t hash) {
-  using namespace GameStatusHash;
+  using namespace nevr_game_status_hash;
   switch (hash) {
     case PRE_MATCH_1:
     case PRE_MATCH_2:

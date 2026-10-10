@@ -1166,7 +1166,7 @@ verify:
     # 571a41b stopped persisting the access token (refresh token only, on disk),
     # which made `HasValidToken()` permanently false in a fresh process — so the
     # cached-token branch became dead code and every server silently fell back to
-    # password auth. Nothing else refreshes in server mode: TokenAuth::Init
+    # password auth. Nothing else refreshes in server mode: nevr_token_auth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
     N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
@@ -1384,15 +1384,15 @@ verify:
     # Literals ("cpu":"Wine", 4 physical cores, 8 logical, 16384 MB total, 8192
     # used) would be emitted as though read from the machine, and nothing could
     # tell, because invented data and a real reading look identical once they are
-    # on the wire. Every field is read from the host (SystemInfo::Get).
+    # on the wire. Every field is read from the host (nevr_system_info::Get).
     #
     # The unit tests cover SystemInfo itself; they cannot see this format string.
     # This sensor is the half that watches the wire format.
     N115_RC=0; N115_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N115_RC=$?
     sensor_stage1 "N115 login system_info measured" "src/runtime/compat/ws_bridge.cpp" "$N115_RC"
     sensor_nonempty "N115 login system_info measured" "non-comment lines of compat/ws_bridge.cpp" "$N115_WS"
-    if ! grep -q 'SystemInfo::Get()' <<<"$N115_WS"; then
-        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (SystemInfo::Get)." >&2
+    if ! grep -q 'nevr_system_info::Get()' <<<"$N115_WS"; then
+        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (nevr_system_info::Get)." >&2
         exit 1
     fi
     # The JSON lives inside a C string literal, so every quote in the source is
@@ -1419,12 +1419,12 @@ verify:
     sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
     sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
     # Whitespace-flattened and matched CONTIGUOUSLY: two separate greps ("some
-    # !g_isServer exists" AND "AssetCDN::Initialize exists") passed blind, because
+    # !g_isServer exists" AND "nevr_asset_cdn::Initialize exists") passed blind, because
     # boot.cpp has OTHER !g_isServer gates — removing THIS gate while leaving the
     # call unconditional still satisfied both. Require the call inside the gate.
     N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
-    if ! grep -qE 'if \( *!g_isServer *\) *\{ *AssetCDN::Initialize\(\)' <<<"$N131_FLAT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
+    if ! grep -qE 'if \( *!g_isServer *\) *\{ *nevr_asset_cdn::Initialize\(\)' <<<"$N131_FLAT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
         echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
         exit 1
     fi
@@ -1432,8 +1432,8 @@ verify:
     N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
     sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
     sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
-    if grep -q 'AssetCDN::Initialize' <<<"$N131_INIT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
+    if grep -q 'nevr_asset_cdn::Initialize' <<<"$N131_INIT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
         echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
         exit 1
     fi
@@ -1448,7 +1448,7 @@ verify:
     sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
     sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
     if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
-        echo "verify: FAIL — N129 DllLoadHook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
+        echo "verify: FAIL — N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
         echo "It would revert to a bare OK/PARTIAL that hides which search-path hook failed — a silent DLL-hijack gap." >&2
         exit 1
     fi
@@ -1500,7 +1500,7 @@ verify:
         echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'DllLoadHook::AddLoadFilter\(' <<<"$N127_MP"; then
+    if ! grep -qE 'nevr_dll_load_hook::AddLoadFilter\(' <<<"$N127_MP"; then
         echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
@@ -1614,11 +1614,11 @@ verify:
     sensor_stage1 "N120 server-fatal plugin guards" "src/runtime/ext/plugin_loader.cpp" "$N120_RC"
     sensor_nonempty "N120 server-fatal plugin guards" "non-comment lines of ext/plugin_loader.cpp" "$N120_LOADER"
 
-    # The HookGuard verdict must be CONSUMED. `HookGuard::VerifyAll(filename);` as
+    # The HookGuard verdict must be CONSUMED. `nevr_hook_guard::VerifyAll(filename);` as
     # a bare statement is the pre-N120 bug: the collision was detected, logged at
     # ERROR, and the plugin loaded anyway — detection that changed nothing.
-    if ! grep -qE '(int|auto) +[a-z_]+ *= *HookGuard::VerifyAll' <<<"$N120_LOADER"; then
-        echo "verify: FAIL — N120 HookGuard::VerifyAll's return is no longer captured." >&2
+    if ! grep -qE '(int|auto) +[a-z_]+ *= *nevr_hook_guard::VerifyAll' <<<"$N120_LOADER"; then
+        echo "verify: FAIL — N120 nevr_hook_guard::VerifyAll's return is no longer captured." >&2
         echo "A discarded verdict means a plugin can re-hook an address this runtime owns, our patch silently stops applying, and the load continues as though nothing happened." >&2
         exit 1
     fi
@@ -1718,7 +1718,7 @@ verify:
     fi
 
     # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
-    # BinaryBugFixes::Init saves the original byte before writing 0xC3 and restores
+    # nevr_binary_bug_fixes::Init saves the original byte before writing 0xC3 and restores
     # it on Shutdown (N33). A SECOND writer defeats that silently: if it runs first,
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.
@@ -1843,12 +1843,12 @@ verify:
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
     # Both call sites are wiring, invisible to the GTest, so they get a sensor.
-    if ! grep -q 'HookGuard::Record(target, name)' src/runtime/hook/patching.h; then
-        echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
+    if ! grep -q 'nevr_hook_guard::Record(target, name)' src/runtime/hook/patching.h; then
+        echo "verify: FAIL — N84 nevr_hook_guard::Record missing from PatchDetour; new detours would be unguarded." >&2
         exit 1
     fi
-    if ! grep -qE 'HookGuard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
-        echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
+    if ! grep -qE 'nevr_hook_guard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
+        echo "verify: FAIL — N84 nevr_hook_guard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi
     # N85: never hand ixwebsocket an empty std::function. It invokes
@@ -1993,8 +1993,8 @@ verify:
         echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
         exit 1
     fi
-    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
-       || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
+    if ! grep -q 'nevr_serverdb_uri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
+       || ! grep -q 'nevr_serverdb_uri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
     fi
@@ -2046,7 +2046,7 @@ verify:
     fi
     # MARKED needs no stage-1 capture: src/runtime is the repo itself, and a
     # zero count makes MARKED < DECLARED fail closed below (measured direction).
-    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/runtime \
+    MARKED=$(grep -rhoE 'nevr_hook_liveness::Mark\(nevr_hook_liveness::k[A-Za-z]+\)' src/runtime \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
         echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
@@ -2471,8 +2471,8 @@ verify:
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
-        echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
+    if ! grep -q 'nevr_build_identity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
+        echo "verify: FAIL — N112c: gameserver.cpp does not call nevr_build_identity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
         exit 1

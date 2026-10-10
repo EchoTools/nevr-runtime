@@ -136,7 +136,7 @@ std::optional<ConnectRequest> SessionBridge::BuildRequest(const nevr_session_rou
   bool hasUrlCredentials = false;
   if (!id.discordId.empty() && !id.password.empty()) {
     std::optional<std::string> withCredentials =
-        ServerDbUri::BuildBridgeCredentialUri(out.url, id.discordId, id.password);
+        nevr_serverdb_uri::BuildBridgeCredentialUri(out.url, id.discordId, id.password);
     if (withCredentials.has_value()) {
       out.url = std::move(*withCredentials);
       hasUrlCredentials = true;
