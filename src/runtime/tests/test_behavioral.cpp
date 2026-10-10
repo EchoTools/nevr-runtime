@@ -1040,9 +1040,9 @@ TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
 // so the host rewrite must apply to each image on its own.
 namespace {
 std::vector<uint8_t> FreshMatchmakerImage() {
-  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
-  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
-              sizeof(MatchmakerHostPatch::kHostExpected));
+  std::vector<uint8_t> image(nevr_matchmaker_host_patch::kHostRva + nevr_matchmaker_host_patch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + nevr_matchmaker_host_patch::kHostRva, nevr_matchmaker_host_patch::kHostExpected,
+              sizeof(nevr_matchmaker_host_patch::kHostExpected));
   return image;
 }
 bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
@@ -1050,46 +1050,46 @@ bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
   return true;
 }
 const char* HostOf(const std::vector<uint8_t>& image) {
-  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+  return reinterpret_cast<const char*>(image.data() + nevr_matchmaker_host_patch::kHostRva);
 }
 }  // namespace
 
 // The slot is the original string and its NUL: the byte after it belongs to other data
 // (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
 TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
-  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, sizeof(nevr_matchmaker_host_patch::kHostExpected));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, 48U);
+  EXPECT_TRUE(nevr_matchmaker_host_patch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(0));
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(-1));
 }
 
 TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   std::vector<uint8_t> first = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(first.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
 
   // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
   std::vector<uint8_t> second = FreshMatchmakerImage();
-  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
-  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), nevr_matchmaker_host_patch::kHostExpected);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(second.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
 }
 
 TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::BytesMismatch);
   EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
 }
 
 TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
-  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
-            MatchmakerHostPatch::Result::WriteFailed);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 0, CopyWrite), nevr_matchmaker_host_patch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), nevr_matchmaker_host_patch::kHostExpected);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            nevr_matchmaker_host_patch::Result::WriteFailed);
 }
 
 // #201: the server's new-location text ends with the code line, which the game's screen drops.
@@ -1477,20 +1477,20 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
   ClearTestLogs();
   int64_t symbol = 0;
-  Evrp::TintData tint;
-  const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
-  EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
+  nevr_evrp::TintData tint;
+  const std::vector<uint8_t> shortBuffer(nevr_evrp::kHeaderSize - 1, 0);
+  EXPECT_FALSE(nevr_evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
   EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
 
   // Exactly the header size is not "too small": it is a header whose data_length promises 80
   // bytes that are not there, so the size check rejects it instead.
   ClearTestLogs();
-  std::vector<uint8_t> headerOnly(Evrp::kHeaderSize, 0);
+  std::vector<uint8_t> headerOnly(nevr_evrp::kHeaderSize, 0);
   const uint8_t header[] = {0x45, 0x56, 0x52, 0x50, 0x01, 0x00, 0x00, 0x00, 0x86, 0xDC, 0xC5, 0x9D,
                             0xD0, 0x28, 0xD2, 0x74, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                             0x50, 0x00, 0x00, 0x00};
   std::copy(std::begin(header), std::end(header), headerOnly.begin());
-  EXPECT_FALSE(Evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
+  EXPECT_FALSE(nevr_evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
   EXPECT_FALSE(TestLogContains("file too small"));
   EXPECT_TRUE(TestLogContains("size mismatch: file=header.evrp"));
 }

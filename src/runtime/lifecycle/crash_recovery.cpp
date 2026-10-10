@@ -93,7 +93,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
-    AssetCDN::StopBackgroundFetch();
+    nevr_asset_cdn::StopBackgroundFetch();
     nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     return gameResult;
   }
@@ -1411,7 +1411,7 @@ void PerformGracefulShutdown(unsigned int exitCode) {
 #endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
-  BinaryBugFixes::Shutdown();
+  nevr_binary_bug_fixes::Shutdown();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
   //    ForceFatalExit sets g_forceExitInProgress, then calls
