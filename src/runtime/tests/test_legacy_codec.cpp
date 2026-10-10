@@ -723,8 +723,8 @@ std::string KeyBytes(std::size_t n, uint8_t fill) { return std::string(n, static
 
 // Everything after the group: endpoint .. the second set of keys, for 0x20-byte keys on both sides.
 std::string SuccessTail(bool quest) {
-  const uint64_t server = EncoderFlags(quest, 0x20, 0x20, 0x20, 0x20);
-  const uint64_t client = EncoderFlags(quest, 0x40, 0x20, 0x20, 0x20);
+  const uint64_t gameServerFlags = EncoderFlags(quest, 0x20, 0x20, 0x20, 0x20);
+  const uint64_t gameClientFlags = EncoderFlags(quest, 0x40, 0x20, 0x20, 0x20);
   return Bytes()
       .U8(10)
       .U8(0)
@@ -738,8 +738,8 @@ std::string SuccessTail(bool quest) {
       .I16(1)
       .U8(0)
       .Pad(3)  // team, session flags, alignment
-      .U64(server)
-      .U64(client)
+      .U64(gameServerFlags)
+      .U64(gameClientFlags)
       .U64(0x1111)
       .Raw(KeyBytes(0x20, 0xA1))
       .Raw(KeyBytes(0x20, 0xA2))

@@ -12,21 +12,19 @@ header and holds no state, so `src/runtime/tests/test_legacy_codec.cpp` runs it 
 
 ## Sources, and how far to trust them
 
-Two kinds of source, and only the second has been checked against anything of ours:
+Each row below names where its layout came from. There are three sources, and only the last is a check
+against the game's own binary, and then only of names:
 
-- **Legacy side.** Byte layouts, field order and the login result values were learned by reading EchoRelay's
-  message documentation and test fixtures. They are wire facts only, written fresh here. **None has been
-  verified against a legacy binary or a live packet.** When the legacy exes arrive, every legacy-side row is
-  to be checked against them.
-- **Current side.** The decode order of the game service's codec (nakama, `server/evr/*.go`), read-only. These
-  rows are what the game service accepts today; `evr_codec.h` confirms the login-connection symbols it names.
-- **Our corpus.** `src/runtime/hook/symbol_corpus.cpp` and `src/runtime/log/symcache_data.cpp` come from the
-  final build's binary. They contain these names, so the names and symbols below are confirmed as game
-  symbols: `SNSLobbySessionSuccessv4`, `SNSLobbySessionSuccessv5`, `SNSLobbySessionFailurev2`, `v3`, `v4`,
-  `SNSLobbyMatchmakerStatus`, `SNSLobbyPlayerSessionsSuccessv3`, `SNSConfigSuccessv2`, `SNSReconcileIAP`,
-  `SNSReconcileIAPResult`, `SNSLeaderboardResponse`. The other legacy symbols are not in the final build
-  (they were removed with their messages); their values are the CSymbol64 of the name, which the tests check,
-  but the name itself comes from EchoRelay.
+- **EchoRelay documentation** (legacy side). Byte layouts, field order and login result values were learned
+  by reading EchoRelay's message documentation and test fixtures: wire facts only, written fresh here.
+  **None has been verified against a legacy binary or a live packet.** When the legacy exes arrive, every
+  row with this source is to be checked against them.
+- **Game service decode order** (current side). What the game service's codec (nakama, `server/evr/*.go`)
+  reads today, taken read-only.
+- **Our symbol corpus.** `src/runtime/hook/symbol_corpus.cpp` and `src/runtime/log/symcache_data.cpp` come
+  from the final build's binary. Rows whose symbol names appear there are marked; the other legacy symbols
+  were removed with their messages, so their names come from EchoRelay and the values are the CSymbol64 of
+  the name (checked by the tests).
 
 ## Outcomes
 
@@ -45,19 +43,19 @@ The roles follow `evr_codec.h`: the login connection, the config connection, and
 
 ### Login connection
 
-| Legacy | Current | Outcome | Notes |
-|---|---|---|---|
-| `SNSLoginRequest` | `SNSLogInRequestv2` | Translated | the 8-byte locale has no current slot; the JSON is replaced by `Context::loginProfileJson` when set |
-| `SNSLogInSuccess` | `SNSLogInSuccess` | Passthrough | |
-| `SNSLoginProfileResult`, success byte | `SNSLoggedInUserProfileSuccess` | Translated | zlib `client NUL server` against zstd `{client, server}`; `config` is not carried |
-| `SNSLoginProfileResult`, other bytes | `SNSLoginFailure` | Translated | 7 against 401, 8 against 403, anything else against 400; a full 0x30-byte header, no profile |
-| `SNSLoginSettings` / `SNSLoginClientSettings` | `SNSLoginSettings` | Passthrough / Translated | the second generation renames the symbol; the payload is identical |
-| `SNSRefreshProfile` | `SNSLoggedInUserProfileRequest` (own id) or `SNSOtherUserProfileRequest` | Translated | the request JSON is `Context::profileRequestJson` |
-| `SNSProfileRequestv2` / `SNSProfileRequest` | `SNSOtherUserProfileRequest` | Translated | |
-| `SNSRefreshProfileResult`, `SNSProfileResponsev2` / `SNSProfileResponse` | `SNSOtherUserProfileSuccess` | Translated | `ProfileReply` says which legacy reply a current answer becomes |
-| `SNSUpdateProfile` | `SNSUpdateProfile` | Passthrough | the profile content is not established |
-| `SNSLeaderboardRequest` | none | Local | an empty board under the request's tag |
-| `SNSTelemetryEvent`, `SNSMatchEnded`, `SNSMatchEndedv2` | none | Dropped | |
+| Legacy | Current | Outcome | Layout source | Notes |
+|---|---|---|---|---|
+| `SNSLoginRequest` | `SNSLogInRequestv2` | Translated | EchoRelay docs (legacy); game service decode (current) | the 8-byte locale has no current slot; the JSON is replaced by `Context::loginProfileJson` when set |
+| `SNSLogInSuccess` | `SNSLogInSuccess` | Passthrough | game service decode; EchoRelay docs | |
+| `SNSLoginProfileResult`, success byte | `SNSLoggedInUserProfileSuccess` | Translated | EchoRelay docs (legacy); game service decode (current) | zlib `client NUL server` against zstd `{client, server}`; `config` is not carried |
+| `SNSLoginProfileResult`, other bytes | `SNSLoginFailure` | Translated | EchoRelay docs (legacy); game service decode (current) | 7 against 401, 8 against 403, anything else against 400; a full 0x30-byte header, no profile |
+| `SNSLoginSettings` / `SNSLoginClientSettings` | `SNSLoginSettings` | Passthrough / Translated | EchoRelay docs (legacy); game service decode (current) | the second generation renames the symbol; the payload is identical |
+| `SNSRefreshProfile` | `SNSLoggedInUserProfileRequest` (own id) or `SNSOtherUserProfileRequest` | Translated | EchoRelay docs (legacy); game service decode (current) | the request JSON is `Context::profileRequestJson` |
+| `SNSProfileRequestv2` / `SNSProfileRequest` | `SNSOtherUserProfileRequest` | Translated | EchoRelay docs (legacy); game service decode (current) | |
+| `SNSRefreshProfileResult`, `SNSProfileResponsev2` / `SNSProfileResponse` | `SNSOtherUserProfileSuccess` | Translated | EchoRelay docs (legacy); game service decode (current) | `ProfileReply` says which legacy reply a current answer becomes |
+| `SNSUpdateProfile` | `SNSUpdateProfile` | Passthrough | EchoRelay docs (legacy); game service decode (current) | the profile content is not established |
+| `SNSLeaderboardRequest` | none | Local | EchoRelay docs; response symbol in our corpus | an empty board under the request's tag |
+| `SNSTelemetryEvent`, `SNSMatchEnded`, `SNSMatchEndedv2` | none | Dropped | EchoRelay docs | |
 
 `BuildLoggedInUserProfileRequest` is the message the bridge sends once the login succeeds; a legacy game
 client never asks for it.
@@ -65,24 +63,26 @@ client never asks for it.
 ### Config connection
 
 `SNSConfigRequestv2`, `SNSConfigSuccessv2`, `SNSConfigFailurev2`, `SNSReconcileIAP`, `SNSReconcileIAPResult`
-and the transport-level `STcpConnectionUnrequireEvent` pass through unchanged.
+and the transport-level `STcpConnectionUnrequireEvent` pass through unchanged. Source: game service decode
+order; `SNSConfigSuccessv2`, `SNSReconcileIAP` and `SNSReconcileIAPResult` are named in our corpus; the legacy
+layout of all of them is taken from EchoRelay's documentation and is unverified.
 
 ### Matchmaker connection
 
-| Legacy | Current | Notes |
-|---|---|---|
-| `SNSLobbyFindSessionRequestv8` | `SNSLobbyFindSessionRequestv11` | login session from `Context`; mode, level and platform through `BuildTables`; two bytes of the legacy form are not carried |
-| `SNSLobbyCreateSessionRequestv7` | `SNSLobbyCreateSessionRequestv9` | the run of bytes between the lobby type and the channel is not identified and not carried |
-| `SNSLobbyJoinSessionRequestv6` | `SNSLobbyJoinSessionRequestv7` | the team index becomes the tail; two unknown u64 are not carried |
-| `SNSLobbyPlayerSessionsRequestv3` | `SNSLobbyPlayerSessionsRequestv5` | the requester is the first listed id |
-| `SNSLobbyPendingSessionCancel` | `SNSLobbyPendingSessionCancelv2` | one byte against the login session |
-| `SNSLobbySessionSuccessv4` | `SNSLobbySessionSuccessv5` | the group GUID is the only difference; Quest encoder flags are converted to the PC layout |
-| `SNSLobbySessionFailurev3` / `v2` | `SNSLobbySessionFailurev4` | v3 drops the message and expiry; v2 also drops the mode and an unknown word |
-| `SNSLobbyMatchmakerStatusRequest`, `SNSLobbyMatchmakerStatus`, `SNSLobbyPlayerSessionsSuccessv3` | same | Passthrough |
+| Legacy | Current | Layout source | Notes |
+|---|---|---|---|
+| `SNSLobbyFindSessionRequestv8` | `SNSLobbyFindSessionRequestv11` | EchoRelay docs (legacy); game service decode (current) | login session from `Context`; mode, level and platform through `BuildTables`; two bytes of the legacy form are not carried |
+| `SNSLobbyCreateSessionRequestv7` | `SNSLobbyCreateSessionRequestv9` | EchoRelay docs (legacy); game service decode (current) | bytes after the lobby type whose purpose is unknown are not carried |
+| `SNSLobbyJoinSessionRequestv6` | `SNSLobbyJoinSessionRequestv7` | EchoRelay docs (legacy); game service decode (current) | the team index becomes the tail; two unknown u64 are not carried |
+| `SNSLobbyPlayerSessionsRequestv3` | `SNSLobbyPlayerSessionsRequestv5` | EchoRelay docs (legacy); game service decode (current) | the game client lists itself at the head of its id list, which is where the requesting user is read from |
+| `SNSLobbyPendingSessionCancel` | `SNSLobbyPendingSessionCancelv2` | EchoRelay docs (legacy); game service decode (current) | one byte against the login session |
+| `SNSLobbySessionSuccessv4` | `SNSLobbySessionSuccessv5` | EchoRelay docs (v4); game service decode (v5); both names in our corpus | the group GUID is the only difference; Quest encoder flags are converted to the PC layout |
+| `SNSLobbySessionFailurev3` / `v2` | `SNSLobbySessionFailurev4` | EchoRelay docs (v3, v2); game service decode (v4); all three names in our corpus | v3 drops the message and expiry; v2 also drops the mode and an unknown word |
+| `SNSLobbyMatchmakerStatusRequest`, `SNSLobbyMatchmakerStatus`, `SNSLobbyPlayerSessionsSuccessv3` | same | game service decode; names in our corpus | Passthrough |
 
 ## Not translated
 
-- the unidentified bytes of the create request, and any create request that does not end in the documented
+- the create request's bytes of unknown purpose, and any create request that does not end in the documented
   user id and team;
 - `SNSLobbyPingRequestv3` / `SNSLobbyPingResponse`: whether a legacy game client answers is not established;
 - `SNSRemoteLogSetv2` against `SNSRemoteLogSetv3`: the v3 header words are not identified;

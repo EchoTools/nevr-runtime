@@ -304,11 +304,11 @@ Translation LoginFailureToLegacy(std::string_view payload, const Context& ctx) {
                           ProfileResultFailure(ctx.loginSession, user, ResultCodeForStatus(status)));
 }
 
-std::optional<std::string> ProfileResultSuccess(const Context& ctx, const UserId& user, const json& client,
-                                                const json& server) {
-  std::string raw = DumpJson(client);
+std::optional<std::string> ProfileResultSuccess(const Context& ctx, const UserId& user, const json& gameClientProfile,
+                                                const json& gameServerProfile) {
+  std::string raw = DumpJson(gameClientProfile);
   raw.push_back('\0');
-  raw.append(DumpJson(server));
+  raw.append(DumpJson(gameServerProfile));
   const std::optional<std::string> z = ZlibDeflate(raw);
   if (!z) return std::nullopt;
   std::string out;
@@ -354,18 +354,18 @@ Translation LoggedInProfileSuccessToLegacy(std::string_view payload, const Conte
   const UserId user = r.User();
   const std::optional<json> doc = UnpackCurrentJson(r);
   if (!r.ok() || !doc) return Bad();
-  const json client = Member(*doc, "client");
-  const json server = Member(*doc, "server");
+  const json gameClientProfile = Member(*doc, "client");
+  const json gameServerProfile = Member(*doc, "server");
   switch (reply) {
     case ProfileReply::LoginProfileResult: {
-      std::optional<std::string> out = ProfileResultSuccess(ctx, user, client, server);
+      std::optional<std::string> out = ProfileResultSuccess(ctx, user, gameClientProfile, gameServerProfile);
       if (!out) return Bad();
       return SendToGameClient(kSNSLoginProfileResult, std::move(*out));
     }
     case ProfileReply::RefreshProfileResult:
-      return SendToGameClient(kSNSRefreshProfileResult, RefreshResult(user, server));
+      return SendToGameClient(kSNSRefreshProfileResult, RefreshResult(user, gameServerProfile));
     case ProfileReply::ProfileResponse:
-      return SendToGameClient(tables.profileResponseSymbol, ProfileResponse(user, server));
+      return SendToGameClient(tables.profileResponseSymbol, ProfileResponse(user, gameServerProfile));
   }
   return Make(Outcome::Unsupported);
 }
@@ -406,20 +406,20 @@ Translation ProfileResultToCurrent(std::string_view payload, const Context& ctx)
   const std::optional<std::string> raw = ZlibInflate(r.Rest(), length);
   if (!raw) return Bad();
   const std::size_t split = raw->find('\0');
-  std::string_view clientText(*raw);
-  std::string_view serverText;
+  std::string_view gameClientText(*raw);
+  std::string_view gameServerText;
   if (split != std::string::npos) {
-    clientText = std::string_view(*raw).substr(0, split);
-    serverText = std::string_view(*raw).substr(split + 1);
-    while (!serverText.empty() && serverText.back() == '\0') serverText.remove_suffix(1);
+    gameClientText = std::string_view(*raw).substr(0, split);
+    gameServerText = std::string_view(*raw).substr(split + 1);
+    while (!gameServerText.empty() && gameServerText.back() == '\0') gameServerText.remove_suffix(1);
   }
-  const std::optional<json> client = ParseJson(clientText);
-  std::optional<json> server = json::object();
-  if (!serverText.empty()) server = ParseJson(serverText);
-  if (!client || !server) return Bad();
+  const std::optional<json> gameClientProfile = ParseJson(gameClientText);
+  std::optional<json> gameServerProfile = json::object();
+  if (!gameServerText.empty()) gameServerProfile = ParseJson(gameServerText);
+  if (!gameClientProfile || !gameServerProfile) return Bad();
   std::string out;
   PutUser(out, user);
-  if (!PackCurrentJson(out, json{{"client", *client}, {"server", *server}})) return Bad();
+  if (!PackCurrentJson(out, json{{"client", *gameClientProfile}, {"server", *gameServerProfile}})) return Bad();
   return SendToGameService(nevr_evr_codec::kSymLoggedInUserProfileSuccess, std::move(out));
 }
 
@@ -655,7 +655,8 @@ Translation JoinToLegacy(std::string_view payload, const Context& ctx, const Bui
 // A legacy create request: five u64 (region, lock, mode, level, platform), the lobby type byte, a run of bytes
 // we have not identified, the channel GUID, the settings JSON with its NUL, the user id and an optional team.
 // Nothing we have fixes the run's length, so the JSON is found by looking for a '{' that begins parseable
-// JSON and is followed by exactly a user id (plus an optional team); the channel is the 16 bytes before it.
+// JSON and is followed by exactly a user id (plus an optional team); the channel GUID occupies the 16 bytes immediately
+// in front of that '{'.
 struct CreateV7 {
   uint64_t region = 0;
   uint64_t versionLock = 0;
@@ -663,7 +664,7 @@ struct CreateV7 {
   uint64_t level = 0;
   uint64_t platform = 0;
   uint8_t lobbyType = 0;
-  std::string unmapped;
+  std::string unidentified;
   Guid channel{};
   std::string settings;
   UserId user;
@@ -680,7 +681,7 @@ std::optional<CreateV7> ParseCreateV7(std::string_view payload) {
   m.platform = head.U64();
   if (!head.ok()) return std::nullopt;
   const std::string rest = head.Rest();
-  // rest = lobbyType(1) unmapped(n) channel(16) json NUL user(16) [team(2)]
+  // rest = lobbyType(1) unidentified(n) channel(16) json NUL user(16) [team(2)]
   for (std::size_t brace = 1 + kGuidSize; brace < rest.size(); ++brace) {
     if (rest[brace] != '{') continue;
     const std::size_t nul = rest.find('\0', brace);
@@ -689,7 +690,7 @@ std::optional<CreateV7> ParseCreateV7(std::string_view payload) {
     if (after != kUserSize && after != kUserSize + 2) continue;
     if (!ParseJson(std::string_view(rest).substr(brace, nul - brace))) continue;  // a 0x7b byte inside the channel GUID
     m.lobbyType = static_cast<uint8_t>(rest[0]);
-    m.unmapped = rest.substr(1, brace - kGuidSize - 1);
+    m.unidentified = rest.substr(1, brace - kGuidSize - 1);
     std::memcpy(m.channel.data(), rest.data() + brace - kGuidSize, kGuidSize);
     m.settings = rest.substr(brace, nul - brace);
     Reader tail(std::string_view(rest).substr(nul + 1));
