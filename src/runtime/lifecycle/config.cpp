@@ -345,6 +345,9 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   return const_cast<CHAR*>(relayUrl);
 }
 
+// Set by ArmServiceRedirects() at the start of the runtime bootstrap (see RedirectServiceUrl).
+static std::atomic<bool> s_serviceRedirectsArmed{false};
+
 /// <summary>
 /// A detour hook for the game's HTTP(S) connect function. Redirects hardcoded endpoints
 /// using config.json overrides with fallback chain: service_key -> loginservice_host -> default.
@@ -358,6 +361,7 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
 /// are automatically relayed through the bridge (matchingservice, serverdb, etc.).
 /// </summary>
 UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
+  const CHAR* const gameUri = uri;
   // If we have a local config, check for service overrides with fallback logic
   if (g_localConfig != NULL) {
     CHAR* originalUri = uri;
@@ -413,6 +417,21 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
   }
 
+  // #408: with no apiservice_host / loginservice_host / api_host configured the game's own API host
+  // (https://api.readyatdawn.com, a dead service) was left alone, so every REST call (the service status
+  // request among them) went there. It goes to nevr_http_uri instead.
+  if (uri == gameUri) {
+    uri = const_cast<CHAR*>(nevr::lifecycle::DecideUnconfiguredApiRedirect(
+        s_serviceRedirectsArmed.load(std::memory_order_acquire), uri,
+        [] { return NevrCfgGetFlat("nevr_http_uri"); },
+        [](const char* url, const char* httpTarget) { return NevrCfgRedirect(url, httpTarget, 0, 0); }));
+    if (uri != gameUri) {
+      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
+          "[NEVR.PATCH] HTTP(S) connection redirected: ", gameUri, " → ", uri);
+      Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
+    }
+  }
+
   // Call the original function
   return EchoVR::HttpConnect(unk, uri);
 }
@@ -433,7 +452,6 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 // We pick the redirect target based on the URL scheme:
 //   wss:// URLs → nevr_socket_uri (WebSocket endpoint)
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
-static std::atomic<bool> s_serviceRedirectsArmed{false};
 
 static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
   return NevrCfgAutoRelay(bridgePort);

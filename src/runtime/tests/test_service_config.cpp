@@ -318,6 +318,35 @@ TEST(DecideServiceRedirect, ABridgeRewritesTheSocketToLoopbackAndTheHttpTargetNe
   EXPECT_STREQ(http, "https://service.example:7350");
 }
 
+TEST(DecideUnconfiguredApiRedirect, TheGamesDefaultApiHostGoesToTheConfiguredHttpService) {
+  SetConfigInputs();
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); };
+  const char api[] = "https://api.readyatdawn.com";
+  const char* chosen = nevr::lifecycle::DecideUnconfiguredApiRedirect(true, api, http, redirect);
+  ASSERT_NE(chosen, api);
+  EXPECT_STREQ(chosen, "https://service.example:7350");
+  // The per-environment form of the same host.
+  const char env[] = "https://api-dev.readyatdawn.com";
+  const char* chosenEnv = nevr::lifecycle::DecideUnconfiguredApiRedirect(true, env, http, redirect);
+  EXPECT_STREQ(chosenEnv, "https://service.example:7350");
+}
+
+TEST(DecideUnconfiguredApiRedirect, OtherHostsNotArmedAndNoTargetKeepTheGamesPointer) {
+  SetConfigInputs();
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); };
+  const char login[] = "https://login.readyatdawn.com";
+  const char graph[] = "https://graph.oculus.com";
+  const char api[] = "https://api.readyatdawn.com";
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, login, http, redirect), login);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, graph, http, redirect), graph);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(false, api, http, redirect), api);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, nullptr, http, redirect), nullptr);
+  SetEmptyInputs();  // no http_uri configured: nothing to redirect to
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, api, http, redirect), api);
+}
+
 TEST(StableStringPoolAccessors, SelectedRedirectReplacesTheGameResultWithTheStablePointer) {
   SetConfigInputs();
   const char defaultValue[] = "wss://login.readyatdawn.com/rad15";
