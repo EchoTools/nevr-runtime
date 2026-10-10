@@ -1409,7 +1409,7 @@ void TestSilentLoginSocketAfterTheLossIsSentOneNotice() {
   const auto toGame = SentToGame(rig, 4);
   QCHECK(toGame.size() == 1 && toGame[0] == ExpectedRemoved());
   QCHECK(rig.router->GetStats().loginsRemoved == 1);
-  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  QCHECK(rig.router->GetStats().loginRemovedDue);  // stays armed: this socket may not be the login peer
   rig.router->OnGameSilent(4);  // idempotent
   QCHECK(CountNotices(rig) == 1);
   // The new session was never sent the game's old login or anything else of its own.
@@ -1419,44 +1419,85 @@ void TestSilentLoginSocketAfterTheLossIsSentOneNotice() {
   QCHECK(!rig.logs.Has(kSecret));
 }
 
-// Failure caught: the notice going to a socket that is not the login socket (or being sent twice per loss):
-// a provisional connection that turns out to be config gets nothing, and the real (silent) login socket gets
-// the one notice.
-void TestOnlyAConnectionKnownToBeTheLoginSocketIsSentTheNotice() {
+// Failure caught (the review's HIGH): the router cannot tell the login socket from the others, so a notice
+// consumed by a guess left the real login socket on the unauthenticated session. Every socket that reconnects
+// is sent it, once. The game drops it on any peer but its login peer (CNSUser::LoginRemovedCB 0x1933a64).
+void TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice() {
   Rig rig(RemovalOptions());
   const auto opens = EstablishedForRemoval(rig);
-  const RemoteId provisional = LoseAndReconnect(rig, opens[1].remote);  // game 4: provisional login
+  const RemoteId provisional = LoseAndReconnect(rig, opens[1].remote);  // game 4: provisional login role
   rig.router->OnRemoteOpen(provisional);
   rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // it is the config socket
-  QCHECK(SentToGame(rig, 4).empty());
-  QCHECK(rig.router->GetStats().loginRemovedDue);  // still due
-  rig.router->OnGameOpen(5);                       // the real login socket, silent
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 4)[0] == ExpectedRemoved());
+  QCHECK(rig.router->GetStats().loginRemovedDue);  // still armed: the login socket has not been heard
+  rig.router->OnGameOpen(5);                       // the real login socket (a matchmaker by order), quiet
   rig.router->OnGameSilent(5);
   QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
-  QCHECK(CountNotices(rig) == 1);
-  // A silent connection that is a matchmaker (not the login role) is never sent it.
-  Rig rig2(RemovalOptions());
-  const auto o2 = EstablishedForRemoval(rig2);
-  const RemoteId r2 = LoseAndReconnect(rig2, o2[1].remote);
-  rig2.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);  // matchmaker
-  rig2.router->OnGameSilent(4);
-  (void)r2;
-  QCHECK(SentToGame(rig2, 4).empty());
+  // Never twice to one socket, whatever it does next.
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg2"), true);
+  rig.router->OnGameFrame(5, Msg(kSymSomething, "profile"), true);
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 5).size() == 1);
+  QCHECK(CountNotices(rig) == 2 && rig.router->GetStats().loginsRemoved == 2);
 }
 
-// Failure caught: a silent connection that is a matchmaker by order (never spoke, opened while the login session
-// is live) being sent the notice because it was silent.
-void TestSilentMatchmakerByOrderIsNeverSentTheNotice() {
+// A socket that was already open when the session failed did not reconnect: it is never sent the notice.
+void TestASocketOpenedBeforeTheLossIsNeverSentTheNotice() {
   Rig rig(RemovalOptions());
   const auto opens = EstablishedForRemoval(rig);
-  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: the login socket, session live
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // game 1 predates the loss
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg-again"), true);
+  rig.router->OnGameSilent(1);
+  QCHECK(SentToGame(rig, 1).empty());
+  rig.router->OnGameSilent(4);
+  QCHECK(SentToGame(rig, 4).size() == 1);
+}
+
+// The review's path (a): a matchmaker socket reconnects first and stays quiet; the real login socket (a
+// matchmaker by order, silent) comes after. Each gets exactly one.
+void TestQuietMatchmakerFirstThenTheLoginSocketEachGetOneNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: quiet
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameOpen(5);  // game 5: the real login socket, a matchmaker by order, quiet
+  rig.router->OnGameSilent(4);
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 4)[0] == ExpectedRemoved());
+  QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
+  QCHECK(CountNotices(rig) == 2);
+}
+
+// The review's path (b): the real login socket is guessed as a matchmaker and the first socket spoke as
+// matchmaker; the notice must still reach the real one (a notice on a socket that spoke is not the last).
+void TestRealLoginSocketGuessedAsMatchmakerStillGetsItsNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: provisional login
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);  // a matchmaker
+  QCHECK(SentToGame(rig, 4).size() == 1);
+  rig.router->OnGameOpen(5);  // the real login socket, a matchmaker by order
+  QCHECK(SentToGame(rig, 5).empty());
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
+  QCHECK(CountNotices(rig) == 2);
+}
+
+// A silent matchmaker by order is sent it too: it cannot be told from the real login socket.
+void TestSilentMatchmakerByOrderIsSentOneNoticeLikeTheRest() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
   rig.router->OnRemoteOpen(fresh);
   rig.router->OnGameOpen(5);  // a second connection on the live session: matchmaker role
   rig.router->OnGameSilent(5);
-  QCHECK(SentToGame(rig, 5).empty());
-  QCHECK(CountNotices(rig) == 0);
-  rig.router->OnGameSilent(4);  // the login socket
+  QCHECK(SentToGame(rig, 5).size() == 1);
+  rig.router->OnGameSilent(4);
   QCHECK(SentToGame(rig, 4).size() == 1);
+  QCHECK(CountNotices(rig) == 2);
 }
 
 // Failure caught (the RETRY path): the login connection ended with a request outstanding. The game takes its
@@ -1482,9 +1523,43 @@ void TestOwnLoginFirstGetsNoNotice() {
   rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest, "OWN-" + kSecret), true);
   QCHECK(SentToGame(rig, 4).empty());
   QCHECK(!rig.router->GetStats().loginRemovedDue);
-  QCHECK(rig.logs.Has("login removed notice skipped"));
+  QCHECK(rig.logs.Has("login removed notice disarmed"));
   rig.router->OnGameSilent(4);  // ignored: it has spoken
   QCHECK(SentToGame(rig, 4).empty());
+  // Disarmed for every socket: one that reconnects (or speaks) after the game's own login is sent nothing.
+  rig.router->OnGameOpen(5);
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameFrame(5, Msg(kSymSomething, "profile"), true);
+  QCHECK(SentToGame(rig, 5).empty() && CountNotices(rig) == 0);
+}
+
+// The next session being established (LoginSuccess on it) disarms the notice for sockets that come later.
+void TestLoginSuccessOnTheNextSessionDisarmsTheNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  QCHECK(rig.router->GetStats().loginRemovedDue);
+  rig.router->OnRemoteFrame(fresh, nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount), true);
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  rig.router->OnGameOpen(5);
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 0);
+}
+
+// The review's LOW: the login socket closed itself before the failure, so nothing reconnects onto it and
+// `outstanding` reads false; the notice is not armed.
+void TestNoNoticeWhenTheLoginSocketAlreadyClosed() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  rig.router->OnGameClose(2);  // the login socket closes itself; the session lives on for the matchmaker
+  rig.router->OnRemoteError(opens[1].remote, 0, "network error");
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  rig.router->OnGameClose(3);
+  rig.router->OnGameOpen(4);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 0);
 }
 
 // Failure caught: a login-role request (no login) after the reconnect: the notice goes to that connection.
@@ -1620,10 +1695,15 @@ int main() {
   TestLoginRemovedFrameLayout();
   TestLoginSuccessUserIdIsParsed();
   TestSilentLoginSocketAfterTheLossIsSentOneNotice();
-  TestOnlyAConnectionKnownToBeTheLoginSocketIsSentTheNotice();
-  TestSilentMatchmakerByOrderIsNeverSentTheNotice();
+  TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice();
+  TestASocketOpenedBeforeTheLossIsNeverSentTheNotice();
+  TestQuietMatchmakerFirstThenTheLoginSocketEachGetOneNotice();
+  TestRealLoginSocketGuessedAsMatchmakerStillGetsItsNotice();
+  TestSilentMatchmakerByOrderIsSentOneNoticeLikeTheRest();
   TestNoNoticeWhenTheLoginConnectionHadRequestsOutstanding();
   TestOwnLoginFirstGetsNoNotice();
+  TestLoginSuccessOnTheNextSessionDisarmsTheNotice();
+  TestNoNoticeWhenTheLoginSocketAlreadyClosed();
   TestLoginRoleRequestAfterTheReconnectGetsTheNotice();
   TestTheAccountIdIsClearedByLogOutRejectionAndShutdown();
   TestNoNoticeWhenTheOptionIsOff();

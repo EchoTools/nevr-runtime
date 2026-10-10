@@ -21,16 +21,18 @@
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
 //   * login removal notice (Options::loginRemovedJson, Quest): the game sends its own login and, when the login
-//     session ends under it (a remote failure) with nothing outstanding on the login connection, its login
-//     socket reconnects WITHOUT a new login (an established count-0 socket raises no Lost event, so the game
-//     stays "logged in" on a session nobody logged into). Nothing is replayed and no credential is kept: the
-//     router sends the game an SNSLoginRemovedNotify for the account it last saw logged in, on that login
-//     connection, once per lost session. The game's own handler puts a logged-in game on the login-failed
-//     screen with RETRY, and RETRY runs the game's own login with a fresh token. A login connection that ended
-//     with requests outstanding is the game's Lost path (-95, RETRY): nothing is armed for it. The notice goes
-//     only to a connection known to be the login socket (it has sent a login-role frame, or has stayed
-//     silent: Router::OnGameSilent); the game ignores it on any other peer. What is kept is the 16-byte account
-//     id of the last LoginSuccess, cleared on any LogOut, a rejected login and Shutdown.
+//     session ends under it (a remote failure) with nothing outstanding on a login socket that is still
+//     open, its login socket reconnects WITHOUT a new login (an established count-0 socket raises no Lost
+//     event, so the game stays "logged in" on a session nobody logged into). Nothing is replayed and no
+//     credential is kept: the router sends each game socket that reconnects, once, an SNSLoginRemovedNotify
+//     for the account it last saw logged in (on its first frame, or when it has stayed silent: OnGameSilent).
+//     It cannot tell the login socket from the others by order, so it sends to all of them: the game ignores
+//     the notice on any peer but its login peer (CNSUser::LoginRemovedCB). The notice stays armed until the
+//     game sends its own login or the next session answers LoginSuccess. The game's own handler puts a
+//     logged-in game on the login-failed screen with RETRY, and RETRY runs the game's own login with a fresh
+//     token. A login connection that ended with requests outstanding is the game's Lost path (-95, RETRY):
+//     nothing is armed for it. What is kept is the 16-byte account id of the last LoginSuccess, cleared on any
+//     LogOut, a rejected login and Shutdown.
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
 //   * remote end (close or error): every game socket on that session is closed and the session is
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
@@ -183,7 +185,7 @@ struct Stats {
   uint64_t droppedRemoteFrames = 0;
   uint64_t loginsRemoved = 0;      // SNSLoginRemovedNotify sent to a game that reconnected without a login
   bool loginUserKnown = false;     // the account of the last LoginSuccess is held (never a credential)
-  bool loginRemovedDue = false;    // the next known login connection is to be sent the notice
+  bool loginRemovedDue = false;    // armed: each reconnecting socket is sent the notice once, until the game logs in
   uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
@@ -244,6 +246,8 @@ class Router {
     bool closing = false;         // a close was issued; waiting for the transport's OnGameClose
     bool classified = false;      // the first data frame has named the role
     uint32_t required = 0;        // requests sent on the shared login session that await their Unrequire
+    uint64_t noticeEpoch = 0;     // the loss this socket reconnected after (0: none was due when it opened)
+    bool noticeSent = false;      // it was sent the login-removed notice (never twice)
     Outbox out;
   };
   struct Remote {
@@ -269,7 +273,9 @@ class Router {
   bool GateAwaitingLocked() const;
   Role ProvisionalRoleLocked() const;
   void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
-  // Sends the removal notice to `game` (a login connection known to be the login socket) when one is due.
+  // Sends the removal notice to `game` once, when it reconnected after the loss the notice is due for.
+  // The router cannot tell the login socket from the others by order or silence, so every socket that
+  // reconnected gets it: the game drops it on any peer but its login peer (CNSUser::LoginRemovedCB).
   void SendLoginRemovedLocked(GameId game, Game& g, Effects& fx);
   void ForgetLoginUserLocked();
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
@@ -307,7 +313,8 @@ class Router {
   // due for the next login connection. loginRemovedJson only.
   bool haveLoginUser_ = false;
   nevr_evr_codec::UserId loginUser_;
-  bool removalDue_ = false;
+  bool removalDue_ = false;      // armed by a silent loss; disarmed by the game's own login or the next LoginSuccess
+  uint64_t removalEpoch_ = 0;    // counts armed losses; a socket is eligible only for the one it opened under
   uint64_t unmatchedEmbeddedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;

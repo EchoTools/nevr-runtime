@@ -540,14 +540,17 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    event and the game reconnects the socket without logging in, so the new session would sit
    unauthenticated. The router does not replay a login and keeps no credential: with
    `Options::loginRemovedJson` set (Quest) it keeps the 16-byte account id of the last `LoginSuccess` and
-   sends the game an `SNSLoginRemovedNotify` (`nevr_evr_codec::BuildLoginRemovedNotify`) on that login
-   socket, once per lost session. The game's own handler (`CNSUser::LoginRemovedCB` `0x1933a28`,
+   sends the game an `SNSLoginRemovedNotify` (`nevr_evr_codec::BuildLoginRemovedNotify`) on each
+   game socket that reconnects, once per socket. The game's own handler (`CNSUser::LoginRemovedCB` `0x1933a28`,
    `CR15NetGame::LoginRemovedCB` `0x125f908`) acts only on the login peer, for the account it holds, when
    it is logged in: reason 1 shows the JSON `message` on the login-failed screen (`SwitchTo(-94)`), whose
    RETRY runs the game's own login with the current token. Nothing in that path persists anything (every
-   call is listed in the PR for #320). The notice goes only to a connection known to be the login socket
-   (a login-role first frame, or silent for `silentNotifyMs`, `Router::OnGameSilent`), and is not armed when
-   the login connection had requests outstanding (the game's Lost path, -95, already shows RETRY). The
+   call is listed in the PR for #320). The router cannot tell the login socket from the others (connection order and silence are guesses),
+   so the notice goes to every socket that reconnects after the loss: on its first frame, or when it has
+   stayed silent for `silentNotifyMs` (`Router::OnGameSilent`), once per socket; the game drops it on any
+   peer but its login peer. It stays armed until the game sends its own `LoginRequest` or the next session
+   answers `LoginSuccess`, and is not armed when the login connection had requests outstanding (the
+   game's Lost path, -95, already shows RETRY) or its socket had already closed. The
    fixed part of the frame (0x18 bytes) is derived from the callbacks, not captured: the 4 bytes at `+0x10`
    and the id word order are the constants `kLoginRemovedWord10` and `kLoginRemovedUserIdSwapped`, the first
    things a headset run checks. The player leaves the current lobby when it arrives (`QuitOnError` ->

@@ -552,7 +552,7 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
   QCHECK(reconnected.Read(noticeWire.size()) == noticeWire);
   // Sent because the loopback server reported the socket silent (the router counts it, one notice).
   QCHECK(WaitFor([&] { return bridge.LoginsRemoved() == 1; }));
-  QCHECK(!bridge.LoginRemovedDue());
+  QCHECK(bridge.LoginRemovedDue());  // armed until the game's own login: this socket may not be the login peer
 
   // No credential was replayed: the new session has been sent nothing of the game's old login.
   FakeConnection* second = nullptr;
@@ -570,6 +570,7 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
     QCHECK(second->WaitSent(1));
     QCHECK(second->Sent()[0] == retry);
   }
+  QCHECK(WaitFor([&] { return !bridge.LoginRemovedDue(); }));  // the game's own login disarms it
   bridge.Stop();
 }
 
