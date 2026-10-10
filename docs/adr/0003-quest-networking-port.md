@@ -535,6 +535,24 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    Quest router runs with the defaults, and `TestQuestDefaultsInjectNothing` pins that it sends
    exactly the frames the game sent. Enabling both would send two logins.
 
+   **A lost login session under a silent game (#320).** When the remote session ends and the game's login
+   connection has nothing outstanding, `SConnection::DisconnectCB` (`libr15.so` `0x24fc17c`) raises no Lost
+   event and the game reconnects the socket without logging in, so the new session would sit
+   unauthenticated. The router does not replay a login and keeps no credential: with
+   `Options::loginRemovedJson` set (Quest) it keeps the 16-byte account id of the last `LoginSuccess` and
+   sends the game an `SNSLoginRemovedNotify` (`nevr_evr_codec::BuildLoginRemovedNotify`) on that login
+   socket, once per lost session. The game's own handler (`CNSUser::LoginRemovedCB` `0x1933a28`,
+   `CR15NetGame::LoginRemovedCB` `0x125f908`) acts only on the login peer, for the account it holds, when
+   it is logged in: reason 1 shows the JSON `message` on the login-failed screen (`SwitchTo(-94)`), whose
+   RETRY runs the game's own login with the current token. Nothing in that path persists anything (every
+   call is listed in the PR for #320). The notice goes only to a connection known to be the login socket
+   (a login-role first frame, or silent for `silentNotifyMs`, `Router::OnGameSilent`), and is not armed when
+   the login connection had requests outstanding (the game's Lost path, -95, already shows RETRY). The
+   fixed part of the frame (0x18 bytes) is derived from the callbacks, not captured: the 4 bytes at `+0x10`
+   and the id word order are the constants `kLoginRemovedWord10` and `kLoginRemovedUserIdSwapped`, the first
+   things a headset run checks. The player leaves the current lobby when it arrives (`QuitOnError` ->
+   `CR15Game::EndMultiplayer`, the same as any login failure from a logged-in state).
+
    `src/quest/net/` holds the Android adapters.
    - `loopback_game_server`: a POSIX WebSocket server bound to `127.0.0.2` (`kListenAddress`) on an
      ephemeral port (RFC 6455 in `ws_wire`). **Access control:** every local app can reach that
