@@ -12,7 +12,7 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 
-namespace ScenarioProtocol {
+namespace nevr_scenario_protocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
                 kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kInjectRecentlyMet, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
@@ -453,4 +453,4 @@ inline std::string BuildPartyInviteNotify(std::uint64_t partyId, std::uint64_t i
   return SocialParty::Frame(m);
 }
 
-}  // namespace ScenarioProtocol
+}  // namespace nevr_scenario_protocol

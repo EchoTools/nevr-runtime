@@ -444,16 +444,16 @@ it was applied.
 
 ### Rule 12: Bootstrap log lines carry a level prefix
 
-Before the game logger is available, `BootLogTee::TeeFprintf` is the
+Before the game logger is available, `nevr_boot_log_tee::TeeFprintf` is the
 only output mechanism. These lines SHALL embed their level in the format
 string so they are distinguishable from timestamped `Log()` output:
 
 ```cpp
 // BEFORE (no level — indistinguishable from any other bootstrap line)
-BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
+nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
 
 // AFTER
-BootLogTee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks...\n");
+nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks...\n");
 ```
 
 The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
@@ -561,7 +561,7 @@ failing any of these checks is rejected until the violation is fixed.
 | State transition without FROM state          | Can't diagnose stuck state        | Log old_state -> new_state                            |
 | Error without error code                     | Not actionable                    | Add GetLastError(), HRESULT, or status code           |
 | INFO in any hot path or per-item detail       | Floods the log                    | Demote to DEBUG; emit one INFO summary line instead.  |
-| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `BootLogTee::TeeFprintf` before the game logger exists (Rule 11). |
+| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `nevr_boot_log_tee::TeeFprintf` before the game logger exists (Rule 11). |
 | Game-native line without an nEVR annotation  | Noise                             | Suppress or wrap with structured fields               |
 | Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |

@@ -134,7 +134,7 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   std::lock_guard<std::mutex> lock(g_testLogMutex);
-  TestLogCap::Append(g_testLogMessages, buffer);
+  nevr_test_log_cap::Append(g_testLogMessages, buffer);
 }
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
@@ -997,7 +997,7 @@ std::string BuildLoginFailureFrame(uint64_t declaredPayloadSize, uint64_t status
 TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
   ClearTestLogs();
   constexpr char kSecret[] = "auth-response-secret-sentinel";
-  LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning, "[NEVR.AUTH] rejected ", 403, kSecret);
+  nevr_log_diagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning, "[NEVR.AUTH] rejected ", 403, kSecret);
 
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   ASSERT_EQ(g_testLogMessages.size(), 1U);
@@ -1006,14 +1006,14 @@ TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
 }
 
 TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
-  const std::string closed = LogDiagnostics::FormatWebSocketCloseDiagnostic("closed ", 1008, 3);
+  const std::string closed = nevr_log_diagnostics::FormatWebSocketCloseDiagnostic("closed ", 1008, 3);
   EXPECT_EQ(closed, "closed code=1008 reconnect_count=3");
-  const std::string failed = LogDiagnostics::FormatWebSocketErrorDiagnostic("failed ", 502, 2, 3);
+  const std::string failed = nevr_log_diagnostics::FormatWebSocketErrorDiagnostic("failed ", 502, 2, 3);
   EXPECT_EQ(failed, "failed http_status=502 retries=2 reconnect_count=3");
-  EXPECT_EQ(LogDiagnostics::FormatCurlFailureDiagnostic("curl ", 28), "curl curl_code=28");
-  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Proxy", 5000, 1, 3),
+  EXPECT_EQ(nevr_log_diagnostics::FormatCurlFailureDiagnostic("curl ", 28), "curl curl_code=28");
+  EXPECT_EQ(nevr_log_diagnostics::FormatBindFailureDiagnostic("Proxy", 5000, 1, 3),
             "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
-  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
+  EXPECT_EQ(nevr_log_diagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
 }
 
@@ -1290,7 +1290,7 @@ TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDecl
   EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
 }
 
-// The log sink is capped: a loop that logs on every pass ends the process (TestLogCap::EndProcessOnOverflow)
+// The log sink is capped: a loop that logs on every pass ends the process (nevr_test_log_cap::EndProcessOnOverflow)
 // instead of growing the sink until memory runs out. Here the handler is replaced to observe the overflow.
 static size_t g_capOverflowCalls = 0;
 static size_t g_capOverflowLines = 0;
@@ -1302,8 +1302,8 @@ static void CountCapOverflow(size_t lines) {
 TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
   ClearTestLogs();
   g_capOverflowCalls = 0;
-  TestLogCap::g_overflowHandler = CountCapOverflow;
-  for (size_t i = 0; i < TestLogCap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+  nevr_test_log_cap::g_overflowHandler = CountCapOverflow;
+  for (size_t i = 0; i < nevr_test_log_cap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
   // Empty the sink before the default handler comes back: a Log from another thread in between would
   // otherwise overflow and end the process.
   size_t held = 0;
@@ -1312,9 +1312,9 @@ TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
     held = g_testLogMessages.size();
     g_testLogMessages.clear();
   }
-  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  nevr_test_log_cap::g_overflowHandler = nevr_test_log_cap::EndProcessOnOverflow;
   EXPECT_EQ(held, 10000u);
-  EXPECT_EQ(TestLogCap::kMaxLines, 10000u);
+  EXPECT_EQ(nevr_test_log_cap::kMaxLines, 10000u);
   EXPECT_EQ(g_capOverflowCalls, 50u);
   EXPECT_EQ(g_capOverflowLines, 10000u);
 }
@@ -1324,10 +1324,10 @@ TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
 TEST(TestLogCapSinkDeathTest, TheDefaultHandlerPrintsTheMessageAndExits98) {
   ASSERT_EXIT(
       {
-        for (size_t i = 0; i <= TestLogCap::kMaxLines; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+        for (size_t i = 0; i <= nevr_test_log_cap::kMaxLines; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
         std::_Exit(0);  // reached only if the cap did not end the process
       },
-      ::testing::ExitedWithCode(TestLogCap::kOverflowExitCode),
+      ::testing::ExitedWithCode(nevr_test_log_cap::kOverflowExitCode),
       "FAILED: log capture overflowed: 10000 lines, a loop is spinning \\(in TestLogCapSinkDeathTest\\.");
 }
 

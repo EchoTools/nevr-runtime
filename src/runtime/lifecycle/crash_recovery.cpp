@@ -118,8 +118,8 @@ void InstallGameMainHook() {
       reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
   // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (BootLogTee::InBootPhase()) {
-    BootLogTee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
+  if (nevr_boot_log_tee::InBootPhase()) {
+    nevr_boot_log_tee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
                                   : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
                                     "longjmp is NOT armed\n");
   } else if (hooked) {
@@ -1407,7 +1407,7 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
 #ifdef NEVR_SCENARIO_CONTROL
-  ScenarioControl::Stop();  // test builds only
+  nevr_scenario_control::Stop();  // test builds only
 #endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.

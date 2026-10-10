@@ -541,6 +541,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       static_cast<unsigned>(GetWebSocketBridgePort()));
 
 #ifdef NEVR_SCENARIO_CONTROL
-  ScenarioControl::Start();  // test builds only (mingw-scenario preset)
+  nevr_scenario_control::Start();  // test builds only (mingw-scenario preset)
 #endif
 }

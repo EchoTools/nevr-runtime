@@ -1120,7 +1120,7 @@ TEST(SocialFacade, AFriendsPresenceFillsTheStatusTextAndJoinablePartySlots) {
   using TextFn = const char* (*)(void*, std::uint32_t);
   using JoinableFn = std::uint32_t (*)(void*, std::uint32_t);
   using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
-  const std::string frame = ScenarioProtocol::BuildFriendPresenceNotify(4242, 77, true, "Public Arena Match");
+  const std::string frame = nevr_scenario_protocol::BuildFriendPresenceNotify(4242, 77, true, "Public Arena Match");
   std::uint64_t id = 0;
   SocialRoster::Presence presence;
   ASSERT_TRUE(SocialRoster::ParsePresenceNotify(reinterpret_cast<const std::uint8_t*>(frame.data()) + 24,
@@ -1301,49 +1301,49 @@ TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
 // Scenario control protocol (src/runtime/scenario/scenario_protocol.h). Pure, so it is covered in
 // every build even though the endpoint itself only exists in the mingw-scenario preset.
 TEST(ScenarioProtocol, ParsesTheThreeOps) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"state"})", &cmd, &error)) << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kState);
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"state"})", &cmd, &error)) << error;
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kState);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"FriendStatusNotify","id":4242,"status":0})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendStatus);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectFriendStatus);
   EXPECT_EQ(cmd.friendId, 4242ULL);
   EXPECT_EQ(cmd.status, 0);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"fire","action":"friend_invite","user":"OVR-ORG-4242"})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireFriendInvite);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireFriendInvite);
   EXPECT_EQ(cmd.user, "OVR-ORG-4242");
 }
 
 TEST(ScenarioProtocol, RejectionsNameWhatWasWrong) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand("not json", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand("not json", &cmd, &error));
   EXPECT_NE(error.find("not a JSON object"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"kick"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"kick"})", &cmd, &error));
   EXPECT_NE(error.find("unknown op \"kick\""), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
                                               &cmd, &error));
   EXPECT_NE(error.find("supports msg \"FriendStatusNotify\""), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
                                               &cmd, &error));
   EXPECT_NE(error.find("nonzero"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":5,"status":7})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":5,"status":7})",
                                               &cmd, &error));
   EXPECT_NE(error.find("status"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"friend_invite"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"friend_invite"})", &cmd, &error));
   EXPECT_NE(error.find("\"user\""), std::string::npos);
 }
 
 // The injected frame must be one the bridge's own roster feed reads back, so an injected friend is
 // the same thing as a friend the server announced.
 TEST(ScenarioProtocol, FriendStatusNotifyFrameRoundTripsThroughTheRosterParser) {
-  const std::string frame = ScenarioProtocol::BuildFriendStatusNotify(4242ULL, 0);
+  const std::string frame = nevr_scenario_protocol::BuildFriendStatusNotify(4242ULL, 0);
   ASSERT_EQ(frame.size(), 24U + 24U);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
@@ -1416,34 +1416,34 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
 }
 
 TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendAcceptNotify","id":4242})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendAcceptNotify","id":4242})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendNotify);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectFriendNotify);
   EXPECT_EQ(cmd.notifySymbol, 0xc237c84c31d3ae05ULL);
   const std::string frame =
-      ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendAcceptNotify"), 4242);
+      nevr_scenario_protocol::BuildFriendNotify(*nevr_scenario_protocol::FindFriendNotify("FriendAcceptNotify"), 4242);
   ASSERT_EQ(frame.size(), 24U + 24U);
   std::uint64_t id = 0;
   std::memcpy(&id, frame.data() + 24 + 8, sizeof(id));
   EXPECT_EQ(id, 4242U);
-  EXPECT_EQ(ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendRemoveNotify"), 4242).size(),
+  EXPECT_EQ(nevr_scenario_protocol::BuildFriendNotify(*nevr_scenario_protocol::FindFriendNotify("FriendRemoveNotify"), 4242).size(),
             24U + 16U);
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"add_friend","user":"OVR-ORG-4242"})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"add_friend","user":"OVR-ORG-4242"})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAddFriend);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireAddFriend);
 }
 
 // An injected party invite is the frame Nakama sends the invitee, and the facade lists it.
 TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyInviteNotify","party":77,"inviter":4242})",
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyInviteNotify","party":77,"inviter":4242})",
                                              &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyInvite);
-  const std::string frame = ScenarioProtocol::BuildPartyInviteNotify(77, 4242);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyInvite);
+  const std::string frame = nevr_scenario_protocol::BuildPartyInviteNotify(77, 4242);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
@@ -1458,35 +1458,35 @@ TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) 
   EXPECT_EQ(view.invites[0].partyId, 77U);
   EXPECT_EQ(view.invites[0].senderId, 4242U);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0,"accept":true})",
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0,"accept":true})",
                                              &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireRespondInvite);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireRespondInvite);
   EXPECT_TRUE(cmd.accept);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
   EXPECT_NE(error.find("\"accept\""), std::string::npos);
 }
 
 TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinNotify","member":4242})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinNotify","member":4242})", &cmd, &error))
       << error;
-  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  ASSERT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyMember);
   EXPECT_EQ(cmd.partyId, 0U) << "no party given: the current one";
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7,"owner":4242})", &cmd,
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7,"owner":4242})", &cmd,
                                              &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyMember);
   EXPECT_EQ(cmd.memberId, 4242U);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7})", &cmd, &error));
   SocialParty::State party;
   party.SetSelf(1);
   ASSERT_TRUE(FeedParty(party, "PartyCreateSuccess", U64s({7, 1})));
   party.DrainEvents();
   const auto feed = [&](const char* name) {
-    const std::string frame = ScenarioProtocol::BuildPartyMemberNotify(name, 7, 4242);
+    const std::string frame = nevr_scenario_protocol::BuildPartyMemberNotify(name, 7, 4242);
     std::uint64_t symbol = 0;
     std::memcpy(&symbol, frame.data() + 8, 8);
     EXPECT_STREQ(SocialParty::ReplyName(symbol), name);
@@ -1503,7 +1503,7 @@ TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
 }
 
 TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   const char* good[] = {
       R"({"op":"fire","action":"invite_users","mode":1,"user":"OVR-ORG-4242"})",
@@ -1525,10 +1525,10 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
   };
   for (const char* line : good) {
     error.clear();
-    EXPECT_TRUE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line << ": " << error;
-    EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAction) << line;
+    EXPECT_TRUE(nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) << line << ": " << error;
+    EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireAction) << line;
   }
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"party_lock","lock":false,"mask":4})", &cmd, &error));
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"party_lock","lock":false,"mask":4})", &cmd, &error));
   EXPECT_FALSE(cmd.flag);
   EXPECT_EQ(cmd.number, 4u);
   const char* bad[] = {
@@ -1542,20 +1542,20 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
   };
   for (const char* line : bad) {
     error.clear();
-    EXPECT_FALSE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line;
+    EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) << line;
     EXPECT_FALSE(error.empty()) << line;
   }
 }
 
 TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77,"code":2})", &cmd,
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77,"code":2})", &cmd,
                                              &error))
       << error;
-  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyJoinFailure);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77})", &cmd, &error));
-  const std::string frame = ScenarioProtocol::BuildPartyJoinFailure(77, 2);
+  ASSERT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyJoinFailure);
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77})", &cmd, &error));
+  const std::string frame = nevr_scenario_protocol::BuildPartyJoinFailure(77, 2);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
@@ -1669,7 +1669,7 @@ TEST(SocialPartyData, ShareDataIsTheRequestNakamaReadsNumberedPerSend) {
 }
 
 TEST(SocialPartyData, TheNotifyFrameRoundTripsAndATruncatedOneIsRefused) {
-  const std::string frame = ScenarioProtocol::BuildPartyDataNotify(9, 200, 4, R"({"headsettype":2})");
+  const std::string frame = nevr_scenario_protocol::BuildPartyDataNotify(9, 200, 4, R"({"headsettype":2})");
   std::uint64_t symbol = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
   EXPECT_EQ(symbol, SocialParty::kPartyDataNotify);
@@ -1684,15 +1684,15 @@ TEST(SocialPartyData, TheNotifyFrameRoundTripsAndATruncatedOneIsRefused) {
   EXPECT_FALSE(SocialParty::ParseDataNotify(payload, 23, &notify));
   EXPECT_EQ(SocialParty::ReplyName(SocialParty::kPartyDataNotify), nullptr) << "the bridge routes it, not Feed";
 
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"PartyDataNotify","member":200,"json":{"headsettype":2}})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyData);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyData);
   EXPECT_EQ(cmd.memberId, 200U);
   EXPECT_EQ(cmd.value, R"({"headsettype":2})");
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyDataNotify","member":200})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyDataNotify","member":200})", &cmd, &error));
 }
 
 // A fake CJson for the facade tests: [+0] holds a heap string with the document's text.
@@ -1899,7 +1899,7 @@ std::vector<SocialRoster::Entry> TwoPeople() {
 }
 
 TEST(SocialRecentlyMet, TheResponseRoundTripsAndATruncatedOneIsRefused) {
-  const std::string frame = ScenarioProtocol::BuildRecentlyMetListResponse(TwoPeople());
+  const std::string frame = nevr_scenario_protocol::BuildRecentlyMetListResponse(TwoPeople());
   std::uint64_t symbol = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
   EXPECT_EQ(symbol, 0xbc3ee692bb03328fULL);
@@ -2004,17 +2004,17 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
 }
 
 TEST(ScenarioProtocol, RecentlyMetInjectParses) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"RecentlyMetListResponse","users":[{"id":7,"name":"A","online":true,"party":3,"text":"In Main Menu"},{"id":8}]})",
       &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectRecentlyMet);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectRecentlyMet);
   ASSERT_EQ(cmd.people.size(), 2U);
   EXPECT_TRUE(cmd.people[0].presence.joinable);
   EXPECT_FALSE(cmd.people[1].online);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"RecentlyMetListResponse"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"RecentlyMetListResponse"})", &cmd, &error));
 }
 
 }  // namespace recentlymet

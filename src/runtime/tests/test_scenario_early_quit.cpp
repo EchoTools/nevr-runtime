@@ -9,9 +9,9 @@
 
 namespace {
 
-bool Parses(const char* line, ScenarioProtocol::Command* cmd, std::string* error) {
+bool Parses(const char* line, nevr_scenario_protocol::Command* cmd, std::string* error) {
   error->clear();
-  return ScenarioProtocol::ParseCommand(line, cmd, error);
+  return nevr_scenario_protocol::ParseCommand(line, cmd, error);
 }
 
 }  // namespace
@@ -19,10 +19,10 @@ bool Parses(const char* line, ScenarioProtocol::Command* cmd, std::string* error
 // early_quit_lockout sets the lockout expiry `seconds` from now; 0 clears it. A week is the cap, so a typo
 // cannot lock the client out for years.
 TEST(ScenarioEarlyQuit, LockoutTakesSecondsUpToAWeek) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_lockout","seconds":300})", &cmd, &error)) << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAction);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireAction);
   EXPECT_EQ(cmd.action, "early_quit_lockout");
   EXPECT_EQ(cmd.number, 300u);
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_lockout","seconds":0})", &cmd, &error)) << error;
@@ -36,7 +36,7 @@ TEST(ScenarioEarlyQuit, LockoutTakesSecondsUpToAWeek) {
 // early_quit_countdown_active switches the penalty expression's lockoutcountdownactive output, which the
 // game hard-codes to false, on or off. It needs an explicit boolean.
 TEST(ScenarioEarlyQuit, CountdownActiveTakesABoolean) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_countdown_active","active":true})", &cmd, &error)) << error;
   EXPECT_TRUE(cmd.flag);
@@ -48,7 +48,7 @@ TEST(ScenarioEarlyQuit, CountdownActiveTakesABoolean) {
 
 // early_quit_warning sets or clears the showearlyquitwarning flag (bit 46).
 TEST(ScenarioEarlyQuit, WarningTakesABoolean) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_warning","show":true})", &cmd, &error)) << error;
   EXPECT_TRUE(cmd.flag);
@@ -59,7 +59,7 @@ TEST(ScenarioEarlyQuit, WarningTakesABoolean) {
 // early_quit_feature_flags sets the early quit feature-flag byte, & 0xdd as the game stores it, or as sent
 // with raw (to test bits 1 and 5, which the game's mask clears); a byte at most.
 TEST(ScenarioEarlyQuit, FeatureFlagsTakeAByte) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_feature_flags","flags":1})", &cmd, &error)) << error;
   EXPECT_EQ(cmd.number, 1u);
@@ -75,7 +75,7 @@ TEST(ScenarioEarlyQuit, FeatureFlagsTakeAByte) {
 // dispatch_event raises a session event by its 64-bit symbol, given as a hex string so no JSON number
 // precision is lost; anything else is refused.
 TEST(ScenarioEarlyQuit, DispatchEventTakesAHexSymbol) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   ASSERT_TRUE(Parses(R"({"op":"fire","action":"dispatch_event","event":"0xd8a114aa7515d439"})", &cmd, &error)) << error;
   EXPECT_EQ(cmd.number, 0xd8a114aa7515d439ULL);
