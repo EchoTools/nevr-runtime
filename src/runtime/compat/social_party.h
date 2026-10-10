@@ -472,8 +472,8 @@ class State {
   }
 
   /// A join the server will not answer: the request could not be sent, or the facade gave up waiting. The
-  /// join is no longer in flight, the invites it consumed come back (BeginJoin and Join dropped them before
-  /// the request left, as pnsovr did, so a retry by party id would otherwise send a plain join), and the game
+  /// join is no longer in flight, the invites it consumed come back (BeginJoin and Join drop them before
+  /// the request leaves, as pnsovr does, so a retry by party id would otherwise send a plain join), and the game
   /// is told the join failed (JoinFailed, code 0: the game's "unknown error", libr15 PartyJoinFailedCB
   /// 0x126f630 takes any code outside 1..6 down its default branch at 0x126f6c4).
   /// Returns whether a join was in flight (false: the server answered first, nothing changed).

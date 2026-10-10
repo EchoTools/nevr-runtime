@@ -22,6 +22,6 @@ VOID PatchSpectatorStreamAlways();
 VOID InstallEntityHooks();
 VOID InstallBugSplatHook();
 VOID InstallGameSpaceHook();
-// InstallGameMainHook moved to lifecycle/crash_recovery.h (N125) — it installs the
+// InstallGameMainHook is in lifecycle/crash_recovery.h (N125) — it installs the
 // setjmp side of the game-loop recovery whose longjmp lives in crash_recovery.cpp.
 

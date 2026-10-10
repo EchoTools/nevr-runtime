@@ -491,10 +491,10 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
 }
 
-// Historical record — the body as originally written, and why it was replaced.
+// The unconditional server-mode skip of the broadcaster's listener dispatcher, and why its justification is false.
 [[maybe_unused]] static VOID EngineEntityPropDispatchHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  // !! N83 — THE COMMENT THAT USED TO BE HERE WAS FALSE. Preserved verbatim so
-  // !! the next reader can recognise the shape of the mistake:
+  // !! N83 — the justification below is FALSE. It is quoted so the next reader
+  // !! can recognise the shape of the mistake:
   // !!
   // !!   "Skip entirely in server mode — this function dispatches entity property
   // !!    updates for client-side state (rendering, effects) that doesn't exist in
@@ -535,8 +535,8 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
 /// means a fatal error occurred), the original function calls the crash handler.
 /// In server mode, we restart the game loop instead so the server stays alive.
 // N125: GameMainWrapperHook, GameMain/OriginalGameMainWrapper, the g_gameLoopJmpBuf
-// definition, and InstallGameMainHook moved to lifecycle/crash_recovery.cpp — that
-// file owns the longjmp side, so the setjmp side belongs beside it rather than
+// definition, and InstallGameMainHook live in lifecycle/crash_recovery.cpp — that
+// file owns the longjmp side, so the setjmp side sits beside it rather than
 // coupled across an extern.
 
 // ============================================================================
@@ -714,8 +714,8 @@ VOID PatchDeadlockMonitor() {
 // =============================================================================
 
 // The Oculus Platform SDK is refused through DllLoadHook, which owns the LoadLibraryA/W/ExA/ExW detours.
-// This used to install its own detours on LoadLibraryW/ExW; MinHook allows one per target, so on every
-// run the second installer failed with MH_ERROR_ALREADY_CREATED and the block never took effect (#361).
+// It installs no detour of its own: MinHook allows one per target, so a second installer on
+// LoadLibraryW/ExW fails with MH_ERROR_ALREADY_CREATED and the block never takes effect (#361).
 VOID PatchBlockOculusSDK() {
   nevr_dll_load_hook::AddLoadFilter("oculus-platform-sdk", nevr_dll_load_hook::IsOculusPlatformPath);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking registered with the DLL load hook");
