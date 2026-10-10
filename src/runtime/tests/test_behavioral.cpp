@@ -1395,7 +1395,7 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json.at("access_token"), "access-token");
   EXPECT_TRUE(json.contains("buildversion"));
   ASSERT_TRUE(json.contains("nevr_identity"));
-  const BuildIdentity::Info& identity = BuildIdentity::Get();
+  const nevr_build_identity::Info& identity = nevr_build_identity::Get();
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
@@ -1799,7 +1799,7 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
 // ============================================================================
 
 TEST(SystemInfo, ReportsRealCpuAndMemory) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
 
     EXPECT_GT(h.logical_cores, 0u) << "logical core count was never measured";
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
@@ -1827,7 +1827,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
     // IsWine() must be exactly "we got a version from ntdll", with no second
     // source of truth that could disagree with the string we transmit.
     EXPECT_EQ(h.IsWine(), !h.wine_version.empty());
@@ -1836,7 +1836,7 @@ TEST(SystemInfo, WineDetectionIsTheVersionString) {
 TEST(SystemInfo, IsCachedNotRemeasured) {
     // Callers may hit this on a login path; the probes (CPUID,
     // GetLogicalProcessorInformation) are not free. Same object every call.
-    EXPECT_EQ(&SystemInfo::Get(), &SystemInfo::Get());
+    EXPECT_EQ(&nevr_system_info::Get(), &nevr_system_info::Get());
 }
 
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
@@ -1852,7 +1852,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // ============================================================================
 
 TEST(BuildIdentity, ProjectVersionIsNotFallback) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The CMake-built binary always has a real version. The "0.0.0" fallback
     // only triggers for a manual compiler invocation without -DPROJECT_VERSION.
     EXPECT_NE(id.project_version, "0.0.0");
@@ -1860,19 +1860,19 @@ TEST(BuildIdentity, ProjectVersionIsNotFallback) {
 }
 
 TEST(BuildIdentity, GitCommitIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_commit.empty());
     EXPECT_NE(id.git_commit, "unknown");
 }
 
 TEST(BuildIdentity, GitDescribeIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_describe.empty());
     EXPECT_NE(id.git_describe, "unknown");
 }
 
 TEST(BuildIdentity, BuildTypeIsSet) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // "unknown-build-type" would mean CMAKE_BUILD_TYPE was not propagated
     // as a compile definition. Our CMake always sets it.
     EXPECT_NE(id.build_type, "unknown-build-type");
@@ -1880,13 +1880,13 @@ TEST(BuildIdentity, BuildTypeIsSet) {
 }
 
 TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The dirty flag is derived from git_describe, not a separate source.
     EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
 }
 
 TEST(BuildIdentity, IsCachedNotRemeasured) {
-    EXPECT_EQ(&BuildIdentity::Get(), &BuildIdentity::Get());
+    EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
 }
 
 // ============================================================================

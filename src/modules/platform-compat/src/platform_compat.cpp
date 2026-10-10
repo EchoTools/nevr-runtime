@@ -90,10 +90,10 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
       pathToUse = fixedPath;
       // This bug has no counterpart on native Windows —
-      // SystemInfo::Get().IsWine() makes that explicit
+      // nevr_system_info::Get().IsWine() makes that explicit
       // instead of leaving the branch looking like an unexplained ad hoc fix,
       // and flags the anomaly loudly if it's ever hit off Wine.
-      static const bool s_isWine = SystemInfo::Get().IsWine();
+      static const bool s_isWine = nevr_system_info::Get().IsWine();
       Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
           s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, fixedPath);

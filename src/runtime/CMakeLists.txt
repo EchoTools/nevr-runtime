@@ -712,7 +712,7 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
-      # ws_bridge.cpp calls SystemInfo::Get(). Linked as a source rather than
+      # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
       # would collide. system_info.cpp depends on nothing but Win32, so it

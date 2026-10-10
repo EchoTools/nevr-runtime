@@ -13,7 +13,7 @@
 ///
 /// Every field here comes from a CMake compile definition set at build time.
 /// Nothing is measured at runtime; nothing is guessed.
-namespace BuildIdentity {
+namespace nevr_build_identity {
 
 struct Info {
   /// Semver from git tags, e.g. "1.2.3". Set by CMake from
@@ -41,4 +41,4 @@ struct Info {
 /// the binary and never change during the process lifetime.
 const Info& Get();
 
-}  // namespace BuildIdentity
+}  // namespace nevr_build_identity
