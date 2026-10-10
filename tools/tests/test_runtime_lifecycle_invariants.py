@@ -218,6 +218,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(attach_calls), len(captured_calls),
                          "a Hooking::Attach call's result is not captured in a variable")
 
+    def test_veh_boot_line_comes_from_the_result_of_install_veh(self):
+        # #339: InstallVEH skips installing on a Wine client, so the boot line is derived from its
+        # return value, never written as a literal that is true on only one platform.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
+        self.assertRegex(source, r"VehPolicy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertNotIn("veh installed", source,
+                         "initialize.cpp hard-codes the veh boot line; take it from VehPolicy::BootLine")
+
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
         # RadPluginShutdown guard has to be inside that hook; a second detour on the
