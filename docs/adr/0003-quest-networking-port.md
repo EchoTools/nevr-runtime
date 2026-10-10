@@ -137,8 +137,9 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
 - `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines and
   calls `SetErrorMessage`, which writes the error block at `CR15NetGame+0x63308` (a byte that is 0
   for one line and 1 for two or four, then four 64-byte lines), logs `[NETGAME] %s %s %s %s`, and
-  builds a JSON record of the lines that it hands to a logger through an indirect call
-  (`0x12413f4`). `CR15NetErrorMessageExpression`
+  builds a JSON record of the lines in a stack-allocated temporary string that it finishes through
+  the temporary's own vtable (the indirect call at `0x12413f4`/`0x1241858`) and frees; the record is
+  not passed to a logger or anything else. `CR15NetErrorMessageExpression`
   (`0x23225d0`) copies the block to the UI script.
 - The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs

@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include <nlohmann/json.hpp>
+
 #include "runtime/compat/evr_codec.h"
 #include "runtime/server/serverdb_uri.h"
 
@@ -10,6 +12,9 @@ namespace quest_net {
 using nevr_session_router::LogLevel;
 
 namespace {
+
+// What the player reads on the login-failed screen after the notice (one line in the game's error block).
+constexpr const char kLoginRemovedMessage[] = "Connection lost. Select RETRY to sign in again.";
 
 LoopbackGameServer::Config WithLog(LoopbackGameServer::Config c, const nevr_session_router::LogSink& log) {
   if (!c.log) c.log = log;
@@ -114,7 +119,12 @@ SessionBridge::SessionBridge(Config config) : config_(std::move(config)), tap_(F
 
   nevr_session_router::Options options;
   options.limits = config_.limits;
-  // No buildLogin: the game sends its own login (see the header).
+  // No buildLogin: the game sends its own login (see the header). When its login session is lost with nothing
+  // outstanding, the game reconnects the socket without logging in again (#320): the router then sends it a
+  // login-removed notice, so it shows RETRY and logs in itself. The text is the game's own error block.
+  nlohmann::json removed;
+  removed["message"] = kLoginRemovedMessage;
+  options.loginRemovedJson = removed.dump();
   options.loginGate = config_.loginGate;
   options.subscribeFriendList = config_.subscribeFriendList;
   options.log = config_.log;

@@ -20,6 +20,17 @@
 //     own count wraps otherwise; see TakeUnrequireLocked); one with nothing to lower is dropped.
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
+//   * login removal notice (Options::loginRemovedJson, Quest): the game sends its own login and, when the login
+//     session ends under it (a remote failure) with nothing outstanding on the login connection, its login
+//     socket reconnects WITHOUT a new login (an established count-0 socket raises no Lost event, so the game
+//     stays "logged in" on a session nobody logged into). Nothing is replayed and no credential is kept: the
+//     router sends the game an SNSLoginRemovedNotify for the account it last saw logged in, on that login
+//     connection, once per lost session. The game's own handler puts a logged-in game on the login-failed
+//     screen with RETRY, and RETRY runs the game's own login with a fresh token. A login connection that ended
+//     with requests outstanding is the game's Lost path (-95, RETRY): nothing is armed for it. The notice goes
+//     only to a connection known to be the login socket (it has sent a login-role frame, or has stayed
+//     silent: Router::OnGameSilent); the game ignores it on any other peer. What is kept is the 16-byte account
+//     id of the last LoginSuccess, cleared on any LogOut, a rejected login and Shutdown.
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
 //   * remote end (close or error): every game socket on that session is closed and the session is
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
@@ -55,6 +66,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#include "runtime/compat/evr_codec.h"
 
 namespace nevr_session_router {
 
@@ -153,6 +166,9 @@ struct Options {
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
   LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
+  // Non-empty: the JSON document of the SNSLoginRemovedNotify sent to a game whose login session was lost
+  // under it (Quest). Built by the wiring (nlohmann::json); empty (default) sends no notice (PC).
+  std::string loginRemovedJson;
   LogSink log;                        // null: logging off
 };
 
@@ -165,6 +181,9 @@ struct Stats {
   int nextConnIdx = 0;
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
+  uint64_t loginsRemoved = 0;      // SNSLoginRemovedNotify sent to a game that reconnected without a login
+  bool loginUserKnown = false;     // the account of the last LoginSuccess is held (never a credential)
+  bool loginRemovedDue = false;    // the next known login connection is to be sent the notice
   uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
@@ -183,6 +202,10 @@ class Router {
   void OnGameFrame(GameId game, std::string frame, bool binary);
   void OnGameClose(GameId game);
   void OnGameWritable(GameId game);
+  // The connection has been upgraded for the wiring's silent period and has sent no data frame: the login
+  // socket of a game that reconnected without a new login is such a connection, while a config or matchmaker
+  // socket sends its request at once. Idempotent; ignored for a connection that has spoken.
+  void OnGameSilent(GameId game);
 
   // ---- events from the remote side ---------------------------------------------------------------
   void OnRemoteOpen(RemoteId remote);
@@ -246,6 +269,9 @@ class Router {
   bool GateAwaitingLocked() const;
   Role ProvisionalRoleLocked() const;
   void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
+  // Sends the removal notice to `game` (a login connection known to be the login socket) when one is due.
+  void SendLoginRemovedLocked(GameId game, Game& g, Effects& fx);
+  void ForgetLoginUserLocked();
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();
   bool OnLoginSessionLocked(GameId id) const;
@@ -276,6 +302,12 @@ class Router {
   // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
   std::deque<GameId> owedUnrequires_;
   uint64_t droppedUnrequires_ = 0;
+  uint64_t loginsRemoved_ = 0;
+  // The account of the last LoginSuccess on the login session (not a credential), and whether the notice is
+  // due for the next login connection. loginRemovedJson only.
+  bool haveLoginUser_ = false;
+  nevr_evr_codec::UserId loginUser_;
+  bool removalDue_ = false;
   uint64_t unmatchedEmbeddedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;
