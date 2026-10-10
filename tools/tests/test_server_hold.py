@@ -26,7 +26,7 @@ class ServerHoldExits(unittest.TestCase):
         PerformGracefulShutdown instead of holding."""
         body = wrapper_body()
         after_loop = body.split("GameMain(arg1);", 1)[1]
-        server_tail = after_loop.split("return;", 1)[1]
+        server_tail = after_loop.split("return gameResult;", 1)[1]
         self.assertIn("PerformGracefulShutdown(requested ? 0 : 1)", server_tail)
         self.assertRegex(server_tail, r"requested\s*=\s*ConsoleShutdownPending\(\)")
 
