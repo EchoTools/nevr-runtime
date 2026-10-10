@@ -5,9 +5,13 @@ interruption only costs a `git log`/ReVault read, not a re-derivation.
 
 Status: built. `src/runtime/patch/mic_provider.{h,cpp}` is installed through the
 `CSysDLL_GetSymbol` hook in `src/runtime/lifecycle/initialize.cpp`, with unit tests in
-`src/runtime/tests/test_mic_*.cpp`. Still open: the capture ring buffer overflows soon after
-capture starts (#95), and no `tools/winvm/systest.py` mic check exists. The rest of this
-document is the investigation record.
+`src/runtime/tests/test_mic_*.cpp`. The game's first MicAvailable/MicRead of each capture drops
+the audio captured before it was listening, and no `tools/winvm/systest.py` mic check exists.
+The rest of this document is the investigation record.
+
+The runtime ring (`kRingCapacitySamples` = 9600 samples, 200 ms in `mic_provider.cpp`) is smaller
+than the game's own `MicBufferSize` (24000) on purpose: the ring bounds the latency a stalled
+reader can pile up, and it never has to hold what the game would buffer.
 
 ## The bug (GH #15)
 

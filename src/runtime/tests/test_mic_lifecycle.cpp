@@ -1,5 +1,6 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_capture_drain.h"
+#include "core/mic_dsp.h"
 
 #include <gtest/gtest.h>
 
@@ -173,7 +174,8 @@ TEST_F(MicCaptureLifecycleTest, CreateThreadFailureRollsAudioBackAndAllowsRetry)
   EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
   EXPECT_FALSE(lifecycle_.HasWorker());
   EXPECT_EQ(fake_.stopCalls, 1u);
-  EXPECT_EQ(fake_.resetCalls, resetsAfterCreate + 1u);
+  // One reset when the capture started (a new stream) and one when the failed start rolled back.
+  EXPECT_EQ(fake_.resetCalls, resetsAfterCreate + 2u);
 
   fake_.workerCreateOk = true;
   EXPECT_TRUE(Start());
@@ -314,6 +316,62 @@ TEST_F(MicCaptureLifecycleTest, ReentrantLifecycleCallIsRejectedWithoutDeadlock)
   EXPECT_EQ(fake_.workerCreateCalls, 1u);
   EXPECT_TRUE(Stop());
   EXPECT_TRUE(Destroy());
+}
+
+// #95: the game polls MicAvailable/MicRead while capture is stopped. That must not latch the
+// "reader is listening" state of the next capture, or its start-of-capture backlog is never dropped.
+namespace {
+struct RingStream {
+  MicRingBuffer ring{9600};
+};
+void RingResetStream(void* context) { static_cast<RingStream*>(context)->ring.Reset(); }
+bool RingStartAudio(void*) { return true; }
+MicWorkerCreateResult RingCreateWorker(void*) { return MicWorkerCreateResult::Started; }
+bool RingCreateResources(void*) { return true; }
+bool RingRequestStop(void*) { return true; }
+MicWorkerWaitResult RingWaitWorker(void*, uint32_t) { return MicWorkerWaitResult::Signaled; }
+void RingCloseWorker(void*) {}
+bool RingStopAudio(void*) { return true; }
+void RingReleaseResources(void*) {}
+
+MicLifecycleOperations RingOps(RingStream& stream) {
+  return {&stream,          RingCreateResources, RingStartAudio,        RingCreateWorker,
+          RingRequestStop, RingWaitWorker,      RingCloseWorker,       RingStopAudio,
+          RingReleaseResources, RingResetStream};
+}
+}  // namespace
+
+TEST(MicCaptureLifecycleStream, ReaderCallWhileStoppedDoesNotSkipTheNextCapturesBacklogDrop) {
+  RingStream stream;
+  MicCaptureLifecycle lifecycle;
+  const MicLifecycleOperations ops = RingOps(stream);
+  ASSERT_TRUE(lifecycle.Create(7, ops));
+
+  // The game asks for audio while capture is stopped (provider created, not started).
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);
+
+  ASSERT_TRUE(lifecycle.Start(7, ops));
+  EXPECT_FALSE(stream.ring.ReaderActive()) << "a new capture starts with no listening reader";
+
+  // The capture worker fills the ring before the game's first read of this capture.
+  const int16_t backlog[1000] = {};
+  stream.ring.Push(backlog, 1000);
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 1000u) << "the first read must drop the backlog";
+}
+
+TEST(MicCaptureLifecycleStream, EveryRestartRearmsTheBacklogDrop) {
+  RingStream stream;
+  MicCaptureLifecycle lifecycle;
+  const MicLifecycleOperations ops = RingOps(stream);
+  ASSERT_TRUE(lifecycle.Create(7, ops));
+  ASSERT_TRUE(lifecycle.Start(7, ops));
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);
+  ASSERT_TRUE(lifecycle.Stop(7, ops, 2000));
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);  // read while stopped again
+  ASSERT_TRUE(lifecycle.Start(7, ops));
+  const int16_t backlog[300] = {};
+  stream.ring.Push(backlog, 300);
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 300u);
 }
 
 TEST(MicCaptureDrain, CancellationDuringContinuousPacketDrainReleasesEveryAcquiredPacket) {
