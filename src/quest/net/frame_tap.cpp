@@ -23,13 +23,13 @@ bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) n
     const std::string copy(frame);  // ReadMessage takes a std::string
     std::size_t offset = 0;
     for (;;) {
-      EvrCodec::Message message;
-      if (EvrCodec::ReadMessage(copy, offset, &message) != EvrCodec::ReadStatus::Ok) return false;
-      if (message.symbol == EvrCodec::kSymLoginSuccess && message.length >= kLoginSuccessMinPayload) {
+      nevr_evr_codec::Message message;
+      if (nevr_evr_codec::ReadMessage(copy, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return false;
+      if (message.symbol == nevr_evr_codec::kSymLoginSuccess && message.length >= kLoginSuccessMinPayload) {
         *accountId = ReadLe64(message.payload + kLoginSuccessAccountOffset);
         return true;
       }
-      offset += EvrCodec::kHeaderSize + static_cast<std::size_t>(message.length);
+      offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
     }
   } catch (const std::exception&) {
     return false;

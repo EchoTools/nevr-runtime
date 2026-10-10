@@ -22,7 +22,7 @@
 #include "runtime/compat/session_router.h"
 
 using namespace quest_net;
-using namespace SessionRouter;
+using namespace nevr_session_router;
 
 namespace {
 
@@ -145,7 +145,7 @@ class FakeGames : public GameTransport {
   std::vector<std::pair<GameId, uint16_t>> closes;
 };
 
-const std::string kLogin = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "LOGIN");
+const std::string kLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "LOGIN");
 
 struct Rig {
   FakeConnector connector;
@@ -272,7 +272,7 @@ void TestTlsVerificationFailureHasNoFallback() {
 void TestSessionLifecycle() {
   Rig rig;
   rig.OpenLoginGame();
-  rig.router->OnGameFrame(2, EvrCodec::BuildMessage(0x77, "first"), true);
+  rig.router->OnGameFrame(2, nevr_evr_codec::BuildMessage(0x77, "first"), true);
   QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
   QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
   FakeConnection* login = rig.connector.Conn("1");
@@ -281,7 +281,7 @@ void TestSessionLifecycle() {
   QCHECK(sent.size() >= 1);
   if (!sent.empty()) QCHECK(sent[0] == kLogin);
   QCHECK(WaitUntil([&] { return login->Sent().size() == 2; }));
-  if (login->Sent().size() == 2) QCHECK(login->Sent()[1] == EvrCodec::BuildMessage(0x77, "first"));
+  if (login->Sent().size() == 2) QCHECK(login->Sent()[1] == nevr_evr_codec::BuildMessage(0x77, "first"));
 
   RecvResult reply;
   reply.status = RecvStatus::Frame;
@@ -310,7 +310,7 @@ void TestOutboundBackpressure() {
   login->SetGate(true);  // the TLS layer stops taking writes
   std::vector<std::string> frames;
   for (int i = 0; i < 12; ++i) {
-    frames.push_back(EvrCodec::BuildMessage(0x88, std::string(50, static_cast<char>('a' + i))));
+    frames.push_back(nevr_evr_codec::BuildMessage(0x88, std::string(50, static_cast<char>('a' + i))));
     rig.router->OnGameFrame(2, frames.back(), true);
   }
   QCHECK(rig.router->GetStats().outboundBytes > 0);  // the router is holding frames the transport refused
@@ -330,7 +330,7 @@ void TestSendFailureEndsTheSession() {
   QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
   QCHECK(WaitUntil([&] { return rig.connector.Conn("1")->Sent().size() == 1; }));
   rig.connector.Conn("1")->failSends = true;
-  rig.router->OnGameFrame(2, EvrCodec::BuildMessage(0x99, "x"), true);
+  rig.router->OnGameFrame(2, nevr_evr_codec::BuildMessage(0x99, "x"), true);
   QCHECK(rig.games.WaitFor([&] { return !rig.games.closes.empty(); }));
 }
 

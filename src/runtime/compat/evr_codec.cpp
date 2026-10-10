@@ -3,7 +3,7 @@
 #include <cstring>
 #include <limits>
 
-namespace EvrCodec {
+namespace nevr_evr_codec {
 
 namespace {
 
@@ -127,4 +127,4 @@ bool IsBearerReplacingPath(const std::string& url) {
   return url.compare(pathStart, pathEnd == std::string::npos ? std::string::npos : pathEnd - pathStart, "/ws") == 0;
 }
 
-}  // namespace EvrCodec
+}  // namespace nevr_evr_codec

@@ -386,12 +386,12 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
   if (netGame == nullptr) return "no NetGame yet";
   std::string user = cmd.user;
   if (user == "self") {
-    const std::uint64_t self = SocialParty::Global().Snapshot().selfId;
+    const std::uint64_t self = nevr_social_party::Global().Snapshot().selfId;
     if (self == 0) return "no local user yet";
     user = "OVR-ORG-" + std::to_string(self);
   } else if (user == "friend") {  // the first friend in the roster: a real player, read-only use
     std::uint64_t friendId = 0;
-    if (!SocialRoster::Global().IdAt(0, &friendId) || friendId == 0) return "the roster has no friend yet";
+    if (!nevr_social_roster::Global().IdAt(0, &friendId) || friendId == 0) return "the roster has no friend yet";
     user = "OVR-ORG-" + std::to_string(friendId);
   }
   {
@@ -595,12 +595,12 @@ nlohmann::json StateJson() {
                   {"last_shared", party.lastShared}};
   nlohmann::json friends = nlohmann::json::array();
   std::uint64_t id = 0;
-  for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
+  for (std::uint32_t index = 0; nevr_social_roster::Global().IdAt(index, &id); ++index) {
     friends.push_back({{"id", id},
-                       {"online", SocialRoster::Global().OnlineAt(index)},
+                       {"online", nevr_social_roster::Global().OnlineAt(index)},
                        {"invitable", nevr_social_facade::FriendInvitableForTest(id)},
-                       {"text", SocialRoster::Global().StatusTextAt(index)},
-                       {"party", SocialRoster::Global().PartyIdAt(index)}});
+                       {"text", nevr_social_roster::Global().StatusTextAt(index)},
+                       {"party", nevr_social_roster::Global().PartyIdAt(index)}});
   }
   out["friends"] = friends;
   nlohmann::json recent = nlohmann::json::array();

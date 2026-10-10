@@ -239,11 +239,11 @@ void TestLoginRelayTapAndSideChannel() {
   }
 
   // Nothing may go out on the login session before the service accepts the login.
-  QCHECK(!bridge.SendToLogin(EvrCodec::BuildMessage(0x77, "early")));
+  QCHECK(!bridge.SendToLogin(nevr_evr_codec::BuildMessage(0x77, "early")));
 
   // The game's own login (the rewritten one) is the first and only frame the service gets: the router
   // injected no second LoginRequest.
-  const std::string gameLogin = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "game-own-login");
+  const std::string gameLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-own-login");
   login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
   FakeConnection* loginConn = nullptr;
   QCHECK(WaitFor([&] {
@@ -260,7 +260,7 @@ void TestLoginRelayTapAndSideChannel() {
   QCHECK(WaitFor([&] { return HasFrame(seen, /*s2g=*/false, gameLogin); }));  // the game->server tap
 
   // The service accepts: the game receives LoginSuccess, the tap signals the account, the side channel opens.
-  const std::string success = EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, 31337);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 31337);
   loginConn->Push(success);
   const std::string wire = BuildFrame(Opcode::Binary, success);
   QCHECK(login.Read(wire.size()) == wire);
@@ -272,11 +272,11 @@ void TestLoginRelayTapAndSideChannel() {
 
   // With social on, the friend-list subscribe follows the accepted login (the game never sends it).
   QCHECK(WaitFor([&] {
-    for (const std::string& s : loginConn->Sent()) if (s == EvrCodec::BuildFriendListSubscribe()) return true;
+    for (const std::string& s : loginConn->Sent()) if (s == nevr_evr_codec::BuildFriendListSubscribe()) return true;
     return false;
   }));
 
-  const std::string request = EvrCodec::BuildMessage(0x1234, "party-request");
+  const std::string request = nevr_evr_codec::BuildMessage(0x1234, "party-request");
   QCHECK(bridge.SendToLogin(request));
   QCHECK(WaitFor([&] {
     for (const std::string& s : loginConn->Sent()) if (s == request) return true;
@@ -323,12 +323,12 @@ void TestNoJwtMeansNoSessionAndTheGameSocketCloses() {
 struct Account {
   std::mutex mutex;
   std::string jwt;
-  std::atomic<int> gate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
+  std::atomic<int> gate{static_cast<int>(nevr_session_router::LoginGate::Awaiting)};
   std::string Jwt() {
     std::lock_guard<std::mutex> lock(mutex);
     return jwt;
   }
-  void Set(const std::string& value, SessionRouter::LoginGate g) {
+  void Set(const std::string& value, nevr_session_router::LoginGate g) {
     {
       std::lock_guard<std::mutex> lock(mutex);
       jwt = value;
@@ -345,7 +345,7 @@ SessionBridge::Config MakeHeldConfig(FakeConnector* connector, Observed* seen, A
     id.serverKey = "";
     return id;
   };
-  c.loginGate = [account] { return static_cast<SessionRouter::LoginGate>(account->gate.load()); };
+  c.loginGate = [account] { return static_cast<nevr_session_router::LoginGate>(account->gate.load()); };
   c.loopback.idleFirstFrameMs = 300;
   return c;
 }
@@ -366,9 +366,9 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   Client bootConfig(port);
   std::string bootBytes = bootConfig.UpgradeBytes(path);
   QCHECK(bootBytes.rfind("HTTP/1.1 101", 0) == 0);
-  bootConfig.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  bootConfig.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
   bool bootEof = false;
-  const std::string closeFrame = BuildCloseFrame(SessionRouter::kCloseInternalError, "remote could not be started");
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "remote could not be started");
   // Fail-fast, as before: the connection is closed 1011 (the close frame can share a read with the upgrade
   // response, so everything up to the end of the stream is read).
   bootBytes += bootConfig.Read(1u << 20, 3000, &bootEof);
@@ -384,7 +384,7 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   QCHECK(login.Read(pong.size()) == pong);
   QCHECK(connector.Calls() == 0);
 
-  account.Set("JWT-SIGNED-IN", SessionRouter::LoginGate::Ready);
+  account.Set("JWT-SIGNED-IN", nevr_session_router::LoginGate::Ready);
   bridge.ReevaluateLoginGate();
   QCHECK(connector.WaitConnects(1));
   {
@@ -394,7 +394,7 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
       QCHECK(connector.requests[0].headers.size() == 1 && connector.requests[0].headers[0].value == "Bearer JWT-SIGNED-IN");
     }
   }
-  const std::string gameLogin = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "game-own-login");
+  const std::string gameLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-own-login");
   login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
   FakeConnection* loginConn = nullptr;
   QCHECK(WaitFor([&] {
@@ -405,14 +405,14 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   }));
   if (loginConn == nullptr) return;
   QCHECK(loginConn->Sent()[0] == gameLogin);
-  const std::string success = EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, 4242);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 4242);
   loginConn->Push(success);
   const std::string successWire = BuildFrame(Opcode::Binary, success);
   QCHECK(login.Read(successWire.size()) == successWire);
 
   Client config(port);  // the connection the game opens after login
   QCHECK(config.Upgrade(path));
-  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c2"), kMask));
+  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c2"), kMask));
   QCHECK(connector.WaitConnects(2));
   FakeConnection* configConn = nullptr;
   QCHECK(WaitFor([&] {
@@ -422,17 +422,17 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
     return !configConn->Sent().empty();
   }));
   if (configConn == nullptr) return;
-  QCHECK(configConn->Sent()[0] == EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c2"));
+  QCHECK(configConn->Sent()[0] == nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c2"));
 
-  const std::string profile = EvrCodec::BuildMessage(EvrCodec::kSymLoggedInUserProfileSuccess, "profile");
+  const std::string profile = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile");
   loginConn->Push(profile);
   const std::string profileWire = BuildFrame(Opcode::Binary, profile);
   QCHECK(login.Read(profileWire.size()) == profileWire);  // the login connection's, not the newest socket's
   // An Unrequire nothing is owed for is dropped, not delivered, and counted where production reads it.
   QCHECK(bridge.DroppedUnrequires() == 0);
-  loginConn->Push(EvrCodec::BuildMessage(EvrCodec::kSymConnectionUnrequire, ""));
+  loginConn->Push(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, ""));
   QCHECK(WaitFor([&] { return bridge.DroppedUnrequires() == 1; }));
-  const std::string configReply = EvrCodec::BuildMessage(0xb9cdaf586f7bd012ULL, "config");
+  const std::string configReply = nevr_evr_codec::BuildMessage(0xb9cdaf586f7bd012ULL, "config");
   configConn->Push(configReply);
   const std::string configWire = BuildFrame(Opcode::Binary, configReply);
   QCHECK(config.Read(configWire.size()) == configWire);
@@ -440,8 +440,8 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   config.Read(1, 200, &configGotProfile);
   QCHECK(!configGotProfile);
   // An Unrequire inside a frame can reach the game with nothing outstanding; the bridge reports the count.
-  const std::string reply = EvrCodec::BuildMessage(EvrCodec::kSymLoginSuccess, std::string(32, '\0')) +
-                            EvrCodec::BuildMessage(EvrCodec::kSymConnectionUnrequire, "");
+  const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')) +
+                            nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "");
   loginConn->Push(reply);  // the login request is still outstanding: covered
   loginConn->Push(reply);  // nothing left to cover
   QCHECK(WaitFor([&] { return bridge.UnmatchedEmbeddedUnrequires() == 1; }));
@@ -461,9 +461,9 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   QCHECK(config.Upgrade(path));
   QCHECK(login.Upgrade(path));
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
-  account.Set("", SessionRouter::LoginGate::Refused);
+  account.Set("", nevr_session_router::LoginGate::Refused);
   bridge.ReevaluateLoginGate();
-  const std::string closeFrame = BuildCloseFrame(SessionRouter::kCloseInternalError, "the account the login needs will not be available");
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
   QCHECK(login.Read(closeFrame.size()) == closeFrame);
   QCHECK(connector.Calls() == 0);
   bridge.Stop();
@@ -482,7 +482,7 @@ void TestSideChannelRefusesWhenNothingIsConnected() {
   Observed seen;
   SessionBridge bridge(MakeConfig(&connector, &seen, "JWT"));
   QCHECK(bridge.Start() != 0);
-  QCHECK(!bridge.SendToLogin(EvrCodec::BuildMessage(1, "x")));
+  QCHECK(!bridge.SendToLogin(nevr_evr_codec::BuildMessage(1, "x")));
   bridge.Stop();
 }
 

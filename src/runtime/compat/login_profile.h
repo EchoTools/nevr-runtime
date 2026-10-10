@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace LoginProfile {
+namespace nevr_login_profile {
 
 struct LoginProfileInputs {
   uint64_t account_id = 0;
@@ -34,4 +34,4 @@ struct LoginProfileInputs {
 
 std::string BuildLoginProfileJson(const LoginProfileInputs& inputs);
 
-}  // namespace LoginProfile
+}  // namespace nevr_login_profile

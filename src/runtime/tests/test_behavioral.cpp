@@ -1241,9 +1241,9 @@ TEST(WsBridgeGameToServerLog, ATruncatedMessageIsNotDecoded) {
   std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   PutU64(frame, 16, 0x1000);  // claim 0x1000 payload bytes while 0x30 are present
   const uint8_t stale = 0;
-  EvrCodec::Message message;
+  nevr_evr_codec::Message message;
   message.payload = &stale;  // a payload left over from an earlier read must not survive a Truncated one
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(message.payload, nullptr);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
@@ -1257,9 +1257,9 @@ TEST(WsBridgeGameToServerLog, AWholeMessageThenATruncatedOneDecodesOnlyTheFirst)
   const std::string first = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   const std::string frame = first + second;
   // Fail fast, before the walk: the first message is whole and the second is truncated.
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Ok);
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, first.size(), &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Ok);
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, first.size(), &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 1);
   EXPECT_TRUE(TestLogContains("FriendInvite: routing=111 target=333 session=222"));
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
@@ -1270,8 +1270,8 @@ TEST(WsBridgeGameToServerLog, ATruncatedPlayerSessionRequestIsNotHexDumped) {
   ClearTestLogs();
   std::string frame = BuildMarkedMessage(kPlayerSessionSym, std::string(4, 'p'));
   PutU64(frame, 16, 16);  // declares 16 payload bytes, has 4
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_FALSE(TestLogContains("PlayerSessionReq payload:"));
 }
@@ -1284,8 +1284,8 @@ TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDecl
   std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   const uint64_t wraps = UINT64_MAX - 23;
   PutU64(frame, 16, wraps);
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
 }
@@ -1399,7 +1399,7 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
-  EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
+  EXPECT_EQ(json.at("nevr_social"), nevr_social_party::kSocialLevel) << "the social level the server gates new messages on";
   // Outside the game there is no headset serial to read: "unknown", which alt detection ignores (#83).
   EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
@@ -1426,7 +1426,7 @@ TEST(WsBridgeLoginRequest, JsonEmitsPositiveCpuAndRamMeasurements) {
 }
 
 TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = 90210;
   inputs.display_name = "Quest \"player\"";
   inputs.access_token = "jwt-\\-token";
@@ -1445,7 +1445,7 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   inputs.social_level = 2;
   inputs.plugins = nlohmann::json::parse(R"([{"name":"example","loaded":true}])");
 
-  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("accountid"), 90210);
   EXPECT_EQ(profile.at("displayname"), inputs.display_name);
   EXPECT_EQ(profile.at("access_token"), inputs.access_token);
@@ -1463,11 +1463,11 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
 }
 
 TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = 90210;
   inputs.display_name = "";
 
-  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("displayname"), "90210");
 }
 
@@ -1994,18 +1994,18 @@ TEST(S8_CapsPriority, CombinedCapsTakeHighestBand) {
 // #83: the stock HMD serial field choice (hmd_serial.h): the game's 24-byte buffer in VR, "N/A" with
 // the No-VR flag, and "unknown" only when the serial buffer is absent or invalid.
 TEST(HmdSerial, StockChoice) {
-  char serial[HmdSerial::kSerialBytes] = {};
+  char serial[nevr_hmd_serial::kSerialBytes] = {};
   std::memcpy(serial, "1WMHHA1234567", 13);
-  const auto vr = HmdSerial::Select(false, serial);
+  const auto vr = nevr_hmd_serial::Select(false, serial);
   EXPECT_EQ(vr.value, "1WMHHA1234567");
-  EXPECT_EQ(vr.source, HmdSerial::Source::GameBuffer);
-  EXPECT_EQ(HmdSerial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
-  char empty[HmdSerial::kSerialBytes] = {};
-  EXPECT_EQ(HmdSerial::Select(false, empty).value, "unknown");
-  EXPECT_EQ(HmdSerial::Select(false, nullptr).value, "unknown");
-  char garbage[HmdSerial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
-  EXPECT_EQ(HmdSerial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
-  char full[HmdSerial::kSerialBytes];
+  EXPECT_EQ(vr.source, nevr_hmd_serial::Source::GameBuffer);
+  EXPECT_EQ(nevr_hmd_serial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
+  char empty[nevr_hmd_serial::kSerialBytes] = {};
+  EXPECT_EQ(nevr_hmd_serial::Select(false, empty).value, "unknown");
+  EXPECT_EQ(nevr_hmd_serial::Select(false, nullptr).value, "unknown");
+  char garbage[nevr_hmd_serial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
+  EXPECT_EQ(nevr_hmd_serial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
+  char full[nevr_hmd_serial::kSerialBytes];
   std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
-  EXPECT_EQ(HmdSerial::Select(false, full).value, std::string(24, 'Z'));
+  EXPECT_EQ(nevr_hmd_serial::Select(false, full).value, std::string(24, 'Z'));
 }

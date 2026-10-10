@@ -8,7 +8,7 @@
 
 #include "runtime/compat/evr_codec.h"
 
-namespace SessionRouter {
+namespace nevr_session_router {
 
 namespace {
 
@@ -94,16 +94,16 @@ const char* RoleName(Role role) {
 
 Role ClassifyFirstFrame(uint64_t symbol) {
   switch (symbol) {
-    case EvrCodec::kSymConfigRequest:
+    case nevr_evr_codec::kSymConfigRequest:
       return Role::Config;
-    case EvrCodec::kSymMatchmakerStatusRequest:
-    case EvrCodec::kSymFindSessionRequest:
-    case EvrCodec::kSymCreateSessionRequest:
-    case EvrCodec::kSymJoinSessionRequest:
-    case EvrCodec::kSymDirectoryRequest:
-    case EvrCodec::kSymPendingSessionCancel:
-    case EvrCodec::kSymPlayerSessionsRequest:
-    case EvrCodec::kSymLobbyPingResponse:
+    case nevr_evr_codec::kSymMatchmakerStatusRequest:
+    case nevr_evr_codec::kSymFindSessionRequest:
+    case nevr_evr_codec::kSymCreateSessionRequest:
+    case nevr_evr_codec::kSymJoinSessionRequest:
+    case nevr_evr_codec::kSymDirectoryRequest:
+    case nevr_evr_codec::kSymPendingSessionCancel:
+    case nevr_evr_codec::kSymPlayerSessionsRequest:
+    case nevr_evr_codec::kSymLobbyPingResponse:
       return Role::Matchmaker;
     default:
       return Role::Login;  // LogInRequestv2, or anything the login connection could be sending
@@ -112,20 +112,20 @@ Role ClassifyFirstFrame(uint64_t symbol) {
 
 bool IsLoginSessionReply(uint64_t symbol) {
   switch (symbol) {
-    case EvrCodec::kSymLoginSuccess:
-    case EvrCodec::kSymLoginFailure:
-    case EvrCodec::kSymLoginSettings:
-    case EvrCodec::kSymLoggedInUserProfileSuccess:
-    case EvrCodec::kSymLoggedInUserProfileFailure:
-    case EvrCodec::kSymDocumentSuccess:
-    case EvrCodec::kSymDocumentFailure:
-    case EvrCodec::kSymOtherUserProfileSuccess:
-    case EvrCodec::kSymOtherUserProfileFailure:
-    case EvrCodec::kSymUpdateProfileSuccess:
-    case EvrCodec::kSymUpdateProfileFailure:
-    case EvrCodec::kSymServerProfileUpdateSuccess:
-    case EvrCodec::kSymServerProfileUpdateFailure:
-    case EvrCodec::kSymChannelInfoResponse:  // accepted on any peer by the game, but its Unrequire lands where the count is
+    case nevr_evr_codec::kSymLoginSuccess:
+    case nevr_evr_codec::kSymLoginFailure:
+    case nevr_evr_codec::kSymLoginSettings:
+    case nevr_evr_codec::kSymLoggedInUserProfileSuccess:
+    case nevr_evr_codec::kSymLoggedInUserProfileFailure:
+    case nevr_evr_codec::kSymDocumentSuccess:
+    case nevr_evr_codec::kSymDocumentFailure:
+    case nevr_evr_codec::kSymOtherUserProfileSuccess:
+    case nevr_evr_codec::kSymOtherUserProfileFailure:
+    case nevr_evr_codec::kSymUpdateProfileSuccess:
+    case nevr_evr_codec::kSymUpdateProfileFailure:
+    case nevr_evr_codec::kSymServerProfileUpdateSuccess:
+    case nevr_evr_codec::kSymServerProfileUpdateFailure:
+    case nevr_evr_codec::kSymChannelInfoResponse:  // accepted on any peer by the game, but its Unrequire lands where the count is
       return true;
     default:
       return false;
@@ -137,12 +137,12 @@ bool RequestRaisesRequireCount(Role role, uint64_t symbol) {
     case Role::Login:
       // Every login-connection send carries the flag (the login, the profile, channel info, document, update,
       // generic message, match ended, leaderboard, the friends and party sends) except these three.
-      return symbol != EvrCodec::kSymLogOut && symbol != EvrCodec::kSymTelemetryEvent &&
-             symbol != EvrCodec::kSymRemoteLogSet;
+      return symbol != nevr_evr_codec::kSymLogOut && symbol != nevr_evr_codec::kSymTelemetryEvent &&
+             symbol != nevr_evr_codec::kSymRemoteLogSet;
     case Role::Matchmaker:
-      return symbol != EvrCodec::kSymMatchmakerStatusRequest;  // the lobby requests and the PingResponse
+      return symbol != nevr_evr_codec::kSymMatchmakerStatusRequest;  // the lobby requests and the PingResponse
     case Role::Config:
-      return symbol == EvrCodec::kSymConfigRequest;
+      return symbol == nevr_evr_codec::kSymConfigRequest;
   }
   return false;
 }
@@ -151,8 +151,8 @@ bool RequestRaisesRequireCount(Role role, uint64_t symbol) {
 // reply carries its Unrequire inside the same frame; a config reply's comes on the config remote). A login
 // failure is sent as SendEvrUnrequire: the LoginFailure frame, then a standalone Unrequire.
 bool PairsWithUnrequire(uint64_t symbol) {
-  return symbol == EvrCodec::kSymLoginFailure || symbol == EvrCodec::kSymChannelInfoResponse || symbol == EvrCodec::kSymDocumentSuccess ||
-         symbol == EvrCodec::kSymUpdateProfileSuccess || symbol == EvrCodec::kSymLobbyPingRequest;
+  return symbol == nevr_evr_codec::kSymLoginFailure || symbol == nevr_evr_codec::kSymChannelInfoResponse || symbol == nevr_evr_codec::kSymDocumentSuccess ||
+         symbol == nevr_evr_codec::kSymUpdateProfileSuccess || symbol == nevr_evr_codec::kSymLobbyPingRequest;
 }
 
 namespace {
@@ -164,10 +164,10 @@ template <class Fn>
 void ForEachMessage(const std::string& frame, Fn fn) {
   std::size_t offset = 0;
   for (std::size_t index = 0;; ++index) {
-    EvrCodec::Message message;
-    if (EvrCodec::ReadMessage(frame, offset, &message) != EvrCodec::ReadStatus::Ok) return;
+    nevr_evr_codec::Message message;
+    if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
     fn(message.symbol, index);
-    offset += EvrCodec::kHeaderSize + static_cast<std::size_t>(message.length);
+    offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
   }
 }
 
@@ -347,12 +347,12 @@ bool Router::TakeUnrequireLocked(GameId target) {
 // *quietDrop is set when the frame is dropped on purpose and counted (an Unrequire, a ping with no matchmaker).
 GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quietDrop) {
   *quietDrop = false;
-  const uint64_t symbol = EvrCodec::FirstSymbol(frame);
+  const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
   std::size_t embedded = 0;
   ForEachMessage(frame, [&embedded](uint64_t s, std::size_t index) {
-    if (index > 0 && s == EvrCodec::kSymConnectionUnrequire) ++embedded;
+    if (index > 0 && s == nevr_evr_codec::kSymConnectionUnrequire) ++embedded;
   });
-  if (symbol == EvrCodec::kSymConnectionUnrequire) {
+  if (symbol == nevr_evr_codec::kSymConnectionUnrequire) {
     GameId owner = kNoGame;
     if (!owedUnrequires_.empty()) {
       owner = owedUnrequires_.front();
@@ -365,7 +365,7 @@ GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quie
   }
   const bool matchmakerLive = OnLoginSessionLocked(activeGame_) && gameTable_.at(activeGame_).role == Role::Matchmaker;
   GameId target = kNoGame;
-  if (symbol == EvrCodec::kSymLobbyPingRequest) {
+  if (symbol == nevr_evr_codec::kSymLobbyPingRequest) {
     if (matchmakerLive) target = activeGame_;
   } else if (IsLoginSessionReply(symbol)) {
     target = OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
@@ -386,7 +386,7 @@ GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quie
     owedUnrequires_.push_back(target);  // kNoGame when the message is dropped: its Unrequire is too
     while (owedUnrequires_.size() > 64) owedUnrequires_.pop_front();
   }
-  if (target == kNoGame && symbol == EvrCodec::kSymLobbyPingRequest) {
+  if (target == kNoGame && symbol == nevr_evr_codec::kSymLobbyPingRequest) {
     ++droppedRemoteFrames_;
     *quietDrop = true;
   }
@@ -537,7 +537,7 @@ bool Router::ReleaseRemoteLocked(GameId game, Game& g, Effects& fx) {
 void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx) {
   g.classified = true;
   Role observed = ClassifyFirstFrame(symbol);
-  if (observed == Role::Login && g.role != Role::Login && symbol != EvrCodec::kSymLoginRequest) observed = g.role;
+  if (observed == Role::Login && g.role != Role::Login && symbol != nevr_evr_codec::kSymLoginRequest) observed = g.role;
   if (observed == g.role) return;
   const Role provisional = g.role;
   if (!ReleaseRemoteLocked(game, g, fx)) {
@@ -600,7 +600,7 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
               options_.limits.maxFrameBytes));
       CloseGameLocked(game, kCloseMessageTooBig, "frame exceeds the size limit", fx);
     } else {
-      if (!git->second.classified) ClassifyGameLocked(game, git->second, EvrCodec::FirstSymbol(frame), fx);
+      if (!git->second.classified) ClassifyGameLocked(game, git->second, nevr_evr_codec::FirstSymbol(frame), fx);
       const RemoteId remoteId = git->second.remote;
       const auto rit = remoteTable_.find(remoteId);
       if (rit == remoteTable_.end()) {
@@ -735,18 +735,18 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
               options_.limits.maxFrameBytes));
       FailSessionLocked(remote, kCloseMessageTooBig, "remote frame exceeds the size limit", true, fx);
     } else {
-      const uint64_t symbol = EvrCodec::FirstSymbol(frame);
-      if (symbol == EvrCodec::kSymLoginFailure) {
+      const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
+      if (symbol == nevr_evr_codec::kSymLoginFailure) {
         // Numeric diagnostics only: the server's message text can carry private data.
-        const std::optional<EvrCodec::LoginFailure> failure = EvrCodec::ParseLoginFailure(frame);
+        const std::optional<nevr_evr_codec::LoginFailure> failure = nevr_evr_codec::ParseLoginFailure(frame);
         Log(fx, LogLevel::Warning,
             Fmt("[router] LOGIN FAILURE remote=%llu status=%llu message_bytes=%zu", Ull(remote),
                 Ull(failure ? failure->statusCode : 0), failure ? failure->messageBytes : static_cast<std::size_t>(0)));
-      } else if (symbol == EvrCodec::kSymLoginSuccess) {
+      } else if (symbol == nevr_evr_codec::kSymLoginSuccess) {
         Log(fx, LogLevel::Info, Fmt("[router] LOGIN SUCCESS remote=%llu", Ull(remote)));
         if (options_.subscribeFriendList && remote == loginRemote_) {
           PushToRemoteLocked(remote, rit->second,
-                             std::make_shared<const std::string>(EvrCodec::BuildFriendListSubscribe()), true, fx);
+                             std::make_shared<const std::string>(nevr_evr_codec::BuildFriendListSubscribe()), true, fx);
         }
       }
       if (remoteTable_.count(remote) != 0) {
@@ -759,7 +759,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
           }
           // The connection's own remote (config): the same rule, its own count.
-          if (target != kNoGame && symbol == EvrCodec::kSymConnectionUnrequire && !TakeUnrequireLocked(target)) {
+          if (target != kNoGame && symbol == nevr_evr_codec::kSymConnectionUnrequire && !TakeUnrequireLocked(target)) {
             ++droppedUnrequires_;
             quietDrop = true;
             target = kNoGame;
@@ -895,4 +895,4 @@ Stats Router::GetStats() const {
   return stats;
 }
 
-}  // namespace SessionRouter
+}  // namespace nevr_session_router

@@ -56,7 +56,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace SessionRouter {
+namespace nevr_session_router {
 
 using GameId = uint64_t;    // one accepted local connection; never reused within a Router
 using RemoteId = uint64_t;  // one remote session; never reused within a Router
@@ -282,4 +282,4 @@ class Router {
   bool shutdown_ = false;
 };
 
-}  // namespace SessionRouter
+}  // namespace nevr_session_router

@@ -68,7 +68,7 @@ struct Identity {
   // only to a session that declared level 1 or more. It is declared only when the social
   // feature is effective AND the social facade is actually installed (docs/adr/0003, contract
   // 5), so the default is 0 and the production IdentitySource sets it to
-  // SocialParty::kSocialLevel (runtime/compat/social_level.h) when, and only when, both hold.
+  // nevr_social_party::kSocialLevel (runtime/compat/social_level.h) when, and only when, both hold.
   int social_level = 0;
 };
 
@@ -134,7 +134,7 @@ struct Composition {
   // Profile members that have no CJson setter (arrays, nulls, reals, out-of-range
   // integers). Paths only, never values.
   std::vector<std::string> skipped;
-  // Where the relayed HMD serial came from (HmdSerial::SourceName) and its length. The
+  // Where the relayed HMD serial came from (nevr_hmd_serial::SourceName) and its length. The
   // value itself is an identifier and is never reported.
   std::string hmd_serial_source;
   std::size_t hmd_serial_length = 0;

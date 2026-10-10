@@ -1,6 +1,6 @@
 #include "runtime/compat/login_profile.h"
 
-namespace LoginProfile {
+namespace nevr_login_profile {
 
 // The profile matches the game's SNSLogInRequestv2 format. It is built with
 // nlohmann::json, never by formatting a string: a hand-built format string cannot
@@ -60,4 +60,4 @@ std::string BuildLoginProfileJson(const LoginProfileInputs& inputs) {
   return profile.dump();
 }
 
-}  // namespace LoginProfile
+}  // namespace nevr_login_profile

@@ -21,9 +21,9 @@ QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth:
   return QuestLogin::IdentityStatus::Ok;
 }
 
-SessionRouter::LoginGate TokenIdentitySource::GateFor(const nevr::quest_auth::Snapshot& snap) noexcept {
+nevr_session_router::LoginGate TokenIdentitySource::GateFor(const nevr::quest_auth::Snapshot& snap) noexcept {
   using nevr::quest_auth::Readiness;
-  using SessionRouter::LoginGate;
+  using nevr_session_router::LoginGate;
   switch (snap.readiness) {
     case Readiness::Starting:
     case Readiness::Refreshing:

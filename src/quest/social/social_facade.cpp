@@ -92,8 +92,8 @@ struct Facade::Impl {
   alignas(16) std::array<std::uint8_t, 16 * kMemberJsonSlots> memberJson{};  // zeroed CJson, the empty document
 
   std::mutex viewMutex;
-  std::shared_ptr<const SocialParty::View> view = std::make_shared<const SocialParty::View>();
-  std::array<std::shared_ptr<const SocialParty::View>, kViewRing> retired{};
+  std::shared_ptr<const nevr_social_party::View> view = std::make_shared<const nevr_social_party::View>();
+  std::array<std::shared_ptr<const nevr_social_party::View>, kViewRing> retired{};
   std::size_t retiredNext = 0;
 
   std::array<std::atomic<std::uint32_t>, kSlotCount> slotCalls{};
@@ -102,7 +102,7 @@ struct Facade::Impl {
   std::atomic<std::uint32_t> slotFailures{0};
   std::atomic<std::uint32_t> callbackCalls{0};
 
-  std::deque<SocialParty::Event> queuedEvents;  // drained from the model, not yet delivered (game thread only)
+  std::deque<nevr_social_party::Event> queuedEvents;  // drained from the model, not yet delivered (game thread only)
   bool queueOverflowLogged = false;
   std::uint64_t deferredLoggedParty = 0;  // the party whose deferral was last logged (0: none)
   // Party members past the game's array (kMemberJsonSlots): in the model, never announced to the game.
@@ -111,8 +111,8 @@ struct Facade::Impl {
   // Party and member data: whose server data each member JSON slot holds (slot 0, the local member's, never
   // holds the server's), the text loaded there, and the party data loaded into +0x1F0.
   std::array<std::uint64_t, kMemberJsonSlots> slotMember{};
-  std::array<SocialParty::JsonText, kMemberJsonSlots> slotData{};
-  SocialParty::JsonText partyDataLoaded;
+  std::array<nevr_social_party::JsonText, kMemberJsonSlots> slotData{};
+  nevr_social_party::JsonText partyDataLoaded;
   std::atomic<bool> memberDataWritten{false};  // slot 31 handed out the local member's JSON since it was last shared
   std::uint64_t sharedParty = 0;               // the party the local data was last shared into
   bool jsonUnavailableLogged = false;
@@ -166,11 +166,11 @@ std::uint64_t Now(const Impl& impl) {
 
 // ---- model access ---------------------------------------------------------------------------
 
-SocialParty::State& Party(Impl& impl) { return *impl.ports.party; }
-SocialRoster::Roster& Friends(Impl& impl) { return *impl.ports.friends; }
-SocialRoster::RecentList& Recent(Impl& impl) { return *impl.ports.recent; }
+nevr_social_party::State& Party(Impl& impl) { return *impl.ports.party; }
+nevr_social_roster::Roster& Friends(Impl& impl) { return *impl.ports.friends; }
+nevr_social_roster::RecentList& Recent(Impl& impl) { return *impl.ports.recent; }
 
-std::shared_ptr<const SocialParty::View> CurrentView(Impl& impl) {
+std::shared_ptr<const nevr_social_party::View> CurrentView(Impl& impl) {
   std::lock_guard<std::mutex> guard(impl.viewMutex);
   return impl.view;
 }
@@ -181,20 +181,20 @@ std::shared_ptr<const SocialParty::View> CurrentView(Impl& impl) {
 // PartyMemberJoinedCB 0x126f8ac), with no check against anything but slot 27, so the game is shown the
 // first kMemberJsonSlots members and no more; the rest stay in the model, hidden (see QueueEvents).
 std::vector<std::uint64_t> PublishView(Impl& impl) {
-  SocialParty::View next = Party(impl).Snapshot();
+  nevr_social_party::View next = Party(impl).Snapshot();
   // The game's party UI reads member 0, the local user, whether or not a party exists, so the local
   // user is the only member until a party replaces the list (CNSOVRSocial counts the local member too).
   if (next.members.empty() && next.selfId != 0) {
-    SocialParty::Member self;
+    nevr_social_party::Member self;
     self.id = next.selfId;
     self.name = next.selfName.empty() ? std::to_string(next.selfId) : next.selfName;
     next.members.push_back(self);
   }
   std::vector<std::uint64_t> ids;
   ids.reserve(next.members.size());
-  for (const SocialParty::Member& member : next.members) ids.push_back(member.id);
+  for (const nevr_social_party::Member& member : next.members) ids.push_back(member.id);
   if (next.members.size() > kMemberJsonSlots) next.members.resize(kMemberJsonSlots);
-  auto shared = std::make_shared<const SocialParty::View>(std::move(next));
+  auto shared = std::make_shared<const nevr_social_party::View>(std::move(next));
   std::lock_guard<std::mutex> guard(impl.viewMutex);
   impl.retired[impl.retiredNext] = impl.view;
   impl.retiredNext = (impl.retiredNext + 1) % impl.retired.size();
@@ -202,7 +202,7 @@ std::vector<std::uint64_t> PublishView(Impl& impl) {
   return ids;
 }
 
-std::uint64_t ViewRoomId(const SocialParty::View& view) {
+std::uint64_t ViewRoomId(const nevr_social_party::View& view) {
   return view.partyId != 0 ? view.partyId : view.joiningPartyId;
 }
 
@@ -211,7 +211,7 @@ std::uint64_t ViewRoomId(const SocialParty::View& view) {
 // Sends the requests and logs one line per request with its stable ids (social_request_log.h). Returns true
 // only if the sender took all of them; nothing to send is true, and logs one line saying so. A create the
 // sender took starts the clock on its answer (kPendingDeadlineSeconds).
-bool SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Message>& messages) {
+bool SendParty(Impl& impl, const char* what, const std::vector<nevr_social_party::Message>& messages) {
   if (messages.empty()) {
     LogFields(LogLevel::kInfo, "social_send", {{"what", what}, {"count", 0}, {"sent", "nothing_to_send"}});
     return true;
@@ -220,8 +220,8 @@ bool SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Mess
   if (!sent) Count(g_sendFailed);
   LogRequests(what, messages, sent, ViewRoomId(*CurrentView(impl)));
   if (sent) {
-    for (const SocialParty::Message& m : messages) {
-      if (m.symbol == SocialParty::kCreateRequest) impl.createSince = Now(impl);
+    for (const nevr_social_party::Message& m : messages) {
+      if (m.symbol == nevr_social_party::kCreateRequest) impl.createSince = Now(impl);
     }
   }
   return sent;
@@ -236,7 +236,7 @@ void RequestLock(Impl& impl, bool wantLocked, bool retry) {
       now - impl.lastLock < kLockRetrySeconds) {
     return;
   }
-  const std::vector<SocialParty::Message> request = Party(impl).SetLocked(wantLocked);
+  const std::vector<nevr_social_party::Message> request = Party(impl).SetLocked(wantLocked);
   if (request.empty()) return;  // already asked and not yet answered (or no party)
   impl.lockTried = true;
   impl.lastLock = now;
@@ -259,7 +259,7 @@ bool Overdue(std::uint64_t since, std::uint64_t now) {
 
 void ExpirePending(Impl& impl) {
   const std::uint64_t now = Now(impl);
-  SocialParty::State& party = Party(impl);
+  nevr_social_party::State& party = Party(impl);
   if (Overdue(impl.createSince, now)) {
     impl.createSince = 0;
     if (party.AbandonCreate()) {
@@ -291,13 +291,13 @@ void ExpirePending(Impl& impl) {
 
 // ---- party and member data ------------------------------------------------------------------
 
-// What the game's JSON must load from the server's data (SocialParty::State::ReceiveData keeps it): each remote member's
+// What the game's JSON must load from the server's data (nevr_social_party::State::ReceiveData keeps it): each remote member's
 // data into its slot of the member array (+0x248; slot 0 is the local member's own and is never loaded) and the party's
 // into +0x1F0 for a member (the leader's is its own). A slot whose member changed (a join, a leave shifting the list)
 // is reloaded or cleared, so slot i always holds member i's data. The texts are the strings the view shares and the
 // facade keeps in slotData / partyDataLoaded until the next plan. Without the game's functions nothing is planned and
 // nothing is marked loaded, so the data loads once they are known.
-void PlanReceivedData(Impl& impl, const SocialParty::View& view, internal::JsonPlan* plan) {
+void PlanReceivedData(Impl& impl, const nevr_social_party::View& view, internal::JsonPlan* plan) {
   plan->game = CurrentGameJson();
   plan->count = 0;
   const bool canLoad = plan->game.decode != nullptr && plan->game.reset != nullptr;
@@ -311,9 +311,9 @@ void PlanReceivedData(Impl& impl, const SocialParty::View& view, internal::JsonP
   };
   bool pending = false;
   for (std::size_t i = 1; i < kMemberJsonSlots; ++i) {
-    const SocialParty::Member* member = i < view.members.size() ? &view.members[i] : nullptr;
+    const nevr_social_party::Member* member = i < view.members.size() ? &view.members[i] : nullptr;
     const std::uint64_t id = member != nullptr ? member->id : 0;
-    const SocialParty::JsonText data = member != nullptr ? member->data : nullptr;
+    const nevr_social_party::JsonText data = member != nullptr ? member->data : nullptr;
     if (impl.slotMember[i] == id && impl.slotData[i] == data) continue;
     if (!canLoad) {
       pending = pending || data != nullptr || impl.slotData[i] != nullptr;
@@ -363,7 +363,7 @@ void ResetLobbyFields(void* self) {
   Put<std::uint8_t>(self, kOffLobbyType, 2);
 }
 
-void SyncObject(Impl& impl, const SocialParty::View& view) {
+void SyncObject(Impl& impl, const nevr_social_party::View& view) {
   void* self = impl.object.data();
   Put<std::uint64_t>(self, kOffRoomId, ViewRoomId(view));
   std::uint32_t owner = 0;
@@ -390,7 +390,7 @@ bool HostWantsJoinable(const Impl& impl) {
 
 // The joinable rule of CNSOVRSocial::Joinable (libpnsovr 0x205180, shared with FriendIsInvitable):
 // Ready, then for the host its own flag, for a member the party's server-side lock, and room for one more.
-bool PartyJoinable(const Impl& impl, const SocialParty::View& view) {
+bool PartyJoinable(const Impl& impl, const nevr_social_party::View& view) {
   if (view.partyId == 0 || view.joining || view.members.size() >= kPartyMaxMembers) return false;
   const bool host = view.ownerId == view.selfId;
   return host ? HostWantsJoinable(impl) : !view.locked;
@@ -608,7 +608,7 @@ void MaybeCreateParty(Impl& impl, const void* flagsPointer) {
   if (Party(impl).Snapshot().selfId == 0) return;
   const std::uint64_t now = Now(impl);
   if (impl.createTried && now - impl.lastCreate < kCreateRetrySeconds) return;
-  const std::vector<SocialParty::Message> request = Party(impl).CreateParty();
+  const std::vector<nevr_social_party::Message> request = Party(impl).CreateParty();
   if (request.empty()) return;
   impl.createTried = true;
   impl.lastCreate = now;
@@ -663,7 +663,7 @@ void SlotExitLobby(void* self) {
 // CNSOVRSocial keeps a count, an online count and parallel id / name / status arrays with the online
 // friends first: FriendStatus(i) is 2 for i < OnlineFriendCount and 0 after it (libpnsovr 0x2061fc).
 
-// The friends tab is open while the game reads the list (SocialParty::NoteFriendsViewed); the poll in
+// The friends tab is open while the game reads the list (nevr_social_party::NoteFriendsViewed); the poll in
 // UpdateCollect refreshes it while it is.
 void NoteFriendsViewed(Impl& impl) { Party(impl).NoteFriendsViewed(Now(impl)); }
 
@@ -695,8 +695,8 @@ const char* SlotFriendStatusString(void* self, std::uint32_t index) {
   return Friends(*OwnerOf(self)).StatusTextAt(index);
 }
 
-bool IsMember(const SocialParty::View& view, std::uint64_t id) {
-  for (const SocialParty::Member& member : view.members) {
+bool IsMember(const nevr_social_party::View& view, std::uint64_t id) {
+  for (const nevr_social_party::Member& member : view.members) {
     if (member.id == id) return true;
   }
   return false;
@@ -725,7 +725,7 @@ std::uint32_t SlotRefreshingRecentlyMet(void* self) {
   const bool busy = Recent(impl).Refreshing(Now(impl), &timedOut);
   if (timedOut) {
     LogFields(LogLevel::kWarn, "social_recently_met",
-              {{"result", "refresh_timeout"}, {"seconds", static_cast<long long>(SocialRoster::RecentList::kRefreshSeconds)}});
+              {{"result", "refresh_timeout"}, {"seconds", static_cast<long long>(nevr_social_roster::RecentList::kRefreshSeconds)}});
   }
   return busy ? 1U : 0U;
 }
@@ -736,7 +736,7 @@ void SlotRefreshRecentlyMet(void* self) {
     LogFields(LogLevel::kInfo, "social_recently_met", {{"result", "already_in_flight"}});
     return;
   }
-  const std::vector<SocialParty::Message> request = Party(impl).RefreshRecentlyMet();
+  const std::vector<nevr_social_party::Message> request = Party(impl).RefreshRecentlyMet();
   const bool sent = !request.empty() && impl.ports.send != nullptr && impl.ports.send(request);
   if (!sent) {
     Recent(impl).EndRefresh();
@@ -776,7 +776,7 @@ std::uint32_t SlotRecentIsJoinable(void* self, std::uint32_t index) { return Slo
 
 // ---- invites --------------------------------------------------------------------------------
 
-const SocialParty::Invite* InviteAt(const SocialParty::View& view, std::uint32_t index) {
+const nevr_social_party::Invite* InviteAt(const nevr_social_party::View& view, std::uint32_t index) {
   if (index >= view.invites.size()) return nullptr;
   return &view.invites[view.invites.size() - 1 - index];  // newest first
 }
@@ -785,13 +785,13 @@ std::uint32_t SlotInviteCount(void* self) { return static_cast<std::uint32_t>(Cu
 
 const char* SlotInviteSender(void* self, std::uint32_t index) {
   const auto view = CurrentView(*OwnerOf(self));
-  const SocialParty::Invite* invite = InviteAt(*view, index);
+  const nevr_social_party::Invite* invite = InviteAt(*view, index);
   return invite != nullptr ? invite->senderName.c_str() : "";
 }
 
 std::uint64_t SlotInviteSentTime(void* self, std::uint32_t index) {
   const auto view = CurrentView(*OwnerOf(self));
-  const SocialParty::Invite* invite = InviteAt(*view, index);
+  const nevr_social_party::Invite* invite = InviteAt(*view, index);
   return invite != nullptr ? invite->sentTime : 0;
 }
 
@@ -962,8 +962,8 @@ std::uint64_t UpdatePrepare(void* self, const void* params) noexcept {
 
 namespace {
 
-EventKind KindOf(SocialParty::EventKind kind, bool* deliver) {
-  using Kind = SocialParty::EventKind;
+EventKind KindOf(nevr_social_party::EventKind kind, bool* deliver) {
+  using Kind = nevr_social_party::EventKind;
   *deliver = true;
   switch (kind) {
     case Kind::kCreated: return kEvCreated;
@@ -987,8 +987,8 @@ EventKind KindOf(SocialParty::EventKind kind, bool* deliver) {
 
 namespace {
 
-bool Coalescible(SocialParty::EventKind kind) {
-  using Kind = SocialParty::EventKind;
+bool Coalescible(nevr_social_party::EventKind kind) {
+  using Kind = nevr_social_party::EventKind;
   return kind == Kind::kUpdated || kind == Kind::kMemberUpdated || kind == Kind::kInviteReceived;
 }
 
@@ -997,11 +997,11 @@ bool Coalescible(SocialParty::EventKind kind) {
 // announces is read when it runs), or an Updated / MemberUpdated of the same index directly after its twin.
 // Past kSoftQueueLimit the oldest coalescible event makes room; if there is none the queue grows to
 // kHardQueueLimit, and only past that is the newest event dropped. Everything dropped is counted.
-void Enqueue(Impl& impl, SocialParty::Event&& event, EventBatch* out) {
-  using Kind = SocialParty::EventKind;
-  std::deque<SocialParty::Event>& queue = impl.queuedEvents;
+void Enqueue(Impl& impl, nevr_social_party::Event&& event, EventBatch* out) {
+  using Kind = nevr_social_party::EventKind;
+  std::deque<nevr_social_party::Event>& queue = impl.queuedEvents;
   if (event.kind == Kind::kInviteReceived) {
-    for (const SocialParty::Event& queued : queue) {
+    for (const nevr_social_party::Event& queued : queue) {
       if (queued.kind == Kind::kInviteReceived) return;
     }
   } else if (Coalescible(event.kind) && !queue.empty() && queue.back().kind == event.kind &&
@@ -1040,10 +1040,10 @@ int PositionOf(const std::vector<std::uint64_t>& ids, std::uint64_t id) {
 // game (any index at or past the array would be read out of bounds, PartyMemberJoinedCB 0x126f8ac), and when
 // a visible member leaves, the first hidden one moves into the window and is announced then. A member
 // callback's index is the member's position now, not the one it had when the event was queued.
-void QueueEvents(Impl& impl, std::vector<SocialParty::Event>& events, const std::vector<std::uint64_t>& ids,
+void QueueEvents(Impl& impl, std::vector<nevr_social_party::Event>& events, const std::vector<std::uint64_t>& ids,
                  std::uint64_t partyId, EventBatch* out) {
-  using Kind = SocialParty::EventKind;
-  for (SocialParty::Event& event : events) {
+  using Kind = nevr_social_party::EventKind;
+  for (nevr_social_party::Event& event : events) {
     switch (event.kind) {
       case Kind::kMemberJoined: {
         const int at = PositionOf(ids, event.id);
@@ -1090,7 +1090,7 @@ void QueueEvents(Impl& impl, std::vector<SocialParty::Event>& events, const std:
   const std::size_t window = ids.size() < kMemberJsonSlots ? ids.size() : kMemberJsonSlots;
   for (std::size_t i = 0; i < window; ++i) {
     if (impl.hiddenMembers.erase(ids[i]) != 0) {
-      Enqueue(impl, SocialParty::MakeEvent(Kind::kMemberJoined, static_cast<std::uint32_t>(i), ids[i]), out);
+      Enqueue(impl, nevr_social_party::MakeEvent(Kind::kMemberJoined, static_cast<std::uint32_t>(i), ids[i]), out);
     }
   }
 }
@@ -1108,9 +1108,9 @@ void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept {
     // The events are drained before the view is published, so the view is at least as new as every event: a
     // member an event names is in it unless it has left since (see QueueEvents).
     // The friends tab stays fresh while it is open (#57): nothing is sent for a closed tab.
-    const std::vector<SocialParty::Message> poll = Party(*impl).PollFriendsWhileOpen(Now(*impl));
+    const std::vector<nevr_social_party::Message> poll = Party(*impl).PollFriendsWhileOpen(Now(*impl));
     if (!poll.empty()) SendParty(*impl, "friends poll", poll);
-    std::vector<SocialParty::Event> events = Party(*impl).DrainEvents();
+    std::vector<nevr_social_party::Event> events = Party(*impl).DrainEvents();
     const std::vector<std::uint64_t> ids = PublishView(*impl);
     const auto view = CurrentView(*impl);
     SyncObject(*impl, *view);
@@ -1125,7 +1125,7 @@ void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept {
                  {"note", "coalescible events dropped for room, or the newest past the hard limit; counted by social_events_dropped"}});
     }
     while (!impl->queuedEvents.empty() && out->count < kMaxPendingEvents) {
-      const SocialParty::Event& event = impl->queuedEvents.front();
+      const nevr_social_party::Event& event = impl->queuedEvents.front();
       bool deliver = false;
       const EventKind kind = KindOf(event.kind, &deliver);
       if (deliver) {
@@ -1156,7 +1156,7 @@ CJsonResetFn ResetPrepare(void* self) noexcept {
     impl->lockSince = 0;
     // What was loaded or shared belonged to the party that is gone.
     impl->slotMember.fill(0);
-    for (SocialParty::JsonText& data : impl->slotData) data.reset();
+    for (nevr_social_party::JsonText& data : impl->slotData) data.reset();
     impl->partyDataLoaded.reset();
     impl->sharedParty = 0;
     impl->memberDataWritten.store(false, std::memory_order_relaxed);
@@ -1260,10 +1260,10 @@ void ShareFinish(void* self, const ShareJob* job) noexcept {
   if (impl == nullptr || job == nullptr) return;
   try {
     if (job->party != 0) {
-      ShareOne(*impl, "party data (party)", SocialParty::kPartyDataScopeParty, job->partyOk != 0, job->partyBuffer, job->partySize);
+      ShareOne(*impl, "party data (party)", nevr_social_party::kPartyDataScopeParty, job->partyOk != 0, job->partyBuffer, job->partySize);
     }
     if (job->member != 0) {
-      ShareOne(*impl, "party data (member)", SocialParty::kPartyDataScopeMember, job->memberOk != 0, job->memberBuffer, job->memberSize);
+      ShareOne(*impl, "party data (member)", nevr_social_party::kPartyDataScopeMember, job->memberOk != 0, job->memberBuffer, job->memberSize);
     }
   } catch (const std::exception&) {
     ReportFailure(impl, kUpdate);
@@ -1284,7 +1284,7 @@ JoinStep JoinBegin(void* self, std::uint64_t partyId) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return JoinStep::kDeferred;
   try {
-    SocialParty::State& party = Party(*impl);
+    nevr_social_party::State& party = Party(*impl);
     if (party.BeginJoin(partyId)) {
       impl->deferredLoggedParty = 0;
       return JoinStep::kAskGate;
@@ -1308,7 +1308,7 @@ void JoinFinish(void* self, std::uint64_t partyId, bool allowed) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return;
   try {
-    SocialParty::State& party = Party(*impl);
+    nevr_social_party::State& party = Party(*impl);
     if (!allowed) {
       party.AbandonJoin(partyId);
       LogFields(LogLevel::kInfo, "social_join", {{"party", static_cast<long long>(partyId)}, {"result", "declined"}});
@@ -1350,7 +1350,7 @@ Facade::Facade(const Ports& ports) : impl_(std::make_unique<Impl>()) {
   Put<const SlotWord*>(object, 0, table);
   Put<Impl*>(object, kOffOwner, impl_.get());
   ResetBase(*impl_, false);
-  Put<std::uint32_t>(object, kOffJoinPolicy, SocialParty::kJoinPolicyEveryone);
+  Put<std::uint32_t>(object, kOffJoinPolicy, nevr_social_party::kJoinPolicyEveryone);
   Put<std::uintptr_t>(object, kOffMemberJson, reinterpret_cast<std::uintptr_t>(impl_->memberJson.data()));
 }
 
@@ -1371,10 +1371,10 @@ std::uint32_t Facade::CallbackCalls() const noexcept { return impl_->callbackCal
 const Ports& ProductionPorts() {
   static const Ports ports = [] {
     Ports p;
-    p.party = &SocialParty::Global();
-    p.friends = &SocialRoster::Global();
-    p.recent = &SocialRoster::RecentlyMet();
-    p.send = &SocialParty::Send;
+    p.party = &nevr_social_party::Global();
+    p.friends = &nevr_social_roster::Global();
+    p.recent = &nevr_social_roster::RecentlyMet();
+    p.send = &nevr_social_party::Send;
     return p;
   }();
   return ports;
@@ -1411,7 +1411,7 @@ void ResetFacadeCountersForTest() noexcept {
 }
 
 void SetLocalAccount(std::uint64_t accountId, const char* displayName) {
-  SocialParty::Global().SetSelf(accountId, displayName != nullptr ? std::string(displayName) : std::string());
+  nevr_social_party::Global().SetSelf(accountId, displayName != nullptr ? std::string(displayName) : std::string());
   LogFields(LogLevel::kInfo, "social_local_account", {{"account", static_cast<long long>(accountId)}});
 }
 
