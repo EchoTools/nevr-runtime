@@ -353,6 +353,20 @@ MicLifecycleOperations RingOps(RingStream& stream) {
 }
 }  // namespace
 
+// #399: the two WASAPI codes that mean the client is dead for good (AUDCLNT_ERR(0x4) and AUDCLNT_ERR(0x26),
+// FACILITY_AUDCLNT 0x889), and no other code is taken for it.
+TEST(MicHresult, OnlyTheInvalidatedCodesMeanTheClientIsDead) {
+  EXPECT_TRUE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x88890004u)));  // DEVICE_INVALIDATED
+  EXPECT_TRUE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x88890026u)));  // RESOURCES_INVALIDATED
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(0));                                  // S_OK
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(1));                                  // S_FALSE
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x80004005u)));  // E_FAIL
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x88890003u)));  // NOT_INITIALIZED
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x88890005u)));  // NOT_STOPPED
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x88890010u)));  // SERVICE_NOT_RUNNING
+  EXPECT_FALSE(MicHresultMeansDeviceInvalidated(static_cast<int32_t>(0x00000004u)));  // the low word alone
+}
+
 // #399: the capture device was invalidated (0x88890004); the dead IAudioClient can never Start again, so the
 // restart re-acquires the default endpoint and capture resumes.
 TEST_F(MicCaptureLifecycleTest, StartOnAnInvalidatedClientReacquiresTheEndpointAndRuns) {

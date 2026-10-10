@@ -2,6 +2,13 @@
 
 #include "core/mic_lifecycle.h"
 
+bool MicHresultMeansDeviceInvalidated(int32_t hresult) {
+  constexpr uint32_t kDeviceInvalidated = 0x88890004u;     // AUDCLNT_ERR(0x4)
+  constexpr uint32_t kResourcesInvalidated = 0x88890026u;  // AUDCLNT_ERR(0x26)
+  const auto value = static_cast<uint32_t>(hresult);
+  return value == kDeviceInvalidated || value == kResourcesInvalidated;
+}
+
 bool MicComInitializationRequiresUninitialize(int32_t hresult) {
   return hresult >= 0;
 }
@@ -278,8 +285,7 @@ bool MicCaptureLifecycle::Recover(uint32_t callerThread, const MicLifecycleOpera
   const bool recovered = ops.recoverAudio(ops.context);
 
   lock.lock();
-  EndTransition(lock);
+  EndTransition(lock);  // releases `lock`
   if (!recovered) return false;
-  lock.unlock();
   return Start(callerThread, ops);
 }

@@ -44,6 +44,12 @@ struct MicLifecycleOperations {
   bool (*recoverAudio)(void*) = nullptr;
 };
 
+/// AUDCLNT_E_DEVICE_INVALIDATED (0x88890004: the endpoint device was unplugged, reconfigured, disabled or
+/// removed) and AUDCLNT_E_RESOURCES_INVALIDATED (0x88890026: the stream's resources were invalidated). The
+/// IAudioClient that returned either is dead for good; capture needs a new client on the current default
+/// endpoint (https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getnextpacketsize).
+bool MicHresultMeansDeviceInvalidated(int32_t hresult);
+
 /// COM initialization returns S_FALSE when the calling thread was already
 /// initialized in the same apartment. It is still a successful increment and
 /// must be balanced with CoUninitialize; RPC_E_CHANGED_MODE is a failure.

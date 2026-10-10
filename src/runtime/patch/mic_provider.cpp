@@ -99,6 +99,12 @@ HANDLE g_captureEvent = nullptr;
 HANDLE g_captureThread = nullptr;
 HANDLE g_workerStartupEvent = nullptr;
 std::atomic<bool> g_running{false};
+// Set by the capture worker (and by a failed IAudioClient::Start) when WASAPI says the client is dead
+// (AUDCLNT_E_DEVICE_INVALIDATED, #399); cleared when the endpoint is acquired again.
+std::atomic<bool> g_deviceInvalidated{false};
+// Steady-clock milliseconds of the last recovery attempt started from MicAvailable (rate limit).
+std::atomic<int64_t> g_lastRecoverAttemptMs{0};
+constexpr int64_t kRecoverRetryMs = 2000;
 std::atomic<bool> g_workerSetupSucceeded{false};
 bool g_ownerMustUninitializeCom = false;
 MicCapturePacketAdapter g_captureAdapter;
@@ -172,11 +178,24 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
 
 bool CaptureCancelled(void*) { return !g_running.load(std::memory_order_acquire); }
 
+// A WASAPI failure on the worker: the invalidated codes mark the client dead so the provider re-acquires the
+// endpoint (see RecoverAudio); every other failure keeps its existing handling.
+void NoteWasapiFailure(const char* operation, HRESULT hr) {
+  if (MicHresultMeansDeviceInvalidated(static_cast<int32_t>(hr))) {
+    g_deviceInvalidated.store(true, std::memory_order_release);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] %s failed: 0x%lx (capture device invalidated: it was unplugged, reconfigured or disabled)",
+        operation, static_cast<unsigned long>(hr));
+    return;
+  }
+  Log(EchoVR::LogLevel::Error, "[NEVR.MIC] %s failed: 0x%lx", operation, static_cast<unsigned long>(hr));
+}
+
 bool CaptureNextPacket(void*, uint32_t* frames) {
   UINT32 packetFrames = 0;
   const HRESULT hr = g_captureClient->GetNextPacketSize(&packetFrames);
   if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetNextPacketSize failed: 0x%lx", static_cast<unsigned long>(hr));
+    NoteWasapiFailure("GetNextPacketSize", hr);
     return false;
   }
   *frames = packetFrames;
@@ -189,7 +208,7 @@ bool CaptureAcquirePacket(void*, const void** data, uint32_t* frames, uint32_t* 
   DWORD packetFlags = 0;
   const HRESULT hr = g_captureClient->GetBuffer(&packet, &packetFrames, &packetFlags, nullptr, nullptr);
   if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetBuffer failed: 0x%lx", static_cast<unsigned long>(hr));
+    NoteWasapiFailure("GetBuffer", hr);
     return false;
   }
   *data = packet;
@@ -266,26 +285,13 @@ DWORD WINAPI CaptureThreadProc(LPVOID) {
 
 namespace {
 
-bool CreateWasapiResources(void*) {
-  const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  if (initResult == RPC_E_CHANGED_MODE) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.MIC] MicCreate rejected an existing non-MTA COM apartment; cross-apartment capture is unverified");
-    return false;
-  }
-  g_ownerMustUninitializeCom = MicComInitializationRequiresUninitialize(static_cast<int32_t>(initResult));
-  if (FAILED(initResult)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx",
-        static_cast<unsigned long>(initResult));
-    return false;
-  }
+// Everything after COM initialization: the default capture endpoint, an activated and initialized
+// IAudioClient on it, the event handles and the capture client. Releases whatever it created when it fails
+// and leaves COM alone (the owner thread's apartment outlives a re-acquire).
+bool AcquireCaptureEndpoint() {
   const auto fail = [](const char* operation, HRESULT failure, EchoVR::LogLevel level) {
     Log(level, "[NEVR.MIC] %s failed: 0x%lx", operation, static_cast<unsigned long>(failure));
     ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
-      CoUninitialize();
-      g_ownerMustUninitializeCom = false;
-    }
     return false;
   };
 
@@ -310,10 +316,6 @@ bool CreateWasapiResources(void*) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(capture) failed: %lu",
         static_cast<unsigned long>(error));
     ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
-      CoUninitialize();
-      g_ownerMustUninitializeCom = false;
-    }
     return false;
   }
   hr = g_audioClient->SetEventHandle(g_captureEvent);
@@ -324,15 +326,12 @@ bool CreateWasapiResources(void*) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(worker startup) failed: %lu",
         static_cast<unsigned long>(error));
     ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
-      CoUninitialize();
-      g_ownerMustUninitializeCom = false;
-    }
     return false;
   }
   hr = g_audioClient->GetService(IID_IAudioCaptureClient, reinterpret_cast<void**>(&g_captureClient));
   if (FAILED(hr)) return fail("GetService(IAudioCaptureClient)", hr, EchoVR::LogLevel::Error);
 
+  g_deviceInvalidated.store(false, std::memory_order_release);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.MIC] capture device ready: %u Hz, %u ch, %u-bit, tag=%u -> resampling to %u Hz mono int16",
       static_cast<unsigned>(g_mixFormat->nSamplesPerSec), static_cast<unsigned>(g_mixFormat->nChannels),
@@ -341,12 +340,51 @@ bool CreateWasapiResources(void*) {
   return true;
 }
 
+bool CreateWasapiResources(void*) {
+  const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  if (initResult == RPC_E_CHANGED_MODE) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] MicCreate rejected an existing non-MTA COM apartment; cross-apartment capture is unverified");
+    return false;
+  }
+  g_ownerMustUninitializeCom = MicComInitializationRequiresUninitialize(static_cast<int32_t>(initResult));
+  if (FAILED(initResult)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx",
+        static_cast<unsigned long>(initResult));
+    return false;
+  }
+  if (!AcquireCaptureEndpoint()) {
+    if (g_ownerMustUninitializeCom) {
+      CoUninitialize();
+      g_ownerMustUninitializeCom = false;
+    }
+    return false;
+  }
+  return true;
+}
+
+// The invalidated IAudioClient can never run again (AUDCLNT_E_DEVICE_INVALIDATED): release the WASAPI
+// interfaces and activate a client on the current default capture endpoint, on the owner thread that made
+// the old one. COM stays initialized. Called by the lifecycle with the worker joined (see
+// MicCaptureLifecycle::Recover and Start).
+bool RecoverAudio(void*) {
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.MIC] capture device invalidated: releasing the dead client and re-acquiring the default capture endpoint");
+  ReleaseWasapi();
+  if (!AcquireCaptureEndpoint()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] could not re-acquire a capture endpoint; the provider stays ready and the next MicStart retries");
+    return false;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture endpoint re-acquired");
+  return true;
+}
+
 bool StartAudio(void*) {
   if (g_audioClient == nullptr) return false;
   const HRESULT hr = g_audioClient->Start();
   if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient::Start failed: 0x%lx",
-        static_cast<unsigned long>(hr));
+    NoteWasapiFailure("IAudioClient::Start", hr);
     return false;
   }
   return true;
@@ -448,7 +486,7 @@ void ResetCaptureStream(void*) {
 
 const MicLifecycleOperations kMicLifecycleOperations = {
     nullptr, CreateWasapiResources, StartAudio, CreateCaptureWorker, RequestCaptureStop,
-    WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream};
+    WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream, RecoverAudio};
 
 const char* StateName(MicLifecycleState state) {
   switch (state) {
@@ -463,7 +501,7 @@ const char* StateName(MicLifecycleState state) {
 }
 
 // --- Owner-thread marshalling (GH #51) ----------------------------------
-enum class MicCall { Create, Start, Stop, Destroy };
+enum class MicCall { Create, Start, Stop, Destroy, Recover };
 
 const char* CallName(MicCall call) {
   switch (call) {
@@ -471,6 +509,7 @@ const char* CallName(MicCall call) {
     case MicCall::Start: return "MicStart";
     case MicCall::Stop: return "MicStop";
     case MicCall::Destroy: return "MicDestroy";
+    case MicCall::Recover: return "MicRecover";
   }
   return "Mic?";
 }
@@ -503,6 +542,9 @@ void RunMicCall(void* context) {
       break;
     case MicCall::Destroy:
       request.result = g_lifecycle.Destroy(ownerThread, kMicLifecycleOperations, 2000);
+      break;
+    case MicCall::Recover:
+      request.result = g_lifecycle.Recover(ownerThread, kMicLifecycleOperations, 2000);
       break;
   }
   request.after = g_lifecycle.State();
@@ -567,8 +609,33 @@ static void NoteGameReader() {
   }
 }
 
+// The capture worker ended because WASAPI invalidated the device while the game keeps polling: re-acquire the
+// default capture endpoint without waiting for the game's own Stop/Start cycle. At most one attempt per
+// kRecoverRetryMs, and only while the provider has capture to resume; a failed attempt leaves it ready.
+static void RecoverIfDeviceInvalidated() {
+  if (!g_deviceInvalidated.load(std::memory_order_acquire)) return;
+  const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+  int64_t last = g_lastRecoverAttemptMs.load(std::memory_order_relaxed);
+  if (nowMs - last < kRecoverRetryMs ||
+      !g_lastRecoverAttemptMs.compare_exchange_strong(last, nowMs, std::memory_order_relaxed)) {
+    return;
+  }
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Recover, &request)) return;
+  if (request.result) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture recovered after the device was invalidated (state=%s)",
+        StateName(request.after));
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] capture recovery after device invalidation did not complete (state=%s); will retry",
+        StateName(request.after));
+  }
+}
+
 uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
+  RecoverIfDeviceInvalidated();
   return static_cast<uint64_t>(g_ring.Available());
 }
 
