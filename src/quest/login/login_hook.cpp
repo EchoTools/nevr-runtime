@@ -11,6 +11,7 @@
 
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/login/login_prerequisites.h"
+#include "quest/login/login_thunk.h"
 #include "quest/sentinel/callback_thunk.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_install.h"
@@ -130,9 +131,6 @@ Globals& G() {
 }
 std::atomic<const State*> g_published{nullptr};
 OculusIdMemory g_oculus_id;  // guarded by G().account_mutex
-
-struct LoginTag {};
-using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 
 // The CNSOVRUser the hook was handed. Every access is guarded: the object's vtable pointer
 // must be exactly CNSOVRUser's before anything is read or called through it.

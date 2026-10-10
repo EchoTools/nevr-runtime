@@ -722,6 +722,28 @@ void PinnedTargetsMatchTheMeasuredBinaries() {
   QCHECK(t.matchmaking.buildId != nullptr && std::strcmp(t.matchmaking.buildId, "8c4fddc079eae65909530132a56c48da48b2708c") == 0);
 }
 
+// The production entry takes the caller's string pool and bridge probe (#237): a probe passed to
+// InstallRedirectHooks reaches the redirector, so the bridge feature picks the loopback target. The
+// pinned libr15 is not loaded in this process, so no slot is hooked; the redirector is still fixed.
+void ProductionEntryPassesTheBridgeProbe() {
+  RemoveRedirectHooks();
+  ResetThunks();
+  Lines().clear();
+  const InstallReport report = InstallRedirectHooks(Config(kRedirectAndBridgeOn), &InternReal, &BridgeProbeFn);
+  QCHECK(report.featureEnabled);
+  ServiceRedirector* const redirector = InstalledRedirectorForTest();
+  QCHECK(redirector != nullptr);
+  if (redirector != nullptr) {
+    g_bridge = {true, 53748};
+    QCHECK(std::strcmp(redirector->Apply("login_host", kDefaultLogin), "ws://127.0.0.1:53748") == 0);
+    g_bridge = {false, 0};
+    QCHECK(std::strcmp(redirector->Apply("login_host", kDefaultLogin), kSocketTarget) == 0);
+  }
+  RemoveRedirectHooks();
+  QCHECK(InstalledRedirectorForTest() == nullptr);
+  ResetThunks();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -750,6 +772,7 @@ int main(int argc, char** argv) {
   CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();
+  ProductionEntryPassesTheBridgeProbe();
   RealHookEndToEnd(dir);
 
   sentinel::SetLogSink(nullptr);
