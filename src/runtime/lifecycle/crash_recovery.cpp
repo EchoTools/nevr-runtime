@@ -1034,10 +1034,10 @@ bool InstallVEH() {
 }
 
 // POSIX signal handler — initiates shutdown DIRECTLY.
-// The prior flag-based approach (set g_shutdownRequested, check per-frame in
-// PrecisionSleepWaitHook) loses the race: after SIGINT, the game begins teardown
-// before the next frame runs, so PerformGracefulShutdown was never invoked and
-// the listening socket survived as a zombie (N13/N38 root cause re-open).
+// A flag (set g_shutdownRequested, check per-frame in PrecisionSleepWaitHook)
+// would lose the race: after SIGINT the game begins teardown before the next
+// frame runs, so PerformGracefulShutdown would never be invoked and the
+// listening socket would survive as a zombie (N13/N38).
 // Uses write() for async-signal-safe diagnostics (not fprintf/Log).
 // PerformGracefulShutdown is NOT formally async-signal-safe (calls Log, GetProcAddress,
 // etc.), but called directly from here because the flag alternative is proven broken:
@@ -1250,9 +1250,9 @@ void InstallConsoleCtrlHandler() {
   // to the CRT signal table. These registrations are retained for native
   // Windows and for a hosted SIGTERM, not because they fire under Wine.
   //
-  // These handlers call PerformGracefulShutdown DIRECTLY — the prior flag-based
-  // approach (set g_shutdownRequested, check per-frame) lost the race to game
-  // teardown; the per-frame check never ran after signal delivery (N13/N38 re-open).
+  // These handlers call PerformGracefulShutdown DIRECTLY — a flag (set
+  // g_shutdownRequested, check per-frame) loses the race to game teardown;
+  // the per-frame check never runs after signal delivery (N13/N38).
   const bool sigintOk = signal(SIGINT, PosixSignalHandler) != SIG_ERR;
   if (!sigintOk) {
     Log(EchoVR::LogLevel::Warning,
@@ -1396,9 +1396,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     // before: there is no module handle and no symbol lookup at all, at init or
     // here. The bridge is compiled into this DLL (N92).
     //
-    // This replaces a GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown") that
-    // has returned NULL on every run since the N92 fold, taking the else-branch
-    // and leaking the listener. Measured on three live runs 2026-07-28:
+    // A GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown") returns NULL on
+    // every run since the N92 fold, taking the else-branch and leaking the
+    // listener, which is why the stop is a direct call. Measured on three live runs 2026-07-28:
     //   shutdown deps resolved ws_bridge=absent WsBridge_Shutdown=null
     ShutdownReport(EchoVR::LogLevel::Info,
                    "[NEVR.PATCH] ws_bridge listener stop starting (hang marker: if shutdown never "

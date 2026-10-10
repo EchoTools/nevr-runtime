@@ -730,10 +730,10 @@ void TestListenerThatStopsListeningIsReportedAndRestored() {
 }
 
 // Finding 4 (#240): the listener number is reused by ANOTHER listening socket with connections already
-// queued on it. The router must not accept those -- they are not its connections. Before the fix the
-// accept ran before the identity check, so the router would drain the foreign socket's backlog (and
-// answer each 403) for up to listenerCheckMs; after the fix the pre-accept identity check refuses the
-// replaced descriptor, so the foreign owner can still accept all of its own connections.
+// queued on it. The router must not accept those -- they are not its connections. An accept before the
+// identity check would drain the foreign socket's backlog (and answer each 403) for up to listenerCheckMs;
+// the pre-accept identity check refuses the replaced descriptor, so the foreign owner can still accept all
+// of its own connections.
 void TestReplacedByAnotherListenerIsNotAccepted() {
   Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 2000; });
   const uint16_t port = rig.server->Start();

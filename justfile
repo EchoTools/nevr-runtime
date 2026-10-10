@@ -443,9 +443,9 @@ test-auth-unit:
         fi
         run_test "$bin"
     done
-    # test_broadcaster_bridge / test_broadcaster_guards moved to
-    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin (2026-07-26).
-    # The N72/N73 guards they cover now live and are tested there.
+    # test_broadcaster_bridge / test_broadcaster_guards live in
+    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
+    # holds and tests the N72/N73 guards.
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
