@@ -69,6 +69,12 @@ inline constexpr PinnedSlot kGetLoggedInUser{"ovr_User_GetLoggedInUser", RelocKi
 inline constexpr PinnedSlot kGetAccessToken{"ovr_User_GetAccessToken", RelocKind::kJumpSlot, 0x6dfa68, 0};
 inline constexpr PinnedSlot kGetUserProof{"ovr_User_GetUserProof", RelocKind::kJumpSlot, 0x6e15a8, 0};
 
+// The entitlement request (#411): RadPluginMain asks Meta whether the viewer owns the app after the log line
+// "Checking OVR entitlement..." (callers 0x206824 and 0x206ae4) and discards the request id; the only reader of
+// the answer is the message pump (Update 0x207534), which hard-exits the game on an error of that type. The
+// hook answers locally with request id 0, so no request leaves and no message comes back.
+inline constexpr PinnedSlot kEntitlementRequest{"ovr_Entitlement_GetIsViewerEntitled", RelocKind::kJumpSlot, 0x6df638, 0};
+
 // Read, never hooked: what a callback handler uses to report the Oculus error code and to tell a
 // transient error from a permanent one (ovr_Error_GetMessage returns the JSON the game reads
 // "error|is_transient" from).
@@ -82,6 +88,7 @@ inline constexpr PinnedSlot kAll[] = {
     kMessageIsError,      kMessageGetString,     kMessageGetOrgScopedId, kOrgScopedIdGetId,
     kMessageGetUser,      kUserGetOculusId,      kMessageGetUserProof,  kUserProofGetNonce,
     kGetOrgScopedId,      kGetLoggedInUser,      kGetAccessToken,       kGetUserProof,
+    kEntitlementRequest,
     kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,     kErrorGetMessage,
 };
 
