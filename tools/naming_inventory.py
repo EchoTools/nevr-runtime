@@ -137,7 +137,7 @@ def macros_without_prefix(files):
 
 def exports_without_prefix(files):
     for path, text in files:
-        if not path.endswith(".h"):
+        if not path.endswith(CODE_EXT):
             continue
         for n, line in lines_of(text):
             if "NEVR_MODULE_API" not in line or line.lstrip().startswith(("#", "//")):
