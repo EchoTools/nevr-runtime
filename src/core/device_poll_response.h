@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 
 enum class DevicePollStatus {
   Pending,
@@ -37,4 +37,4 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response);
 uint64_t ResolveAccessTokenExpiry(uint64_t now, const std::string& access_token,
                                   std::optional<uint64_t> expires_in);
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

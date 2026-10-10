@@ -180,8 +180,8 @@ TEST(CachedAuthTokenExpiry, ExpiredAndFutureTokensAreDistinguished) {
 }
 
 TEST(DeviceAuthState, InitialStateIsUnauthenticated) {
-  const TokenAuth::TestHook::DeviceAuthState state =
-      TokenAuth::TestHook::InspectInitialDeviceAuth();
+  const nevr_token_auth::test_hook::DeviceAuthState state =
+      nevr_token_auth::test_hook::InspectInitialDeviceAuth();
 
   EXPECT_FALSE(state.authenticated);
   EXPECT_TRUE(state.token.empty());
@@ -198,8 +198,8 @@ TEST(DeviceAuthState, RefreshUpdateMakesValidTokenObservable) {
   refreshed.user_id = "user-id";
   refreshed.username = "refreshed-player";
 
-  const TokenAuth::TestHook::DeviceAuthState state =
-      TokenAuth::TestHook::InspectDeviceAuthAfterRefresh(refreshed);
+  const nevr_token_auth::test_hook::DeviceAuthState state =
+      nevr_token_auth::test_hook::InspectDeviceAuthAfterRefresh(refreshed);
 
   EXPECT_TRUE(state.authenticated);
   EXPECT_EQ(state.token, refreshed.token);
@@ -213,8 +213,8 @@ TEST(DeviceAuthState, ExpiredRefreshUpdateRemainsUnauthenticated) {
   refreshed.token_expiry = static_cast<uint64_t>(std::time(nullptr)) - 1;
   refreshed.username = "expired-player";
 
-  const TokenAuth::TestHook::DeviceAuthState state =
-      TokenAuth::TestHook::InspectDeviceAuthAfterRefresh(refreshed);
+  const nevr_token_auth::test_hook::DeviceAuthState state =
+      nevr_token_auth::test_hook::InspectDeviceAuthAfterRefresh(refreshed);
 
   EXPECT_FALSE(state.authenticated);
   EXPECT_EQ(state.token, refreshed.token);
@@ -239,8 +239,8 @@ TEST(DeviceAuthState, SafelyRejectsLegacyAccessTokenFromExecutableLocalCache) {
   // 60-second safety window, so DeviceAuth cannot adopt it without a refresh.
   EXPECT_FALSE(loaded.HasValidToken());
 
-  const TokenAuth::TestHook::DeviceAuthState state =
-      TokenAuth::TestHook::InspectDeviceAuthFromCache();
+  const nevr_token_auth::test_hook::DeviceAuthState state =
+      nevr_token_auth::test_hook::InspectDeviceAuthFromCache();
 
   EXPECT_FALSE(state.authenticated);
   EXPECT_TRUE(state.token.empty());
@@ -285,7 +285,7 @@ TEST(RefreshThreadGuard, LiveTokenExpiryDecidesNotTheCredentialCache) {
   live.refresh_token = "refresh-token";
   live.refresh_token_expiry = now + 30 * 24 * 3600;
 
-  EXPECT_FALSE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_FALSE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 }
 
 // Pins the lead time itself. 300s against a 3600s token and a 60s wake interval
@@ -305,28 +305,28 @@ TEST(RefreshThreadGuard, RefreshesInsideTheLeadWindowAndNotOutsideIt) {
   live.refresh_token_expiry = now + 30 * 24 * 3600;
 
   live.token_expiry = now + 301;
-  EXPECT_FALSE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_FALSE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 
   live.token_expiry = now + 300;
-  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_TRUE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 
   live.token_expiry = now + 60;
-  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_TRUE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 
   live.token_expiry = now - 1;
-  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_TRUE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 
   // No live token at all: refresh, do not sit on an empty session.
   live.token_expiry = 0;
-  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+  EXPECT_TRUE(nevr_token_auth::test_hook::InspectRefreshDecision(live, now));
 }
 
 TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {
-  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":\"token\",\"refresh_token\":\"refresh\","
       "\"user_id\":\"user\",\"username\":\"name\",\"expires_in\":3600}");
 
-  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.status, nevr_token_auth::DevicePollStatus::Verified);
   EXPECT_EQ(response.access_token, "token");
   EXPECT_EQ(response.refresh_token, "refresh");
   EXPECT_EQ(response.user_id, "user");
@@ -339,25 +339,25 @@ TEST(DevicePollResponse, ZeroExpiresInUsesFutureJwtExpiry) {
   constexpr uint64_t kNow = 1000;
   constexpr uint64_t kJwtExpiry = 5000;
   const std::string accessToken = MakeJwt("eyJleHAiOjUwMDB9");
-  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":\"" + accessToken + "\",\"expires_in\":0}");
 
-  ASSERT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  ASSERT_EQ(response.status, nevr_token_auth::DevicePollStatus::Verified);
   ASSERT_TRUE(response.expires_in.has_value());
   EXPECT_EQ(*response.expires_in, 0U);
-  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
+  EXPECT_EQ(nevr_token_auth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
             kJwtExpiry);
 }
 
 TEST(DevicePollResponse, PendingExpiredAndErrorResponsesRemainDistinct) {
-  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}").status,
-            TokenAuth::DevicePollStatus::Pending);
-  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"status\":\"expired\"}").status,
-            TokenAuth::DevicePollStatus::Expired);
-  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"error\":\"access_denied\"}").status,
-            TokenAuth::DevicePollStatus::Error);
-  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("not json").status,
-            TokenAuth::DevicePollStatus::Error);
+  EXPECT_EQ(nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}").status,
+            nevr_token_auth::DevicePollStatus::Pending);
+  EXPECT_EQ(nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}").status,
+            nevr_token_auth::DevicePollStatus::Expired);
+  EXPECT_EQ(nevr_token_auth::ParseDevicePollResponse("{\"error\":\"access_denied\"}").status,
+            nevr_token_auth::DevicePollStatus::Error);
+  EXPECT_EQ(nevr_token_auth::ParseDevicePollResponse("not json").status,
+            nevr_token_auth::DevicePollStatus::Error);
 }
 
 TEST(DevicePollResponse, WrongTypedVerifiedFieldsRemainErrorAndExpiryTypesStayAbsent) {
@@ -365,25 +365,25 @@ TEST(DevicePollResponse, WrongTypedVerifiedFieldsRemainErrorAndExpiryTypesStayAb
     const std::string body = "{\"status\":\"verified\",\"access_token\":\"access\","
                              "\"refresh_token\":\"refresh\",\"user_id\":\"user\","
                              "\"username\":\"name\",\"" + field + "\":7}";
-    const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(body);
-    EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Error) << field;
+    const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(body);
+    EXPECT_EQ(response.status, nevr_token_auth::DevicePollStatus::Error) << field;
     EXPECT_TRUE(response.access_token.empty()) << field;
     EXPECT_TRUE(response.refresh_token.empty()) << field;
     EXPECT_TRUE(response.user_id.empty()) << field;
     EXPECT_TRUE(response.username.empty()) << field;
   }
 
-  const TokenAuth::DevicePollResponse malformedLegacyToken = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse malformedLegacyToken = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":7,\"refresh_token\":\"refresh\","
       "\"user_id\":\"user\",\"username\":\"name\"}");
-  EXPECT_EQ(malformedLegacyToken.status, TokenAuth::DevicePollStatus::Error);
+  EXPECT_EQ(malformedLegacyToken.status, nevr_token_auth::DevicePollStatus::Error);
   EXPECT_TRUE(malformedLegacyToken.access_token.empty());
   EXPECT_TRUE(malformedLegacyToken.refresh_token.empty());
 
-  const TokenAuth::DevicePollResponse wrongExpiry = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse wrongExpiry = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"access_token\":\"access\",\"expires_in\":\"3600\","
       "\"refresh_token_expires_in\":false}");
-  EXPECT_EQ(wrongExpiry.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(wrongExpiry.status, nevr_token_auth::DevicePollStatus::Verified);
   EXPECT_FALSE(wrongExpiry.expires_in.has_value());
   EXPECT_FALSE(wrongExpiry.refresh_token_expires_in.has_value());
 }
@@ -393,12 +393,12 @@ TEST(DevicePollResponse, WrongTypedVerifiedFieldsRemainErrorAndExpiryTypesStayAb
 // they are EQUAL cannot tell "read the new name" from "read the old one". They
 // differ here specifically so preference is observable.
 TEST(DevicePollResponse, PrefersRfcAccessTokenOverDeprecatedToken) {
-  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"access_token\":\"rfc\",\"token\":\"deprecated\","
       "\"token_type\":\"Bearer\",\"expires_in\":3600,\"refresh_token\":\"refresh\","
       "\"refresh_token_expires_in\":2592000,\"user_id\":\"user\",\"username\":\"name\"}");
 
-  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.status, nevr_token_auth::DevicePollStatus::Verified);
   EXPECT_EQ(response.access_token, "rfc");
   ASSERT_TRUE(response.expires_in.has_value());
   EXPECT_EQ(*response.expires_in, 3600U);
@@ -410,11 +410,11 @@ TEST(DevicePollResponse, PrefersRfcAccessTokenOverDeprecatedToken) {
 // sends neither access_token nor refresh_token_expires_in. A client that reads
 // only the RFC names authenticates against nothing there.
 TEST(DevicePollResponse, LegacyServerWithoutRfcFieldsStillAuthenticates) {
-  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":\"legacy\",\"refresh_token\":\"refresh\","
       "\"user_id\":\"user\",\"username\":\"name\"}");
 
-  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.status, nevr_token_auth::DevicePollStatus::Verified);
   EXPECT_EQ(response.access_token, "legacy");
   EXPECT_EQ(response.refresh_token, "refresh");
   EXPECT_FALSE(response.expires_in.has_value());
@@ -427,16 +427,16 @@ TEST(DevicePollResponse, LegacyServerWithoutRfcFieldsStillAuthenticates) {
 // negative. Adding that to `now` would place the expiry decades in the past and
 // look like a measured value. Absent is the honest answer.
 TEST(DevicePollResponse, NegativeExpiresInIsAbsentNotBackwards) {
-  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+  const nevr_token_auth::DevicePollResponse response = nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"access_token\":\"tok\",\"expires_in\":-1757300000,"
       "\"refresh_token\":\"refresh\",\"refresh_token_expires_in\":-1757300000}");
 
-  ASSERT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  ASSERT_EQ(response.status, nevr_token_auth::DevicePollStatus::Verified);
   EXPECT_FALSE(response.expires_in.has_value());
   EXPECT_FALSE(response.refresh_token_expires_in.has_value());
 
   constexpr uint64_t kNow = 1000;
-  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
+  EXPECT_EQ(nevr_token_auth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
             kNow + kFallbackAccessTokenLifetimeSec);
   EXPECT_GT(ResolveRefreshTokenExpirySec(kNow, response.refresh_token_expires_in), kNow);
 }
@@ -487,7 +487,7 @@ TEST(AccessTokenExpiry, RefreshAndPollPathsShareOneAuthorityOrder) {
   const std::string jwt = MakeJwt("eyJleHAiOjUwMDB9");
 
   EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, jwt, 10),
-            TokenAuth::ResolveAccessTokenExpiry(kNow, jwt, 10));
+            nevr_token_auth::ResolveAccessTokenExpiry(kNow, jwt, 10));
   EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, jwt, 10), 5000U);
   // No decodable exp: the server's expires_in is next, not a fixed 60 seconds.
   EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, "opaque", 3600), kNow + 3600U);
@@ -498,15 +498,15 @@ TEST(AccessTokenExpiry, RefreshAndPollPathsShareOneAuthorityOrder) {
 TEST(DevicePollResponse, JwtExpiryTakesPrecedenceThenFallsBack) {
   constexpr uint64_t kNow = 1000;
   const std::string jwt = MakeJwt("eyJleHAiOjUwMDB9");
-  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, jwt, 10), 5000U);
-  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", 10), 1010U);
-  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", std::nullopt),
+  EXPECT_EQ(nevr_token_auth::ResolveAccessTokenExpiry(kNow, jwt, 10), 5000U);
+  EXPECT_EQ(nevr_token_auth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", 10), 1010U);
+  EXPECT_EQ(nevr_token_auth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", std::nullopt),
             kNow + kFallbackAccessTokenLifetimeSec);
 }
 
 namespace {
 
-using FlowClock = TokenAuth::TestHook::DeviceAuthFlowOps::Clock;
+using FlowClock = nevr_token_auth::test_hook::DeviceAuthFlowOps::Clock;
 
 struct FakeDeviceAuthFlow {
   FlowClock::time_point current{};
@@ -527,14 +527,14 @@ struct FakeDeviceAuthFlow {
   std::string ui_code;
   std::string ui_url;
   intptr_t ui_browser_result = -1;
-  TokenAuth::DevicePollResponse poll_response;
-  std::vector<TokenAuth::DevicePollResponse> poll_sequence;
+  nevr_token_auth::DevicePollResponse poll_response;
+  std::vector<nevr_token_auth::DevicePollResponse> poll_sequence;
   size_t poll_sequence_index = 0;
   std::vector<FlowClock::duration> sleep_durations;
   std::vector<std::pair<EchoVR::LogLevel, std::string>> logs;
 
-  TokenAuth::TestHook::DeviceAuthFlowOps Ops() {
-    TokenAuth::TestHook::DeviceAuthFlowOps ops;
+  nevr_token_auth::test_hook::DeviceAuthFlowOps Ops() {
+    nevr_token_auth::test_hook::DeviceAuthFlowOps ops;
     ops.now = [this]() { return current; };
     ops.request_device_code = [this]() {
       ++request_calls;
@@ -579,8 +579,8 @@ struct FakeDeviceAuthFlow {
   }
 };
 
-TokenAuth::TestHook::DeviceAuthState ExistingDeviceAuthState() {
-  TokenAuth::TestHook::DeviceAuthState state;
+nevr_token_auth::test_hook::DeviceAuthState ExistingDeviceAuthState() {
+  nevr_token_auth::test_hook::DeviceAuthState state;
   state.token = "existing-access-token";
   state.token_expiry = static_cast<uint64_t>(std::time(nullptr)) + 3600U;
   state.refresh_token = "existing-refresh-token";
@@ -592,8 +592,8 @@ TokenAuth::TestHook::DeviceAuthState ExistingDeviceAuthState() {
   return state;
 }
 
-void ExpectSameDeviceAuthState(const TokenAuth::TestHook::DeviceAuthState& actual,
-                               const TokenAuth::TestHook::DeviceAuthState& expected) {
+void ExpectSameDeviceAuthState(const nevr_token_auth::test_hook::DeviceAuthState& actual,
+                               const nevr_token_auth::test_hook::DeviceAuthState& expected) {
   EXPECT_EQ(actual.authenticated, expected.authenticated);
   EXPECT_EQ(actual.token, expected.token);
   EXPECT_EQ(actual.token_expiry, expected.token_expiry);
@@ -604,8 +604,8 @@ void ExpectSameDeviceAuthState(const TokenAuth::TestHook::DeviceAuthState& actua
   EXPECT_EQ(actual.discord_id, expected.discord_id);
 }
 
-TokenAuth::DevicePollResponse VerifiedPollResponse() {
-  return TokenAuth::ParseDevicePollResponse(
+nevr_token_auth::DevicePollResponse VerifiedPollResponse() {
+  return nevr_token_auth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"access_token\":\"" +
       MakeJwt("eyJ2cnMiOnsiZGlkIjoiNDIifSwiZXhwIjo0MTAyNDQ0ODAwfQ") +
       "\",\"refresh_token\":\"new-refresh\",\"user_id\":\"new-user\","
@@ -617,7 +617,7 @@ TokenAuth::DevicePollResponse VerifiedPollResponse() {
 TEST(DeviceAuthFlow, ServerRefusesBeforeAnyHttpBrowserUiOrPollOperation) {
   FakeDeviceAuthFlow fake;
   const auto original = ExistingDeviceAuthState();
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(true, original, fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(true, original, fake.Ops());
 
   EXPECT_FALSE(result.success);
   ExpectSameDeviceAuthState(result.state, original);
@@ -633,7 +633,7 @@ TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo
     FakeDeviceAuthFlow fake;
     fake.browser_result = resultCode;
     fake.ui_result = 0;
-    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+    const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
     EXPECT_FALSE(flow.success) << resultCode;
     EXPECT_EQ(fake.browser_calls, 1) << resultCode;
@@ -662,8 +662,8 @@ TEST(DeviceAuthFlow, DismissalContinuesButUiDeadlineUsesOriginalFiveMinuteBudget
     FakeDeviceAuthFlow fake;
     fake.browser_result = 32;
     fake.ui_elapsed = std::chrono::seconds(elapsedSeconds);
-    fake.poll_response.status = TokenAuth::DevicePollStatus::Pending;
-    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+    fake.poll_response.status = nevr_token_auth::DevicePollStatus::Pending;
+    const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
     EXPECT_FALSE(flow.success) << elapsedSeconds;
     EXPECT_EQ(fake.ui_calls, 1);
@@ -685,7 +685,7 @@ TEST(DeviceAuthFlow, BrowserThatReturnsAfterDeadlineDoesNotStartPolling) {
   fake.poll_response = VerifiedPollResponse();
   const auto original = ExistingDeviceAuthState();
 
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, fake.Ops());
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(fake.ui_calls, 0);
@@ -698,10 +698,10 @@ TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineThatIsNotVerifiedDoesNotMutateOr
   for (const char* body : {R"({"status":"pending"})", R"({"status":"expired"})"}) {
     for (const auto elapsedSeconds : {300, 301}) {
       FakeDeviceAuthFlow fake;
-      fake.poll_response = TokenAuth::ParseDevicePollResponse(body);
+      fake.poll_response = nevr_token_auth::ParseDevicePollResponse(body);
       fake.poll_elapsed = std::chrono::seconds(elapsedSeconds - 3);
       const auto original = ExistingDeviceAuthState();
-      const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+      const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, fake.Ops());
 
       EXPECT_FALSE(flow.success) << body << " " << elapsedSeconds;
       EXPECT_EQ(fake.poll_calls, 1);
@@ -720,7 +720,7 @@ TEST(DeviceAuthFlow, VerifiedPollResultReturningAtOrAfterDeadlineIsApplied) {
     fake.poll_response = VerifiedPollResponse();
     fake.poll_elapsed = std::chrono::seconds(elapsedSeconds - 3);
     const auto original = ExistingDeviceAuthState();
-    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+    const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, fake.Ops());
 
     EXPECT_TRUE(flow.success) << elapsedSeconds;
     EXPECT_EQ(fake.poll_calls, 1);
@@ -737,7 +737,7 @@ TEST(DeviceAuthFlow, SleepIsCappedAtDeadlineAndTimelyVerificationAppliesAndSaves
   fake.ui_result = 1;
   fake.poll_response = VerifiedPollResponse();
   fake.save_result = false;  // Save failure must not undo successful in-memory auth.
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_FALSE(result.success);  // 298s + capped 2s reaches the deadline before polling.
   EXPECT_EQ(fake.poll_calls, 0);
@@ -751,7 +751,7 @@ TEST(DeviceAuthFlow, SleepIsCappedAtDeadlineAndTimelyVerificationAppliesAndSaves
   timely.save_result = false;
   const auto original = ExistingDeviceAuthState();
   const uint64_t wallClockBefore = static_cast<uint64_t>(std::time(nullptr));
-  const auto success = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, timely.Ops());
+  const auto success = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, timely.Ops());
   const uint64_t wallClockAfter = static_cast<uint64_t>(std::time(nullptr));
   EXPECT_TRUE(success.success);
   EXPECT_EQ(timely.save_calls, 1);
@@ -774,7 +774,7 @@ TEST(DeviceAuthFlow, DeadlineStartsAfterTheNonemptyDeviceCodeResponse) {
   fake.ui_result = 1;
   fake.poll_response = VerifiedPollResponse();
 
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_TRUE(result.success);
   ASSERT_EQ(fake.sleep_durations.size(), 1U);
@@ -787,19 +787,19 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
   FakeDeviceAuthFlow uiFailure;
   uiFailure.browser_result = 32;
   uiFailure.ui_result = 0;
-  (void)TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), uiFailure.Ops());
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), uiFailure.Ops());
 
   FakeDeviceAuthFlow polling;
   polling.browser_result = 33;
   for (unsigned int index = 0; index < 10; ++index) {
-    TokenAuth::DevicePollResponse pending;
-    pending.status = TokenAuth::DevicePollStatus::Pending;
+    nevr_token_auth::DevicePollResponse pending;
+    pending.status = nevr_token_auth::DevicePollStatus::Pending;
     polling.poll_sequence.push_back(pending);
   }
-  TokenAuth::DevicePollResponse error;
-  error.status = TokenAuth::DevicePollStatus::Error;
+  nevr_token_auth::DevicePollResponse error;
+  error.status = nevr_token_auth::DevicePollStatus::Error;
   polling.poll_sequence.push_back(error);
-  (void)TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), polling.Ops());
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), polling.Ops());
 
   EXPECT_EQ(polling.browser_url, "https://echovrce.com/login/device?code=device-code-secret-sentinel");
   EXPECT_EQ(uiFailure.ui_code, uiFailure.code);
@@ -829,12 +829,12 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
 TEST(DeviceAuthFlow, CancellationStopsTheWaitWithoutPollingOrSaving) {
   FakeDeviceAuthFlow fake;
   fake.browser_result = 33;
-  fake.poll_response = TokenAuth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
+  fake.poll_response = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
   int wakeups = 0;
   auto ops = fake.Ops();
   ops.cancelled = [&wakeups]() { return ++wakeups >= 3; };  // cancelled at the third wake-up
   const auto original = ExistingDeviceAuthState();
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, ops);
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, ops);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(fake.poll_calls, 2) << "polled after the first two wake-ups, not after the cancelled one";
@@ -851,7 +851,7 @@ TEST(DeviceAuthFlow, WithoutACancellationHookTheFlowIsUnchanged) {
   FakeDeviceAuthFlow fake;
   fake.browser_result = 33;
   fake.poll_response = VerifiedPollResponse();
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
   EXPECT_TRUE(result.success);
   EXPECT_EQ(fake.save_calls, 1);
 }
@@ -860,7 +860,7 @@ TEST(DeviceAuthFlow, WithoutACancellationHookTheFlowIsUnchanged) {
 // caller's window stays responsive; the caller still gets the flow's result before it continues.
 TEST(OffThreadWait, FlowRunsOnAWorkerWhileTheCallerPumps) {
   std::atomic<int> pumps{0};
-  const auto r = TokenAuth::RunWhilePumping(
+  const auto r = nevr_token_auth::RunWhilePumping(
       [&pumps]() {
         // Block until the caller has pumped a few times: proves the caller is not blocked on us.
         while (pumps.load() < 3) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -876,10 +876,10 @@ TEST(OffThreadWait, FlowRunsOnAWorkerWhileTheCallerPumps) {
 }
 
 TEST(OffThreadWait, FlowResultAndThrowAreReported) {
-  const auto failed = TokenAuth::RunWhilePumping([]() { return false; }, []() {}, std::chrono::milliseconds(1));
+  const auto failed = nevr_token_auth::RunWhilePumping([]() { return false; }, []() {}, std::chrono::milliseconds(1));
   EXPECT_FALSE(failed.flowResult);
   EXPECT_FALSE(failed.flowThrew);
-  const auto threw = TokenAuth::RunWhilePumping(
+  const auto threw = nevr_token_auth::RunWhilePumping(
       []() -> bool { throw std::runtime_error("flow failed"); }, []() {}, std::chrono::milliseconds(1));
   EXPECT_FALSE(threw.flowResult);
   EXPECT_TRUE(threw.flowThrew);
@@ -888,7 +888,7 @@ TEST(OffThreadWait, FlowResultAndThrowAreReported) {
 // A flow that finishes before the first interval elapses needs no pumping at all.
 TEST(OffThreadWait, QuickFlowNeedsNoPump) {
   int pumps = 0;
-  const auto r = TokenAuth::RunWhilePumping([]() { return true; }, [&pumps]() { ++pumps; },
+  const auto r = nevr_token_auth::RunWhilePumping([]() { return true; }, [&pumps]() { ++pumps; },
                                             std::chrono::milliseconds(10'000));
   EXPECT_TRUE(r.flowResult);
   EXPECT_EQ(pumps, 0);
@@ -900,12 +900,12 @@ TEST(OffThreadWait, QuickFlowNeedsNoPump) {
 TEST(DeviceAuthFlow, TransientPollErrorsAreRetriedUntilVerified) {
   FakeDeviceAuthFlow fake;
   fake.browser_result = 33;
-  TokenAuth::DevicePollResponse error;
-  error.status = TokenAuth::DevicePollStatus::Error;
+  nevr_token_auth::DevicePollResponse error;
+  error.status = nevr_token_auth::DevicePollStatus::Error;
   fake.poll_sequence = {error, error, error, error};
   fake.poll_response = VerifiedPollResponse();
 
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_TRUE(result.success);
   EXPECT_EQ(fake.poll_calls, 5);
@@ -915,9 +915,9 @@ TEST(DeviceAuthFlow, TransientPollErrorsAreRetriedUntilVerified) {
 TEST(DeviceAuthFlow, ConsecutivePollErrorsEndTheWaitAfterTheLimit) {
   FakeDeviceAuthFlow fake;
   fake.browser_result = 33;
-  fake.poll_response.status = TokenAuth::DevicePollStatus::Error;
+  fake.poll_response.status = nevr_token_auth::DevicePollStatus::Error;
 
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(fake.poll_calls, 5);
@@ -927,14 +927,14 @@ TEST(DeviceAuthFlow, ConsecutivePollErrorsEndTheWaitAfterTheLimit) {
 TEST(DeviceAuthFlow, AnAnsweredPollResetsTheErrorRun) {
   FakeDeviceAuthFlow fake;
   fake.browser_result = 33;
-  TokenAuth::DevicePollResponse error;
-  error.status = TokenAuth::DevicePollStatus::Error;
-  TokenAuth::DevicePollResponse pending;
-  pending.status = TokenAuth::DevicePollStatus::Pending;
+  nevr_token_auth::DevicePollResponse error;
+  error.status = nevr_token_auth::DevicePollStatus::Error;
+  nevr_token_auth::DevicePollResponse pending;
+  pending.status = nevr_token_auth::DevicePollStatus::Pending;
   fake.poll_sequence = {error, error, error, error, pending, error, error, error, error};
   fake.poll_response = VerifiedPollResponse();
 
-  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
 
   EXPECT_TRUE(result.success);
   EXPECT_EQ(fake.poll_calls, 10);
@@ -957,9 +957,9 @@ TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {
 
   for (const std::string& body : malformedBodies) {
     FakeDeviceAuthFlow fake;
-    fake.poll_response = TokenAuth::ParseDevicePollResponse(body);
-    ASSERT_EQ(fake.poll_response.status, TokenAuth::DevicePollStatus::Error);
-    const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+    fake.poll_response = nevr_token_auth::ParseDevicePollResponse(body);
+    ASSERT_EQ(fake.poll_response.status, nevr_token_auth::DevicePollStatus::Error);
+    const auto result = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, original, fake.Ops());
 
     EXPECT_FALSE(result.success) << body;
     EXPECT_EQ(fake.save_calls, 0) << body;
@@ -971,26 +971,26 @@ TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
   const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
-  const auto snapshot = TokenAuth::GetAuthSnapshot();
+  const auto snapshot = nevr_token_auth::GetAuthSnapshot();
   ASSERT_NE(snapshot, nullptr);
-  EXPECT_EQ(snapshot->readiness, TokenAuth::AuthReadiness::Disabled);
-  EXPECT_TRUE(TokenAuth::GetToken().empty());
-  EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
-  EXPECT_TRUE(TokenAuth::GetUsername().empty());
+  EXPECT_EQ(snapshot->readiness, nevr_token_auth::AuthReadiness::Disabled);
+  EXPECT_TRUE(nevr_token_auth::GetToken().empty());
+  EXPECT_EQ(nevr_token_auth::GetDiscordId(), 0U);
+  EXPECT_TRUE(nevr_token_auth::GetUsername().empty());
   token_auth_Shutdown();
-  EXPECT_EQ(TokenAuth::GetAuthSnapshot()->readiness, TokenAuth::AuthReadiness::Disabled);
+  EXPECT_EQ(nevr_token_auth::GetAuthSnapshot()->readiness, nevr_token_auth::AuthReadiness::Disabled);
 }
 
 TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
   const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
-  const auto snapshot = TokenAuth::GetAuthSnapshot();
+  const auto snapshot = nevr_token_auth::GetAuthSnapshot();
   ASSERT_NE(snapshot, nullptr);
-  EXPECT_EQ(snapshot->readiness, TokenAuth::AuthReadiness::Disabled);
-  EXPECT_TRUE(TokenAuth::GetToken().empty());
-  EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
-  EXPECT_TRUE(TokenAuth::GetUsername().empty());
+  EXPECT_EQ(snapshot->readiness, nevr_token_auth::AuthReadiness::Disabled);
+  EXPECT_TRUE(nevr_token_auth::GetToken().empty());
+  EXPECT_EQ(nevr_token_auth::GetDiscordId(), 0U);
+  EXPECT_TRUE(nevr_token_auth::GetUsername().empty());
   token_auth_Shutdown();
 }
 
@@ -999,13 +999,13 @@ TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
 }
 
 TEST(AuthSnapshotStore, PublishedSnapshotIsImmutableAndGetsANewGeneration) {
-  TokenAuth::AuthSnapshotStore store;
+  nevr_token_auth::AuthSnapshotStore store;
   const auto initial = store.Read();
   ASSERT_NE(initial, nullptr);
   EXPECT_EQ(initial->generation, 0U);
 
-  TokenAuth::AuthSnapshot first;
-  first.readiness = TokenAuth::AuthReadiness::Ready;
+  nevr_token_auth::AuthSnapshot first;
+  first.readiness = nevr_token_auth::AuthReadiness::Ready;
   first.access_token = "token-first";
   first.access_expiry = 1000;
   first.discord_id = 11;
@@ -1013,8 +1013,8 @@ TEST(AuthSnapshotStore, PublishedSnapshotIsImmutableAndGetsANewGeneration) {
   first.username = "name-first";
   const auto publishedFirst = store.Publish(std::move(first));
 
-  TokenAuth::AuthSnapshot second;
-  second.readiness = TokenAuth::AuthReadiness::Ready;
+  nevr_token_auth::AuthSnapshot second;
+  second.readiness = nevr_token_auth::AuthReadiness::Ready;
   second.access_token = "token-second";
   second.access_expiry = 2000;
   second.discord_id = 22;
@@ -1034,7 +1034,7 @@ TEST(AuthSnapshotStore, PublishedSnapshotIsImmutableAndGetsANewGeneration) {
 }
 
 TEST(AuthSnapshotStore, ConcurrentReadersNeverObserveMixedGenerations) {
-  TokenAuth::AuthSnapshotStore store;
+  nevr_token_auth::AuthSnapshotStore store;
   std::atomic<bool> done{false};
   std::atomic<bool> mismatch{false};
   constexpr uint64_t kPublishCount = 20000;
@@ -1058,8 +1058,8 @@ TEST(AuthSnapshotStore, ConcurrentReadersNeverObserveMixedGenerations) {
   std::thread readerOne(reader);
   std::thread readerTwo(reader);
   for (uint64_t id = 1; id <= kPublishCount; ++id) {
-    TokenAuth::AuthSnapshot snapshot;
-    snapshot.readiness = TokenAuth::AuthReadiness::Ready;
+    nevr_token_auth::AuthSnapshot snapshot;
+    snapshot.readiness = nevr_token_auth::AuthReadiness::Ready;
     snapshot.access_token = "token-" + std::to_string(id);
     snapshot.access_expiry = id + 1000U;
     snapshot.discord_id = id;
@@ -1074,7 +1074,7 @@ TEST(AuthSnapshotStore, ConcurrentReadersNeverObserveMixedGenerations) {
 }
 
 TEST(AuthCancellation, StopRequestWakesWaitersAndRemainsObservable) {
-  TokenAuth::AuthCancellation cancellation;
+  nevr_token_auth::AuthCancellation cancellation;
   std::atomic<bool> enteredWait{false};
   std::atomic<bool> wokeForStop{false};
   std::thread waiter([&] {
