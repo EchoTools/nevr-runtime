@@ -871,7 +871,7 @@ test-quest-integration:
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
         src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
-        src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
     # 2. the hook translation units and the counter budget
@@ -905,14 +905,15 @@ test-quest-integration:
         "$out/login_prompt_hook.o" "$out/prompt_board.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
-    # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
+    # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
+    # builds when none is injected)
     "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
-        src/quest/tests/integrated_bridge_test.cpp src/quest/integration/integrated_bridge.cpp \
-        src/quest/integration/tapped_transports.cpp src/quest/integration/frame_tap.cpp \
+        src/quest/tests/session_bridge_test.cpp src/quest/net/session_bridge.cpp src/quest/net/frame_tap.cpp \
+        src/quest/net/curl_ws_connector.cpp src/quest/auth/ca_bundle.cpp \
         src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/runtime/server/serverdb_uri.cpp \
-        -o "$out/integrated_bridge_test" $(pkg-config --libs libcurl)
-    timeout 300 "$out/integrated_bridge_test"
+        -o "$out/session_bridge_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the

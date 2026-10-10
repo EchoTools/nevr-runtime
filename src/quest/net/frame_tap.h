@@ -13,7 +13,7 @@
 #include <string_view>
 #include <utility>
 
-namespace nevr_quest::integration {
+namespace quest_net {
 
 struct FrameTapSinks {
   // Every frame, with its direction. May be empty.
@@ -39,4 +39,4 @@ class FrameTap {
 // (Exposed for the test.)
 bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) noexcept;
 
-}  // namespace nevr_quest::integration
+}  // namespace quest_net

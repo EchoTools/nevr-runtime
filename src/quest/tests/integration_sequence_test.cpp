@@ -16,11 +16,11 @@
 
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
-#include "quest/integration/frame_tap.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/stage_log.h"
+#include "quest/net/frame_tap.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 
@@ -37,6 +37,8 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace nevr_quest;
 using namespace nevr_quest::integration;
+using quest_net::FrameTap;
+using quest_net::FrameTapSinks;
 
 namespace {
 
