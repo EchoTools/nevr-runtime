@@ -20,6 +20,7 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **On close without merge:** same, the creator, same turn.
 - **No PR within 24 hours:** open one or delete the branch.
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
+- **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
 
 ## Build Commands
