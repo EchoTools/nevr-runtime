@@ -13,7 +13,7 @@
 
 #include <cstdint>
 
-namespace StackAllocCheck {
+namespace nevr_stack_alloc_check {
 
 struct Result {
   bool fits;
@@ -30,4 +30,4 @@ inline Result Check(std::uint64_t field38, std::uint64_t field40, std::uint64_t 
   return {start + rounded <= field38 + field40, rounded, start, (field38 - field40) + start + rounded};
 }
 
-}  // namespace StackAllocCheck
+}  // namespace nevr_stack_alloc_check

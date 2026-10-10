@@ -161,7 +161,7 @@ set(PATCHES_HEADERS
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_compile_definitions(nevr_runtime PRIVATE USE_MINHOOK PROTOBUF_STATIC_LIB)
+target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
 target_precompile_headers(nevr_runtime PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")
 # NOTE: neither ${CMAKE_CURRENT_SOURCE_DIR} nor any subdirectory of it is on
@@ -183,7 +183,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -271,15 +271,15 @@ if(MINGW)
 endif()
 
 if(MINGW)
-  add_library(dbghelp_stubs_gp STATIC link/dbghelp_stubs.cpp)
-  target_compile_definitions(dbghelp_stubs_gp PRIVATE PROTOBUF_STATIC_LIB)
-  set_target_properties(dbghelp_stubs_gp PROPERTIES
+  add_library(nevr_dbghelp_stubs STATIC link/dbghelp_stubs.cpp)
+  target_compile_definitions(nevr_dbghelp_stubs PRIVATE PROTOBUF_STATIC_LIB)
+  set_target_properties(nevr_dbghelp_stubs PROPERTIES
     OUTPUT_NAME "dbghelp"
     PREFIX "lib"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
   )
   target_link_directories(nevr_runtime BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stubs")
-  add_dependencies(nevr_runtime dbghelp_stubs_gp)
+  add_dependencies(nevr_runtime nevr_dbghelp_stubs)
 endif()
 
 if(MINGW)
@@ -319,12 +319,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_export_trace PRIVATE GTest::gtest GTest::gtest_main)
     # A stand-in module the test loads: named pnsrad.dll (the tracer identifies a platform DLL by file name),
     # with a code export and a data export, in its own directory next to the test.
-    add_library(export_trace_fixture MODULE tests/export_trace_fixture.cpp)
-    set_target_properties(export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
+    add_library(nevr_export_trace_fixture MODULE tests/export_trace_fixture.cpp)
+    set_target_properties(nevr_export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture"
       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture")
     set_source_files_properties(tests/export_trace_fixture.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    add_dependencies(test_export_trace export_trace_fixture)
+    add_dependencies(test_export_trace nevr_export_trace_fixture)
     gtest_discover_tests(test_export_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_system_module_loader
@@ -507,10 +507,12 @@ if(BUILD_TESTING)
       tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp)
     set_source_files_properties(tests/test_mic_lifecycle.cpp tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_mic_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -633,7 +635,7 @@ if(BUILD_TESTING)
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
       compat/social_names.cpp)
-    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS USE_MINHOOK)
+    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK)
     set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp compat/social_names.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_social_facade PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -661,7 +663,7 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_hooking tests/test_hooking.cpp)
-    target_compile_definitions(test_hooking PRIVATE USE_MINHOOK)
+    target_compile_definitions(test_hooking PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
@@ -670,7 +672,7 @@ if(BUILD_TESTING)
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
     set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE USE_MINHOOK)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
@@ -710,7 +712,7 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
-      # ws_bridge.cpp calls SystemInfo::Get(). Linked as a source rather than
+      # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
       # would collide. system_info.cpp depends on nothing but Win32, so it
@@ -733,16 +735,16 @@ if(BUILD_TESTING)
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
-      # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
+      # N84: plugin_loader calls nevr_hook_guard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
       hook/hook_liveness.cpp
     )
-    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS USE_MINHOOK
-      PROJECT_VERSION="${PROJECT_VERSION}"
-      GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-      GIT_DESCRIBE="${GIT_DESCRIBE}"
+    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
+      NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
+      NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+      NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
@@ -845,7 +847,7 @@ if(BUILD_TESTING)
       ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/src/modules/token-auth/src)
     target_link_libraries(test_token_auth PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth_test_hooks)
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json nevr_token_auth_test_hooks)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_messages tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp)

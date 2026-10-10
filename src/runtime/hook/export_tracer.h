@@ -19,7 +19,7 @@
 //   summary   module= export= calls= total_dur_ns= max_dur_ns= last_ret=        every 10 s, per export that was called
 //   dropped   count=<n>                                                          only if the ring overflowed
 
-namespace ExportTracer {
+namespace nevr_export_tracer {
 
 /// Reads the selection (a `-traceexports` value), arms the thunk ring and starts the drain thread when it
 /// names a module. Idempotent: only the first call has an effect.
@@ -47,4 +47,4 @@ bool Enabled();
 /// where it reads a value), or no thunk could be made; otherwise a thunk that forwards to `resolved`.
 void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved);
 
-}  // namespace ExportTracer
+}  // namespace nevr_export_tracer

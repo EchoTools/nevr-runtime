@@ -93,16 +93,16 @@ static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 // stub bodies.
 static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name) {
   if (!symbol_name) return nullptr;
-  uintptr_t pnsradBase = PnsradEnabler::GetModuleBase();
+  uintptr_t pnsradBase = nevr_pnsrad_enabler::GetModuleBase();
   if (pnsradBase == 0 || reinterpret_cast<uintptr_t>(dll_handle) != pnsradBase) return nullptr;
 
-  if (strcmp(symbol_name, "MicAvailable") == 0) return reinterpret_cast<void*>(&MicProvider::MicAvailable);
-  if (strcmp(symbol_name, "MicCreate") == 0) return reinterpret_cast<void*>(&MicProvider::MicCreate);
-  if (strcmp(symbol_name, "MicDetected") == 0) return reinterpret_cast<void*>(&MicProvider::MicDetected);
-  if (strcmp(symbol_name, "MicRead") == 0) return reinterpret_cast<void*>(&MicProvider::MicRead);
-  if (strcmp(symbol_name, "MicStart") == 0) return reinterpret_cast<void*>(&MicProvider::MicStart);
-  if (strcmp(symbol_name, "MicStop") == 0) return reinterpret_cast<void*>(&MicProvider::MicStop);
-  if (strcmp(symbol_name, "MicDestroy") == 0) return reinterpret_cast<void*>(&MicProvider::MicDestroy);
+  if (strcmp(symbol_name, "MicAvailable") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicAvailable);
+  if (strcmp(symbol_name, "MicCreate") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicCreate);
+  if (strcmp(symbol_name, "MicDetected") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicDetected);
+  if (strcmp(symbol_name, "MicRead") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicRead);
+  if (strcmp(symbol_name, "MicStart") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicStart);
+  if (strcmp(symbol_name, "MicStop") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicStop);
+  if (strcmp(symbol_name, "MicDestroy") == 0) return reinterpret_cast<void*>(&nevr_mic_provider::MicDestroy);
   // MicBufferSize/MicCaptureSize/MicSampleRate are NOT overridden: pnsrad's
   // own (unmodified) answers are already correct (24000/2400/48000) and
   // nothing downstream needs them to change.
@@ -112,10 +112,10 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
-  static const bool tracerConfigured = (ExportTracer::ConfigureFromCommandLine(), true);
+  static const bool tracerConfigured = (nevr_export_tracer::ConfigureFromCommandLine(), true);
   static_cast<void>(tracerConfigured);
   const auto traced = [dll_handle, symbol_name](void* resolved) {
-    return ExportTracer::WrapSymbol(dll_handle, symbol_name, resolved);
+    return nevr_export_tracer::WrapSymbol(dll_handle, symbol_name, resolved);
   };
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
@@ -295,7 +295,7 @@ static VOID InitializeAfterGameImageGuard() {
   // static-CRT build (see boot_log_tee.h DESIGN DECISION and N43).
   nevr_boot_log_tee::Init();
 
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", PROJECT_VERSION, EchoVR::g_GameBaseAddress);
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
@@ -311,15 +311,15 @@ static VOID InitializeAfterGameImageGuard() {
   // Observe the platform Social factory result on every run. The hook preserves
   // a real provider object and substitutes the façade only for a null one, unless
   // `social.facade: false` turns the substitution off.
-  SocialFacade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  nevr_social_facade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // The early quit lockout: the shipped client cannot show it from any game service message
   // (early_quit_lockout.h).
-  EarlyQuitLockout::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  nevr_early_quit_lockout::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
-  DllLoadHook::Install();
+  nevr_dll_load_hook::Install();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
 
   // --- Headless graphics stubs (DXGI/D3D11 interception) ---
@@ -380,7 +380,7 @@ static VOID InitializeAfterGameImageGuard() {
 
   // --- Broadcaster dispatch guard ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing broadcaster guard...\n");
-  BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  nevr_broadcaster_guard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   // Truthful outcome: Install() is an empty placeholder (broadcaster_guard.cpp).
   // The previous line here read "broadcaster guard installed" — a log line
   // asserting a fact that is false in the source it describes. An operator (or
@@ -454,7 +454,7 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
   const bool vehInstalled = InstallVEH();
   InstallCrashFilterInstrumentation();
-  nevr_boot_log_tee::TeeFprintf("%s", VehPolicy::BootLine(vehInstalled));
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehInstalled));
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");
@@ -470,7 +470,7 @@ static VOID InitializeAfterGameImageGuard() {
 
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing binary bug fix hooks...\n");
-  BinaryBugFixes::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  nevr_binary_bug_fixes::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] binary bug fix hooks installed\n");
 
   // --- CDN asset loading ---
@@ -497,5 +497,5 @@ static void InitializeValidatedGameModule(HMODULE module) {
 }
 
 void InitializeGameModule(HMODULE module) {
-  GameImageGuard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
+  nevr_game_image_guard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
 }

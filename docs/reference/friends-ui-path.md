@@ -51,9 +51,7 @@ No other file under `echovr/bin/win10` posts it, and neither `revault search cod
 ## What this says about the UI
 
 - The friends list is drawn by the social script `e9b0db765f1eb096`, and the refresh is requested
-  through its `evt_refresh_friends` event. The existing run record in
-  `docs/design/2026-10-01-social-features-test-plan.md` (row 1) says the 2026-09-30 owner run showed
-  names and presence.
+  through its `evt_refresh_friends` event.
 - `d74afbc03c66a45e` ties a refresh to a page being enabled (`delegate_onpage2enabled`) while
   logged in: its node-transition table runs the logged-in check (`0xe44da977`) between the
   page-enable delegate (`0x95d4d232`) and the nodes after it.

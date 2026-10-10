@@ -13,7 +13,7 @@
 
 namespace {
 
-namespace Policy = ExportTracePolicy;
+namespace Policy = nevr_export_trace_policy;
 
 constexpr std::size_t kNameBytes = 48;
 
@@ -25,7 +25,7 @@ struct Slot {
 };
 
 // Static storage, no dynamic initializer: a tracer that is off costs nothing at DLL load.
-Slot g_slots[ExportTrace::kMaxThunks];
+Slot g_slots[nevr_export_trace::kMaxThunks];
 std::uint32_t g_slotCount = 0;
 std::atomic<std::uint32_t> g_mask{0};
 std::atomic<bool> g_configured{false};
@@ -44,7 +44,7 @@ struct Stats {
   std::uint64_t maxTicks;
   std::uint64_t lastRet;
 };
-Stats g_stats[ExportTrace::kMaxThunks];
+Stats g_stats[nevr_export_trace::kMaxThunks];
 
 std::uint64_t Rdtsc() {
   std::uint32_t lo, hi;
@@ -108,8 +108,8 @@ DWORD WINAPI DrainMain(LPVOID) {
     const DWORD wait = WaitForSingleObject(g_stopEvent, 250);
     nevr::CallRecord r;
     const double nsPerTick = clock.NsPerTick();
-    while (ExportTrace::Pop(&r)) {
-      if (r.exportId >= ExportTrace::kMaxThunks) continue;
+    while (nevr_export_trace::Pop(&r)) {
+      if (r.exportId >= nevr_export_trace::kMaxThunks) continue;
       Stats& s = g_stats[r.exportId];
       const std::uint64_t ticks = r.exitTicks - r.enterTicks;
       if (s.calls < Policy::kFullLogCalls) LogCall(r, s.calls + 1, nsPerTick);
@@ -118,7 +118,7 @@ DWORD WINAPI DrainMain(LPVOID) {
       if (ticks > s.maxTicks) s.maxTicks = ticks;
       s.lastRet = r.ret;
     }
-    const std::uint64_t dropped = ExportTrace::Dropped();
+    const std::uint64_t dropped = nevr_export_trace::Dropped();
     if (dropped != lastDropped) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.TRACE] dropped count=%llu (the ring overflowed between drains)",
           static_cast<unsigned long long>(dropped));
@@ -151,7 +151,7 @@ bool PointsToCodeImpl(const void* address) {
 
 }  // namespace
 
-namespace ExportTracer {
+namespace nevr_export_tracer {
 
 void ConfigureFromCommandLineText(const wchar_t* commandLine) {
   char list[64];
@@ -181,7 +181,7 @@ void Configure(const char* list) {
         list != nullptr ? list : "");
   }
   if (mask == 0) return;
-  ExportTrace::Reset();
+  nevr_export_trace::Reset();
   g_stopEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
   g_thread = g_stopEvent != nullptr ? CreateThread(nullptr, 0, &DrainMain, nullptr, 0, nullptr) : nullptr;
   if (g_thread == nullptr) {
@@ -222,9 +222,9 @@ void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved) {
         return g_slots[i].thunk;
       }
     }
-    if (g_slotCount >= ExportTrace::kMaxThunks) return resolved;
+    if (g_slotCount >= nevr_export_trace::kMaxThunks) return resolved;
     id = g_slotCount;
-    thunk = ExportTrace::MakeThunk(resolved, id);
+    thunk = nevr_export_trace::MakeThunk(resolved, id);
     if (thunk == nullptr) return resolved;
     Slot& slot = g_slots[id];
     std::strncpy(slot.name, symbol, kNameBytes - 1);
@@ -242,4 +242,4 @@ void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved) {
   return thunk;
 }
 
-}  // namespace ExportTracer
+}  // namespace nevr_export_tracer

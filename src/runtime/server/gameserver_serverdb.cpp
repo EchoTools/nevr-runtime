@@ -171,7 +171,7 @@ static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
         // match, so every server fell through to password auth while a perfectly
         // valid refresh token sat unused on disk.
         //
-        // Nothing else refreshes in server mode either: TokenAuth::Init returns
+        // Nothing else refreshes in server mode either: nevr_token_auth::Init returns
         // early on is_server, before the background refresh thread starts. This
         // function is the only place a server can mint an access token.
         const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
@@ -360,9 +360,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   if (externalIp.empty()) externalIp = internalIp;
 
   // Build protobuf registration request
-  const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
+  const nevr_build_identity::Info& buildId = nevr_build_identity::Get();  // N112: commit hash and build type in the version
   GameServer::RegistrationParams params;
-  params.loginSessionId = GuidToUuidString(LoginSession::Get());
+  params.loginSessionId = GuidToUuidString(nevr_login_session::Get());
   params.serverId = static_cast<uint64_t>(serverId);
   params.externalIp = externalIp;  // public-facing IP
   params.port = static_cast<uint32_t>(broadcasterPort);

@@ -95,7 +95,7 @@ void PreflightRuntimeBootstrap() {
   // collision with server mode.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
-        reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
+        reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
   }
 }
@@ -420,7 +420,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (g_isWindowed || g_isServer || g_isHeadless) {
-    using namespace PatchAddresses;
+    using namespace nevr_patch_addresses;
     // Set windowed mode flag in game structure
     UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
@@ -428,7 +428,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Force the game to load pnsrad.dll instead of pnsovr.dll.
   // Must run before the game's module loader starts.
-  PnsradEnabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
+  nevr_pnsrad_enabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
 
   // Block Oculus Platform SDK on server/headless/windowed — client needs Oculus
   // Platform services only when running with actual VR hardware.
@@ -444,7 +444,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchDisableWwise();
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
-    CoopAiTrace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
+    nevr_coop_ai_trace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
     // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
     // patch/binary_bug_fixes.cpp, which validates the address and saves the
@@ -461,7 +461,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
   // so gating it off on a server does not affect loadout handling.
   if (!g_isServer) {
-    AssetCDN::Initialize();
+    nevr_asset_cdn::Initialize();
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than
@@ -482,27 +482,27 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
     const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
-    if (g_isServer && BridgePolicy::IsUnrecognized(allowOffline)) {  // a server-only key
+    if (g_isServer && nevr_bridge_policy::IsUnrecognized(allowOffline)) {  // a server-only key
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.WS] services.allow_offline_server is not a boolean (use true/false); treating it as false");
     }
-    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE, BridgePolicy::IsTruthy(allowOffline))) {
-      case BridgePolicy::Outcome::Start:
+    switch (nevr_bridge_policy::Decide(hasSocketUri, g_isServer != FALSE, nevr_bridge_policy::IsTruthy(allowOffline))) {
+      case nevr_bridge_policy::Outcome::Start:
         SetWebSocketBridgeTarget(socketUri);
         InstallWebSocketBridge();
         break;
-      case BridgePolicy::Outcome::SkipClient:
+      case nevr_bridge_policy::Outcome::SkipClient:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
             "— bridge NOT started; the game will talk to services directly and login injection "
             "cannot fire");
         break;
-      case BridgePolicy::Outcome::SkipOfflineServer:
+      case nevr_bridge_policy::Outcome::SkipOfflineServer:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.WS] no services.socket_uri — bridge NOT started; services.allow_offline_server is "
             "set, so this server boots offline and will never log in or register");
         break;
-      case BridgePolicy::Outcome::RefuseServer:
+      case nevr_bridge_policy::Outcome::RefuseServer:
         // A server without the bridge never sends a LoginRequest: it idles silently (#16).
         ServerFatal(
             "no services.socket_uri in config.yaml — a dedicated server cannot log in without the "
@@ -517,13 +517,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   if (g_isServer) {
     std::string ttlProblem;
     const uint64_t ttlSeconds =
-        ReturnToLobbyHold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
+        nevr_return_to_lobby_hold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
     if (!ttlProblem.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] network.empty_server_ttl_seconds is %s; using %llu s", ttlProblem.c_str(),
           static_cast<unsigned long long>(ttlSeconds));
     }
-    if (!ReturnToLobby::Configure(ttlSeconds)) {
+    if (!nevr_return_to_lobby::Configure(ttlSeconds)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
   }

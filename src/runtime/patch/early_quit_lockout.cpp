@@ -15,7 +15,7 @@
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/patch/early_quit_lockout_rules.h"
 
-namespace EarlyQuitLockout {
+namespace nevr_early_quit_lockout {
 namespace {
 
 // CR15NetGame fields (Quest CR15NetGame::LoadEarlyQuitPenalty 0x126c958 has the setter inlined).
@@ -60,7 +60,7 @@ std::atomic<int> g_lastCountdownActive{-1};  // for logging transitions only; th
 
 void Dispatch(void* netGame, std::uint64_t event) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, kDispatchEventVA);
-  if (!HookGuard::IsOurDetour(target) &&
+  if (!nevr_hook_guard::IsOurDetour(target) &&
       !nevr::ValidatePrologue(target, kDispatchEventPrologue.data(), kDispatchEventPrologue.size())) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.EARLYQUIT] penalty event not raised: DispatchEventToSession prologue mismatch");
     return;
@@ -148,4 +148,4 @@ void Install(std::uintptr_t gameBase) {
   KeepFeatureFlagBit1();
 }
 
-}  // namespace EarlyQuitLockout
+}  // namespace nevr_early_quit_lockout

@@ -16,7 +16,7 @@
 /// functions below directly. pnsrad's own (unmodified, correct)
 /// MicBufferSize/MicCaptureSize/MicSampleRate keep answering from pnsrad
 /// itself — only the seven functions below are overridden.
-namespace MicProvider {
+namespace nevr_mic_provider {
 
 /// Samples currently buffered and ready for MicRead. Cheap; the game calls
 /// this every tick from CaptureAndEncodeLocalVoice (echovr.exe 0x140d7bd90).
@@ -63,4 +63,4 @@ void MicStop();
 /// the CoUninitialize on the thread that initialized COM.
 void MicDestroy();
 
-} // namespace MicProvider
+} // namespace nevr_mic_provider

@@ -37,7 +37,7 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
   void* target = *reinterpret_cast<void**>(ppPointer);
   const BOOL ok = Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
   if (ok) {
-    HookGuard::Record(target, name);
+    nevr_hook_guard::Record(target, name);
   } else {
     // N126. A failed hook was SILENT and its return was ignored by 9 of 10 call
     // sites, which log "installed" unconditionally on the next line — so a

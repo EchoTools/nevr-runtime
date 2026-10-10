@@ -1040,9 +1040,9 @@ TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
 // so the host rewrite must apply to each image on its own.
 namespace {
 std::vector<uint8_t> FreshMatchmakerImage() {
-  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
-  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
-              sizeof(MatchmakerHostPatch::kHostExpected));
+  std::vector<uint8_t> image(nevr_matchmaker_host_patch::kHostRva + nevr_matchmaker_host_patch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + nevr_matchmaker_host_patch::kHostRva, nevr_matchmaker_host_patch::kHostExpected,
+              sizeof(nevr_matchmaker_host_patch::kHostExpected));
   return image;
 }
 bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
@@ -1050,46 +1050,46 @@ bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
   return true;
 }
 const char* HostOf(const std::vector<uint8_t>& image) {
-  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+  return reinterpret_cast<const char*>(image.data() + nevr_matchmaker_host_patch::kHostRva);
 }
 }  // namespace
 
 // The slot is the original string and its NUL: the byte after it belongs to other data
 // (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
 TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
-  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, sizeof(nevr_matchmaker_host_patch::kHostExpected));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, 48U);
+  EXPECT_TRUE(nevr_matchmaker_host_patch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(0));
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(-1));
 }
 
 TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   std::vector<uint8_t> first = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(first.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
 
   // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
   std::vector<uint8_t> second = FreshMatchmakerImage();
-  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
-  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), nevr_matchmaker_host_patch::kHostExpected);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(second.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
 }
 
 TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::BytesMismatch);
   EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
 }
 
 TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
-  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
-            MatchmakerHostPatch::Result::WriteFailed);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 0, CopyWrite), nevr_matchmaker_host_patch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), nevr_matchmaker_host_patch::kHostExpected);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            nevr_matchmaker_host_patch::Result::WriteFailed);
 }
 
 // #201: the server's new-location text ends with the code line, which the game's screen drops.
@@ -1395,7 +1395,7 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json.at("access_token"), "access-token");
   EXPECT_TRUE(json.contains("buildversion"));
   ASSERT_TRUE(json.contains("nevr_identity"));
-  const BuildIdentity::Info& identity = BuildIdentity::Get();
+  const nevr_build_identity::Info& identity = nevr_build_identity::Get();
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
@@ -1477,20 +1477,20 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
   ClearTestLogs();
   int64_t symbol = 0;
-  Evrp::TintData tint;
-  const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
-  EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
+  nevr_evrp::TintData tint;
+  const std::vector<uint8_t> shortBuffer(nevr_evrp::kHeaderSize - 1, 0);
+  EXPECT_FALSE(nevr_evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
   EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
 
   // Exactly the header size is not "too small": it is a header whose data_length promises 80
   // bytes that are not there, so the size check rejects it instead.
   ClearTestLogs();
-  std::vector<uint8_t> headerOnly(Evrp::kHeaderSize, 0);
+  std::vector<uint8_t> headerOnly(nevr_evrp::kHeaderSize, 0);
   const uint8_t header[] = {0x45, 0x56, 0x52, 0x50, 0x01, 0x00, 0x00, 0x00, 0x86, 0xDC, 0xC5, 0x9D,
                             0xD0, 0x28, 0xD2, 0x74, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                             0x50, 0x00, 0x00, 0x00};
   std::copy(std::begin(header), std::end(header), headerOnly.begin());
-  EXPECT_FALSE(Evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
+  EXPECT_FALSE(nevr_evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
   EXPECT_FALSE(TestLogContains("file too small"));
   EXPECT_TRUE(TestLogContains("size mismatch: file=header.evrp"));
 }
@@ -1647,7 +1647,7 @@ TEST(N66_FormatSymbolId, ValidInput_DoesNotOverflow) {
 // ============================================================================
 
 TEST(N65_GateCount, DerivedFromProductionTable) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5)
       << "Gate count must match the 5 entries in HEADLESS_GATE_TABLE";
   // Verify table entries are distinct and have valid metadata.
@@ -1665,7 +1665,7 @@ TEST(N65_GateCount, DerivedFromProductionTable) {
 }
 
 TEST(N65_GateCount, AllGatesInCodeRange) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   for (int i = 0; i < HEADLESS_GATE_COUNT; i++) {
     EXPECT_GT(HEADLESS_GATE_TABLE[i].rva, 0x100000u)
         << "Gate " << i << " RVA below .text section";
@@ -1706,24 +1706,24 @@ struct GuardScratch {
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);  // NOPs stand in for an untouched prologue
 
-    HookGuard::Record(s.page, "N84_unchanged");
-    EXPECT_EQ(HookGuard::VerifyAll("test:unchanged"), 0)
+    nevr_hook_guard::Record(s.page, "N84_unchanged");
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);
 
-    HookGuard::Record(s.page, "N84_overwritten");
-    ASSERT_EQ(HookGuard::VerifyAll("test:baseline"), 0)
+    nevr_hook_guard::Record(s.page, "N84_overwritten");
+    ASSERT_EQ(nevr_hook_guard::VerifyAll("test:baseline"), 0)
         << "precondition: freshly recorded bytes must match";
 
     // Simulate a second MinHook instance writing its own JMP rel32 over ours.
@@ -1734,14 +1734,14 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
     p[3] = 0x33;
     p[4] = 0x44;
 
-    EXPECT_EQ(HookGuard::VerifyAll("test:overwritten"), 1)
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overwritten"), 1)
         << "guard did NOT detect a foreign detour overwriting a recorded address";
 }
 
 // IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
 // are still our own jump. Recorded and unchanged: yes. Never recorded, or overwritten since: no.
 TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch ours;
     GuardScratch other;
     ASSERT_NE(ours.page, nullptr);
@@ -1749,41 +1749,41 @@ TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
     memset(ours.page, 0x90, 32);
     memset(other.page, 0x90, 32);
 
-    HookGuard::Record(ours.page, "IsOurDetour_ours");
-    EXPECT_TRUE(HookGuard::IsOurDetour(ours.page));
-    EXPECT_FALSE(HookGuard::IsOurDetour(other.page)) << "an address the runtime never detoured";
-    EXPECT_FALSE(HookGuard::IsOurDetour(nullptr));
+    nevr_hook_guard::Record(ours.page, "IsOurDetour_ours");
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(ours.page));
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(other.page)) << "an address the runtime never detoured";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(nullptr));
 
     static_cast<unsigned char*>(ours.page)[0] = 0xE9;  // someone else's JMP over ours
-    EXPECT_FALSE(HookGuard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
 }
 
 TEST(N84_HookGuard, NullTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
-    HookGuard::Record(nullptr, "N84_null");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
+    nevr_hook_guard::Record(nullptr, "N84_null");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "null target was recorded; a bad call site would occupy a guard slot";
 }
 
 TEST(N84_HookGuard, UnreadableTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
     // Reserved-but-not-committed: readable-looking pointer, unreadable memory.
     void* reserved = VirtualAlloc(nullptr, 4096, MEM_RESERVE, PAGE_NOACCESS);
     ASSERT_NE(reserved, nullptr);
-    HookGuard::Record(reserved, "N84_unreadable");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::Record(reserved, "N84_unreadable");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "uncommitted memory was recorded; VerifyAll would fault reading it";
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// WOULD-FAIL-IF (N84): delete the memcmp in HookGuard::VerifyAll (hook_guard.cpp)
+// WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
-// WOULD-FAIL-IF (N84-record): delete the Readable() check in HookGuard::Record
+// WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
 //   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
 //      uncommitted page instead of skipping it.
-// WOULD-FAIL-IF (N84-wiring): delete HookGuard::VerifyAll(filename) from
+// WOULD-FAIL-IF (N84-wiring): delete nevr_hook_guard::VerifyAll(filename) from
 //   plugin_loader.cpp -> not caught here (call-site wiring), caught by the
 //   `just verify` grep sensor instead.
 
@@ -1799,7 +1799,7 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
 // ============================================================================
 
 TEST(SystemInfo, ReportsRealCpuAndMemory) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
 
     EXPECT_GT(h.logical_cores, 0u) << "logical core count was never measured";
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
@@ -1827,7 +1827,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
     // IsWine() must be exactly "we got a version from ntdll", with no second
     // source of truth that could disagree with the string we transmit.
     EXPECT_EQ(h.IsWine(), !h.wine_version.empty());
@@ -1836,7 +1836,7 @@ TEST(SystemInfo, WineDetectionIsTheVersionString) {
 TEST(SystemInfo, IsCachedNotRemeasured) {
     // Callers may hit this on a login path; the probes (CPUID,
     // GetLogicalProcessorInformation) are not free. Same object every call.
-    EXPECT_EQ(&SystemInfo::Get(), &SystemInfo::Get());
+    EXPECT_EQ(&nevr_system_info::Get(), &nevr_system_info::Get());
 }
 
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
@@ -1852,7 +1852,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // ============================================================================
 
 TEST(BuildIdentity, ProjectVersionIsNotFallback) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The CMake-built binary always has a real version. The "0.0.0" fallback
     // only triggers for a manual compiler invocation without -DPROJECT_VERSION.
     EXPECT_NE(id.project_version, "0.0.0");
@@ -1860,19 +1860,19 @@ TEST(BuildIdentity, ProjectVersionIsNotFallback) {
 }
 
 TEST(BuildIdentity, GitCommitIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_commit.empty());
     EXPECT_NE(id.git_commit, "unknown");
 }
 
 TEST(BuildIdentity, GitDescribeIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_describe.empty());
     EXPECT_NE(id.git_describe, "unknown");
 }
 
 TEST(BuildIdentity, BuildTypeIsSet) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // "unknown-build-type" would mean CMAKE_BUILD_TYPE was not propagated
     // as a compile definition. Our CMake always sets it.
     EXPECT_NE(id.build_type, "unknown-build-type");
@@ -1880,13 +1880,13 @@ TEST(BuildIdentity, BuildTypeIsSet) {
 }
 
 TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The dirty flag is derived from git_describe, not a separate source.
     EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
 }
 
 TEST(BuildIdentity, IsCachedNotRemeasured) {
-    EXPECT_EQ(&BuildIdentity::Get(), &BuildIdentity::Get());
+    EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
 }
 
 // ============================================================================

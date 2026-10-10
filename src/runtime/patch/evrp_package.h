@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace Evrp {
+namespace nevr_evrp {
 
 constexpr uint32_t kMagic = 0x50525645;  // "EVRP" little-endian
 constexpr uint32_t kFormatVersion = 1;
@@ -29,4 +29,4 @@ struct TintData {
 bool ParseTint(const std::vector<uint8_t>& data, const std::string& context,
                int64_t& out_symbol_id, TintData& out_tint);
 
-}  // namespace Evrp
+}  // namespace nevr_evrp

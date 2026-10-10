@@ -223,9 +223,24 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # return value, never written as a literal that is true on only one platform.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
         self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
-        self.assertRegex(source, r"VehPolicy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehInstalled\s*\)")
         self.assertNotIn("veh installed", source,
-                         "initialize.cpp hard-codes the veh boot line; take it from VehPolicy::BootLine")
+                         "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
+
+    def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
+        # #95: the ring fills before the game's first read of a stream. The first MicRead drops that
+        # backlog (MicAvailable polls do not), the overflow warning is for a game that read and then
+        # stopped, and the ring is capped at 200 ms.
+        source = strip_comments((ROOT / "src/runtime/patch/mic_provider.cpp").read_text())
+        read = extract_braced_function(source, "uint64_t nevr_mic_provider::MicRead(")
+        self.assertRegex(read, r"\bNoteGameReader\s*\(\s*\)", "MicRead must drop the backlog")
+        # MicAvailable is a poll the game makes from the moment capture starts; it must not drop or latch.
+        avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
+        self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
+        self.assertRegex(source, r"result\.ringOverflow\s*&&\s*g_ring\.ReaderActive\(\)")
+        cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
+        self.assertIsNotNone(cap)
+        self.assertLessEqual(int(cap.group(1)), 9600)
 
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
@@ -302,18 +317,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
-        # duplicated HookLiveness::Report for the same two hooks. HookLiveness is the one instrument.
+        # duplicated nevr_hook_liveness::Report for the same two hooks. HookLiveness is the one instrument.
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
         for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
             self.assertNotIn(gone, patches)
         for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
-            self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
+            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", extract_braced_function(patches, hook))
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
-        self.assertIn('HookLiveness::Report("periodic")', tick)
+        self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -378,7 +393,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         rearm = extract_braced_function(recovery, "void RearmConsoleCtrlHandler(")
         self.assertNotRegex(rearm, r"s_gameServerLibStarted")
         handler = extract_braced_function(recovery, "static BOOL WINAPI ConsoleCtrlHandler(")
-        self.assertRegex(handler, r"ConsoleCtrlPolicy::ShouldDeferToGame\s*\(")
+        self.assertRegex(handler, r"nevr_console_ctrl_policy::ShouldDeferToGame\s*\(")
         server = gameserver_text()
         initialize = extract_braced_function(server, "VOID* GameServerLib::Initialize(")
         self.assertRegex(initialize, r"\bNotifyGameServerLibStarted\s*\(\s*\)")
@@ -410,16 +425,16 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                             "a guard around the matchmaking host patch leaves a reloaded image unpatched")
 
     def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
-        # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
+        # Issue #58: the ServerDB CODE_ENDED path calls nevr_return_to_lobby::Request (not the game function
         # directly) and the game thread polls the hold once per Update.
         server = strip_comments(gameserver_text())
         call = extract_braced_function(server, "void CallScheduleReturnToLobby(")
-        self.assertIn("ReturnToLobby::Request(", call)
+        self.assertIn("nevr_return_to_lobby::Request(", call)
         self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
         update = extract_braced_function(server, "VOID GameServerLib::Update(")
-        self.assertRegex(update.lstrip("{ \n"), r"^ReturnToLobby::Poll\(\)")
+        self.assertRegex(update.lstrip("{ \n"), r"^nevr_return_to_lobby::Poll\(\)")
         boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
-        self.assertRegex(boot, r"ReturnToLobby::Configure\(")
+        self.assertRegex(boot, r"nevr_return_to_lobby::Configure\(")
         glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
         self.assertIn("0x1A89F0", glue)
         self.assertRegex(glue, r"memcmp\(target, kPrologue")
@@ -458,7 +473,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("nevr_boot_replay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
         self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
-        self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
+        self.assertEqual(len(re.findall(r"nevr_json_escape::AppendTo\(line, (ts|lvl)", record)), 2,
                          "ts and level come from the parsed boot file and are escaped like the message")
         # The tee stays open until initialize() closes it; the lines it writes after the main log
         # opened are replayed once more, under the file lock, just before the tee closes.

@@ -1,8 +1,8 @@
 #pragma once
 // Hooking abstraction layer - supports MinHook or Detours
-// Define USE_MINHOOK to use MinHook, otherwise uses Detours
+// Define NEVR_USE_MINHOOK to use MinHook, otherwise uses Detours
 
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
 #include <MinHook.h>
 #else
 #include <detours/detours.h>
@@ -19,7 +19,7 @@ namespace Hooking {
 
 // Initialize the hooking library (call once at startup)
 inline BOOL Initialize() {
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
   return MH_Initialize() == MH_OK;
 #else
   return TRUE;  // Detours doesn't need global initialization
@@ -28,7 +28,7 @@ inline BOOL Initialize() {
 
 // Shutdown the hooking library (call once at cleanup)
 inline VOID Shutdown() {
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
   MH_Uninitialize();
 #endif
 }
@@ -49,7 +49,7 @@ inline const char* LastAttachError() { return LastAttachErrorRef(); }
 // GOT backend runs the same contract. Re-exported here for existing callers.
 using nevr::hook::CreatePublishEnable;
 
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
 // MinHook identifies a hook by its target address, which Attach() overwrites in
 // *ppOriginal with the trampoline. Detach() is handed only the trampoline, so each
 // successful Attach records trampoline -> target here. The trampoline is unique per
@@ -126,7 +126,7 @@ inline BOOL DetachMinHookWith(PVOID* ppOriginal, Disable&& disable) {
 // pDetour: The hook function
 inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
   LastAttachErrorRef() = "";
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
   return AttachMinHookWith(ppOriginal, pDetour, MH_CreateHook, MH_EnableHook, MH_RemoveHook);
 #else
   DetourTransactionBegin();
@@ -142,7 +142,7 @@ inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
 // ppOriginal: Pointer to the trampoline (will be restored to original)
 // pDetour: The hook function (Detours only; MinHook finds the hook by its trampoline)
 inline BOOL Detach(PVOID* ppOriginal, PVOID pDetour) {
-#ifdef USE_MINHOOK
+#ifdef NEVR_USE_MINHOOK
   static_cast<void>(pDetour);
   return DetachMinHookWith(ppOriginal, MH_DisableHook);
 #else

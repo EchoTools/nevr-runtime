@@ -1,6 +1,4 @@
-# NEVR Runtime Logging Standards
-
-_Authored by @agents._
+# nEVR Runtime Logging Standards
 
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
@@ -25,7 +23,7 @@ how an agent triangulates a correct log line.
   `modules/`, and any future component that links `libcommon.a`.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
-- A definition of what constitutes noise (see N18) and what a log line
+- A definition of what constitutes noise and what a log line
   SHALL carry to be actionable.
 - The single authority on log level usage in this project. If you are
   unsure whether something is INFO or DEBUG, the answer is here.
@@ -46,9 +44,9 @@ how an agent triangulates a correct log line.
 
 - You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
-  no `std::cout`. (`logging.h:31`, `CPP-MINGW-ADDENDUM-GENERIC.md` "Logging (Structured, Always)").
+  no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
 - You **shall** include a subsystem tag on EVERY log line. The tag identifies which
-  NEVR component produced the line. See the Subsystem Tags table below.
+  nEVR component produced the line. See the Subsystem Tags table below.
 - You **shall** log the outcome. A log line that says "connecting" without a
   corresponding "connected" or "connection failed" is incomplete.
 - You **shall** log the relevant identifier. Connection index, session ID, XPID
@@ -89,9 +87,9 @@ how an agent triangulates a correct log line.
 ## Subsystem Tags
 
 Every log line begins with a bracketed tag identifying the emitting
-component. Tags are hierarchical: `[NEVR.COMPONENT]` for NEVR-authored
+component. Tags are hierarchical: `[NEVR.COMPONENT]` for nEVR-authored
 code, `[COMPONENT]` (no NEVR prefix) for third-party or game-native
-subsystems that NEVR annotates.
+subsystems that nEVR annotates.
 
 | Tag                   | Component                                     |
 | --------------------- | --------------------------------------------- |
@@ -183,8 +181,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
     uri, connIndex);
 ```
 
-**Where:** This rule applies to every `Log()` call site. Existing
-violations are recorded in N19 (no logging standards exist).
+**Where:** This rule applies to every `Log()` call site.
 
 ### Rule 2: XPID shall be logged at login
 
@@ -194,7 +191,7 @@ to a specific user account — it is the single most important identifier
 in the log.
 
 ```cpp
-// BEFORE (N15 — numeric account ID only, no platform prefix, no full XPID)
+// BEFORE — numeric account ID only, no platform prefix or full XPID
 Log(EchoVR::LogLevel::Info,
     "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
     (unsigned long long)discordId, loginMsg.size());
@@ -214,7 +211,7 @@ The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
 login as DSC (code 2) would produce `DSC-<id>`.
 
 **Where:** the injection site is `InstallWebSocketBridge` in
-`src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line). Tracked as N15.
+`src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line).
 
 ### Rule 3: Silence is not success
 
@@ -256,8 +253,8 @@ and request bytes for protocol handling; this rule changes diagnostics only.
 
 ### Rule 5: Noise is a defect
 
-echovr-native log lines are "objectively 97% worthless" (owner). The
-built-in log filter exists to suppress them (see N18). If noise is
+echovr-native log lines are noisy. The built-in log filter exists to suppress
+them. If noise is
 reaching the production log, the filter is broken and that is a defect.
 
 What constitutes noise:
@@ -268,8 +265,8 @@ What constitutes noise:
 - **Lines with no structured fields.** A log line that carries only a
   free-text message with no identifier, no subsystem tag, and no outcome
   is noise. See Rule 1.
-- **Game-native lines that NEVR doesn't annotate.** Lines from
-  `echovr.exe` that pass through unmodified, without a NEVR subsystem
+- **Game-native lines that nEVR doesn't annotate.** Lines from
+  `echovr.exe` that pass through unmodified, without an nEVR subsystem
   tag or structured wrapper, are noise. The log_filter SHALL suppress
   these in production server builds.
 - **Per-item detail at INFO level.** Per-frame, per-tick, or per-connection
@@ -278,7 +275,7 @@ What constitutes noise:
 - **Hex dumps, pointer values, and raw binary at INFO level.** These
   are DEBUG, gated by a verbosity flag.
 
-**Filter audit checklist (N18 fix direction):**
+**Filter audit checklist:**
 1. Verify the built-in log filter is capturing game lines (its health line
    reports `game_lines=`; a zero-game-lines warning names its cause: hook not
    installed, hook target taken by another module, or the game idle or blocked)
@@ -325,16 +322,15 @@ function removed) SHALL still be logged; an operator seeing a new failure
 in the summary cannot distinguish "this was always failing" from "this
 just started failing" without a baseline.
 
-**Where:** `src/runtime/patch/binary_bug_fixes.cpp:435-439`,
-`src/runtime/patch/headless_graphics.cpp:454-525`,
-`src/runtime/patch/resource_override.cpp:134`,
-`src/runtime/log/builtin_filter.cpp:826`. Tracked as N17
-(startup hook errors not systematically tracked).
+**Where:** `src/runtime/patch/binary_bug_fixes.cpp`,
+`src/runtime/patch/headless_graphics.cpp`,
+`src/runtime/patch/resource_override.cpp`, and
+`src/runtime/log/builtin_filter.cpp`.
 
 ### Rule 7: The Log() function is the single entry point
 
 `Log(EchoVR::LogLevel::level, "format %d", val)` from
-`src/core/logging.h:18` is the mechanism. This standard defines WHAT
+`src/core/logging.h` declares the mechanism. This standard defines WHAT
 goes in the format string and what level to use. No other output
 mechanism is permitted.
 
@@ -356,12 +352,13 @@ std::cerr << "failed" << std::endl;
 
 ### `Log()` does not emit JSON, and that is a decision — not an omission
 
-`FormatJsonLogEntry` exists in `src/core/logging.cpp:70` and is called from
+`FormatJsonLogEntry` is declared in `src/core/logging.h` and defined in
+`src/core/logging.cpp`. It is called from
 nowhere in production (the only other reference is a test stub). `Log()` routes
 to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
 before the game logger exists.
 
-So NEVR lines go through the game's logger and appear in its stream, rather than
+So nEVR lines go through the game's logger and appear in its stream, rather than
 being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
 into `Log()` on the assumption it was left half-done: it would double every log
 line.
@@ -477,7 +474,7 @@ Every event that produces multiple log lines SHALL follow this pattern:
 ```
 // INFO — one summary line
 [NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
-  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
+  (optional target unavailable; patch skipped), 0 unexpected
 
 // DEBUG — per-item narrative (gated behind DEBUG level)
 [NEVR.BOOT] debug; installing crash recovery hooks
@@ -512,7 +509,7 @@ form.
 
 | Context | BEFORE | AFTER |
 | ------- | ------ | ----- |
-| Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu"` |
+| Login injection | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu"` |
 | WebSocket connected | `"[NEVR.SERVERDB] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
 | WebSocket disconnected | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
@@ -559,13 +556,13 @@ failing any of these checks is rejected until the violation is fixed.
 | No subsystem tag                             | Can't trace to component          | Add `[NEVR.COMPONENT]` prefix                         |
 | No identifier                                | Can't correlate events            | Add conn=%d, xpid=%s, session_id=%s, or equivalent    |
 | No outcome                                   | Can't tell if it worked           | Add success/error code, state transition, or count    |
-| XPID not logged at login (N15)               | Can't identify connecting user    | Log the full XPID string                              |
+| XPID not logged at login                     | Can't identify connecting user    | Log the full XPID string                              |
 | Hook failure at DEBUG or not logged          | Silent regression in coverage     | Log at WARNING with VA + expected + actual            |
 | State transition without FROM state          | Can't diagnose stuck state        | Log old_state -> new_state                            |
 | Error without error code                     | Not actionable                    | Add GetLastError(), HRESULT, or status code           |
 | INFO in any hot path or per-item detail       | Floods the log                    | Demote to DEBUG; emit one INFO summary line instead.  |
 | printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `nevr_boot_log_tee::TeeFprintf` before the game logger exists (Rule 11). |
-| Game-native line without NEVR annotation     | Noise (N18)                       | Suppress or wrap with structured fields               |
+| Game-native line without an nEVR annotation  | Noise                             | Suppress or wrap with structured fields               |
 | Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |
 | Event with no consequence stated (G)         | Reader can't tell why it matters  | State the "so what," not just the "what"               |
@@ -589,13 +586,7 @@ the level is already right and Rule 1's four fields are already present, and
 ask instead: **does the line's CONTENT actually tell the reader what they
 need?**
 
-This section was added after a 2026-09 repo-wide audit of every `Log()` /
-`FatalError()` / `ServerFatal()` call site (706 sites across `src/`,
-`src/modules/`, and `plugins/`) found that ~55% of flagged sites failed
-Category G alone — the single most common defect in this codebase's logging
-is not a missing tag or a wrong level, it's a line that reports an event
-without reporting its consequence. Apply these checks to every new `Log()`
-call, the same way Rule 1-13 already apply.
+Apply these checks to every new `Log()` call, alongside Rules 1-14.
 
 ### Category G: State the consequence, not just the event
 
@@ -694,18 +685,13 @@ The explanation belongs in the line. The ticket ref, if kept at all, is a
 footnote.
 
 ```cpp
-// BEFORE — this exact line already exists in this document, in Rule 12's own
-// example above; it violates the category the rule it illustrates is not about
-[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+// BEFORE — reports an unexplained failure count
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed, 0 unexpected
 
 // AFTER
 [NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
-  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
+  (optional target unavailable; patch skipped), 0 unexpected
 ```
-
-(Rule 12's example above this section should be updated to match the AFTER
-form in the same commit that adds this section — it is the one place in this
-document that models the anti-pattern it's supposed to prevent.)
 
 ### Category L: The sentence has to parse
 
@@ -752,19 +738,10 @@ Log(EchoVR::LogLevel::Warning,
 
 ## References
 
-- **N15** — Login XPID not logged at injection time.
-- **N18** — log filter not suppressing noise effectively.
-- **N89** — the `log_filter.dll` *plugin* is superseded by the built-in
+- The `log_filter.dll` *plugin* is superseded by the built-in
   filter and is refused by the loader. `src/runtime/log/builtin_filter.cpp`
   is the shipping path; do not reintroduce the plugin.
-- **N19** — No logging standards exist (this document).
-- **2026-09 message-content audit** — repo-wide review of all 706 `Log()`/
-  `FatalError()`/`ServerFatal()` call sites in `src/`, `src/modules/`, and
-  `plugins/` against Categories G-M above (N-ledger closed; findings tracked
-  as GitHub issues, not N-entries). Basis for the "Message Content Quality"
-  section.
-- **N17** — Startup hook errors not systematically tracked.
-- **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.
-- **CPP-MINGW-ADDENDUM-GENERIC.md** — "Logging (Structured, Always)" section, "No printf" rule.
+- **`AGENTS.md`** — project conventions, `Log()` usage, subsystem architecture,
+  and the C++ Mingw Addendum's structured-output rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.
 - **`src/core/logging.cpp`** — `Log()` implementation, `FormatJsonLogEntry`.
