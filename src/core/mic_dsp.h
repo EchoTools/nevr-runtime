@@ -19,12 +19,14 @@ class MicRingBuffer {
   void Reset();
   uint32_t capacity() const { return capacity_; }
 
-  /// Called on every game MicAvailable/MicRead. The first call after the stream (re)started drops
-  /// whatever was captured before the game was listening, so the first read gets only fresh audio
-  /// (#95), and returns how many samples that was. Every later call returns 0 until Reset().
+  /// Called on every game MicAvailable/MicRead. The first call after the stream (re)started that
+  /// finds audio waiting drops that backlog, so the first read gets only fresh audio (#95), and
+  /// returns how many samples that was. A call that finds the ring empty changes nothing: the game
+  /// polls once the moment capture starts, before any audio exists, and that poll is not a reader.
+  /// Every call after the first one that found audio returns 0 until Reset().
   uint32_t NoteReaderActive();
-  /// True once the game has asked for audio since the last Reset(). Before that a full ring is
-  /// the normal state (nobody is listening yet), not a game that stopped draining.
+  /// True once a game call has found audio waiting since the last Reset(). Before that a full ring
+  /// is the normal state (nobody is consuming yet), not a game that stopped draining.
   bool ReaderActive() const;
 
  private:

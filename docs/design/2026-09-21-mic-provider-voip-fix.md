@@ -5,8 +5,8 @@ interruption only costs a `git log`/ReVault read, not a re-derivation.
 
 Status: built. `src/runtime/patch/mic_provider.{h,cpp}` is installed through the
 `CSysDLL_GetSymbol` hook in `src/runtime/lifecycle/initialize.cpp`, with unit tests in
-`src/runtime/tests/test_mic_*.cpp`. The game's first MicAvailable/MicRead of each capture drops
-the audio captured before it was listening, and no `tools/winvm/systest.py` mic check exists.
+`src/runtime/tests/test_mic_*.cpp`. The first MicAvailable/MicRead of each capture that finds audio
+waiting drops the audio captured before the game was listening (a poll of an empty ring is not a reader), and no `tools/winvm/systest.py` mic check exists.
 The rest of this document is the investigation record.
 
 The runtime ring (`kRingCapacitySamples` = 9600 samples, 200 ms in `mic_provider.cpp`) is smaller

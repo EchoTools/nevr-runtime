@@ -553,7 +553,8 @@ bool DispatchMicCall(MicCall call, MicCallRequest* request) {
 
 }  // namespace
 
-// The game's first MicAvailable/MicRead of a stream drops what was captured before it was listening.
+// The game's first MicAvailable/MicRead of a stream that finds audio waiting drops what was captured
+// before it was listening. A poll that finds the ring empty is not a reader (MicRingBuffer::NoteReaderActive).
 static void NoteGameReader() {
   const uint32_t stale = g_ring.NoteReaderActive();
   if (stale > 0) {

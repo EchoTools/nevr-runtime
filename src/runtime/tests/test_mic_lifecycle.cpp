@@ -347,8 +347,11 @@ TEST(MicCaptureLifecycleStream, ReaderCallWhileStoppedDoesNotSkipTheNextCaptures
   const MicLifecycleOperations ops = RingOps(stream);
   ASSERT_TRUE(lifecycle.Create(7, ops));
 
-  // The game asks for audio while capture is stopped (provider created, not started).
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);
+  // Audio is waiting while capture is stopped (left from a previous stream) and the game asks for it.
+  const int16_t leftover[50] = {};
+  stream.ring.Push(leftover, 50);
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 50u);
+  EXPECT_TRUE(stream.ring.ReaderActive());
 
   ASSERT_TRUE(lifecycle.Start(7, ops));
   EXPECT_FALSE(stream.ring.ReaderActive()) << "a new capture starts with no listening reader";
@@ -365,13 +368,40 @@ TEST(MicCaptureLifecycleStream, EveryRestartRearmsTheBacklogDrop) {
   const MicLifecycleOperations ops = RingOps(stream);
   ASSERT_TRUE(lifecycle.Create(7, ops));
   ASSERT_TRUE(lifecycle.Start(7, ops));
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);
+  const int16_t first[10] = {};
+  stream.ring.Push(first, 10);
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 10u);
   ASSERT_TRUE(lifecycle.Stop(7, ops, 2000));
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);  // read while stopped again
   ASSERT_TRUE(lifecycle.Start(7, ops));
   const int16_t backlog[300] = {};
   stream.ring.Push(backlog, 300);
   EXPECT_EQ(stream.ring.NoteReaderActive(), 300u);
+}
+
+// The game's real order, from nevr-2026-10-10T12-00-22.946.jsonl: MicStart, then one MicAvailable the same
+// moment (the ring is empty), then nothing for a while during which the worker overfills the ring, then
+// calls that find audio. The early poll must not be taken for a consuming reader: the overflow before the
+// game consumes is silent (ReaderActive false is what the provider's warning waits for), and the first call
+// that finds audio drops the backlog and arms the warning.
+TEST(MicCaptureLifecycleStream, TheGamesEarlyPollOfAnEmptyRingDoesNotArmTheOverflowWarning) {
+  RingStream stream;
+  MicCaptureLifecycle lifecycle;
+  const MicLifecycleOperations ops = RingOps(stream);
+  ASSERT_TRUE(lifecycle.Create(7, ops));
+  ASSERT_TRUE(lifecycle.Start(7, ops));
+
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);  // MicAvailable right after MicStart: nothing yet
+  EXPECT_FALSE(stream.ring.ReaderActive());
+
+  const int16_t chunk[1000] = {};
+  bool overflowed = false;
+  for (int i = 0; i < 12; ++i) overflowed = stream.ring.Push(chunk, 1000) || overflowed;  // 12000 > 9600
+  EXPECT_TRUE(overflowed);
+  EXPECT_FALSE(stream.ring.ReaderActive()) << "no consumer yet: the provider must not warn";
+
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 9600u);  // the first call that finds audio: the newest 200 ms, dropped
+  EXPECT_TRUE(stream.ring.ReaderActive());
+  EXPECT_EQ(stream.ring.Available(), 0u);
 }
 
 TEST(MicCaptureDrain, CancellationDuringContinuousPacketDrainReleasesEveryAcquiredPacket) {

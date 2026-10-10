@@ -179,9 +179,24 @@ TEST(MicRingBuffer, FirstReaderCallDropsAudioCapturedBeforeItAndReportsHowMuch) 
   EXPECT_EQ(std::vector<int16_t>(out, out + 2), (std::vector<int16_t>{9, 8}));
 }
 
+// The game polls MicAvailable once the moment capture starts, before any audio exists (nevr-2026-10-10T12-00-22.946,
+// MicAvailable=1 MicRead=0 at +0.234 s). That poll must not make the ring look consumed.
+TEST(MicRingBuffer, ACallOnAnEmptyRingIsNotAReader) {
+  MicRingBuffer ring(8);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_FALSE(ring.ReaderActive());
+  const int16_t before[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  EXPECT_TRUE(ring.Push(before, 10));  // overflows while nobody consumes: the provider stays quiet
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 8u);  // the first call that finds audio drops it and arms the warning
+  EXPECT_TRUE(ring.ReaderActive());
+}
+
 TEST(MicRingBuffer, LaterReaderCallsDropNothing) {
   MicRingBuffer ring(8);
-  ring.NoteReaderActive();
+  const int16_t first[] = {9};
+  ring.Push(first, 1);
+  EXPECT_EQ(ring.NoteReaderActive(), 1u);
   const int16_t s[] = {1, 2, 3};
   ring.Push(s, 3);
   EXPECT_EQ(ring.NoteReaderActive(), 0u);
@@ -200,6 +215,8 @@ TEST(MicRingBuffer, ResetStartsANewStreamTheNextReaderCallDropsAgain) {
 
 TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
   MicRingBuffer ring(4);
+  const int16_t first[] = {0};
+  ring.Push(first, 1);
   ring.NoteReaderActive();
   const int16_t s[] = {1, 2, 3, 4, 5, 6};
   EXPECT_TRUE(ring.Push(s, 6));
