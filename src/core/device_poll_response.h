@@ -29,6 +29,7 @@ struct DevicePollResponse {
   // as sent ("" when absent or the body was not JSON). `http_code` is 0 when no HTTP answer arrived (or
   // the caller is not an HTTP one). `body_prefix` is PollBodyPrefix of the body: never a token or the code.
   std::string server_status;
+  bool answered = false;  // a JSON body from the server was read (not a transport failure or a synthesized state)
   long http_code = 0;
   std::string body_prefix;
 };

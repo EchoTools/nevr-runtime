@@ -103,7 +103,7 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
               (response.http_code != 0 ? std::to_string(response.http_code) : std::string("none")) +
               " status=" + kNames[static_cast<int>(response.status)] + " server_status=\"" +
               response.server_status + "\" body=\"" + response.body_prefix + "\"");
-      if (response.status == nevr_token_auth::DevicePollStatus::Pending &&
+      if (response.status == nevr_token_auth::DevicePollStatus::Pending && response.answered &&
           !nevr_token_auth::IsKnownPollStatus(response.server_status)) {
         log(LogLevel::Warning, "[NEVR.AUTH] poll answered an unknown status \"" + response.server_status +
                                    "\"; treating it as pending");

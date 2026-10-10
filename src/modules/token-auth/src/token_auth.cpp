@@ -17,6 +17,7 @@
 #include "core/auth_refresh.h"
 #include "core/device_auth_flow.h"
 #include "core/signin_dialog_text.h"
+#include "core/signin_dialog_lifecycle.h"
 #include "auth_token_refresh.h"
 #include "core/bounded_retry.h"
 #include "nevr_curl.h"
@@ -858,8 +859,9 @@ public:
     SignInDialog() : m_state(std::make_shared<State>()) {}
     ~SignInDialog() {
         // A wait that never reported its end must not leave the dialog up; one that did keeps its message
-        // until the player dismisses it (or kSignInDialogLingerMs).
-        if (m_started && !m_ended) PostIfCreated(kDialogClose, 0);
+        // until the player dismisses it (or kSignInDialogLingerMs). A window that does not exist yet closes
+        // itself when it does (SignInDialogLifecycle).
+        if (m_started && !m_ended) Abandon();
     }
     SignInDialog(const SignInDialog&) = delete;
     SignInDialog& operator=(const SignInDialog&) = delete;
@@ -876,7 +878,10 @@ public:
             std::thread([state]() { WindowThread(state); }).detach();
             std::unique_lock<std::mutex> lock(m_state->mutex);
             m_state->ready.wait_for(lock, std::chrono::seconds(3), [this]() { return m_state->created || m_state->failed; });
-            return m_state->created;
+            if (m_state->created) return true;
+            // Gave up waiting: a window that appears later closes itself instead of staying topmost forever.
+            (void)m_state->lifecycle.Abandon();
+            return false;
         }
         PostIfCreated(kDialogApply, 0);
         return true;
@@ -904,7 +909,18 @@ private:
         HFONT codeFont = nullptr;
         bool created = false;
         bool failed = false;
+        nevr::auth::SignInDialogLifecycle lifecycle;
     };
+
+    // The wait is over without a result to show: close the window now, or have it close on creation.
+    void Abandon() {
+        bool closeNow = false;
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            closeNow = !m_state->lifecycle.Abandon();
+        }
+        if (closeNow) PostIfCreated(kDialogClose, 0);
+    }
 
     void PostIfCreated(UINT message, WPARAM wParam) {
         HWND hwnd = nullptr;
@@ -1000,11 +1016,14 @@ private:
         SendMessageW(state->button, WM_SETFONT, reinterpret_cast<WPARAM>(guiFont), TRUE);
         Apply(*state, 0);
         SetForegroundWindow(hwnd);
+        bool closeAtOnce = false;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
             state->created = true;
+            closeAtOnce = state->lifecycle.OnCreated();
         }
         state->ready.notify_all();
+        if (closeAtOnce) DestroyWindow(hwnd);  // created after the caller stopped waiting
 
         MSG msg;
         while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

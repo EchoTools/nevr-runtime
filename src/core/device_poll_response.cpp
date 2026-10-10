@@ -10,6 +10,7 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
   try {
     const nlohmann::json json = nlohmann::json::parse(response);
     DevicePollResponse result;
+    result.answered = true;
     if (json.contains("error")) return result;
 
     const std::string status = json.value("status", "");

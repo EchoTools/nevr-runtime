@@ -17,6 +17,7 @@
 #include "core/auth_token.h"
 #include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
+#include "core/signin_dialog_lifecycle.h"
 #include "core/signin_dialog_text.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
@@ -773,6 +774,34 @@ TEST(DeviceAuthFlow, AnUnknownStatusIsAWarningAndStillPending) {
   EXPECT_TRUE(nevr_token_auth::IsKnownPollStatus("verified"));
   EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus(""));
   EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus("weird"));
+}
+
+// A caller's own pending (an outage it waits out) is not the server's answer: no warning per poll.
+TEST(DeviceAuthFlow, ASynthesizedPendingIsNotAnUnknownStatus) {
+  FakeDeviceAuthFlow fake;
+  nevr_token_auth::DevicePollResponse outage;  // what the Quest session returns while the network is down
+  outage.status = nevr_token_auth::DevicePollStatus::Pending;
+  outage.http_code = 503;
+  nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
+  fake.poll_sequence = {outage, expired};
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #1 http=503 status=pending"));
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status"));
+}
+
+// #404 review: the window can appear after the caller gave up waiting for it, and then nothing closed it.
+TEST(SignInDialogLifecycle, AWindowCreatedAfterTheWaitTimedOutIsToldToCloseAtOnce) {
+  nevr::auth::SignInDialogLifecycle lifecycle;
+  EXPECT_TRUE(lifecycle.Abandon()) << "the window does not exist yet: it must close itself when it does";
+  EXPECT_TRUE(lifecycle.OnCreated());
+}
+
+TEST(SignInDialogLifecycle, AWindowThatExistsWhenTheCallerLetsGoIsClosedDirectly) {
+  nevr::auth::SignInDialogLifecycle lifecycle;
+  EXPECT_FALSE(lifecycle.OnCreated()) << "wanted: it stays up";
+  EXPECT_FALSE(lifecycle.Abandon()) << "it exists: the caller closes it, nothing is deferred";
+  EXPECT_TRUE(lifecycle.created());
+  EXPECT_TRUE(lifecycle.abandoned());
 }
 
 TEST(DeviceAuthFlow, ATransportFailureIsLoggedAsHttpNoneNotSilence) {

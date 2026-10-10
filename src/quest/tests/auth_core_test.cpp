@@ -596,6 +596,37 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK(all.find("rt-dev") == std::string::npos);
   CHECK(all.find("eyJ") == std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
+  // The per-poll line says what the server answered (#397): HTTP code, parsed status, never "none".
+  CHECK(all.find("poll #1 http=200 status=pending server_status=\"pending\"") != std::string::npos);
+  CHECK(all.find("poll #3 http=200 status=verified") != std::string::npos);
+  CHECK(all.find("http=none") == std::string::npos);
+  s.Stop();
+}
+
+TEST(session_poll_line_reports_a_server_error_status_and_no_unknown_status_warning) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto polls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [=](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "DEVCODE"}});
+    if (endpoint == "poll") {
+      if (polls->fetch_add(1) == 0) return Status(503, "<html>down</html>");
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt-dev"},
+                 {"refresh_token_expires_in", 2592000}, {"user_id", "u9"}, {"username", "nine"}});
+    }
+    return Status(404);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(3);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  const std::string all = log.All();
+  CHECK(all.find("poll #1 http=503 status=pending") != std::string::npos);
+  CHECK(all.find("unknown status") == std::string::npos);
+  CHECK(all.find("DEVCODE") == std::string::npos);
   s.Stop();
 }
 
