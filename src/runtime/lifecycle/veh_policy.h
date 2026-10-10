@@ -7,7 +7,7 @@
 // changes that handler ordering even when it returns CONTINUE_SEARCH. The handler is server-only
 // recovery, so it is skipped on a Wine client and installed everywhere else.
 
-namespace VehPolicy {
+namespace nevr_veh_policy {
 
 inline bool ShouldInstall(bool isServer, bool isWineClient) { return isServer || !isWineClient; }
 
@@ -18,4 +18,4 @@ inline const char* BootLine(bool installed) {
                    : "[NEVR.CRASH] veh skipped reason=wine_client\n";
 }
 
-}  // namespace VehPolicy
+}  // namespace nevr_veh_policy

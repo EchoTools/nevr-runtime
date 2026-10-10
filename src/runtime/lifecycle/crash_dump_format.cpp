@@ -2,7 +2,7 @@
 
 #include <cstdio>
 
-namespace CrashRecovery {
+namespace nevr_crash_recovery {
 namespace {
 
 const char* ExceptionName(uint32_t exception_code) {
@@ -34,4 +34,4 @@ int FormatCrashExceptionSummary(char* buffer, size_t buffer_size,
   return result < 0 ? 0 : result;
 }
 
-}  // namespace CrashRecovery
+}  // namespace nevr_crash_recovery

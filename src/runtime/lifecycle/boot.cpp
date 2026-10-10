@@ -482,27 +482,27 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
     const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
-    if (g_isServer && BridgePolicy::IsUnrecognized(allowOffline)) {  // a server-only key
+    if (g_isServer && nevr_bridge_policy::IsUnrecognized(allowOffline)) {  // a server-only key
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.WS] services.allow_offline_server is not a boolean (use true/false); treating it as false");
     }
-    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE, BridgePolicy::IsTruthy(allowOffline))) {
-      case BridgePolicy::Outcome::Start:
+    switch (nevr_bridge_policy::Decide(hasSocketUri, g_isServer != FALSE, nevr_bridge_policy::IsTruthy(allowOffline))) {
+      case nevr_bridge_policy::Outcome::Start:
         SetWebSocketBridgeTarget(socketUri);
         InstallWebSocketBridge();
         break;
-      case BridgePolicy::Outcome::SkipClient:
+      case nevr_bridge_policy::Outcome::SkipClient:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
             "— bridge NOT started; the game will talk to services directly and login injection "
             "cannot fire");
         break;
-      case BridgePolicy::Outcome::SkipOfflineServer:
+      case nevr_bridge_policy::Outcome::SkipOfflineServer:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.WS] no services.socket_uri — bridge NOT started; services.allow_offline_server is "
             "set, so this server boots offline and will never log in or register");
         break;
-      case BridgePolicy::Outcome::RefuseServer:
+      case nevr_bridge_policy::Outcome::RefuseServer:
         // A server without the bridge never sends a LoginRequest: it idles silently (#16).
         ServerFatal(
             "no services.socket_uri in config.yaml — a dedicated server cannot log in without the "
@@ -517,13 +517,13 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   if (g_isServer) {
     std::string ttlProblem;
     const uint64_t ttlSeconds =
-        ReturnToLobbyHold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
+        nevr_return_to_lobby_hold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
     if (!ttlProblem.empty()) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] network.empty_server_ttl_seconds is %s; using %llu s", ttlProblem.c_str(),
           static_cast<unsigned long long>(ttlSeconds));
     }
-    if (!ReturnToLobby::Configure(ttlSeconds)) {
+    if (!nevr_return_to_lobby::Configure(ttlSeconds)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
   }

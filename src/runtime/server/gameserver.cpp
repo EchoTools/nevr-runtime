@@ -63,7 +63,7 @@ static uint64_t AcceptedEntrantsNow() {
 }
 
 void CallScheduleReturnToLobby() {
-    if (g_pGame) ReturnToLobby::Request(g_pGame);
+    if (g_pGame) nevr_return_to_lobby::Request(g_pGame);
 }
 
 #include "core/logging.h"
@@ -232,7 +232,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   RearmConsoleCtrlHandler();
   NotifyGameServerLibStarted();
   g_activeServerLib.store(this, std::memory_order_release);
-  ReturnToLobby::SetEntrantCounter(&AcceptedEntrantsNow);
+  nevr_return_to_lobby::SetEntrantCounter(&AcceptedEntrantsNow);
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -271,7 +271,7 @@ static bool s_exitPending = false;
 
 VOID GameServerLib::Update() {
   // #58: end a held return to lobby (empty-server TTL) on the game thread, before anything else.
-  ReturnToLobby::Poll();
+  nevr_return_to_lobby::Poll();
 
   // GH #44: run the graceful-shutdown thread's EndSession + Unregister here, on
   // the game thread that owns the callback registry. Once it has run the server
