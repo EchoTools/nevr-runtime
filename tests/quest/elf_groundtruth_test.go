@@ -404,7 +404,7 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 //
 // It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
 // (callback_thunk.h, "Limits").
-var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
+var includeRe = regexp.MustCompile(`#\s*include(?:_next)?\s*[<"]([^>"]+)[>"]`)
 
 func TestRawInstallOnlyInTests(t *testing.T) {
 	root, err := filepath.Abs("../../src")
@@ -429,6 +429,12 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	}
 	seen := 0
 	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr == nil && info.Mode()&os.ModeSymlink != 0 {
+			// filepath.Walk does not follow a symlink, so a link under src/ would hide the files behind it
+			// from this scan. None exists; one appearing is an error to be looked at, not a gap.
+			t.Errorf("%s is a symlink under src/: the scan does not follow it", p)
+			return nil
+		}
 		if werr != nil || info.IsDir() || !exts[filepath.Ext(p)] {
 			return werr
 		}
