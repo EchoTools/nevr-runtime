@@ -593,21 +593,31 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    this order:
    - logs one `sentinel_ctor` record (logcat only);
    - `Arm()`: `mkdir`/`access` on up to four candidate crash-dump directories, then allocates the
-     Breakpad exception handler (`new`), outside any `try` block;
+     Breakpad exception handler (`new`), outside any `try` block. The `ExceptionHandler` constructor
+     (`extern/breakpad/src/client/linux/handler/exception_handler.cc`) allocates a signal stack with
+     `calloc` when the thread has none or a smaller one (`InstallAlternateStackLocked`, at least
+     16 KiB), installs handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGBUS` and `SIGTRAP`
+     (`InstallHandlersLocked`, `kExceptionSignals`), and creates a dump GUID from `getrandom`
+     (`GRND_NONBLOCK`) or, failing that, `/dev/urandom` (`extern/breakpad/src/common/linux/guid_creator.cc`);
    - `InitActivation()`: opens `nevr-quest.json` read-only and `nevr-sentinel.log` read-write in
      append mode in the app's external files directory. Both opens are non-blocking, the log open
      does not follow symlinks, and each target must be a regular file (a FIFO or device is
-     refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open is
-     retried at most once per 30 s, and never when the path is not a regular file. The catch block
-     of `InitActivation()` allocates nothing, so a failure there cannot escape the constructor;
-   - `InstallBasicsHook()`: installs one GOT hook on `libr15.so`'s `clock_gettime` import (an
-     `mprotect` of the slot's page) and creates the counter reporter thread.
+     refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open (a
+     missing directory, or a directory or a symlink at the path) is retried at most once per 30 s,
+     measured on `CLOCK_MONOTONIC`; a path that opens but is not a regular file (a FIFO or a device)
+     is never retried. The catch block of `InitActivation()` allocates nothing, so a failure there
+     cannot escape the constructor;
+   - registers every counter, then starts the counter reporter thread (the reporter refuses a later
+     registration), and only then installs one GOT hook on `libr15.so`'s `clock_gettime` import
+     (an `mprotect` of the slot's page). The sequence, with the steps after it that the
+     configuration gates, is `integration/ctor_sequence.h`.
 
    It opens no socket and does no TLS. `Arm()` can still throw `std::bad_alloc` (it allocates
    outside a `try`). The on-disk log is rotated, never deleted: at open once it is 1 MiB or more,
    and in-process once this run has written 1 MiB; the old file keeps a `nevr-sentinel.<unix_ms>`
    name, so every process start that begins with a full log, and every 1 MiB written, leaves one
-   more file. Nothing prunes them; whether that is acceptable is the owner's decision. The remaining
+   more file. A rename that fails is logged once to logcat and retried at most once per 30 s; the
+   log keeps growing meanwhile. Nothing prunes them; whether that is acceptable is the owner's decision. The remaining
    risk is a stall in the storage layer of the headset (FUSE-backed external storage): the
    non-blocking opens do not bound it, and it has not been measured on a device. An
    unknown binary, a failed validation or a partial install leaves the original call intact
