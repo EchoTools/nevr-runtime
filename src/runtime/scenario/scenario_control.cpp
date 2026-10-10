@@ -670,7 +670,7 @@ nlohmann::json Handle(const std::string& line) {
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyMember: {
+    case nevr_scenario_protocol::Op::kInjectPartyMember: {
       const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject " + cmd.notifyName + ": no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s party=%llu member=%llu", cmd.notifyName.c_str(),
@@ -686,7 +686,7 @@ nlohmann::json Handle(const std::string& line) {
       if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyData: {
+    case nevr_scenario_protocol::Op::kInjectPartyData: {
       const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject PartyDataNotify: no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyDataNotify party=%llu member=%llu bytes=%zu",
