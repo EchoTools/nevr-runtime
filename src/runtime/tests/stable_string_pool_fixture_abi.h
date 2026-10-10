@@ -4,7 +4,7 @@
 
 #include <cstddef>
 
-namespace nevr_runtime::lifecycle::test {
+namespace nevr::lifecycle::test {
 
 // Updated in place by the fixture DLL from its replacement operator new/delete
 // and from DllMain, so the values are valid after the DLL is unloaded. Memory
@@ -21,4 +21,4 @@ struct FixtureObservation {
   std::size_t publishedBlockFreed = 0;
 };
 
-}  // namespace nevr_runtime::lifecycle::test
+}  // namespace nevr::lifecycle::test

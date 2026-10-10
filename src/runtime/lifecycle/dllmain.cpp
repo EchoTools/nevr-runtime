@@ -34,7 +34,7 @@ static MiniDumpWriteDump_t g_realMiniDumpWriteDump = nullptr;
 static void LoadRealDbgCore() {
   if (g_realDbgCore) return;
 
-  g_realDbgCore = Nevr::Lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
+  g_realDbgCore = nevr::lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
   if (g_realDbgCore) {
     g_realMiniDumpWriteDump =
         (MiniDumpWriteDump_t)::GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");

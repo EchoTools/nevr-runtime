@@ -89,15 +89,15 @@ ResolvedConfig Config(const std::string& fileText, const EmbeddedDefaults& defau
 
 // ---- the pool, with fault injection -----------------------------------------
 
-nevr_runtime::lifecycle::StableStringPool& Pool() {
-  static nevr_runtime::lifecycle::StableStringPool pool;
+nevr::lifecycle::StableStringPool& Pool() {
+  static nevr::lifecycle::StableStringPool pool;
   return pool;
 }
-nevr_runtime::lifecycle::InternResult InternReal(std::string_view value) { return Pool().Intern(value); }
-nevr_runtime::lifecycle::InternResult InternRefuse(std::string_view) {
-  return {nevr_runtime::lifecycle::InternStatus::kPoolCountExceeded, nullptr, 1024, 0};
+nevr::lifecycle::InternResult InternReal(std::string_view value) { return Pool().Intern(value); }
+nevr::lifecycle::InternResult InternRefuse(std::string_view) {
+  return {nevr::lifecycle::InternStatus::kPoolCountExceeded, nullptr, 1024, 0};
 }
-nevr_runtime::lifecycle::InternResult InternThrow(std::string_view) { throw std::bad_alloc(); }
+nevr::lifecycle::InternResult InternThrow(std::string_view) { throw std::bad_alloc(); }
 
 BridgeState g_bridge;
 BridgeState BridgeProbeFn() { return g_bridge; }
@@ -347,7 +347,7 @@ void PointerStableAcrossCallsAndPoolChurn() {
   // Churn the pool far past the redirector's own cache: 600 unrelated strings.
   for (int i = 0; i < 600; ++i) {
     const std::string filler = "churn-" + std::to_string(i) + "-" + std::string(64, 'x');
-    QCHECK(Pool().Intern(filler).status == nevr_runtime::lifecycle::InternStatus::kSuccess);
+    QCHECK(Pool().Intern(filler).status == nevr::lifecycle::InternStatus::kSuccess);
   }
   QCHECK(std::strcmp(first, kSocketTarget) == 0);  // still readable, still the same bytes
   QCHECK(s.R15("login_host", kDefaultLogin) == first);
