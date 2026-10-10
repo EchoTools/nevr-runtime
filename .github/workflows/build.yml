@@ -47,7 +47,7 @@ jobs:
       WINEDEBUG: "-all"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
         fetch-depth: 0
@@ -95,7 +95,7 @@ jobs:
     # for the same vcpkg.json.
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -121,7 +121,7 @@ jobs:
     # Saved right after the install, so a failure in a later step does not lose the dependency build.
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -183,7 +183,7 @@ jobs:
     # archives are never published.
     - name: Upload the unsigned packages for signing
       if: github.event_name == 'release'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: unsigned-packages
         path: |
@@ -204,7 +204,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: unsigned-packages
         path: packages
@@ -242,7 +242,7 @@ jobs:
         }
         if ($bad -ne 0) { throw "$bad file(s) not validly signed" }
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: signed-packages
         path: packages
@@ -257,7 +257,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Install archive tools
       run: |
@@ -265,7 +265,7 @@ jobs:
         sudo apt-get install -y zstd
         python -m pip install cmake==4.0.0
 
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: signed-packages
         path: signed
@@ -297,7 +297,7 @@ jobs:
         test "${#tars[@]}" -eq 2
 
     - name: Upload dist artifacts
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           dist/*.zip

@@ -176,6 +176,7 @@ if(TARGET nevr_quest_got_hook)
   add_library(nevr_quest_login STATIC
     login/login_rewrite.cpp
     login/login_hook.cpp
+    login/login_counters.cpp
     login/login_apply.cpp
     login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp
@@ -191,7 +192,7 @@ if(TARGET nevr_quest_got_hook)
   # (login_prerequisites.cpp, login_prerequisites_install.cpp), which run inside the game's OVR
   # callbacks. login_rewrite.cpp keeps exceptions; it calls no game code and returns before the
   # next game call.
-  set_source_files_properties(login/login_hook.cpp login/login_apply.cpp login/login_prerequisites.cpp
+  set_source_files_properties(login/login_hook.cpp login/login_counters.cpp login/login_apply.cpp login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp login/login_standin.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
