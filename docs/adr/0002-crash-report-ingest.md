@@ -17,6 +17,13 @@ Capture writes to local disk from the fault context. A separate uploader, runnin
 in an ordinary context, delivers from a spool directory. Delivery is at-least-once;
 the sink makes it effectively once per `client_report_id`.
 
+## Consequences
+
+Capture and delivery remain separate paths, so the fault handlers never wait on
+network work. The sink must tolerate retries and enforce uniqueness by
+`client_report_id`; delivery is not complete until it acknowledges the stored
+report.
+
 ### Invariants
 
 1. No DNS, TLS, HTTP, heap allocation, mutex, `Log()`, loader operation, or thread

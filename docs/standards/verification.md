@@ -1,15 +1,10 @@
-# NEVR Runtime Verification Standards
+# nEVR Runtime Verification Standards
 
-_Authored by @agents._
+**Required reading** for anyone claiming a fix works or adding a check to
+`just verify`. Read it before writing "verified" or relying on a green gate.
 
-**Required reading** for ANY agent claiming a fix works, closing an N-ledger
-entry, or adding a check to `just verify`. Read this BEFORE writing "verified",
-BEFORE closing an N-entry, and BEFORE trusting a green gate.
-
-`docs/standards/logging.md` governs *what a component says*. This document governs *how you
-know it did anything*. They are the same problem seen from two sides: a
-component that says nothing and a component that does nothing are
-indistinguishable from outside, and both have shipped here.
+`docs/standards/logging.md` governs *what a component says*. This document
+governs *how you know it did anything*.
 
 ---
 
@@ -18,9 +13,9 @@ indistinguishable from outside, and both have shipped here.
 > _A hook that installed, a type that compiled, a call site that exists — none
 > of these is a thing that happened._
 
-Every serious defect found in this codebase in the 2026-07-26 session had the
-same shape: **something reported success while doing nothing.** Not a crash. Not
-an exception. Silence, and a gate that accepted it.
+Successful installation, compilation, or registration does not prove that the
+resulting behavior ran. Verification must measure the behavior relevant to the
+claim.
 
 ### This IS
 
@@ -65,7 +60,7 @@ an exception. Silence, and a gate that accepted it.
 
 ## The Evidence Ladder
 
-Rank every claim. Write the rank in the ledger entry.
+Rank every claim. Record the rank and its measurement in the tracking issue or commit message.
 
 | Rank | Method | What it actually proves |
 | ---- | ------ | ----------------------- |
@@ -74,7 +69,7 @@ Rank every claim. Write the rank in the ledger entry.
 | **3** | **Falsified sensor** — a `just verify` check, broken and observed failing | The check works and the source has the shape you claim. Nothing about runtime. |
 | **4** | **Type/compile enforcement** | True only of translation units the linker consumes. Verify that first. |
 | **5** | **Static measurement** — disassembly, `grep`, call-graph | The hazard exists or does not. Says nothing about whether it fires. |
-| **✗** | **Reasoning from a name, a comment, or a prior entry** | Nothing. This is how N83 happened. |
+| **✗** | **Reasoning from a name, a comment, or an earlier claim** | Nothing. |
 
 Rank 2 is the trap. "Production-linked" means linked to **the code that runs**,
 not to a copy that compiles. Check which one ships before using the phrase.
@@ -86,39 +81,38 @@ not to a copy that compiles. Check which one ships before using the phrase.
 A component can report success while doing nothing in exactly four ways. Check
 all four before closing anything.
 
-| Shape | Question that exposes it | Precedent |
-| ----- | ------------------------ | --------- |
-| **Not built** | Is this translation unit in a target the linker consumes? | **N67** — `std::atomic` fix landed in a plugin CMake does not build; closed as VERIFIED-BY-TYPE |
-| **Not called** | Does this function have a call site outside its own file? | **N92** — `InstallWebSocketBridge` had one call site, in the *other* copy; the gamepatches copy compiled and never ran |
-| **Not reached** | Does this hook ever fire at runtime? | **N86** — tick wired into `CPrecisionSleep::Wait`, which is never called in server mode. Zero entries for a whole run |
-| **Not received** | Is the thing arriving at all? | **N89** — log filter emitted happily while capturing **zero** game lines, because another module had taken its hook |
+| Shape | Question that exposes it |
+| ----- | ------------------------ |
+| **Not built** | Is this translation unit in a target the linker consumes? |
+| **Not called** | Does this function have a call site outside its own file? |
+| **Not reached** | Does this hook ever fire at runtime? |
+| **Not received** | Is the thing arriving at all? |
 
 And the reporting variant, which hides all four:
 
 | | | |
 | --- | --- | --- |
-| **Success logged below the filter** | Is the success line at a level production keeps? | **pnsrad** — patches logged success at `Debug`, failure at `Warning`. Silence meant *either* "all applied" or "never ran" |
-| **Return value discarded** | Does the caller check what it called? | **platform_compat** — three installers returned `bool`, all discarded; "initialized" printed unconditionally |
+| **Success logged below the filter** | Is the success line at a level production keeps? |
+| **Return value discarded** | Does the caller check what it called? |
 
-**The generalisation:** a gate that asks *"does this exist?"* can never answer
-*"did this do anything?"*. Every defect above passed its gate.
+**The generalisation:** a gate that asks *"does this exist?"* cannot answer
+*"did this do anything?"*.
 
 ---
 
 ## Falsify Every Check
 
-Seven checks written in a single session were silently broken. Each looked
-green. Each was found only by deliberately breaking its subject.
+Common failure modes for static checks include:
 
-| Failure | What happened |
+| Failure mode | Required response |
 | ------- | ------------- |
-| `(^\|[^a-zA-Z_])X\(` matched nothing | GNU grep's ERE mishandles `^` inside an alternation group. `[^a-zA-Z_]X\(` works |
-| `\bLog\(` matched its own comment | The function's comment said "no `Log()` here"; the rule flagged itself. **Strip comment lines** |
-| Counted lines, not entries | Table packed two entries per line; read 20 of 30 |
-| Undercounted enum members | Regex required `kName,` and missed `kName = 0,`; made the comparison unsatisfiable — the check could never fire |
-| Tautological `static_assert` | `kEntries[kCount]` then asserting `sizeof/sizeof == kCount` compares a value to itself. Size the array by its **initialiser** |
-| Monitor driven by its subject | Health check called only from inside the hook it monitored; when the hook died the check died with it |
-| Cumulative where a rate was needed | `count == 0` never fired because 13 lines arrived before the failure began |
+| Regex misses intended syntax | Test matching and non-matching examples; check the tool's regex dialect |
+| Comments satisfy a code check | Strip comments before matching code |
+| Count uses display lines instead of records | Count parsed entries, not lines |
+| Enum parser misses explicit values | Cover both implicit and explicitly assigned members |
+| Assertion compares a value to itself | Derive expected values independently from the initializer |
+| Monitor is driven by its subject | Drive it from an independently-live site |
+| Cumulative count stands in for a rate | Measure over a bounded interval |
 
 **Procedure — not optional:**
 
@@ -135,14 +129,6 @@ it, break it a way that still compiles — a clean deletion, not a corruption.
 
 ## A Monitor Must Not Depend On What It Monitors
 
-Three instances in one session, including one inside the tool written to detect
-this class.
-
-- The log-filter health check ran only from inside the log hook. When another
-  module took the hook, the check stopped — precisely when its warning mattered.
-- Per-frame reporting was driven from a hook that does not run in server mode.
-- `HookLiveness` reported from the same dead site until it was moved.
-
 **Rule:** drive every monitor from a site whose liveness is independently
 proven, and prove it — do not assume it. `HookLiveness::Report` exists to make
 that provable.
@@ -154,13 +140,7 @@ that provable.
 When a failure has two or more plausible causes that need **different** fixes,
 find the single measurement that splits them. Do this before writing any fix.
 
-`N90` is the worked example. Two hypotheses: the log filter was *dropping* the
-oversized lines, or it never *saw* them. A probe placed before every
-suppress/truncate decision — one bit — settled it in one run. It never saw them,
-so no amount of filter tuning would have worked. Two earlier guesses had already
-been wrong.
-
-Record the discriminator in the ledger entry **before** attempting the fix, so
+Record the discriminator in the tracking issue **before** attempting the fix, so
 the next agent inherits the question rather than the guess.
 
 ---
@@ -190,7 +170,7 @@ Enforced in review. A change that fails any of these is rejected until fixed.
 | "Verified" with no method named | The word means nothing alone | State the ladder rank + quote the measurement |
 | Sensor added without falsification | It may match nothing; seven did | Break it, watch it fail, record both |
 | Runtime claim closed on a source-shape gate | The gate cannot see runtime | Add a rank-1 observation or downgrade the claim |
-| "Production-linked" without checking what ships | N92 closed this way | Verify the linked copy is the installed one |
+| "Production-linked" without checking what ships | The claim may refer to a copy that never runs | Verify the linked copy is the installed one |
 | Success logged at DEBUG | Invisible in production; silence becomes ambiguous | Log outcomes at INFO, failures at WARNING |
 | Install/patch return value discarded | Failure becomes indistinguishable from success | Capture it, report per-item + aggregate |
 | Monitor driven by its own subject | Dies exactly when needed | Drive from an independently-proven site |
@@ -206,6 +186,4 @@ Enforced in review. A change that fails any of these is rejected until fixed.
   success") is the same principle applied to output.
 - **`AGENTS.md`** §Methodology, §Continuity — plan-before-code, measure before
   concluding, confirmation bias.
-- **`~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md`** — build and C++ hard stops.
-- **The N-ledger** — every entry carries the invariant it protects.
-- Worked precedents: **N67**, **N83**, **N86**, **N88**, **N89**, **N90**, **N92**.
+- **`AGENTS.md`** — C++ Mingw Addendum, build and code hard stops.

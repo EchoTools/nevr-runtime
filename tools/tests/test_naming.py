@@ -14,6 +14,9 @@ NVR = re.compile(r"(?<![A-Za-z])Nvr[A-Z][A-Za-z0-9_]*")
 # Any spelling of the name made of the letters n-e-v-r in some case, not preceded by a letter.
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
 CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+UPPERCASE_BRAND_IN_DOCS = re.compile(
+    r"(?<![A-Za-z])NEVR(?: Runtime| project|['’]s| refuses| subsystem|-authored)\b"
+)
 # These files define the anti-patterns themselves.
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
 EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/")
@@ -31,19 +34,30 @@ FROZEN_NVR = frozenset({
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
     "NvrTestPluginGetKeptInfo",
 })
-# Existing non-canonical spellings, per file and exact token. The map only shrinks.
-LEGACY_SPELLINGS = {
+# Allowed mixed-case spellings, per file and exact token. This includes the nEVR brand in prose;
+# all other entries are existing identifiers, comments, or certificate names.
+ALLOWED_SPELLINGS = {
+    "AGENTS.md": {"nEVR"},
+    "CONTRIBUTING.md": {"nEVR"},
     "README.md": {"nEVR"},
     "certs/code-signing.conf": {"nEVR"},
     "certs/generate-ca.sh": {"nEVR"},
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
+    "docs/adr/0003-quest-networking-port.md": {"nEVR"},
+    "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
+    "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
+    "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/standards/logging.md": {"nEVR"},
+    "docs/standards/verification.md": {"nEVR"},
+    "docs/README.md": {"nEVR"},
     "plugins/common/include/address_registry.h": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
     "plugins/example/src/plugin.cpp": {"nEVR"},
     "src/extension/plugin_interface.h": {"nEVR"},
     "src/runtime/compat/ws_bridge.cpp": {"nEVR"},
+    "tools/winvm/README.md": {"nEVR"},
     "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
     "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
     "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
@@ -93,16 +107,26 @@ class NamingTest(unittest.TestCase):
     def test_no_new_noncanonical_spelling(self):
         offenders = {}
         for path, text in project_files():
-            extra = noncanonical(text) - LEGACY_SPELLINGS.get(path, set())
+            extra = noncanonical(text) - ALLOWED_SPELLINGS.get(path, set())
             if extra:
                 offenders[path] = sorted(extra)
-        self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
+        self.assertEqual(offenders, {}, "use the prescribed identifier spelling (docs/standards/naming.md)")
 
-    def test_every_legacy_spelling_is_still_present(self):
+    def test_every_allowed_spelling_is_still_present(self):
         files = dict(project_files())
-        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()
+        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in ALLOWED_SPELLINGS.items()
                 if tokens - noncanonical(files.get(p, ""))}
-        self.assertEqual(gone, {}, "remove cleaned entries from LEGACY_SPELLINGS")
+        self.assertEqual(gone, {}, "remove cleaned entries from ALLOWED_SPELLINGS")
+
+    def test_project_brand_spelling_in_docs(self):
+        offenders = {}
+        for path, text in project_files():
+            if not path.endswith((".md", ".yaml", ".yml")):
+                continue
+            matches = sorted({m.group() for m in UPPERCASE_BRAND_IN_DOCS.finditer(text)})
+            if matches:
+                offenders[path] = matches
+        self.assertEqual(offenders, {}, "spell the project brand nEVR in prose (docs/standards/naming.md)")
 
 
 if __name__ == "__main__":

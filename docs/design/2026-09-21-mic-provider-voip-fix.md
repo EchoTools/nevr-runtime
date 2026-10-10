@@ -1,4 +1,4 @@
-# Mic provider: fixing one-way voice under NEVR (GH #15)
+# Mic provider: fixing one-way voice under nEVR (GH #15)
 
 2026-09-21, Claude + Andrew. Design and investigation record, written so an
 interruption only costs a `git log`/ReVault read, not a re-derivation.
@@ -11,7 +11,7 @@ document is the investigation record.
 
 ## The bug (GH #15)
 
-Voice is one-way under the NEVR runtime: players can hear others but cannot
+Voice is one-way under the nEVR runtime: players can hear others but cannot
 be heard. Reproduced by a tester and on a maintainer's own client.
 
 ## Root cause, confirmed
@@ -21,7 +21,7 @@ social provider. `CR15Game::CreateNetServiceProviders` @ `0x140109810`
 creates OVR (`pnsovr.dll`) and/or DMO (`pnsdemo.dll`) providers per the
 `-micprovider` flag, plus RAD (`pnsrad.dll`) unconditionally, then selects
 one for mic input (logged as "Using OVR/DMO/RAD provider for mic input";
-default RAD). NEVR forcing `pnsrad` for login/social does not force it for
+default RAD). nEVR forcing `pnsrad` for login/social does not force it for
 mic — that was a wrong initial hypothesis, corrected during this
 investigation.
 
@@ -111,7 +111,7 @@ it). Read for two reasons only:
 fallback.** It requires the Oculus platform/runtime to be present and
 initialized (`MicDetected` there is `ovr_IsPlatformInitialized()`), which
 excludes servers, `-windowed`, headset-free clients, and Wine — the
-opposite of what NEVR needs. `pnsrad_enabler` already forces `pnsrad` to
+opposite of what nEVR needs. `pnsrad_enabler` already forces `pnsrad` to
 load in place of it; nothing in the game requires `pnsovr.dll` to be
 present once its mic exports are implemented in `pnsrad`, so the intent is
 to make the install `pnsovr.dll`-free, not merely `pnsovr.dll`-inert.

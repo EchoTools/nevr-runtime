@@ -4,11 +4,16 @@ Status: accepted, mostly not implemented. The shared redirect vectors and the so
 check exist; the fixture, callback, lifecycle and Bionic tests are tranches of #158. The design
 being verified is ADR 0003.
 
-## Objective
+## Context
 
-Show that the callback contracts the Quest build uses match the exact Quest game binaries, then
-test the shared networking behavior PCVR already uses. A passing mock or a matching method name
-is not evidence that the Quest binary calls a callback with the declared ABI.
+The Quest port relies on callback contracts defined by game binaries. A matching method name or
+passing mock does not establish that a Quest binary calls a callback with the declared ABI.
+
+## Decision
+
+Pin the exact PCVR and Quest binaries, map each platform boundary to binary evidence, and test
+shared networking behavior with offline fixtures and bounded harnesses. Routine checks do not
+require a headset or a live service.
 
 Routine checks need no headset, APK install, full game launch, local Nakama, live service,
 `config.json` or controller input. A behavior that static analysis and a bounded binary harness
@@ -98,7 +103,7 @@ different instruction relocation, memory protection, cache synchronization or lo
    path cannot run without a full game launch, the status stays unresolved and only that hook's
    promotion waits for approved qualification.
 
-These tests show that NEVR's callback conforms to the verified call contract and that the hook
+These tests show that nEVR's callback conforms to the verified call contract and that the hook
 lifecycle behaves; they do not show that a whole game process reaches the hook.
 
 ### 3. Shared behavior tests
@@ -169,3 +174,9 @@ local Nakama or a headset.
 5. Network rules pass offline, with unit fixtures and the scripted peer.
 6. Artifact and platform checks pass: the Android output has the expected AArch64 shape, and any
    Bionic-only claim has a Bionic test result.
+
+## Consequences
+
+The offline suite can qualify only behavior established by source analysis and bounded binary
+harnesses. Behaviors those methods cannot establish require a separate qualification; a passing
+offline suite does not claim they work on a headset.

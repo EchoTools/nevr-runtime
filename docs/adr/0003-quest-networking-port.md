@@ -4,13 +4,24 @@ Status: accepted. The login-profile builder and the redirect policy are shared t
 (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/lifecycle/service_redirect.{h,cpp}`).
 The rest is not implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
-## Outcome
+## Context
+
+The Quest client needs to reach the same community services as PCVR while using Android-specific
+loading, game ABI, hook installation, configuration, logging, and socket integration. Duplicating
+protocol behavior would make the clients diverge.
+
+## Decision
+
+Keep protocol and social rules in shared source and isolate platform-specific behavior in adapters.
+The Quest client must use the same implementation of each nEVR protocol and social rule as PCVR.
+
+## Consequences
 
 The Android/arm64 Quest client reaches the community service, completes config and login,
 connects to matchmaking, enters a social lobby, and supports the Windows client's friends and
-party behavior. There is one implementation of each NEVR protocol and social rule. Android
-supplies its own loader, game ABI, hook installation, logging, configuration discovery and
-socket adapter, and the original Oculus loader stays available to the game.
+party behavior. Android supplies its own loader, game ABI, hook installation, logging,
+configuration discovery and socket adapter, and the original Oculus loader stays available to
+the game.
 
 Scope is the client. The dedicated server, `src/legacy/` and production server deployment are
 out of scope.

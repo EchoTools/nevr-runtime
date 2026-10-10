@@ -1,6 +1,6 @@
-# Contributing to NEVR Runtime
+# Contributing to nEVR Runtime
 
-NEVR Runtime is a set of Windows DLL patches for Echo VR (`echovr.exe`), written in C++17 and cross-compiled with
+nEVR Runtime is a set of Windows DLL patches for Echo VR (`echovr.exe`), written in C++17 and cross-compiled with
 MinGW from Linux. [`AGENTS.md`](AGENTS.md) is the full statement of conventions and guardrails; this page is the short
 path from a checkout to a pull request.
 
@@ -41,8 +41,7 @@ binary. See "Testing" in `AGENTS.md`.
 
 ## Branch, commit, open a PR
 
-1. Branch from `main`. Existing branches are named `<kind>/<short-description>`, for example `feat/...`, `fix/...`,
-   `docs/...` and `ci/...`.
+1. Create and name the branch as described under “Branch lifecycle” in [`AGENTS.md`](AGENTS.md).
 2. One logical change per commit, with a conventional prefix (`feat:`, `fix:`, `docs:`, `ci:`; an optional scope is
    fine, as in `fix(bridge): ...`), and the issue number in the subject when there is one.
 3. Push the branch and open a pull request against `main`. The PR template asks for what and why, the linked issue,
