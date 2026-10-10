@@ -64,7 +64,12 @@ bool MicCaptureLifecycle::Start(uint32_t callerThread, const MicLifecycleOperati
   // Every capture starts from an empty stream: audio read or polled while stopped must not make
   // the new capture look like it already has a listening reader (#95).
   if (ops.resetStream != nullptr) ops.resetStream(ops.context);
-  if (!ops.startAudio(ops.context)) {
+  // A client that cannot start may be dead (its device was invalidated): get a fresh one once and retry.
+  bool started = ops.startAudio(ops.context);
+  if (!started && ops.recoverAudio != nullptr && ops.recoverAudio(ops.context)) {
+    started = ops.startAudio(ops.context);
+  }
+  if (!started) {
     lock.lock();
     EndTransition(lock);
     return false;
@@ -242,4 +247,39 @@ bool MicCaptureLifecycle::HasWorker() const {
 uint32_t MicCaptureLifecycle::OwnerThread() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return ownerThread_;
+}
+
+bool MicCaptureLifecycle::Recover(uint32_t callerThread, const MicLifecycleOperations& ops,
+                                  uint32_t timeoutMs) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!BeginTransition(lock)) return false;
+  if (callerThread != ownerThread_ || ops.recoverAudio == nullptr ||
+      (state_ != MicLifecycleState::Running && state_ != MicLifecycleState::Ready)) {
+    EndTransition(lock);
+    return false;
+  }
+  if (workerExists_) {
+    state_ = MicLifecycleState::Stopping;
+    lock.unlock();
+    const bool joined = StopWorkerOutsideLock(ops, timeoutMs);
+    lock.lock();
+    if (!joined) {
+      state_ = MicLifecycleState::FaultedWorker;
+      EndTransition(lock);
+      return false;
+    }
+    workerExists_ = false;
+  }
+  // The invalidated client cannot be stopped; recoverAudio releases it.
+  audioStarted_ = false;
+  state_ = MicLifecycleState::Ready;
+  lock.unlock();
+
+  const bool recovered = ops.recoverAudio(ops.context);
+
+  lock.lock();
+  EndTransition(lock);
+  if (!recovered) return false;
+  lock.unlock();
+  return Start(callerThread, ops);
 }

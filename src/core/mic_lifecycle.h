@@ -38,6 +38,10 @@ struct MicLifecycleOperations {
   bool (*stopAudio)(void*) = nullptr;
   void (*releaseResources)(void*) = nullptr;
   void (*resetStream)(void*) = nullptr;
+  // Optional. Releases the WASAPI interfaces and acquires the current default capture endpoint again
+  // (AUDCLNT_E_DEVICE_INVALIDATED: the client is dead for good). Runs on the owner thread, with the capture
+  // worker joined and the audio stopped or dead; returns whether a client is ready to Start.
+  bool (*recoverAudio)(void*) = nullptr;
 };
 
 /// COM initialization returns S_FALSE when the calling thread was already
@@ -54,6 +58,10 @@ class MicCaptureLifecycle {
   bool Start(uint32_t callerThread, const MicLifecycleOperations& ops);
   bool Stop(uint32_t callerThread, const MicLifecycleOperations& ops, uint32_t timeoutMs);
   bool Destroy(uint32_t callerThread, const MicLifecycleOperations& ops, uint32_t timeoutMs);
+  /// The capture device was invalidated while running (or the worker has ended): joins the worker,
+  /// re-acquires the endpoint (ops.recoverAudio) and starts capture again. Returns whether capture runs.
+  /// A failure leaves the provider Ready (no worker, audio not started) so the game's next Start retries.
+  bool Recover(uint32_t callerThread, const MicLifecycleOperations& ops, uint32_t timeoutMs);
 
   MicLifecycleState State() const;
   bool IsCreated() const;
