@@ -606,6 +606,53 @@ TEST(SocialParty, TheFriendsTabRefreshIsRateLimited) {
   EXPECT_EQ(state.RefreshFriends().size(), 1u) << "the server-driven re-request is not limited";
 }
 
+TEST(SocialParty, AFriendsTabHeldOpenIsRefreshedEveryPollInterval) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  const std::uint64_t poll = SocialParty::State::kFriendPollSeconds;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  // The tab reads the list every second for three poll intervals; Update polls every second.
+  std::size_t sent = 0;
+  for (std::uint64_t t = t0 + 1; t <= t0 + 3 * poll; ++t) {
+    state.NoteFriendsViewed(t);
+    const auto out = state.PollFriendsWhileOpen(t);
+    sent += out.size();
+    for (const auto& m : out) EXPECT_EQ(m.symbol, SocialParty::kFriendListRefreshRequest);
+  }
+  EXPECT_EQ(sent, 3u) << "one refresh per interval while the tab is held open";
+}
+
+TEST(SocialParty, AClosedFriendsTabIsNotPolled) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  EXPECT_TRUE(state.PollFriendsWhileOpen(t0).empty()) << "never opened";
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  // The tab is read for 4 seconds and then closed: no read for the idle window.
+  for (std::uint64_t t = t0 + 1; t <= t0 + 4; ++t) state.NoteFriendsViewed(t);
+  std::size_t sent = 0;
+  for (std::uint64_t t = t0 + 5; t <= t0 + 6 * SocialParty::State::kFriendPollSeconds; ++t) {
+    sent += state.PollFriendsWhileOpen(t).size();
+  }
+  EXPECT_EQ(sent, 0u) << "a closed tab sends nothing, however long it stays closed";
+}
+
+TEST(SocialParty, ThePollNeverBeatsTheRefreshFloor) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  const std::uint64_t t1 = t0 + SocialParty::State::kFriendPollSeconds;
+  state.NoteFriendsViewed(t1);
+  ASSERT_EQ(state.PollFriendsWhileOpen(t1).size(), 1u);
+  // A tab reopened a moment after the poll is inside the floor: nothing goes out.
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t1 + SocialParty::State::kFriendRefreshMinSeconds - 1).empty());
+  EXPECT_TRUE(state.PollFriendsWhileOpen(t1 + 1).empty());
+  static_assert(SocialParty::State::kFriendPollSeconds >= SocialParty::State::kFriendRefreshMinSeconds,
+                "the poll interval is never below the floor");
+}
+
 TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   SocialParty::Global().SetSelf(77, "Me");
   void* object = SocialFacade::Object();

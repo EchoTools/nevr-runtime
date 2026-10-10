@@ -663,19 +663,31 @@ void SlotExitLobby(void* self) {
 // CNSOVRSocial keeps a count, an online count and parallel id / name / status arrays with the online
 // friends first: FriendStatus(i) is 2 for i < OnlineFriendCount and 0 after it (libpnsovr 0x2061fc).
 
-std::uint32_t SlotFriendCount(void* self) { return Friends(*OwnerOf(self)).Count(); }
+// The friends tab is open while the game reads the list (SocialParty::NoteFriendsViewed); the poll in
+// UpdateCollect refreshes it while it is.
+void NoteFriendsViewed(Impl& impl) { Party(impl).NoteFriendsViewed(Now(impl)); }
+
+std::uint32_t SlotFriendCount(void* self) {
+  NoteFriendsViewed(*OwnerOf(self));
+  return Friends(*OwnerOf(self)).Count();
+}
 std::uint32_t SlotOnlineFriendCount(void* self) { return Friends(*OwnerOf(self)).Online(); }
 std::uint32_t SlotOfflineFriendCount(void* self) { return Friends(*OwnerOf(self)).Offline(); }
 
 std::uint64_t SlotFriendId(void* self, std::uint32_t index) {
+  NoteFriendsViewed(*OwnerOf(self));
   std::uint64_t id = 0;
   Friends(*OwnerOf(self)).IdAt(index, &id);
   return id;
 }
 
-const char* SlotFriendName(void* self, std::uint32_t index) { return Friends(*OwnerOf(self)).NameAt(index); }
+const char* SlotFriendName(void* self, std::uint32_t index) {
+  NoteFriendsViewed(*OwnerOf(self));
+  return Friends(*OwnerOf(self)).NameAt(index);
+}
 
 std::uint32_t SlotFriendStatus(void* self, std::uint32_t index) {
+  NoteFriendsViewed(*OwnerOf(self));
   return Friends(*OwnerOf(self)).OnlineAt(index) ? 2U : 0U;
 }
 
@@ -1095,6 +1107,9 @@ void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept {
   try {
     // The events are drained before the view is published, so the view is at least as new as every event: a
     // member an event names is in it unless it has left since (see QueueEvents).
+    // The friends tab stays fresh while it is open (#57): nothing is sent for a closed tab.
+    const std::vector<SocialParty::Message> poll = Party(*impl).PollFriendsWhileOpen(Now(*impl));
+    if (!poll.empty()) SendParty(*impl, "friends poll", poll);
     std::vector<SocialParty::Event> events = Party(*impl).DrainEvents();
     const std::vector<std::uint64_t> ids = PublishView(*impl);
     const auto view = CurrentView(*impl);
