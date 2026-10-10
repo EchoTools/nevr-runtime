@@ -203,7 +203,6 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
     #!/usr/bin/env bash
     set -euo pipefail
-    unset VCPKG_ROOT
     case "{{ n }}" in ''|*[!0-9]*|0) echo "package-rc: N must be a positive integer, got '{{ n }}'" >&2; exit 1;; esac
     [ -z "$(git status --porcelain)" ] || { echo "package-rc: the tree is not clean; commit or stash first (a candidate is built from a commit)" >&2; exit 1; }
     [ -f "{{ ks }}" ] || { echo "package-rc: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
@@ -212,9 +211,13 @@ package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="
     label="rc.{{ n }}"
     out="build/package-rc/$label"
     # Windows DLL: its own build tree (build/mingw-rc), the label in the version string.
-    just preset=mingw-rc _vcpkg-mingw
-    cmake --preset mingw-rc -DNEVR_RC_LABEL="$label"
-    cmake --build --preset mingw-rc
+    # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
+    (
+        unset VCPKG_ROOT
+        just preset=mingw-rc _vcpkg-mingw
+        cmake --preset mingw-rc -DNEVR_RC_LABEL="$label"
+        cmake --build --preset mingw-rc
+    )
     # Quest sentinel: its own build tree (build/android-rc), the same label, the default features.
     (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-rc \
         -DNEVR_RC_LABEL="$label" -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
