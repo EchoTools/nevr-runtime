@@ -118,6 +118,207 @@ void* SelectSocialObject(void* original, void* facadeObject, PnsovrLookup lookup
   return facadeObject;
 }
 
+// ---- rich presence trace (#393) -----------------------------------------------------------------------------
+
+namespace {
+
+// The tracing copy of CNSOVRRichPresence's vtable: offset-to-top and typeinfo, then the slots. Static storage,
+// filled once (before any object points at it) and never written again.
+constexpr std::size_t kPresenceTableWords = 2 + kOvrRichPresenceSlotCount;
+std::uintptr_t g_presenceTable[kPresenceTableWords];
+std::atomic<bool> g_presenceTableBuilt{false};
+std::uintptr_t g_presenceOrigCount = 0;
+std::uintptr_t g_presenceOrigName = 0;
+std::uintptr_t g_presenceOrigDestination = 0;
+std::uintptr_t g_presenceOrigSet = 0;
+
+std::atomic<std::uint64_t> g_presenceSelected{0};
+std::atomic<std::uint64_t> g_presencePassThrough{0};
+std::atomic<bool> g_presenceSlotCheck{true};
+std::atomic<CJsonEncodeToCompactFn> g_presenceEncode{nullptr};
+std::atomic<bool> g_presenceEncodeResolved{false};
+
+// What the wrappers logged last, so only a change is a line (the game asks on every party and lobby event).
+std::atomic<bool> g_destSeen{false};
+std::atomic<int> g_lastDestIndex{0};
+std::atomic<unsigned> g_lastDestCount{0};
+std::atomic<std::uint64_t> g_lastNameKey{0};
+std::atomic<std::uint64_t> g_lastSetKey{0};
+
+using CountFn = unsigned (*)(const void*);
+using DestinationFn = int (*)(const void*);
+using NameFn = const char* (*)(const void*, unsigned);
+using SetFn = void (*)(void*, const void*);
+
+template <typename Fn>
+Fn AsFn(std::uintptr_t address) noexcept {
+  Fn fn;
+  static_assert(sizeof(fn) == sizeof(address), "function pointer size");
+  std::memcpy(&fn, &address, sizeof(fn));
+  return fn;
+}
+
+std::uint64_t Fnv(const char* text, std::uint64_t seed) noexcept {
+  std::uint64_t h = 1469598103934665603ULL ^ seed;
+  for (; text != nullptr && *text != '\0'; ++text) h = (h ^ static_cast<unsigned char>(*text)) * 1099511628211ULL;
+  return h;
+}
+
+// Slot 9: the index of the destination the presence's game_type names, -1 when none (the empty list of a failed
+// GetDestinations). The answer is the original's.
+int TracedDestination(const void* self) noexcept {
+  const int index = AsFn<DestinationFn>(g_presenceOrigDestination)(self);
+  const unsigned count = AsFn<CountFn>(g_presenceOrigCount)(self);
+  const bool seen = g_destSeen.exchange(true, std::memory_order_relaxed);
+  if (!seen || g_lastDestIndex.load(std::memory_order_relaxed) != index ||
+      g_lastDestCount.load(std::memory_order_relaxed) != count) {
+    g_lastDestIndex.store(index, std::memory_order_relaxed);
+    g_lastDestCount.store(count, std::memory_order_relaxed);
+    LogFields(LogLevel::kInfo, "rich_presence_destination",
+              {{"index", index}, {"count", static_cast<long long>(count)}});
+  }
+  return index;
+}
+
+// Slot 8: the display name of destination `index`. Only asked for when slot 9 found one.
+const char* TracedName(const void* self, unsigned index) noexcept {
+  const char* const name = AsFn<NameFn>(g_presenceOrigName)(self, index);
+  const std::uint64_t key = Fnv(name, index + 1U);
+  if (g_lastNameKey.exchange(key, std::memory_order_relaxed) != key) {
+    LogFields(LogLevel::kInfo, "rich_presence_name",
+              {{"index", static_cast<long long>(index)}, {"name", name != nullptr ? name : "(null)"}});
+  }
+  return name;
+}
+
+// Slot 15: the presence document the game set (game_type, lobby_id, party_id, capacities, joinable). The
+// original copies it into the object; the line carries the document's compact text.
+void TracedSet(void* self, const void* json) noexcept {
+  AsFn<SetFn>(g_presenceOrigSet)(self, json);
+  if (!g_presenceEncodeResolved.load(std::memory_order_acquire)) {
+    if (g_presenceEncode.load(std::memory_order_relaxed) == nullptr) {
+      g_presenceEncode.store(ResolveGameJson(&sentinel::FindLoadedImage).encode, std::memory_order_relaxed);
+    }
+    g_presenceEncodeResolved.store(true, std::memory_order_release);
+  }
+  const CJsonEncodeToCompactFn encode = g_presenceEncode.load(std::memory_order_relaxed);
+  if (encode == nullptr || json == nullptr) {
+    if (g_lastSetKey.exchange(1, std::memory_order_relaxed) != 1) {
+      LogFields(LogLevel::kWarn, "rich_presence_set", {{"result", "game_json_unavailable"}});
+    }
+    return;
+  }
+  char text[512];
+  unsigned long long size = sizeof(text);
+  if (encode(json, text, &size, 1, "") != 0 || size >= sizeof(text)) {
+    LogFields(LogLevel::kWarn, "rich_presence_set", {{"result", "encode_failed"}});
+    return;
+  }
+  text[size] = '\0';
+  const std::uint64_t key = Fnv(text, 7);
+  if (g_lastSetKey.exchange(key, std::memory_order_relaxed) != key) {
+    LogFields(LogLevel::kInfo, "rich_presence_set", {{"json", text}});
+  }
+}
+
+// The slots we wrap must hold the functions of the pinned build, or the wrappers would call into something else.
+bool SlotsAreThePinnedOnes(const std::uintptr_t* live, std::uintptr_t bias) noexcept {
+  if (!g_presenceSlotCheck.load(std::memory_order_relaxed)) return true;
+  return live[kRichPresenceSlotDestinationCount] == bias + kOvrRichPresenceDestinationCountVaddr &&
+         live[kRichPresenceSlotDestinationName] == bias + kOvrRichPresenceDestinationNameVaddr &&
+         live[kRichPresenceSlotDestination] == bias + kOvrRichPresenceDestinationVaddr &&
+         live[kRichPresenceSlotSet] == bias + kOvrRichPresenceSetVaddr;
+}
+
+}  // namespace
+
+void* OnPresenceHandler(PresenceThunk::Fn original, std::uint64_t handle) noexcept {
+  void* const result = original(handle);
+  return SelectRichPresenceObject(result, g_lookup.load(std::memory_order_acquire));
+}
+
+NEVR_HOOK_RECORD(kPresenceHook, PresenceThunk, &OnPresenceHandler);
+
+sentinel::GotTarget LibR15RichPresence() {
+  return {sentinel::pinned::kLibR15, kRichPresenceSymbol, sentinel::RelocKind::kJumpSlot,
+          sentinel::pinned::kLibR15BuildId, kRichPresenceSlotVaddr};
+}
+
+void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept {
+  if (original == nullptr || lookup == nullptr) {
+    Count(g_presencePassThrough);
+    return original;
+  }
+  const PnsovrView pnsovr = lookup();
+  if (!pnsovr.found || !pnsovr.buildIdMatches) {
+    Count(g_presencePassThrough);
+    return original;
+  }
+  std::uintptr_t vptr = 0;
+  std::memcpy(&vptr, original, sizeof(vptr));
+  if (vptr == reinterpret_cast<std::uintptr_t>(&g_presenceTable[2])) return original;  // already traced
+  if (vptr != pnsovr.loadBias + static_cast<std::uintptr_t>(kOvrRichPresenceVptrVaddr)) {
+    Count(g_presencePassThrough);
+    return original;
+  }
+  const std::uintptr_t* const live = reinterpret_cast<const std::uintptr_t*>(vptr);
+  if (!SlotsAreThePinnedOnes(live, pnsovr.loadBias)) {
+    Count(g_presencePassThrough);
+    return original;
+  }
+  if (!g_presenceTableBuilt.load(std::memory_order_acquire)) {
+    g_presenceOrigCount = live[kRichPresenceSlotDestinationCount];
+    g_presenceOrigName = live[kRichPresenceSlotDestinationName];
+    g_presenceOrigDestination = live[kRichPresenceSlotDestination];
+    g_presenceOrigSet = live[kRichPresenceSlotSet];
+    g_presenceTable[0] = live[-2];
+    g_presenceTable[1] = live[-1];
+    for (std::size_t i = 0; i < kOvrRichPresenceSlotCount; ++i) g_presenceTable[2 + i] = live[i];
+    const auto word = [](auto* fn) { return reinterpret_cast<std::uintptr_t>(fn); };
+    g_presenceTable[2 + kRichPresenceSlotDestinationName] = word(&TracedName);
+    g_presenceTable[2 + kRichPresenceSlotDestination] = word(&TracedDestination);
+    g_presenceTable[2 + kRichPresenceSlotSet] = word(&TracedSet);
+    g_presenceTableBuilt.store(true, std::memory_order_release);
+  }
+  const std::uintptr_t table = reinterpret_cast<std::uintptr_t>(&g_presenceTable[2]);
+  std::memcpy(original, &table, sizeof(table));
+  Count(g_presenceSelected);
+  return original;
+}
+
+PresenceCounters PresenceCountersView() noexcept { return PresenceCounters{g_presenceSelected, g_presencePassThrough}; }
+
+void ResetPresenceForTest() noexcept {
+  g_presenceSelected.store(0, std::memory_order_relaxed);
+  g_presencePassThrough.store(0, std::memory_order_relaxed);
+  g_presenceSlotCheck.store(true, std::memory_order_relaxed);
+  g_presenceEncode.store(nullptr, std::memory_order_relaxed);
+  g_presenceEncodeResolved.store(false, std::memory_order_relaxed);
+  g_destSeen.store(false, std::memory_order_relaxed);
+  g_lastNameKey.store(0, std::memory_order_relaxed);
+  g_lastSetKey.store(0, std::memory_order_relaxed);
+  g_presenceTableBuilt.store(false, std::memory_order_relaxed);
+}
+
+void SetPresenceSeamsForTest(bool slotCheck, CJsonEncodeToCompactFn encode) noexcept {
+  g_presenceSlotCheck.store(slotCheck, std::memory_order_relaxed);
+  g_presenceEncode.store(encode, std::memory_order_relaxed);
+  g_presenceEncodeResolved.store(encode != nullptr, std::memory_order_release);
+}
+
+sentinel::GotStatus InstallPresenceTrace() {
+  static sentinel::GotHook hook;
+  PresenceThunk::Arm(kPresenceHook);
+  const sentinel::GotStatus got = sentinel::InstallThunk<PresenceThunk>(hook, LibR15RichPresence());
+  if (got != sentinel::GotStatus::kOk) {
+    PresenceThunk::Disarm();
+    LogFields(LogLevel::kError, "rich_presence_install", {{"status", "hook_failed"}, {"got", sentinel::GotStatusName(got)}});
+  } else {
+    LogFields(LogLevel::kInfo, "rich_presence_install", {{"status", "ok"}});
+  }
+  return got;
+}
+
 SocialCounters Counters() noexcept {
   return SocialCounters{g_selected, g_nullResult, g_pnsovrUnavailable, g_foreignObject};
 }
@@ -156,6 +357,12 @@ bool RegisterSocialReportCounters() {
   ok = sentinel::RegisterReportCounter("social_json_failed", &facade.jsonFailed, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_frames_ignored", &facade.framesIgnored, sentinel::ReportKind::kFaults) && ok;
   ok = RegisterInviteGateCounters() && ok;
+  ok = sentinel::RegisterReportCounter("presence_calls", &PresenceThunk::CallCounter()) && ok;
+  ok = sentinel::RegisterReportCounter("presence_selected", &g_presenceSelected) && ok;
+  ok = sentinel::RegisterReportCounter("presence_pass_through", &g_presencePassThrough,
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("presence_thunk_faults", &PresenceThunk::FaultCounter(),
+                                       sentinel::ReportKind::kFaults) && ok;
   return ok;
 }
 
@@ -188,6 +395,8 @@ InstallResult InstallSocialHook(bool enabled) {
   LogFields(LogLevel::kInfo, "social_install", {{"status", "ok"}});
   // The facade is live: let the invite "+" reach it (the gate logs its own outcome; the facade works without it).
   InstallInviteGate();
+  // The rich presence trace: the object pnsovr returns for RichPresence() answers as before and says what it answered.
+  InstallPresenceTrace();
   return result;
 }
 

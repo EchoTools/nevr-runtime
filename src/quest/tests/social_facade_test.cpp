@@ -1272,6 +1272,17 @@ void TestWrittenDataIsSharedWithTheServer() {
   QCHECK(shared(nevr_social_party::kPartyDataScopeMember) == std::vector<std::string>{"{\"headsettype\":2}"});
   QCHECK(shared(nevr_social_party::kPartyDataScopeParty).empty());
 
+  // #393: the status text the game wrote is logged with the share (the line the headset run reads), and a
+  // document without one says so.
+  QCHECK(CountLines("\"event\":\"social_member_status\"") >= 1 && CountLines("\"status\":\"(absent)\"") >= 1);
+  SetDoc(MemberJson(obj, 0), "{\"status\":\"Social Lobby | EchoVR\",\"headsettype\":2}");
+  SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
+  g_lines.clear();
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(CountLines("\"event\":\"social_member_status\",\"status\":\"Social Lobby | EchoVR\"") == 1);
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember).size() == 1);
+
   // A game JSON that cannot be read out is counted, and nothing is sent.
   SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
   g_encodeFails = 1;
