@@ -65,9 +65,6 @@ separate namespace is an open ABI decision, issue #130.
   in `cmake/codesign/sign.sh` and the certificate subjects under `certs/`. A certificate subject is a
   trust identity, so changing one is the owner's call. `LEGACY_SPELLINGS` in `tools/tests/test_naming.py`
   lists each file and token; the list only shrinks.
-- Three spellings of one lifecycle namespace: `Nevr::Lifecycle` (`src/runtime/lifecycle/system_module_loader.h`),
-  `nevr_runtime::lifecycle` (`src/runtime/lifecycle/stable_string_pool.h`) and `nevr::lifecycle`
-  (`src/runtime/lifecycle/login_redirect_override.h`).
 - Exports without the `NEVR_` prefix: `TokenAuth_GetToken`, `token_auth_Init`, `platform_compat_Init`
   and their siblings (declared with `NEVR_MODULE_API`).
 - Library targets without `nevr_` (`platform_compat`, `token_auth`, `crash_handler`, `log_filter`),
