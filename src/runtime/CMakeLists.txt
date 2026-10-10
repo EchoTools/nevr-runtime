@@ -659,6 +659,17 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
+    # The engine's package manifest layout (patch/asset_manifest.cpp): pure byte handling, so it builds and runs
+    # on its own; the plugin asset registry that feeds it to the game is a separate unit.
+    add_executable(test_asset_manifest
+      tests/test_asset_manifest.cpp
+      patch/asset_manifest.cpp)
+    set_source_files_properties(tests/test_asset_manifest.cpp patch/asset_manifest.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_asset_manifest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_manifest PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_asset_manifest DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_social_facade
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
