@@ -13,7 +13,7 @@
 
 namespace {
 
-namespace Policy = ExportTracePolicy;
+namespace Policy = nevr_export_trace_policy;
 
 constexpr std::size_t kNameBytes = 48;
 

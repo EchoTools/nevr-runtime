@@ -45,7 +45,7 @@ VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
 
 namespace {
 
-namespace Policy = ExportTracePolicy;
+namespace Policy = nevr_export_trace_policy;
 
 // ---- functions to trace -------------------------------------------------------------------------
 
