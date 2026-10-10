@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -447,14 +448,68 @@ void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std:
   original(self, arg);
 }
 
+// Every page a UI script enables is recorded, so a headset run shows what a button did (#391, #318): one
+// line per page symbol per kPageLogSpacingNs, with the number of enables since the previous line. The
+// table is lock-free and fixed (the hook may run on a task-scheduler worker thread, and a line is built in
+// a stack buffer): a symbol claims a slot by compare-and-swap and keeps it; when all slots are taken the
+// enable is counted and one warning says so.
+constexpr std::size_t kPageLogSlots = 128;
+constexpr std::int64_t kPageLogSpacingNs = 1'000'000'000;
+constexpr std::int64_t kPageLogNever = INT64_MIN;
+struct PageLogSlot {
+  std::atomic<std::uint64_t> key{0};  // the page symbol (0: free)
+  std::atomic<std::uint64_t> enters{0};
+  std::atomic<std::int64_t> lastNs{kPageLogNever};
+};
+PageLogSlot g_pageLog[kPageLogSlots];
+std::atomic<std::uint64_t> g_pageLogFull{0};
+
+const char* KnownPageName(std::uint64_t page) noexcept {
+  if (page == ui::kErrorDisplayPage) return "error_display_page";
+  if (page == ui::kFatalErrorDisplayPage) return "fatal_error_display_page";
+  if (page == ui::kLoggingInPage) return "logging_in_page";
+  return "unknown";
+}
+
+void NotePageEnter(std::uint64_t page, bool latchArmed) noexcept {
+  const std::uint64_t key = page != 0 ? page : ~std::uint64_t{0};
+  const std::size_t first = static_cast<std::size_t>((key ^ (key >> 29) ^ (key >> 47)) % kPageLogSlots);
+  for (std::size_t probe = 0; probe < kPageLogSlots; ++probe) {
+    PageLogSlot& slot = g_pageLog[(first + probe) % kPageLogSlots];
+    std::uint64_t held = slot.key.load(std::memory_order_acquire);
+    if (held == 0 && slot.key.compare_exchange_strong(held, key, std::memory_order_acq_rel)) held = key;
+    if (held != key) continue;
+    slot.enters.fetch_add(1, std::memory_order_relaxed);
+    const std::int64_t now = g_clock.load(std::memory_order_relaxed)();
+    std::int64_t last = slot.lastNs.load(std::memory_order_relaxed);
+    if (last != kPageLogNever && now - last < kPageLogSpacingNs) return;
+    if (!slot.lastNs.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+    char hex[19];
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "ui_page_enter",
+                        {{"page", sentinel::HexString(hex, page)},
+                         {"name", KnownPageName(page)},
+                         {"enters", slot.enters.exchange(0, std::memory_order_relaxed)},
+                         {"latch_armed", latchArmed ? 1 : 0}});
+    return;
+  }
+  if (g_pageLogFull.fetch_add(1, std::memory_order_relaxed) == 0) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "ui_page_enter_table_full", {{"slots", kPageLogSlots}});
+  }
+}
+
 // CR15UIPage2EnablePageNode::Enter. While the latch is armed (the screen shows our sign-in text) the game
 // must not replace it: the enable of the error page or the fatal error page is skipped, and so is the
 // enable of the logging-in page while token auth still waits for the player (the screen would lose its
 // header and buttons for a login that cannot succeed yet). Skipping is a plain return: the node writes
 // nothing to its thread, and its caller ignores the return. Anything else, and every enable while the
-// latch is not armed (a genuine error), goes to the game unchanged. Reads atomics only, no logging: it may
-// run on a task-scheduler worker thread.
+// latch is not armed (a genuine error), goes to the game unchanged. It may run on a task-scheduler worker
+// thread: it reads atomics and writes the page-enter line (NotePageEnter) from a stack buffer, nothing else.
 void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const void* data) noexcept {
+  if (data != nullptr) {
+    std::uint64_t page = 0;
+    __builtin_memcpy(&page, static_cast<const unsigned char*>(data) + ui::kEnablePageActorIdOffset, sizeof(page));
+    NotePageEnter(page, g_latchArmed.load(std::memory_order_acquire));
+  }
   if (data != nullptr && g_latchArmed.load(std::memory_order_acquire)) {
     const unsigned char* bytes = static_cast<const unsigned char*>(data);
     std::uint64_t actor = 0;
@@ -603,6 +658,14 @@ void SetQuitOnErrorForTest(QuitFn quit) noexcept {
   g_quit.store(quit, std::memory_order_release);
   g_resendPending.store(false, std::memory_order_relaxed);
   g_lastResendNs.store(0, std::memory_order_relaxed);
+}
+void ResetPageLogForTest() noexcept {
+  for (PageLogSlot& slot : g_pageLog) {
+    slot.key.store(0, std::memory_order_relaxed);
+    slot.enters.store(0, std::memory_order_relaxed);
+    slot.lastNs.store(kPageLogNever, std::memory_order_relaxed);
+  }
+  g_pageLogFull.store(0, std::memory_order_relaxed);
 }
 void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept {
   g_clock.store(clock != nullptr ? clock : &SteadyNs, std::memory_order_relaxed);

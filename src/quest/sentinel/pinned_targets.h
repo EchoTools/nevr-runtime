@@ -111,7 +111,8 @@ inline constexpr const char* kObbFallbackDataRoot = "/storage/emulated/0/readyat
 // or the node, and either enables the page (EnablePage 0x1f79314, directly or deferred) or reports a script
 // component error. Skipping the call, as a plain return, leaves the page disabled and the script thread
 // where it was. It can run on a task-scheduler worker thread (CScriptCS::UpdateScripts may run instances
-// through CComponentSystem::TaskedUpdate), so a handler reads only atomics and never logs.
+// through CComponentSystem::TaskedUpdate), so a handler reads atomics and writes at most one rate-limited
+// log line built in a stack buffer.
 using EnablePageNodeEnterSig = void(void* node, const void* data);
 struct LibR15EnablePageNodeEnterTag {};
 using LibR15EnablePageNodeEnterThunk = CallbackThunk<LibR15EnablePageNodeEnterTag, EnablePageNodeEnterSig>;

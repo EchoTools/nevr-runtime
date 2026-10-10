@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -85,7 +86,11 @@ void Publish(const std::string& text, board::Mode mode = board::Mode::kPrompt) {
 }
 
 std::vector<std::string> g_lines;
-void CaptureSink(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+std::mutex g_linesMutex;  // the page-enter line is written from whichever thread runs the hook
+void CaptureSink(sentinel::LogLevel, const char* line) {
+  std::lock_guard<std::mutex> lock(g_linesMutex);
+  g_lines.emplace_back(line);
+}
 int CountLines(const char* needle) {
   int n = 0;
   for (const std::string& l : g_lines) n += l.find(needle) != std::string::npos ? 1 : 0;
@@ -903,6 +908,72 @@ void ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison() {
   lp::ResetLatchForTest();
 }
 
+// #391: every page enable is logged with its symbol, once per symbol per second, and the game's Enter still
+// runs for all of them. (The page-enter log writes only atomics and one stack-built line, so it is safe on
+// the worker thread the hook can run on.)
+void EveryPageEnableIsLoggedOncePerSymbolPerSecond() {
+  lp::ResetLatchForTest();
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(&FakeClock);
+  g_now = 5'000'000'000;
+  g_lines.clear();
+  const int originalBefore = g_enableOriginalCalls.load();
+  QCHECK(Enabled(kSomeOtherPage));
+  QCHECK(Enabled(kSomeOtherPage));
+  QCHECK(Enabled(kSomeOtherPage));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 1);
+  QCHECK(CountLines("\"page\":\"0x1234567890abcdef\"") == 1 && CountLines("\"enters\":1") == 1);
+  QCHECK(CountLines("\"name\":\"unknown\"") == 1 && CountLines("\"latch_armed\":0") == 1);
+  // A second page has its own line at once; the first logs again after a second, carrying the four enables
+  // since its line (the call that triggers the line counts).
+  QCHECK(Enabled(ui::kLoggingInPage));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 2 && CountLines("\"name\":\"logging_in_page\"") == 1);
+  g_now += 999'999'999;
+  QCHECK(Enabled(kSomeOtherPage));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 2);  // not yet
+  g_now += 1;
+  QCHECK(Enabled(kSomeOtherPage));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 3 && CountLines("\"enters\":4") == 1);
+  QCHECK(g_enableOriginalCalls.load() == originalBefore + 6);  // the game's Enter ran for every one
+  lp::SetClockForTest(nullptr);
+}
+
+// The volume: one hot page enabled 60 times a second for ten minutes, and a handful of others, stay at
+// one line per symbol per second at most, and the latch state is carried.
+void PageEnterLogVolumeIsBounded() {
+  lp::ResetLatchForTest();
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(&FakeClock);
+  g_now = 1'000'000'000;
+  g_lines.clear();
+  for (int second = 0; second < 600; ++second) {
+    for (int frame = 0; frame < 60; ++frame) {
+      QCHECK(Enabled(kSomeOtherPage));
+      g_now += 16'666'666;
+    }
+  }
+  const int hot = CountLines("\"event\":\"ui_page_enter\"");
+  QCHECK(hot >= 580 && hot <= 601);  // one a second for the 10 minutes, not 36000
+  g_lines.clear();
+  QCHECK(Enabled(ui::kErrorDisplayPage) && Enabled(ui::kLoggingInPage));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 2);
+  lp::SetClockForTest(nullptr);
+}
+
+// Every one of more pages than the table holds still reaches the game, and the table says once that it is full.
+void APageTableThatIsFullStillPassesEveryEnable() {
+  lp::ResetLatchForTest();
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(&FakeClock);
+  g_now = 9'000'000'000;
+  g_lines.clear();
+  for (std::uint64_t i = 0; i < 300; ++i) QCHECK(Enabled(0x7000000000000000ULL + i * 0x10001ULL));
+  QCHECK(CountLines("\"event\":\"ui_page_enter\"") == 128);
+  QCHECK(CountLines("\"event\":\"ui_page_enter_table_full\"") == 1);
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -942,6 +1013,9 @@ int main() {
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
+  EveryPageEnableIsLoggedOncePerSymbolPerSecond();
+  PageEnterLogVolumeIsBounded();
+  APageTableThatIsFullStillPassesEveryEnable();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();

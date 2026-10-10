@@ -139,6 +139,9 @@ void ResetLatchForTest() noexcept;
 void SetQuitOnErrorForTest(QuitFn quit) noexcept;
 void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept;
 
+// Test support: forgets which pages the page-enter log has seen (each is logged again at its next enable).
+void ResetPageLogForTest() noexcept;
+
 // Test support: takes / gives back the hooks' single-writer flag, as the other hook would hold it.
 // Returns false when it was already taken. Nothing in production calls these.
 bool HoldBlockWriterForTest() noexcept;
