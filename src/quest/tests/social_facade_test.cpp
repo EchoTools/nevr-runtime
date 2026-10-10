@@ -327,10 +327,35 @@ void TestFriendRoster() {
   int profileRequests = 0;
   for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
   QCHECK(profileRequests == 0);  // no profile decoder is registered, so no reply could be read: none asked for
-  // The friend tab refresh sends the refresh request.
+  // The friend tab refresh sends the refresh request, once per rate-limit window: the tab opened again
+  // inside it sends nothing, and after it asks again (#57).
   g_sent.clear();
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
   QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  g_sent.clear();
+  SlotFn<Void0>(obj, kRefreshFriends)(obj);
+  QCHECK(g_sent.empty());
+  g_now += SocialParty::State::kFriendRefreshMinSeconds;
+  SlotFn<Void0>(obj, kRefreshFriends)(obj);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  // A tab held open is polled (#57): while the game keeps reading the list, Update refreshes it every
+  // kFriendPollSeconds, and a closed tab (no read for the idle window) sends nothing.
+  g_sent.clear();
+  const std::uint64_t pollStart = g_now;
+  std::size_t polled = 0;
+  for (std::uint64_t i = 0; i < 3 * SocialParty::State::kFriendPollSeconds; ++i) {
+    g_now = pollStart + 1 + i;
+    SlotFn<U32_0>(obj, kFriendCount)(obj);  // the tab draws
+    Update(w, 0);
+  }
+  for (const SocialParty::Message& m : g_sent) polled += m.symbol == SocialParty::kFriendListRefreshRequest ? 1 : 0;
+  QCHECK(polled == 3);
+  g_sent.clear();
+  for (std::uint64_t i = 0; i < 2 * SocialParty::State::kFriendPollSeconds; ++i) {
+    g_now += 1;
+    Update(w, 0);  // the tab was closed: no reads
+  }
+  QCHECK(g_sent.empty());
   // A friend change from the server asks for the list again.
   g_sent.clear();
   Feed(w, 0xc237c84c31d3ae05ULL, Le(0, 8) + Le(2002, 8));  // SNSFriendAcceptNotify

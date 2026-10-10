@@ -494,8 +494,12 @@ void AcceptInvite(void* self, std::int32_t index) {
 }
 
 // The game calls this when the friends tab opens. The roster is otherwise filled only once, at
-// login, so a friend added since (for example on the web site) never showed until a restart.
-void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().RefreshFriends()); }
+// login, so a friend added since (for example on the web site) never showed until a restart. Rate
+// limited in the model (SocialParty::kFriendRefreshMinSeconds).
+std::uint64_t NowSeconds();
+void RefreshFriends(void*) {
+  SendParty("refresh friends", SocialParty::Global().RefreshFriendsOnTabOpen(NowSeconds()));
+}
 // Slot 37 OpenFriendRequestUI: the game's add-friend node (R15NetAddFriendNode, run 0x140dd90f0 ->
 // 0x1401870f0) calls it with (0, target account) after its provider checks. pnsovr opened the
 // Oculus friend-request overlay; here it is the friend request itself.
@@ -648,6 +652,9 @@ void Update(void* self, const void* flags) {
   else
     MaybeCreateParty(flags);
   PumpParty(self);
+  // The friends tab stays fresh while it is open (#57); nothing is sent, or logged, for a closed one.
+  const std::vector<SocialParty::Message> friendsPoll = SocialParty::Global().PollFriendsWhileOpen(NowSeconds());
+  if (!friendsPoll.empty()) SendParty("friends poll", friendsPoll);
   ShareLocalData(self, *CurrentView());
   SyncHostJoinable(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
@@ -682,6 +689,7 @@ void SetLocalUser(void* self, std::uint32_t userIndex) {
 // ordered online-first, and FriendStatus(i) is 2 for an online friend and 0 for an offline one.
 // An online friend can be invited. No friend is joinable or in a party yet.
 std::uint32_t FriendCount(void*) {
+  SocialParty::Global().NoteFriendsViewed(NowSeconds());
   const std::uint32_t result = SocialRoster::Global().Count();
   LogQuery("FriendCount", 0x170, CountCall(g_calls.friendCount), result);
   return result;
@@ -692,6 +700,7 @@ std::uint32_t OnlineFriendCount(void*) { return SocialRoster::Global().Online();
 std::uint32_t OfflineFriendCount(void*) { return SocialRoster::Global().Offline(); }
 
 std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
+  SocialParty::Global().NoteFriendsViewed(NowSeconds());
   std::uint64_t id = 0;
   SocialRoster::Global().IdAt(index, &id);
   if (out != nullptr) *out = id;
@@ -704,6 +713,7 @@ std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
 }
 
 const char* FriendName(void*, std::uint32_t index) {
+  SocialParty::Global().NoteFriendsViewed(NowSeconds());
   const char* name = SocialRoster::Global().NameAt(index);
   const std::uint32_t callCount = CountCall(g_calls.friendName);
   if (callCount <= kFriendQueryLogCalls) {
@@ -714,6 +724,7 @@ const char* FriendName(void*, std::uint32_t index) {
 }
 
 std::uint32_t FriendStatus(void*, std::uint32_t index) {
+  SocialParty::Global().NoteFriendsViewed(NowSeconds());
   const std::uint32_t result = SocialRoster::Global().OnlineAt(index) ? 2U : 0U;
   LogQuery("FriendStatus", 0x198, CountCall(g_calls.friendStatus), result);
   return result;
