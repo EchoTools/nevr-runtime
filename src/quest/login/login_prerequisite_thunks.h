@@ -9,7 +9,7 @@
 #include "quest/login/login_prerequisites.h"
 #include "quest/sentinel/callback_thunk.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 // Callbacks: void (SCallbacks* / CNSOVRUser*, ovrMessage*). The mailbox proxies (0x2089d0, 0x208be0) call
 // the registered member pointer with the object in x0 and the message in x1.
@@ -54,4 +54,4 @@ using UserRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::Logged
 using TokenRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::AccessToken>, std::uint64_t()>;
 using ProofRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::UserProof>, std::uint64_t()>;
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

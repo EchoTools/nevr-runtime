@@ -13,7 +13,7 @@
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 namespace {
 
@@ -168,4 +168,4 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   return result;
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

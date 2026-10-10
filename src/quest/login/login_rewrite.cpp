@@ -10,7 +10,7 @@
 #include "runtime/compat/login_profile.h"
 #include "quest/sentinel/outside_game_call.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 namespace {
 
@@ -194,4 +194,4 @@ NEVR_OUTSIDE_GAME_CALL void ComposePlan(IdentitySource& source, const BuildInfo&
   }
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

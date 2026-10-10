@@ -20,7 +20,7 @@ namespace {
 namespace board = nevr::quest_auth::prompt_board;
 namespace layout = sentinel::pinned::game_layout;
 namespace ui = sentinel::pinned::ui_layout;
-namespace gate = QuestLogin::attempt_gate;
+namespace gate = nevr_quest_login::attempt_gate;
 using sentinel::pinned::CR15NetGameOpaque;
 
 sentinel::GotHook g_errorHook;

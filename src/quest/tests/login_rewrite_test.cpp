@@ -26,14 +26,14 @@
 
 namespace {
 
-using QuestLogin::FieldKind;
-using QuestLogin::JsonType;
+using nevr_quest_login::FieldKind;
+using nevr_quest_login::JsonType;
 
 // CJson stand-in with the type rules measured in the game:
 //   SetString writes over absent, string or null; SetInt over absent, int or null;
 //   SetBoolean over absent, boolean or null; any other existing type is left unchanged.
 //   Clear removes a key and everything under it.
-class FakeJson final : public QuestLogin::JsonAccess {
+class FakeJson final : public nevr_quest_login::JsonAccess {
  public:
   struct Value {
     JsonType type = JsonType::Absent;
@@ -133,9 +133,9 @@ class FakeJson final : public QuestLogin::JsonAccess {
 
 // The CNSOVRUser as measured: provider already 4, and the account id the sender uses comes
 // from a virtual AccountID() that returns a process global, never from the object.
-class FakeUser final : public QuestLogin::UserAccess {
+class FakeUser final : public nevr_quest_login::UserAccess {
  public:
-  std::uint64_t provider = QuestLogin::kPlatformOvrOrg;
+  std::uint64_t provider = nevr_quest_login::kPlatformOvrOrg;
   std::uint64_t global_account_id = 5551234;     // what AccountID() returns (the org-scoped id)
   std::uint64_t object_account_field = 5551234;  // [this+0x88]: ignored by the override
   bool setter_reaches_global = true;             // false: the write lands somewhere AccountID() never reads
@@ -154,7 +154,7 @@ class FakeUser final : public QuestLogin::UserAccess {
     return true;
   }
   bool SetAccountId(std::uint64_t id) override {
-    if (!memory_.NoteBeforeWrite(global_account_id, id, QuestLogin::StandIn::IsOrgId(global_account_id))) return false;
+    if (!memory_.NoteBeforeWrite(global_account_id, id, nevr_quest_login::StandIn::IsOrgId(global_account_id))) return false;
     if (setter_reaches_global) global_account_id = id;
     else object_account_field = id;
     return true;
@@ -168,23 +168,23 @@ class FakeUser final : public QuestLogin::UserAccess {
   }
 
  private:
-  QuestLogin::OculusIdMemory memory_;
+  nevr_quest_login::OculusIdMemory memory_;
 };
 
-class FakeSource final : public QuestLogin::IdentitySource {
+class FakeSource final : public nevr_quest_login::IdentitySource {
  public:
-  QuestLogin::IdentityStatus status = QuestLogin::IdentityStatus::Ok;
-  QuestLogin::Identity identity;
-  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override {
-    if (status != QuestLogin::IdentityStatus::Ok) return status;
+  nevr_quest_login::IdentityStatus status = nevr_quest_login::IdentityStatus::Ok;
+  nevr_quest_login::Identity identity;
+  nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity& out) override {
+    if (status != nevr_quest_login::IdentityStatus::Ok) return status;
     out = identity;
-    return QuestLogin::IdentityStatus::Ok;
+    return nevr_quest_login::IdentityStatus::Ok;
   }
 };
 
 // Log records flattened to `event key=value ...` text for assertions.
 std::vector<std::string> g_log;
-void CaptureLog(QuestLogin::Level, const char* event, const QuestLogin::LogKv* fields, std::size_t count) {
+void CaptureLog(nevr_quest_login::Level, const char* event, const nevr_quest_login::LogKv* fields, std::size_t count) {
   std::string line = event;
   for (std::size_t i = 0; i < count; ++i) {
     line += std::string(" ") + fields[i].key + "=";
@@ -201,16 +201,16 @@ constexpr std::int64_t kQuestBuild = 630783;
 constexpr std::int64_t kQuestAppId = 0x7de88f07bd07aLL;
 constexpr std::int64_t kQuestLobbyVersion = 0x3f69c77a;
 
-QuestLogin::Identity MakeIdentity() {
-  QuestLogin::Identity id;
+nevr_quest_login::Identity MakeIdentity() {
+  nevr_quest_login::Identity id;
   id.account_id = kNevrAccount;
   id.display_name = "Pilot";
   id.access_token = "NEVR-TOKEN-SECRET";
   return id;
 }
 
-QuestLogin::BuildInfo MakeBuild() {
-  QuestLogin::BuildInfo build;
+nevr_quest_login::BuildInfo MakeBuild() {
+  nevr_quest_login::BuildInfo build;
   build.project_version = "1.2.3";
   build.git_commit = "abc123";
   build.git_describe = "v1.2.3-4-gabc123";
@@ -255,16 +255,16 @@ nlohmann::json At(const nlohmann::json& doc, const std::string& path) {
 }
 
 void TestComposeFailsClosed() {
-  QuestLogin::Identity id = MakeIdentity();
+  nevr_quest_login::Identity id = MakeIdentity();
   id.account_id = 0;
-  QCHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
+  QCHECK(nevr_quest_login::Compose(id, {}, MakeBuild()).status == nevr_quest_login::ComposeStatus::MissingAccountId);
   id = MakeIdentity();
   id.account_id = 0x8000000000000000ULL;  // does not fit CJson's signed integer
-  QCHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
+  QCHECK(nevr_quest_login::Compose(id, {}, MakeBuild()).status == nevr_quest_login::ComposeStatus::MissingAccountId);
   id = MakeIdentity();
   id.access_token.clear();
-  const QuestLogin::Composition c = QuestLogin::Compose(id, {}, MakeBuild());
-  QCHECK(c.status == QuestLogin::ComposeStatus::MissingToken);
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(id, {}, MakeBuild());
+  QCHECK(c.status == nevr_quest_login::ComposeStatus::MissingToken);
   QCHECK(c.fields.empty());
 }
 
@@ -272,18 +272,18 @@ void TestComposeFailsClosed() {
 // plugin array (CJson has no setter for it) and with no password value: the server reads the
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
 void TestComposedProfileMatchesPcvrBuilder() {
-  QuestLogin::Identity id = MakeIdentity();
+  nevr_quest_login::Identity id = MakeIdentity();
   id.social_level = SocialParty::kSocialLevel;  // a source with the social facade installed
-  QuestLogin::GameValues game;
+  nevr_quest_login::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
-  const QuestLogin::Composition c = QuestLogin::Compose(id, game, MakeBuild());
-  QCHECK(c.status == QuestLogin::ComposeStatus::Ok);
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(id, game, MakeBuild());
+  QCHECK(c.status == nevr_quest_login::ComposeStatus::Ok);
   QCHECK(c.skipped.size() == 1 && c.skipped[0] == "nevr_plugins");
 
   FakeJson json;
   std::string failed;
-  QCHECK(QuestLogin::ApplyFieldsAtomically(c.fields, json, failed));
+  QCHECK(nevr_quest_login::ApplyFieldsAtomically(c.fields, json, failed));
 
   LoginProfile::LoginProfileInputs pc;
   pc.account_id = id.account_id;
@@ -302,7 +302,7 @@ void TestComposedProfileMatchesPcvrBuilder() {
   QCHECK(At(expected, "accountid") == kNevrAccount);
   QCHECK(At(expected, "access_token") == "NEVR-TOKEN-SECRET");
   QCHECK(At(expected, "password") == "");
-  for (const QuestLogin::Field& f : c.fields) {
+  for (const nevr_quest_login::Field& f : c.fields) {
     if (f.path == "password") QCHECK(f.text.empty());
   }
 }
@@ -312,14 +312,14 @@ void TestComposedProfileMatchesPcvrBuilder() {
 // social facade is actually installed; otherwise 0. The server sends friend presence, recently
 // met, the lobby tablet and party data only to a session that declared level 1 or more (nakama
 // evr_friend_presence.go, evr_recently_met.go, evr_lobby_tablet.go, evr_pipeline_party_data.go).
-class SocialAwareSource final : public QuestLogin::IdentitySource {
+class SocialAwareSource final : public nevr_quest_login::IdentitySource {
  public:
   bool feature_enabled = true;
   bool facade_installed = true;
-  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override {
+  nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity& out) override {
     out = MakeIdentity();
     out.social_level = (feature_enabled && facade_installed) ? SocialParty::kSocialLevel : 0;
-    return QuestLogin::IdentityStatus::Ok;
+    return nevr_quest_login::IdentityStatus::Ok;
   }
 };
 
@@ -331,8 +331,8 @@ void TestSocialLevelFollowsTheIdentitySource() {
     SocialAwareSource source;
     source.feature_enabled = feature;
     source.facade_installed = installed;
-    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-    QCHECK(out == QuestLogin::Outcome::Rewritten);
+    const nevr_quest_login::Outcome out = nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    QCHECK(out == nevr_quest_login::Outcome::Rewritten);
     const nlohmann::json doc = json.ToJson();
     // The client-class members next to it are still the game's.
     QCHECK(At(doc, "buildversion") == kQuestBuild);
@@ -346,9 +346,9 @@ void TestSocialLevelFollowsTheIdentitySource() {
   QCHECK(declared(false, false) == 0);
 
   // An identity that says nothing about social declares nothing.
-  const QuestLogin::Composition plain = QuestLogin::Compose(MakeIdentity(), {}, MakeBuild());
+  const nevr_quest_login::Composition plain = nevr_quest_login::Compose(MakeIdentity(), {}, MakeBuild());
   bool found = false;
-  for (const QuestLogin::Field& f : plain.fields) {
+  for (const nevr_quest_login::Field& f : plain.fields) {
     if (f.path != "nevr_social") continue;
     found = true;
     QCHECK(f.kind == FieldKind::Int && f.number == 0);
@@ -358,10 +358,10 @@ void TestSocialLevelFollowsTheIdentitySource() {
 
 void TestSerialRelay() {
   auto serial_of = [](const std::string& game_serial) {
-    QuestLogin::GameValues game;
+    nevr_quest_login::GameValues game;
     game.hmd_serial = game_serial;
-    const QuestLogin::Composition c = QuestLogin::Compose(MakeIdentity(), game, MakeBuild());
-    for (const QuestLogin::Field& f : c.fields) {
+    const nevr_quest_login::Composition c = nevr_quest_login::Compose(MakeIdentity(), game, MakeBuild());
+    for (const nevr_quest_login::Field& f : c.fields) {
       if (f.path == "hmdserialnumber") return f.text;
     }
     return std::string("<absent>");
@@ -384,8 +384,8 @@ void TestRewriteCarriesNevrIdentityToTheWire() {
   std::uint64_t wire = 0;
   QCHECK(user.WireAccountId(wire) && wire == 5551234);  // before: the org-scoped id
 
-  const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-  QCHECK(out == QuestLogin::Outcome::Rewritten);
+  const nevr_quest_login::Outcome out = nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+  QCHECK(out == nevr_quest_login::Outcome::Rewritten);
   QCHECK(user.WireAccountId(wire) && wire == kNevrAccount);
 
   const nlohmann::json doc = json.ToJson();
@@ -422,7 +422,7 @@ void TestClientClassKeysAreNeverOverwritten() {
   FakeUser user;
   FakeSource source;
   source.identity = MakeIdentity();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
   const nlohmann::json doc = json.ToJson();
   QCHECK(At(doc, "buildversion") == kQuestBuild);
   QCHECK(At(doc, "appid") == kQuestAppId);
@@ -436,7 +436,7 @@ void TestClientClassKeysAreNeverOverwritten() {
     SeedOculusLogin(partial);
     partial.Clear(key);
     FakeUser u;
-    QCHECK(QuestLogin::RewriteLogin(u, partial, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(nevr_quest_login::RewriteLogin(u, partial, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
     QCHECK(partial.TypeOf(key) == JsonType::Absent);
   }
 }
@@ -451,8 +451,8 @@ void TestAccountIdThatDoesNotReachTheWireIsRejected() {
   user.setter_reaches_global = false;
   FakeSource source;
   source.identity = MakeIdentity();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         nevr_quest_login::Outcome::AccountIdNotCarried);
   QCHECK(json.ToJson() == before);
   std::uint64_t wire = 0;
   QCHECK(user.WireAccountId(wire) && wire == 5551234);
@@ -466,8 +466,8 @@ void TestPlatformMustAlreadyBeOvrOrg() {
   user.provider = 5;
   FakeSource source;
   source.identity = MakeIdentity();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-         QuestLogin::Outcome::PlatformMismatch);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         nevr_quest_login::Outcome::PlatformMismatch);
   QCHECK(json.ToJson() == before);
   QCHECK(user.global_account_id == 5551234);
 }
@@ -478,9 +478,9 @@ void TestNoIdentityChangesNothing() {
   const nlohmann::json before = json.ToJson();
   FakeUser user;
   FakeSource source;
-  source.status = QuestLogin::IdentityStatus::NoToken;
+  source.status = nevr_quest_login::IdentityStatus::NoToken;
   g_log.clear();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::NoIdentity);
   QCHECK(json.ToJson() == before);
   QCHECK(user.global_account_id == 5551234);
   QCHECK(g_log.size() == 1 && g_log[0].find("outcome=no-identity reason=no-token") != std::string::npos);
@@ -493,28 +493,28 @@ void TestEveryRefusedWriteLeavesEverythingUntouched() {
   SeedOculusLogin(probe);
   FakeSource source;
   source.identity = MakeIdentity();
-  const QuestLogin::GameValues game = QuestLogin::ReadGameValues(probe);
-  const QuestLogin::Composition c = QuestLogin::Compose(source.identity, game, MakeBuild());
+  const nevr_quest_login::GameValues game = nevr_quest_login::ReadGameValues(probe);
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(source.identity, game, MakeBuild());
   QCHECK(c.fields.size() > 10);
 
-  for (const QuestLogin::Field& field : c.fields) {
-    if (QuestLogin::IsClientClassPath(field.path)) continue;  // never written
+  for (const nevr_quest_login::Field& field : c.fields) {
+    if (nevr_quest_login::IsClientClassPath(field.path)) continue;  // never written
     FakeJson json;
     SeedOculusLogin(json);
     const nlohmann::json before = json.ToJson();
     json.refuse_path = field.path;
     FakeUser user;
     g_log.clear();
-    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-    if (out == QuestLogin::Outcome::Rewritten) {
+    const nevr_quest_login::Outcome out = nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    if (out == nevr_quest_login::Outcome::Rewritten) {
       // A refusal is harmless only when the write would have changed nothing: the game's
       // measured value is kept, or the key already holds the value being written.
       const nlohmann::json current = At(before, field.path);
       const bool same_value = field.kind == FieldKind::String ? current == field.text : current == field.number;
-      QCHECK(QuestLogin::IsGameMeasuredPath(field.path) || same_value);
+      QCHECK(nevr_quest_login::IsGameMeasuredPath(field.path) || same_value);
       QCHECK(user.global_account_id == kNevrAccount);
     } else {
-      QCHECK(out == QuestLogin::Outcome::JsonWriteFailed);
+      QCHECK(out == nevr_quest_login::Outcome::JsonWriteFailed);
       if (json.ToJson() != before) std::fprintf(stderr, "state changed after refused path %s\n", field.path.c_str());
       QCHECK(json.ToJson() == before);
       QCHECK(user.global_account_id == 5551234);
@@ -527,7 +527,7 @@ void TestEveryRefusedWriteLeavesEverythingUntouched() {
   const nlohmann::json before = json.ToJson();
   json.refuse_path = "access_token";
   FakeUser user;
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
   QCHECK(json.ToJson() == before);
   QCHECK(user.global_account_id == 5551234);
 }
@@ -546,7 +546,7 @@ void TestEveryJsonTypeSurvivesRollback() {
     json.SetReal("system_info|memory_total", 5800.5);
     const nlohmann::json before = json.ToJson();
     FakeUser user;
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
     QCHECK(At(json.ToJson(), "system_info|memory_total") == 5800.5);
     QCHECK(json.TypeOf("system_info|memory_total") == JsonType::Real);
   }
@@ -558,7 +558,7 @@ void TestEveryJsonTypeSurvivesRollback() {
     json.refuse_path = "system_info|dedicated_gpu_memory";  // fails after nevr_social was written
     const nlohmann::json before = json.ToJson();
     FakeUser user;
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
     QCHECK(json.TypeOf("nevr_social") == JsonType::Null);
     QCHECK(json.ToJson() == before);
   }
@@ -573,7 +573,7 @@ void TestEveryJsonTypeSurvivesRollback() {
     if (variant == 2) json.SetBoolean("nevr_social", true);
     const nlohmann::json before = json.ToJson();
     FakeUser user;
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
     QCHECK(json.ToJson() == before);
     QCHECK(user.global_account_id == 5551234);
   }
@@ -590,7 +590,7 @@ void TestNestedKeyAddedByRewriteIsRemovedOnRollback() {
   FakeUser user;
   FakeSource source;
   source.identity = MakeIdentity();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
   QCHECK(json.ToJson() == before);
 }
 
@@ -620,7 +620,7 @@ void TestAccountIdStaysInstalledAfterSend() {
   SendProbe probe;
   probe.user = &user;
   probe.json = &json;
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
   ProbeSend(&probe);  // the send hook's `original`, called last as RunLogin does
   QCHECK(probe.calls == 1);
   QCHECK(probe.wire_at_send == kNevrAccount);
@@ -640,14 +640,14 @@ void TestSendHappensOnceEvenWhenTheRewriteFails() {
     FakeUser user;
     FakeSource source;
     source.identity = MakeIdentity();
-    if (variant == 0) source.status = QuestLogin::IdentityStatus::NotReady;
+    if (variant == 0) source.status = nevr_quest_login::IdentityStatus::NotReady;
     if (variant == 1) user.provider = 5;
     if (variant == 2) json.refuse_path = "access_token";
     const nlohmann::json before = json.ToJson();
     SendProbe probe;
     probe.user = &user;
     probe.json = &json;
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) != QuestLogin::Outcome::Rewritten);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) != nevr_quest_login::Outcome::Rewritten);
     ProbeSend(&probe);
     QCHECK(probe.calls == 1);
     QCHECK(probe.json_at_send == before);
@@ -666,24 +666,24 @@ void TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId() {
     source.identity = MakeIdentity();
     FakeJson first;
     SeedOculusLogin(first);
-    QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(nevr_quest_login::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
     QCHECK(user.global_account_id == kNevrAccount);
 
     FakeJson second;
     SeedOculusLogin(second);
     const nlohmann::json before = second.ToJson();
-    if (variant == 0) source.status = QuestLogin::IdentityStatus::NoToken;
-    if (variant == 1) source.status = QuestLogin::IdentityStatus::NotReady;
+    if (variant == 0) source.status = nevr_quest_login::IdentityStatus::NoToken;
+    if (variant == 1) source.status = nevr_quest_login::IdentityStatus::NotReady;
     if (variant == 2) user.provider = 5;
     if (variant == 3) source.identity.display_name = "bad\xff\xfe";
     if (variant == 4) second.refuse_path = "access_token";
     SendProbe probe;
     probe.user = &user;
     probe.json = &second;
-    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog);
+    const nevr_quest_login::Outcome out = nevr_quest_login::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog);
     ProbeSend(&probe);
-    if (out == QuestLogin::Outcome::Rewritten) std::fprintf(stderr, "variant %s was rewritten\n", names[variant]);
-    QCHECK(out != QuestLogin::Outcome::Rewritten);
+    if (out == nevr_quest_login::Outcome::Rewritten) std::fprintf(stderr, "variant %s was rewritten\n", names[variant]);
+    QCHECK(out != nevr_quest_login::Outcome::Rewritten);
     QCHECK(probe.calls == 1);
     QCHECK(probe.json_at_send == before);                 // the Oculus login, untouched
     QCHECK(probe.wire_at_send == 5551234);                // carrying the Oculus account id
@@ -698,25 +698,25 @@ void TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus() {
   for (int attempt = 0; attempt < 2; ++attempt) {
     FakeJson json;
     SeedOculusLogin(json);
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
     QCHECK(user.global_account_id == kNevrAccount);
   }
-  source.status = QuestLogin::IdentityStatus::NotReady;
+  source.status = nevr_quest_login::IdentityStatus::NotReady;
   FakeJson json;
   SeedOculusLogin(json);
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::NoIdentity);
   QCHECK(user.global_account_id == 5551234);
 
   // A new Oculus id written by the game in between is the one remembered.
   user.global_account_id = 777;
-  source.status = QuestLogin::IdentityStatus::Ok;
+  source.status = nevr_quest_login::IdentityStatus::Ok;
   FakeJson again;
   SeedOculusLogin(again);
-  QCHECK(QuestLogin::RewriteLogin(user, again, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
-  source.status = QuestLogin::IdentityStatus::NoToken;
+  QCHECK(nevr_quest_login::RewriteLogin(user, again, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
+  source.status = nevr_quest_login::IdentityStatus::NoToken;
   FakeJson last;
   SeedOculusLogin(last);
-  QCHECK(QuestLogin::RewriteLogin(user, last, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(nevr_quest_login::RewriteLogin(user, last, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::NoIdentity);
   QCHECK(user.global_account_id == 777);
 }
 
@@ -736,7 +736,7 @@ void TestParentThatIsNotAnObjectIsLeftAlone() {
     FakeUser user;
     FakeSource source;
     source.identity = MakeIdentity();
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
     QCHECK(json.ToJson() == before);
     QCHECK(At(json.ToJson(), top) == "game-value");
     QCHECK(user.global_account_id == 5551234);
@@ -757,7 +757,7 @@ void TestParentCheckIsDefensiveAgainstAnOverwritingBuild() {
     FakeUser user;
     FakeSource source;
     source.identity = MakeIdentity();
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::JsonWriteFailed);
     QCHECK(json.ToJson() == before);
     QCHECK(At(json.ToJson(), top) == "game-value");
     QCHECK(user.global_account_id == 5551234);
@@ -779,8 +779,8 @@ void TestAccountIdNotCarriedRestoresTheWrittenGlobal() {
   FakeSource source;
   source.identity = MakeIdentity();
   g_log.clear();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         nevr_quest_login::Outcome::AccountIdNotCarried);
   QCHECK(user.global_account_id == 5551234);  // written, then put back
   QCHECK(json.ToJson() == before);
   QCHECK(g_log.size() == 1 && g_log[0].find("restored=1") != std::string::npos);
@@ -794,13 +794,13 @@ void TestRestoreLeavesAGameWriteAlone() {
   source.identity = MakeIdentity();
   FakeJson first;
   SeedOculusLogin(first);
-  QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(nevr_quest_login::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
   user.global_account_id = 2222;  // the game stored a new id
-  source.status = QuestLogin::IdentityStatus::NotReady;
+  source.status = nevr_quest_login::IdentityStatus::NotReady;
   FakeJson second;
   SeedOculusLogin(second);
   g_log.clear();
-  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(nevr_quest_login::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::NoIdentity);
   QCHECK(user.global_account_id == 2222);
   QCHECK(g_log.size() == 1 && g_log[0].find("restored=0") != std::string::npos);
 }
@@ -814,8 +814,8 @@ void TestNoRealIdToRememberRefusesTheRewrite() {
     user.global_account_id = value;  // RadPluginShutdown wrote 0, or the "fetch again" marker -1
     FakeSource source;
     source.identity = MakeIdentity();
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-           QuestLogin::Outcome::AccountIdNotCarried);
+    QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+           nevr_quest_login::Outcome::AccountIdNotCarried);
     QCHECK(user.global_account_id == value);
     QCHECK(json.ToJson() == before);
   }
@@ -825,13 +825,13 @@ void TestNoRealIdToRememberRefusesTheRewrite() {
   source.identity = MakeIdentity();
   FakeJson first;
   SeedOculusLogin(first);
-  QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(nevr_quest_login::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
   user.global_account_id = 0;
   FakeJson second;
   SeedOculusLogin(second);
   const nlohmann::json before = second.ToJson();
-  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) ==
-         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(nevr_quest_login::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) ==
+         nevr_quest_login::Outcome::AccountIdNotCarried);
   QCHECK(user.global_account_id == 0);
   QCHECK(second.ToJson() == before);
 }
@@ -840,32 +840,32 @@ void TestNoRealIdToRememberRefusesTheRewrite() {
 void TestDeclineRecordSaysWhetherTheOculusIdWasRestored() {
   FakeUser user;
   FakeSource source;
-  source.status = QuestLogin::IdentityStatus::NoToken;
+  source.status = nevr_quest_login::IdentityStatus::NoToken;
   FakeJson never;
   SeedOculusLogin(never);
   g_log.clear();
-  QuestLogin::RewriteLogin(user, never, source, MakeBuild(), &CaptureLog);
+  nevr_quest_login::RewriteLogin(user, never, source, MakeBuild(), &CaptureLog);
   QCHECK(g_log.size() == 1 && g_log[0].find("restored=0") != std::string::npos);
 
-  source.status = QuestLogin::IdentityStatus::Ok;
+  source.status = nevr_quest_login::IdentityStatus::Ok;
   source.identity = MakeIdentity();
   FakeJson ok;
   SeedOculusLogin(ok);
-  QuestLogin::RewriteLogin(user, ok, source, MakeBuild(), &CaptureLog);
-  source.status = QuestLogin::IdentityStatus::NoToken;
+  nevr_quest_login::RewriteLogin(user, ok, source, MakeBuild(), &CaptureLog);
+  source.status = nevr_quest_login::IdentityStatus::NoToken;
   FakeJson after;
   SeedOculusLogin(after);
   g_log.clear();
-  QuestLogin::RewriteLogin(user, after, source, MakeBuild(), &CaptureLog);
+  nevr_quest_login::RewriteLogin(user, after, source, MakeBuild(), &CaptureLog);
   QCHECK(g_log.size() == 1 && g_log[0].find("restored=1") != std::string::npos);
   QCHECK(g_log[0].find("5551234") == std::string::npos && g_log[0].find("987654321012345") == std::string::npos);
 }
 
 // The compose phase is the only part that runs exceptions-enabled code; an exception from the
 // identity source becomes an outcome, with nothing changed and the account id at the Oculus value.
-class ThrowingSource final : public QuestLogin::IdentitySource {
+class ThrowingSource final : public nevr_quest_login::IdentitySource {
  public:
-  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity&) override { throw std::runtime_error("source"); }
+  nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity&) override { throw std::runtime_error("source"); }
 };
 
 void TestComposeFailureBecomesAnOutcome() {
@@ -875,7 +875,7 @@ void TestComposeFailureBecomesAnOutcome() {
   FakeUser user;
   ThrowingSource source;
   g_log.clear();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Exception);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Exception);
   QCHECK(json.ToJson() == before);
   QCHECK(user.global_account_id == 5551234);
   QCHECK(g_log.size() == 1 && g_log[0].find("outcome=exception") != std::string::npos);
@@ -885,34 +885,34 @@ void TestComposeFailureBecomesAnOutcome() {
   ok.identity = MakeIdentity();
   FakeJson first;
   SeedOculusLogin(first);
-  QCHECK(QuestLogin::RewriteLogin(user, first, ok, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(nevr_quest_login::RewriteLogin(user, first, ok, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Rewritten);
   FakeJson second;
   SeedOculusLogin(second);
-  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Exception);
+  QCHECK(nevr_quest_login::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::Exception);
   QCHECK(user.global_account_id == 5551234);
 }
 
 // The compose phase keeps game-measured members using only what Observe recorded, so every
 // system_info member the profile can produce has to be one Observe looks at.
 void TestEveryComposedMeasuredPathIsObserved() {
-  const QuestLogin::Composition c = QuestLogin::Compose(MakeIdentity(), {}, MakeBuild());
-  QCHECK(c.status == QuestLogin::ComposeStatus::Ok);
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(MakeIdentity(), {}, MakeBuild());
+  QCHECK(c.status == nevr_quest_login::ComposeStatus::Ok);
   std::size_t measured = 0;
-  for (const QuestLogin::Field& f : c.fields) {
-    if (!QuestLogin::IsGameMeasuredPath(f.path)) continue;
+  for (const nevr_quest_login::Field& f : c.fields) {
+    if (!nevr_quest_login::IsGameMeasuredPath(f.path)) continue;
     ++measured;
     bool known = false;
-    for (const char* path : QuestLogin::kMeasuredPaths) known = known || f.path == path;
+    for (const char* path : nevr_quest_login::kMeasuredPaths) known = known || f.path == path;
     QCHECK(known);
   }
-  QCHECK(measured == QuestLogin::kMeasuredCount);
+  QCHECK(measured == nevr_quest_login::kMeasuredCount);
 }
 
 void TestInvalidUtf8NameDoesNotThrow() {
-  QuestLogin::Identity id = MakeIdentity();
+  nevr_quest_login::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
-  const QuestLogin::Composition c = QuestLogin::Compose(id, {}, MakeBuild());
-  QCHECK(c.status == QuestLogin::ComposeStatus::ProfileBuildFailed);
+  const nevr_quest_login::Composition c = nevr_quest_login::Compose(id, {}, MakeBuild());
+  QCHECK(c.status == nevr_quest_login::ComposeStatus::ProfileBuildFailed);
   QCHECK(c.fields.empty());
   FakeJson json;
   SeedOculusLogin(json);
@@ -920,16 +920,16 @@ void TestInvalidUtf8NameDoesNotThrow() {
   FakeUser user;
   FakeSource source;
   source.identity = id;
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::ComposeFailed);
+  QCHECK(nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == nevr_quest_login::Outcome::ComposeFailed);
   QCHECK(json.ToJson() == before);
 }
 
 // DecideSend reads the current wire state: a login whose account id, access_token or nonce is a
 // stand-in, or whose account id is 0 or -1, is refused; a clean wire is sent.
 void TestDecideSendReadsTheWire() {
-  using QuestLogin::DecideSend;
-  using QuestLogin::SendDecision;
-  using QuestLogin::WireCheck;
+  using nevr_quest_login::DecideSend;
+  using nevr_quest_login::SendDecision;
+  using nevr_quest_login::WireCheck;
   QCHECK(DecideSend(WireCheck{}) == SendDecision::SendOriginal);  // all clean
   WireCheck w;
   w.account_id_stand_in = true;
@@ -948,32 +948,32 @@ void TestDecideSendReadsTheWire() {
 // in still rewrites to the NEVR id), but is never remembered -- a later restore puts back the
 // game's "fetch again" marker, never the stand-in.
 void TestOculusIdMemoryHandlesTheStandIn() {
-  QuestLogin::StandIn::SetForTest(0xABCDEF12ULL, "tok", "non", "player-00");
-  const std::uint64_t standin = QuestLogin::StandIn::OrgId();
-  QuestLogin::OculusIdMemory mem;
+  nevr_quest_login::StandIn::SetForTest(0xABCDEF12ULL, "tok", "non", "player-00");
+  const std::uint64_t standin = nevr_quest_login::StandIn::OrgId();
+  nevr_quest_login::OculusIdMemory mem;
   // Allowed to overwrite a stand-in with the NEVR id...
   QCHECK(mem.NoteBeforeWrite(standin, 777ULL, /*current_is_stand_in=*/true));
   std::uint64_t out = 0;
   // ...and the value put back for a later decline is the re-fetch marker, not the stand-in.
   QCHECK(mem.RestoreFor(777ULL, out) && out == ~std::uint64_t{0});
   // 0 and -1 are still not ids and are refused.
-  QuestLogin::OculusIdMemory mem2;
+  nevr_quest_login::OculusIdMemory mem2;
   QCHECK(!mem2.NoteBeforeWrite(0ULL, 5ULL));
   QCHECK(!mem2.NoteBeforeWrite(~std::uint64_t{0}, 5ULL));
   // A real Oculus id is remembered and restored as before.
-  QuestLogin::OculusIdMemory mem3;
+  nevr_quest_login::OculusIdMemory mem3;
   QCHECK(mem3.NoteBeforeWrite(1234ULL, 777ULL));
   std::uint64_t r = 0;
   QCHECK(mem3.RestoreFor(777ULL, r) && r == 1234ULL);
 }
 
 // A PrerequisiteState over a plain org-id value and a 36-byte name buffer, for FinishLogin.
-class FakePrereqState final : public QuestLogin::PrerequisiteState {
+class FakePrereqState final : public nevr_quest_login::PrerequisiteState {
  public:
   std::uint64_t org = 0;
   char name[0x24] = {};
   char offline[21] = {};
-  bool UserNameIsStandIn() const override { return QuestLogin::StandIn::IsOculusId(name, sizeof(name)); }
+  bool UserNameIsStandIn() const override { return nevr_quest_login::StandIn::IsOculusId(name, sizeof(name)); }
   void ResetUserNameToRefetch() override {
     std::memset(name, 0, sizeof(name));
     name[0] = '?';
@@ -982,9 +982,9 @@ class FakePrereqState final : public QuestLogin::PrerequisiteState {
     std::memset(name, 0, sizeof(name));
     for (std::size_t i = 0; i + 1 < sizeof(name) && n[i] != '\0'; ++i) name[i] = n[i];
   }
-  bool OrgIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgId(org); }
+  bool OrgIdIsStandIn() const override { return nevr_quest_login::StandIn::IsOrgId(org); }
   void ResetOrgIdToRefetch() override { org = ~std::uint64_t{0}; }
-  bool OfflineIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgIdText(offline); }
+  bool OfflineIdIsStandIn() const override { return nevr_quest_login::StandIn::IsOrgIdText(offline); }
   void SetOfflineIdText(std::uint64_t account_id) override {
     std::snprintf(offline, sizeof(offline), "%llu", static_cast<unsigned long long>(account_id));
   }
@@ -995,7 +995,7 @@ class FakePrereqState final : public QuestLogin::PrerequisiteState {
 // the wire (any field) is refused whatever the outcome; a refused/declined login resets the
 // stand-ins the game holds so the next attempt asks Oculus again.
 void TestFinishLoginGate() {
-  QuestLogin::StandIn::SetForTest(0x4242ULL, "standtoken", "standnonce", "player-ab");
+  nevr_quest_login::StandIn::SetForTest(0x4242ULL, "standtoken", "standnonce", "player-ab");
 
   // Rewritten, clean wire, stood-in user name -> send, and the name is replaced by the NEVR name.
   {
@@ -1008,9 +1008,9 @@ void TestFinishLoginGate() {
     FakePrereqState st;
     std::memcpy(st.name, "player-ab", 10);  // the stand-in name
     g_log.clear();
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::SendOriginal);
     QCHECK(r.renamed_user && std::string(st.name) == "Pilot");
     QCHECK(st.org == 0);  // not reset on a send
   }
@@ -1019,15 +1019,15 @@ void TestFinishLoginGate() {
   {
     FakeUser user;
     user.wire_forced = true;
-    user.forced_wire = QuestLogin::StandIn::OrgId();
+    user.forced_wire = nevr_quest_login::StandIn::OrgId();
     FakeJson json;
     json.SetString("access_token", "NEVR-TOKEN-SECRET");
     FakePrereqState st;
-    st.org = QuestLogin::StandIn::OrgId();
+    st.org = nevr_quest_login::StandIn::OrgId();
     std::memcpy(st.name, "player-ab", 10);
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.wire.account_id_stand_in);
     QCHECK(r.reset_org_id && st.org == ~std::uint64_t{0});
     QCHECK(r.reset_user_name && st.name[0] == '?');
@@ -1039,11 +1039,11 @@ void TestFinishLoginGate() {
     FakeUser user;
     user.global_account_id = 5551234;  // a real wire id
     FakeJson json;
-    json.SetString("access_token", QuestLogin::StandIn::AccessToken());
+    json.SetString("access_token", nevr_quest_login::StandIn::AccessToken());
     FakePrereqState st;  // no stand-in org id or name held
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.wire.access_token_stand_in);
     QCHECK(!r.reset_org_id && st.org == 0);  // a genuine org id is left alone
   }
@@ -1056,9 +1056,9 @@ void TestFinishLoginGate() {
     json.SetString("access_token", "OCULUS-TOKEN");
     json.SetString("nonce", "oculus-nonce");
     FakePrereqState st;  // no stand-in held
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::SendOriginal);
     QCHECK(!r.reset_org_id && !r.reset_user_name && st.org == 0);
   }
   // An unreadable account id (the object is not a CNSOVRUser) is refused.
@@ -1067,9 +1067,9 @@ void TestFinishLoginGate() {
     user.wire_readable = false;
     FakeJson json;
     FakePrereqState st;
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed && r.wire.account_id_unreadable);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed && r.wire.account_id_unreadable);
   }
   // A declined login whose JSON nonce is a stand-in is refused on the nonce alone.
   {
@@ -1077,11 +1077,11 @@ void TestFinishLoginGate() {
     user.global_account_id = 5551234;
     FakeJson json;
     json.SetString("access_token", "OCULUS-TOKEN");
-    json.SetString("nonce", QuestLogin::StandIn::Nonce());
+    json.SetString("nonce", nevr_quest_login::StandIn::Nonce());
     FakePrereqState st;
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.wire.nonce_stand_in);
   }
   // Rewritten with a stood-in OfflineID decimal -> sent, and OfflineID is rewritten to the NEVR id's
@@ -1094,26 +1094,26 @@ void TestFinishLoginGate() {
     json.SetString("nonce", "real-nonce");
     FakePrereqState st;
     std::snprintf(st.offline, sizeof(st.offline), "%llu",
-                  static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));  // the stand-in decimal
+                  static_cast<unsigned long long>(nevr_quest_login::StandIn::OrgId()));  // the stand-in decimal
     QCHECK(st.OfflineIdIsStandIn());
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::SendOriginal);
     QCHECK(r.renamed_offline_id);
     QCHECK(std::string(st.offline) == std::to_string(kNevrAccount));
   }
   // Declined with a stood-in OfflineID decimal -> refused on the wire org id and OfflineID cleared.
   {
     FakeUser user;
-    user.global_account_id = QuestLogin::StandIn::OrgId();
+    user.global_account_id = nevr_quest_login::StandIn::OrgId();
     FakeJson json;
     FakePrereqState st;
-    st.org = QuestLogin::StandIn::OrgId();
+    st.org = nevr_quest_login::StandIn::OrgId();
     std::snprintf(st.offline, sizeof(st.offline), "%llu",
-                  static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
-    const QuestLogin::FinishResult r =
-        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+                  static_cast<unsigned long long>(nevr_quest_login::StandIn::OrgId()));
+    const nevr_quest_login::FinishResult r =
+        nevr_quest_login::FinishLogin(user, json, st, nevr_quest_login::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::FailClosed);
     QCHECK(r.reset_offline_id && st.offline[0] == '\0');
   }
 }
@@ -1151,56 +1151,56 @@ const void* RealGetUserProof(const void*) { return nullptr; }
 const char* RealNonce(const void*) { return ""; }
 
 void OrgCb(void*, void* m) {
-  if (QuestLogin::OnMessageIsError(&RealIsError, m)) {
+  if (nevr_quest_login::OnMessageIsError(&RealIsError, m)) {
     g_game->org = ~std::uint64_t{0};
     return;
   }
-  g_game->org = QuestLogin::OnOrgScopedIdGetId(&RealOrgGetId, QuestLogin::OnMessageGetOrgScopedId(&RealGetOrgScopedId, m));
+  g_game->org = nevr_quest_login::OnOrgScopedIdGetId(&RealOrgGetId, nevr_quest_login::OnMessageGetOrgScopedId(&RealGetOrgScopedId, m));
   std::snprintf(g_game->offline, sizeof(g_game->offline), "%llu", static_cast<unsigned long long>(g_game->org));
 }
 void UserCb(void*, void* m) {
-  if (QuestLogin::OnMessageIsError(&RealIsError, m)) return;
-  const char* id = QuestLogin::OnUserGetOculusId(&RealOculusId, QuestLogin::OnMessageGetUser(&RealGetUser, m));
+  if (nevr_quest_login::OnMessageIsError(&RealIsError, m)) return;
+  const char* id = nevr_quest_login::OnUserGetOculusId(&RealOculusId, nevr_quest_login::OnMessageGetUser(&RealGetUser, m));
   std::memset(g_game->name, 0, sizeof(g_game->name));
   for (std::size_t i = 0; i + 1 < sizeof(g_game->name) && id[i] != '\0'; ++i) g_game->name[i] = id[i];
 }
 void TokenCb(void*, void* m) {
-  g_game->token = QuestLogin::OnMessageIsError(&RealIsError, m)
+  g_game->token = nevr_quest_login::OnMessageIsError(&RealIsError, m)
                       ? "?"
-                      : QuestLogin::OnMessageGetString(&RealGetString, m);
+                      : nevr_quest_login::OnMessageGetString(&RealGetString, m);
 }
 void ProofCb(void*, void* m) {
-  g_game->nonce = QuestLogin::OnMessageIsError(&RealIsError, m)
+  g_game->nonce = nevr_quest_login::OnMessageIsError(&RealIsError, m)
                       ? ""
-                      : QuestLogin::OnUserProofGetNonce(&RealNonce, QuestLogin::OnMessageGetUserProof(&RealGetUserProof, m));
+                      : nevr_quest_login::OnUserProofGetNonce(&RealNonce, nevr_quest_login::OnMessageGetUserProof(&RealGetUserProof, m));
 }
-void Deliver(QuestLogin::Prerequisite which, QuestLogin::GameCallback cb) {
-  QuestLogin::OnPrerequisiteCallback(which, cb, nullptr, g_game);
+void Deliver(nevr_quest_login::Prerequisite which, nevr_quest_login::GameCallback cb) {
+  nevr_quest_login::OnPrerequisiteCallback(which, cb, nullptr, g_game);
 }
 
 // Views over the one FakeGame.
-class GameUser final : public QuestLogin::UserAccess {
+class GameUser final : public nevr_quest_login::UserAccess {
  public:
   explicit GameUser(FakeGame& g) : g_(g) {}
-  bool Provider(std::uint64_t& c) const override { c = QuestLogin::kPlatformOvrOrg; return true; }
+  bool Provider(std::uint64_t& c) const override { c = nevr_quest_login::kPlatformOvrOrg; return true; }
   bool WireAccountId(std::uint64_t& id) const override { id = g_.org; return true; }
   bool SetAccountId(std::uint64_t id) override { g_.org = id; return true; }
   bool RestoreAccountId() override { return true; }
  private:
   FakeGame& g_;
 };
-class GamePrereq final : public QuestLogin::PrerequisiteState {
+class GamePrereq final : public nevr_quest_login::PrerequisiteState {
  public:
   explicit GamePrereq(FakeGame& g) : g_(g) {}
-  bool UserNameIsStandIn() const override { return QuestLogin::StandIn::IsOculusId(g_.name, sizeof(g_.name)); }
+  bool UserNameIsStandIn() const override { return nevr_quest_login::StandIn::IsOculusId(g_.name, sizeof(g_.name)); }
   void ResetUserNameToRefetch() override { std::memset(g_.name, 0, sizeof(g_.name)); g_.name[0] = '?'; }
   void SetUserName(const char* n) override {
     std::memset(g_.name, 0, sizeof(g_.name));
     for (std::size_t i = 0; i + 1 < sizeof(g_.name) && n[i] != '\0'; ++i) g_.name[i] = n[i];
   }
-  bool OrgIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgId(g_.org); }
+  bool OrgIdIsStandIn() const override { return nevr_quest_login::StandIn::IsOrgId(g_.org); }
   void ResetOrgIdToRefetch() override { g_.org = ~std::uint64_t{0}; }
-  bool OfflineIdIsStandIn() const override { return QuestLogin::StandIn::IsOrgIdText(g_.offline); }
+  bool OfflineIdIsStandIn() const override { return nevr_quest_login::StandIn::IsOrgIdText(g_.offline); }
   void SetOfflineIdText(std::uint64_t id) override {
     std::snprintf(g_.offline, sizeof(g_.offline), "%llu", static_cast<unsigned long long>(id));
   }
@@ -1214,24 +1214,24 @@ void TestEndToEndFlow() {
   using namespace flow;
   FakeGame game;
   g_game = &game;
-  const QuestLogin::OvrErrorApi api{&RealIsError, &RealGetError, &RealCode, &RealHttp, &RealErrMsg};
+  const nevr_quest_login::OvrErrorApi api{&RealIsError, &RealGetError, &RealCode, &RealHttp, &RealErrMsg};
   auto ReadyTrue = +[]() noexcept { return true; };
   auto ReadyFalse = +[]() noexcept { return false; };
 
   // Attempt 1: NEVR ready, Oculus errors every prerequisite -> the callbacks stand in, and the gate
   // reads those exact stand-ins. The rewrite then replaces the wire with the NEVR identity and the
   // login is SENT; OfflineID and the name are rewritten to the NEVR values.
-  QuestLogin::ResetPrerequisitesForTest();
-  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/true, ReadyTrue, nullptr);
+  nevr_quest_login::ResetPrerequisitesForTest();
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyTrue, nullptr);
   game.errored = true;
-  Deliver(QuestLogin::Prerequisite::OrgScopedId, &OrgCb);
-  Deliver(QuestLogin::Prerequisite::LoggedInUser, &UserCb);
-  Deliver(QuestLogin::Prerequisite::AccessToken, &TokenCb);
-  Deliver(QuestLogin::Prerequisite::UserProof, &ProofCb);
-  QuestLogin::EndPrerequisiteAttempt();
-  QCHECK(QuestLogin::StandIn::IsOrgId(game.org));             // the callback wrote the stand-in...
-  QCHECK(QuestLogin::StandIn::IsOculusId(game.name, sizeof(game.name)));
-  QCHECK(QuestLogin::StandIn::IsAccessToken(game.token.c_str()));
+  Deliver(nevr_quest_login::Prerequisite::OrgScopedId, &OrgCb);
+  Deliver(nevr_quest_login::Prerequisite::LoggedInUser, &UserCb);
+  Deliver(nevr_quest_login::Prerequisite::AccessToken, &TokenCb);
+  Deliver(nevr_quest_login::Prerequisite::UserProof, &ProofCb);
+  nevr_quest_login::EndPrerequisiteAttempt();
+  QCHECK(nevr_quest_login::StandIn::IsOrgId(game.org));             // the callback wrote the stand-in...
+  QCHECK(nevr_quest_login::StandIn::IsOculusId(game.name, sizeof(game.name)));
+  QCHECK(nevr_quest_login::StandIn::IsAccessToken(game.token.c_str()));
   {
     GameUser user(game);
     FakeJson json;  // the login JSON GotUserProofCB built, then the rewrite
@@ -1239,11 +1239,11 @@ void TestEndToEndFlow() {
     json.SetString("nonce", game.nonce.c_str());
     FakeSource source;
     source.identity = MakeIdentity();  // Ready: a real NEVR identity
-    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-    QCHECK(out == QuestLogin::Outcome::Rewritten);
+    const nevr_quest_login::Outcome out = nevr_quest_login::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    QCHECK(out == nevr_quest_login::Outcome::Rewritten);
     GamePrereq st(game);
-    const QuestLogin::FinishResult r = QuestLogin::FinishLogin(user, json, st, out, &CaptureLog);
-    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);  // the wire is the NEVR identity
+    const nevr_quest_login::FinishResult r = nevr_quest_login::FinishLogin(user, json, st, out, &CaptureLog);
+    QCHECK(r.decision == nevr_quest_login::SendDecision::SendOriginal);  // the wire is the NEVR identity
     QCHECK(game.org == kNevrAccount);                              // SetAccountId wrote it
     QCHECK(std::string(game.offline) == std::to_string(kNevrAccount));
     QCHECK(std::string(game.name) == "Pilot");
@@ -1253,21 +1253,21 @@ void TestEndToEndFlow() {
   // the not-ready reset clears any stand-in still held from a prior attempt.
   FakeGame game2;
   g_game = &game2;
-  game2.org = QuestLogin::StandIn::OrgId();  // left over from a prior ready attempt the game failed
-  std::memcpy(game2.name, QuestLogin::StandIn::OculusId(), std::strlen(QuestLogin::StandIn::OculusId()));
-  std::snprintf(game2.offline, sizeof(game2.offline), "%llu", static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
+  game2.org = nevr_quest_login::StandIn::OrgId();  // left over from a prior ready attempt the game failed
+  std::memcpy(game2.name, nevr_quest_login::StandIn::OculusId(), std::strlen(nevr_quest_login::StandIn::OculusId()));
+  std::snprintf(game2.offline, sizeof(game2.offline), "%llu", static_cast<unsigned long long>(nevr_quest_login::StandIn::OrgId()));
   bool reset_ran = false;
   static bool* s_reset = &reset_ran;
   static FakeGame* s_game2 = &game2;
   auto Reset = +[]() noexcept {
     GamePrereq st(*s_game2);
-    QuestLogin::ResetHeldStandIns(st);
+    nevr_quest_login::ResetHeldStandIns(st);
     *s_reset = true;
   };
-  QuestLogin::ResetPrerequisitesForTest();
-  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/true, ReadyFalse, Reset);
+  nevr_quest_login::ResetPrerequisitesForTest();
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyFalse, Reset);
   game2.errored = true;
-  Deliver(QuestLogin::Prerequisite::OrgScopedId, &OrgCb);  // not ready -> game's own error path + reset
+  Deliver(nevr_quest_login::Prerequisite::OrgScopedId, &OrgCb);  // not ready -> game's own error path + reset
   QCHECK(reset_ran);
   QCHECK(game2.org == ~std::uint64_t{0});                  // reset to the re-fetch marker
   QCHECK(game2.offline[0] == '\0');
@@ -1278,9 +1278,9 @@ void TestEndToEndFlow() {
 // ChooseRunAction: send a clean login; on a refusal drive the deferred failure when its entry is
 // available, else withhold.
 void TestChooseRunAction() {
-  using QuestLogin::ChooseRunAction;
-  using QuestLogin::RunAction;
-  using QuestLogin::SendDecision;
+  using nevr_quest_login::ChooseRunAction;
+  using nevr_quest_login::RunAction;
+  using nevr_quest_login::SendDecision;
   QCHECK(ChooseRunAction(SendDecision::SendOriginal, true) == RunAction::SendOriginal);
   QCHECK(ChooseRunAction(SendDecision::SendOriginal, false) == RunAction::SendOriginal);
   QCHECK(ChooseRunAction(SendDecision::FailClosed, true) == RunAction::DeferFailure);
@@ -1289,13 +1289,13 @@ void TestChooseRunAction() {
 
 // ResetHeldStandIns clears exactly the globals that hold a stand-in, leaving real values alone.
 void TestResetHeldStandIns() {
-  QuestLogin::StandIn::SetForTest(0x99ULL, "t", "n", "player-xy");
+  nevr_quest_login::StandIn::SetForTest(0x99ULL, "t", "n", "player-xy");
   {  // all three held -> all three reset
     FakePrereqState st;
-    st.org = QuestLogin::StandIn::OrgId();
+    st.org = nevr_quest_login::StandIn::OrgId();
     std::memcpy(st.name, "player-xy", 10);
-    std::snprintf(st.offline, sizeof(st.offline), "%llu", static_cast<unsigned long long>(QuestLogin::StandIn::OrgId()));
-    const QuestLogin::HeldReset r = QuestLogin::ResetHeldStandIns(st);
+    std::snprintf(st.offline, sizeof(st.offline), "%llu", static_cast<unsigned long long>(nevr_quest_login::StandIn::OrgId()));
+    const nevr_quest_login::HeldReset r = nevr_quest_login::ResetHeldStandIns(st);
     QCHECK(r.org_id && r.offline_id && r.user_name);
     QCHECK(st.org == ~std::uint64_t{0} && st.name[0] == '?' && st.offline[0] == '\0');
   }
@@ -1304,7 +1304,7 @@ void TestResetHeldStandIns() {
     st.org = 7777ULL;
     std::memcpy(st.name, "RealName", 9);
     std::snprintf(st.offline, sizeof(st.offline), "7777");
-    const QuestLogin::HeldReset r = QuestLogin::ResetHeldStandIns(st);
+    const nevr_quest_login::HeldReset r = nevr_quest_login::ResetHeldStandIns(st);
     QCHECK(!r.org_id && !r.offline_id && !r.user_name);
     QCHECK(st.org == 7777ULL && std::string(st.name) == "RealName");
   }

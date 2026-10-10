@@ -98,7 +98,7 @@ namespace sentinel {
 struct ElfImage;
 }
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 enum class Prerequisite : std::uint8_t { OrgScopedId, LoggedInUser, AccessToken, UserProof };
 inline constexpr std::size_t kPrerequisiteCount = 4;
@@ -190,4 +190,4 @@ struct PrerequisiteInstall {
 };
 PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept;
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

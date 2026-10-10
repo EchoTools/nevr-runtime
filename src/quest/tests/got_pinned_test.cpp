@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
   }
   CheckBuildId(r15, pinned::kLibR15BuildId);
   CheckBuildId(mm, pinned::kMatchmakingBuildId);
-  CheckBuildId(ovr, QuestLogin::PrerequisiteTargets::kPnsovrBuildId);
+  CheckBuildId(ovr, nevr_quest_login::PrerequisiteTargets::kPnsovrBuildId);
 
   CheckTarget(r15, pinned::LibR15ClockGettime(), "libr15 clock_gettime JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15TString(), "libr15 CJson::TString JUMP_SLOT");
@@ -183,8 +183,8 @@ int main(int argc, char** argv) {
 
   // The login prerequisites (login_prerequisite_targets.h): every slot resolves at its pin, and a
   // callback slot's symbol is defined at the function the install expects the slot to hold.
-  for (const QuestLogin::PrerequisiteTargets::PinnedSlot& slot : QuestLogin::PrerequisiteTargets::kAll) {
-    CheckTarget(ovr, QuestLogin::PrerequisiteTargets::TargetFor(slot), slot.symbol);
+  for (const nevr_quest_login::PrerequisiteTargets::PinnedSlot& slot : nevr_quest_login::PrerequisiteTargets::kAll) {
+    CheckTarget(ovr, nevr_quest_login::PrerequisiteTargets::TargetFor(slot), slot.symbol);
     if (slot.function != 0 && DynamicSymbolValue(ovr, slot.symbol) != slot.function) {
       std::fprintf(stderr, "libpnsovr %s: .dynsym value is not %#llx\n", slot.symbol,
                    static_cast<unsigned long long>(slot.function));
@@ -207,7 +207,7 @@ int main(int argc, char** argv) {
   // prompt's recognised local text).
   // The non-GOT byte facts the login send gate pins, checked against the real libpnsovr using the
   // SAME production constants login_hook.cpp acts on (login_prerequisite_targets.h).
-  namespace PT = QuestLogin::PrerequisiteTargets;
+  namespace PT = nevr_quest_login::PrerequisiteTargets;
   const unsigned char* ovr_base = static_cast<const unsigned char*>(ovr.mem);
   auto CheckCode = [&](std::uint64_t vaddr, const std::uint32_t* code, std::size_t words, const char* what) {
     std::uint32_t got[4] = {};
@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
   const char* msg = reinterpret_cast<const char*>(ovr_base + PT::kPrerequisitesMissingTextVaddr);
-  if (std::strcmp(msg, QuestLogin::kPrerequisitesMissingText) != 0) {
+  if (std::strcmp(msg, nevr_quest_login::kPrerequisitesMissingText) != 0) {
     std::fprintf(stderr, "libpnsovr prerequisites-missing text differs from the production constant\n");
     QCHECK(false);
   }

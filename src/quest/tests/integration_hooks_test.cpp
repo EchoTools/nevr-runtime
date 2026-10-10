@@ -142,7 +142,7 @@ struct RealCounterSteps final : Steps {
   }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
-  bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
+  bool RegisterLoginCounters() override { return nevr_quest_login::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::login_prompt::RegisterCounters(); }
   bool RegisterObbSkipCounters() override { return nevr_quest::obb_skip::RegisterCounters(); }

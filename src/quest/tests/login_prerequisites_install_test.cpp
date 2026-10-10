@@ -51,29 +51,29 @@ int main() {
 
   // The gate: substitution turns on only with all eight accessor hooks AND ovr_Message_IsError.
   for (int n = 0; n <= 8; ++n) {
-    QCHECK(QuestLogin::SubstitutionAllowed(n, true) == (n == 8));
+    QCHECK(nevr_quest_login::SubstitutionAllowed(n, true) == (n == 8));
   }
-  QCHECK(!QuestLogin::SubstitutionAllowed(8, false));  // no is-error -> cannot substitute
+  QCHECK(!nevr_quest_login::SubstitutionAllowed(8, false));  // no is-error -> cannot substitute
 
   // The install with no libpnsovr.so loaded: nothing patched, substitution off, no residual line,
   // and idempotent (second call re-logs nothing).
-  QuestLogin::ResetPrerequisitesForTest();
+  nevr_quest_login::ResetPrerequisitesForTest();
   sentinel::ElfImage dummy{};  // base 0, no program headers: every slot resolution fails
-  const QuestLogin::PrerequisiteInstall r = QuestLogin::InstallLoginPrerequisites(dummy, &Ready, nullptr);
+  const nevr_quest_login::PrerequisiteInstall r = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr);
   QCHECK(r.callbacks == 0 && r.accessors == 0 && r.requests == 0 && !r.substitute);
   QCHECK(g_sawPartial);
   QCHECK(!g_sawResidual);  // only a substituting install warns about residuals
   const int linesAfterFirst = g_lines;
-  const QuestLogin::PrerequisiteInstall r2 = QuestLogin::InstallLoginPrerequisites(dummy, &Ready, nullptr);
+  const nevr_quest_login::PrerequisiteInstall r2 = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr);
   QCHECK(r2.accessors == 0 && !r2.substitute);
   QCHECK(g_lines == linesAfterFirst);
 
   // Configured with substitution OFF (what the install computes when fewer than eight accessors
   // hooked): a delivered error is measured and the game keeps its own answer, reason
   // "substitution_unavailable" -- the gate, not the unconfigured pass-through.
-  QuestLogin::ResetPrerequisitesForTest();
-  QuestLogin::OvrErrorApi api{&IsError, nullptr, nullptr, nullptr, &ErrMsg};
-  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/false, &Ready, nullptr);
+  nevr_quest_login::ResetPrerequisitesForTest();
+  nevr_quest_login::OvrErrorApi api{&IsError, nullptr, nullptr, nullptr, &ErrMsg};
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/false, &Ready, nullptr);
   g_sawPartial = false;
   int seen_is_error = 0;
   struct Ctx {
@@ -81,10 +81,10 @@ int main() {
   } ctx{&seen_is_error};
   const auto game = +[](void* self, void* message) noexcept {
     // The game asks IsError; with substitution off the hook returns the real answer (true here).
-    if (QuestLogin::OnMessageIsError(&IsError, message)) ++*static_cast<Ctx*>(self)->seen;
+    if (nevr_quest_login::OnMessageIsError(&IsError, message)) ++*static_cast<Ctx*>(self)->seen;
   };
   const int before = g_lines;
-  QuestLogin::OnPrerequisiteCallback(QuestLogin::Prerequisite::AccessToken, game, &ctx,
+  nevr_quest_login::OnPrerequisiteCallback(nevr_quest_login::Prerequisite::AccessToken, game, &ctx,
                                      reinterpret_cast<void*>(0x1));
   QCHECK(seen_is_error == 1);         // the game saw the real error (not forced false)
   QCHECK(g_lines == before + 1);      // one record was logged

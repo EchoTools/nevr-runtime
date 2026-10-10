@@ -11,7 +11,7 @@
 // runs. Nothing here has a destructor or a try/catch, and no namespace-scope object needs a
 // dynamic initializer (all are constant-initialized), so nothing lands in .init_array.
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 namespace {
 
@@ -560,4 +560,4 @@ void SetPrerequisiteClockForTest(MonotonicMsFn clock) noexcept {
   g_clock.store(clock != nullptr ? clock : &RealMonotonicMs, std::memory_order_release);
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login
