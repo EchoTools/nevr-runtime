@@ -23,9 +23,6 @@ add_library(nevr_quest_integration STATIC
   identity_source.cpp
   stage_log.cpp
   bridge_uri.cpp
-  frame_tap.cpp
-  tapped_transports.cpp
-  integrated_bridge.cpp
   production_steps.cpp
   dlopen_hook.cpp
   social_shim.cpp)
@@ -40,6 +37,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_social
   nevr_quest_net
   nevr_quest_token_auth
+  nevr_quest_hwdump
   nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export
 # (tests/quest TestExportAllowlist).
@@ -50,7 +48,7 @@ set_source_files_properties(production_steps.cpp PROPERTIES COMPILE_DEFINITIONS
 
 # Android-linkable builds of the host tests (they cannot execute on the build machine); the same
 # sources run on the host in `just test-quest-integration`.
-foreach(test_name integration_sequence_test integration_hooks_test integrated_bridge_test)
+foreach(test_name integration_sequence_test integration_hooks_test)
   add_executable(${test_name} "${CMAKE_CURRENT_SOURCE_DIR}/../tests/${test_name}.cpp")
   target_link_libraries(${test_name} PRIVATE nevr_quest_integration)
   target_include_directories(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
@@ -63,6 +61,10 @@ target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../se
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
+# The same test registers the #319 OBB-skip hook's counters through its real function (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.

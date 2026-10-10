@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -44,6 +44,11 @@ struct Features {
   bool bridge = false;
   bool login = false;
   bool social = false;
+  // The hardware/environment dump (#335): a diagnostic build only, never on unless the file asks for it.
+  bool hwdump = false;
+  // Report the OBB mount as done and use the data root the game falls back to (#319): no ~30 s wait in
+  // CSysFile::Init. Off until a headset run confirms it; independent of every other feature.
+  bool obbSkip = false;
 };
 
 struct LogEvent {

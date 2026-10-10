@@ -141,6 +141,11 @@ target_include_directories(nevr_quest_prompt_board PUBLIC "${CMAKE_CURRENT_SOURC
 target_compile_options(nevr_quest_prompt_board PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 
+# The temp-file/fsync/rename writer shared by the credential cache and the hardware dump.
+add_library(nevr_quest_atomic_write STATIC auth/atomic_write.cpp)
+target_include_directories(nevr_quest_atomic_write PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(nevr_quest_atomic_write PRIVATE -Wall -Wextra -Werror)
+
 add_library(nevr_quest_token_auth STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/auth_refresh.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_auth_flow.cpp"
@@ -152,7 +157,7 @@ add_library(nevr_quest_token_auth STATIC
   auth/curl_http.cpp
   auth/quest_token_auth.cpp)
 target_include_directories(nevr_quest_token_auth PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::Crypto
+target_link_libraries(nevr_quest_token_auth PUBLIC nevr_quest_atomic_write nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::Crypto
   nevr_quest_prompt_board)
 target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
 
@@ -176,6 +181,7 @@ if(TARGET nevr_quest_got_hook)
   add_library(nevr_quest_login STATIC
     login/login_rewrite.cpp
     login/login_hook.cpp
+    login/login_counters.cpp
     login/login_apply.cpp
     login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp
@@ -191,7 +197,7 @@ if(TARGET nevr_quest_got_hook)
   # (login_prerequisites.cpp, login_prerequisites_install.cpp), which run inside the game's OVR
   # callbacks. login_rewrite.cpp keeps exceptions; it calls no game code and returns before the
   # next game call.
-  set_source_files_properties(login/login_hook.cpp login/login_apply.cpp login/login_prerequisites.cpp
+  set_source_files_properties(login/login_hook.cpp login/login_counters.cpp login/login_apply.cpp login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp login/login_standin.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
@@ -227,5 +233,7 @@ add_subdirectory(net)
 # Wires every package above into the sentinel entry point. After net/, login, social and the redirect,
 # because it links all of them.
 if(TARGET ovrplatformloader)
+  # The hardware/environment dump (#335), linked through the integration.
+  add_subdirectory(diag)
   add_subdirectory(integration)
 endif()

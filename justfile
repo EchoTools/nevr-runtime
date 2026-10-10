@@ -102,7 +102,13 @@ verbose-build-android: configure-android
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
 check-android-static-init: build-android
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $(find build/android-arm64 -name '*.o' \( -path '*/ovrplatformloader.dir/*' -o -path '*/nevr_quest_config.dir/*' -o -path '*/nevr_quest_got_hook.dir/*' \) | sort)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The object list is what the linker was given (build.ninja's link statement and the in-tree
+    # archives it links), not what `find` sees: tools/quest_link_objects.py. A failure there stops
+    # the recipe (the assignment is the command), so an empty list can never pass the check.
+    objects=$(python3 tools/quest_link_objects.py build/android-arm64 sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
@@ -305,9 +311,10 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
+    cmake --build --preset {{ preset }} --target test_export_trace
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -322,6 +329,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_game_image_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_export_trace.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -409,6 +422,12 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_dll_load_hook.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_plugin_load_plan.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -474,6 +493,21 @@ test-quest-shared:
         src/quest/tests/quest_config_test.cpp \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
+    # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
+    # game threads while the dump thread reads it).
+    hwdump_core=(src/quest/diag/hwdump_field.cpp src/quest/diag/hwdump_fs.cpp src/quest/diag/hwdump_os.cpp \
+        src/quest/diag/hwdump_records.cpp src/quest/diag/hwdump_report.cpp src/quest/tests/hwdump_core_test.cpp)
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${hwdump_core[@]}" -pthread -o "$out/hwdump_core_test"
+    timeout -k 5 120 "$out/hwdump_core_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -fsanitize=thread -g -O1 "${hwdump_core[@]}" \
+        -pthread -o "$out/hwdump_core_test_tsan"
+    timeout -k 5 300 "$out/hwdump_core_test_tsan"
+    # The libr15 hook handlers, built like the sentinel's copy (-fno-exceptions): arguments pass through bit
+    # for bit, results come back unchanged, nothing is read past the game's buffers.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc src/quest/diag/hwdump_records.cpp \
+        src/quest/diag/hwdump_handlers.cpp src/quest/tests/hwdump_handlers_test.cpp -o "$out/hwdump_handlers_test"
+    timeout -k 5 120 "$out/hwdump_handlers_test"
     # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
@@ -491,7 +525,7 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
@@ -501,7 +535,7 @@ test-quest-shared:
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
@@ -669,6 +703,7 @@ test-quest-hooks:
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
     "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    # The patterns below are GCC's wording, which is why the recipe pins g++ (clang words the same errors differently).
     # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
     # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
     for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
@@ -676,8 +711,14 @@ test-quest-hooks:
         if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
             echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
         fi
+        # Fail closed: a diagnostics file that is missing or empty (the redirect failed, so the compiler never
+        # ran) or counts that are not numbers must not read as "no unrelated errors".
+        [ -s "$out/$name.err" ] || { echo "test-quest-hooks: $snip/$name.cpp left no diagnostics in $out/$name.err; the gate did not run" >&2; exit 1; }
         total=$(grep -c 'error:' "$out/$name.err" || true)
         matched=$(grep 'error:' "$out/$name.err" | grep -c "$want" || true)
+        case "$total$matched" in
+            ''|*[!0-9]*) echo "test-quest-hooks: $snip/$name.cpp: could not count diagnostics (total='$total' matched='$matched')" >&2; exit 1;;
+        esac
         if [ "$total" -lt 1 ] || [ "$total" -ne "$matched" ]; then
             echo "test-quest-hooks: $snip/$name.cpp: $total error line(s), $matched match '$want'; every error must be the rule's own:" >&2
             cat "$out/$name.err" >&2; exit 1
@@ -706,6 +747,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
+    # game's callback and wait loop.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
+        src/quest/sentinel/obb_skip_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/obb_skip_hook_test" -ldl
+    timeout 120 "$out/obb_skip_hook_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
@@ -873,7 +921,7 @@ test-quest-integration:
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
         src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
-        src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
     # 2. the hook translation units and the counter budget
@@ -883,6 +931,8 @@ test-quest-integration:
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
+    "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     "${off[@]}" -c src/quest/auth/prompt_board.cpp -o "$out/prompt_board.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
@@ -904,17 +954,18 @@ test-quest-integration:
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/prompt_board.o" \
+        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
-    # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
+    # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
+    # builds when none is injected)
     "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
-        src/quest/tests/integrated_bridge_test.cpp src/quest/integration/integrated_bridge.cpp \
-        src/quest/integration/tapped_transports.cpp src/quest/integration/frame_tap.cpp \
+        src/quest/tests/session_bridge_test.cpp src/quest/net/session_bridge.cpp src/quest/net/frame_tap.cpp \
+        src/quest/net/curl_ws_connector.cpp src/quest/auth/ca_bundle.cpp \
         src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/runtime/server/serverdb_uri.cpp \
-        -o "$out/integrated_bridge_test" $(pkg-config --libs libcurl)
-    timeout 300 "$out/integrated_bridge_test"
+        -o "$out/session_bridge_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
@@ -963,7 +1014,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_standin_testonly -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1442,17 +1493,15 @@ verify:
         echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
         exit 1
     fi
-    if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
-        echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+    # #361: the block is a DllLoadHook filter. A second detour on LoadLibraryW/ExW fails with
+    # MH_ERROR_ALREADY_CREATED (DllLoadHook owns those targets), which is how N127 went unnoticed.
+    if grep -qE 'PatchDetour\(&Original_LoadLibrary' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK installs its own LoadLibrary detour again." >&2
+        echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
-        exit 1
-    fi
-    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
+    if ! grep -qE 'DllLoadHook::AddLoadFilter\(' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
 

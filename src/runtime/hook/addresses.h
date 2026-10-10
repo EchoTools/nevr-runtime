@@ -316,11 +316,15 @@ constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 ///   ADD  RSP,0x38
 ///   RET
 ///
-/// There is NO test of the return value — it is stored and never read — and the
-/// handler is NOT reached by falling through. It is a `__try/__except` block
-/// entered by the OS exception dispatcher during unwinding. So "hook this to
-/// restart the game loop on crash" describes a control flow that does not
-/// exist: on a normal return this function simply returns.
+/// The return value is NOT dropped: the wrapper returns GameMain's RAX and WinMain's CRT start-up
+/// passes it to ExitProcess, so it is the process exit code. A hook of this function must return
+/// the original result. Measured on one build, same close path: a hook declared VOID that ended on a
+/// bool-returning call gave `ExitProcess(1)` (nevr-2026-10-10T08-56-09.541.jsonl, launch-client.sh
+/// "exited with code 1"); the same hook returning GameMain's result gave `ExitProcess(0)`
+/// (nevr-2026-10-10T09-27-19.256.jsonl). Nothing in the wrapper tests the value, and the handler is
+/// NOT reached by falling through: it is a `__try/__except` block entered by the OS exception
+/// dispatcher during unwinding. So "hook this to restart the game loop on crash" describes a control
+/// flow that does not exist: on a normal return this function simply returns.
 constexpr uintptr_t GAME_MAIN_WRAPPER = 0x0CD510;
 
 /// Address: Game main function (0x1400cd550, 676 bytes)

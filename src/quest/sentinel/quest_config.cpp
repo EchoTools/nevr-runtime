@@ -40,11 +40,13 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 4> kFeatures = {{
+constexpr std::array<FeatureSpec, 6> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
     {"social", Feature::kSocial, &Features::social},
+    {"hwdump", Feature::kHwDump, &Features::hwdump},
+    {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
 }};
 
 bool HasControlOrSpace(std::string_view s) {

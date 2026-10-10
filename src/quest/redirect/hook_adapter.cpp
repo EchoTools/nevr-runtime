@@ -143,8 +143,10 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
   return s.report;
 }
 
-InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config) {
-  return InstallRedirectHooksWith(config, {PinnedTargets(), sentinel::FindLoadedImage, &nevr_runtime::lifecycle::InternStableCStr, nullptr});
+InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config, InternFn intern, BridgeProbe bridge) {
+  return InstallRedirectHooksWith(config, {PinnedTargets(), sentinel::FindLoadedImage,
+                                           intern != nullptr ? intern : &nevr::lifecycle::InternStableCStr,
+                                           bridge});
 }
 
 GotStatus InstallLibR15RedirectWith(sentinel::ImageLookup lookup) {
@@ -177,6 +179,8 @@ void RemoveRedirectHooks() {
   s.redirector = nullptr;
   s.report = InstallReport{};
 }
+
+ServiceRedirector* InstalledRedirectorForTest() { return g_redirector.load(std::memory_order_acquire); }
 
 void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);

@@ -21,16 +21,20 @@ const char* StepName(StepId id) {
     case StepId::kRegisterClockCounters: return "register_clock_counters";
     case StepId::kRegisterRedirectCounters: return "register_redirect_counters";
     case StepId::kRegisterDlopenCounters: return "register_dlopen_counters";
+    case StepId::kRegisterLoginCounters: return "register_login_counters";
     case StepId::kRegisterSocialCounters: return "register_social_counters";
     case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
+    case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
+    case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
     case StepId::kInstallRedirect: return "install_redirect";
     case StepId::kInstallSocial: return "install_social";
     case StepId::kInstallDlopenHook: return "install_dlopen_hook";
+    case StepId::kInstallHwDump: return "install_hwdump";
     case StepId::kCount: break;
   }
   return "unknown";
@@ -100,7 +104,8 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // 3: every counter, before the one StartReporter. A refused registration turns off only the piece
     // whose counters those are.
     r.Run(StepId::kRegisterClockCounters, [&] { return steps.RegisterClockCounters(); });
-    bool redirectCounters = false, dlopenCounters = false, socialCounters = false, promptCounters = false;
+    bool redirectCounters = false, dlopenCounters = false, loginCounters = false, socialCounters = false,
+         promptCounters = false;
     if (wantRedirect) {
       redirectCounters = r.Run(StepId::kRegisterRedirectCounters, [&] { return steps.RegisterRedirectCounters(); });
     } else {
@@ -110,6 +115,11 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       dlopenCounters = r.Run(StepId::kRegisterDlopenCounters, [&] { return steps.RegisterDlopenCounters(); });
     } else {
       r.Skip(StepId::kRegisterDlopenCounters, "login_and_redirect_off");
+    }
+    if (wantLogin) {
+      loginCounters = r.Run(StepId::kRegisterLoginCounters, [&] { return steps.RegisterLoginCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterLoginCounters, "login_off");
     }
     if (wantSocial) {
       socialCounters = r.Run(StepId::kRegisterSocialCounters, [&] { return steps.RegisterSocialCounters(); });
@@ -124,9 +134,30 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterLoginPromptCounters, "bridge_and_login_off");
     }
+    // The OBB-mount skip (#319) is independent of every feature above.
+    bool obbCounters = false;
+    if (want.obbSkip) {
+      obbCounters = r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterObbSkipCounters, "obb_skip_off");
+    }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
+
+    // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
+    if (!want.obbSkip) {
+      r.Skip(StepId::kInstallObbSkip, "obb_skip_off");
+    } else if (!obbCounters) {
+      try {
+        steps.InstallObbSkip(false);  // the hook's own rule logs that it installs nothing
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kInstallObbSkip, "counters_refused");
+    } else {
+      r.Run(StepId::kInstallObbSkip, [&] { return steps.InstallObbSkip(true); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {
@@ -188,7 +219,7 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
 
     // The post-load installs: the login hook needs the bridge (the rewrite targets the service the
     // bridge reaches) and token auth; the matchmaking redirect needs the redirect installed.
-    const bool loginWanted = wantLogin && bridgeOk && tokenOk;
+    const bool loginWanted = wantLogin && loginCounters && bridgeOk && tokenOk;
     const bool matchmakingWanted = redirectOk;
     if (!wantDlopen) {
       r.Skip(StepId::kInstallDlopenHook, "login_and_redirect_off");
@@ -198,6 +229,15 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Skip(StepId::kInstallDlopenHook, "nothing_to_install_after_load");
     } else {
       r.Run(StepId::kInstallDlopenHook, [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted); });
+    }
+
+    // The hardware dump (#335) is independent of every feature above. Still in the constructor, so its
+    // hooks are in place before libr15 runs; it registers no reporter counters, so it may follow
+    // StartReporter.
+    if (want.hwdump) {
+      r.Run(StepId::kInstallHwDump, [&] { return steps.StartHwDump(); });
+    } else {
+      r.Skip(StepId::kInstallHwDump, "hwdump_off");
     }
   } catch (const std::exception&) {
     // Unreachable by construction (every step is contained); the sequence still never throws.

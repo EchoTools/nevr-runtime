@@ -16,11 +16,11 @@
 
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
-#include "quest/integration/frame_tap.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/stage_log.h"
+#include "quest/net/frame_tap.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 
@@ -37,6 +37,8 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace nevr_quest;
 using namespace nevr_quest::integration;
+using quest_net::FrameTap;
+using quest_net::FrameTapSinks;
 
 namespace {
 
@@ -73,10 +75,13 @@ struct FakeSteps final : Steps {
   bool RegisterClockCounters() override { return Step("reg_clock"); }
   bool RegisterRedirectCounters() override { return Step("reg_redirect"); }
   bool RegisterDlopenCounters() override { return Step("reg_dlopen"); }
+  bool RegisterLoginCounters() override { return Step("reg_login"); }
   bool RegisterSocialCounters() override { return Step("reg_social"); }
   bool RegisterLoginPromptCounters() override { return Step("reg_prompt"); }
+  bool RegisterObbSkipCounters() override { return Step("reg_obb"); }
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
+  bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -88,6 +93,7 @@ struct FakeSteps final : Steps {
     dlopenArgsSeen = true;
     return Step("dlopen");
   }
+  bool StartHwDump() override { return Step("hwdump"); }
   void Note(const char*, const char*, const char*) override {}
 
   static FakeSteps With(bool redirect, bool bridge, bool login, bool socialOn) {
@@ -113,17 +119,92 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallDlopenHook).state == StepState::kSkipped);
+  // The hardware dump (#335) is off by default and its step says so.
+  QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallHwDump).reason, "hwdump_off") == 0);
+  // So is the OBB-mount skip (#319).
+  QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kSkipped);
+  QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallObbSkip).reason, "obb_skip_off") == 0);
 }
 
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.config.effective.hwdump = true;
+  s.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm",        "config",     "reg_clock", "reg_redirect", "reg_dlopen",
-                                         "reg_social", "reg_prompt", "reporter",  "clock",        "token",
-                                         "prompt",     "bridge",     "redirect",  "social",       "dlopen"};
+  const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
+                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reporter",
+                                         "clock",     "obb",        "token",      "prompt",       "bridge",
+                                         "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
+}
+
+// The hardware dump needs no other feature, and a failing or throwing dump step leaves every other step as
+// it was (#335).
+void TestHwDumpIsIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.config.effective.hwdump = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reporter", "clock", "hwdump"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.hwdump = true;
+    s.config.effective.obbSkip = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    for (int i = 0; i < static_cast<int>(StepId::kInstallHwDump); ++i) QCHECK(r.steps[i].state == StepState::kOk);
+    QCHECK(r.at(StepId::kInstallHwDump).state != StepState::kOk);
+    QCHECK(s.Ran("dlopen") && s.Ran("social"));
+  }
+}
+
+// The OBB-mount skip (#319) needs no other feature, its counters are registered before the single reporter
+// start, it installs right after the clock hook, and a refused counter, a failing or a throwing step leaves
+// every other step as it was.
+void TestObbSkipIsIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.config.effective.obbSkip = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
+    QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
+    QCHECK(!s.Ran("token") && !s.Ran("bridge") && !s.Ran("redirect"));
+  }
+  {  // counters refused: the hook installs nothing (its own rule is called to log the skip) and says why
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    s.failing = {"reg_obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kFailed);
+    QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallObbSkip).reason, "counters_refused") == 0);
+    QCHECK(s.Ran("obb_uncounted") && !s.Ran("obb"));
+    QCHECK(s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"obb"}; else s.throwing = {"obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallObbSkip).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  {  // before the reporter is up nothing installs, and the skip is in before token auth starts
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    RunConstructorSequence(s);
+    QCHECK(s.Index("reg_obb") < s.Index("reporter"));
+    QCHECK(s.Index("obb") > s.Index("reporter") && s.Index("obb") < s.Index("token"));
+  }
 }
 
 // Every counter is registered before the single StartReporter, and StartReporter runs once.
@@ -134,7 +215,7 @@ void TestCountersBeforeTheSingleReporterStart() {
   for (const std::string& c : s.calls) if (c == "reporter") ++starts;
   QCHECK(starts == 1);
   const int reporter = s.Index("reporter");
-  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt"}) {
+  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_login", "reg_social", "reg_prompt"}) {
     QCHECK(s.Index(reg) >= 0 && s.Index(reg) < reporter);
   }
   // No hook is installed before the reporter is up.
@@ -697,6 +778,8 @@ int main() {
   TestStepLogLevels();
   TestEverythingOffInstallsOnlyTheProofHook();
   TestFullStackOrder();
+  TestHwDumpIsIndependentAndContained();
+  TestObbSkipIsIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();

@@ -326,22 +326,49 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 // The backend library is built with -fno-exceptions, exactly like the host test build, so the
 // host tests exercise the same code generation and the backend's frames carry no personality
 // either.
+//
+// The backend is the set of functions the backend archive defines (`nm` on libnevr_quest_got_hook.a,
+// types T and t: the archive is what this target builds, so a function added to it is covered
+// without editing a list, and const members and file-static functions are included). A name pattern
+// cannot take its place: a prefix like `_ZN8sentinel` also matches the functions other targets put in
+// namespace sentinel, which are built with exceptions.
+const backendArchiveRelPath = "../../build/android-arm64/sentinel/libnevr_quest_got_hook.a"
+
+var archiveSymRe = regexp.MustCompile(`^(?:[0-9a-f]+\s+)?([Tt])\s+(_Z\S+)\s*$`)
+
+func backendFunctionNames(t *testing.T) map[string]bool {
+	t.Helper()
+	archive, err := filepath.Abs(backendArchiveRelPath)
+	if err != nil {
+		t.Fatalf("resolve path: %v", err)
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(run(t, "nm", "--defined-only", archive), "\n") {
+		if m := archiveSymRe.FindStringSubmatch(line); m != nil {
+			names[m[2]] = true
+		}
+	}
+	if len(names) < 10 {
+		t.Fatalf("found only %d function symbols in %s: the list is looking at nothing", len(names), archive)
+	}
+	return names
+}
+
 func TestBackendBuiltWithoutExceptions(t *testing.T) {
 	requireArtifact(t)
 	cieAug, fdeCIE := parseFrames(t)
-	// The hook backend's own symbols, by exact mangled prefix: namespace sentinel, then the name's
-	// length and the name. A function elsewhere that merely mentions one of these names (for
-	// example one taking a std::vector<LogEvent>) is not the backend and is not matched.
-	backend := regexp.MustCompile(`^_ZN8sentinel(7GotHook|11ResolveSlot|9LogFields|8LogEvent|9HexString|` +
-		`10SetLogSink|13StartReporter|20RegisterReportCounter|12StopReporter|15ReporterRunning|` +
-		`12_GLOBAL__N_112ReporterMain)`)
+	backend := backendFunctionNames(t)
+	// Functions that must be in the shipped .so, by mangled prefix, or the check is looking at nothing.
 	want := map[string]bool{"_ZN8sentinel7GotHook7Install": false, "_ZN8sentinel11ResolveSlot": false,
 		"_ZN8sentinel9LogFields": false, "_ZN8sentinel13StartReporter": false,
-		"_ZN8sentinel12_GLOBAL__N_112ReporterMain": false}
+		"_ZN8sentinel12_GLOBAL__N_112ReporterMain": false,
+		"_ZN8sentinel21RegisterReportCounter":      false}
+	checked := 0
 	for _, f := range parseFuncs(t) {
-		if !backend.MatchString(f.name) {
+		if !backend[f.name] {
 			continue
 		}
+		checked++
 		for k := range want {
 			if strings.HasPrefix(f.name, k) {
 				want[k] = true
@@ -361,6 +388,7 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 			t.Errorf("backend function with prefix %q not found: the test is looking at nothing", k)
 		}
 	}
+	t.Logf("backend functions in the archive=%d, present in the .so and checked=%d", len(backend), checked)
 }
 
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be
@@ -376,7 +404,7 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 //
 // It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
 // (callback_thunk.h, "Limits").
-var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
+var includeRe = regexp.MustCompile(`#\s*include(?:_next)?\s*[<"]([^>"]+)[>"]`)
 
 func TestRawInstallOnlyInTests(t *testing.T) {
 	root, err := filepath.Abs("../../src")
@@ -401,6 +429,12 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	}
 	seen := 0
 	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr == nil && info.Mode()&os.ModeSymlink != 0 {
+			// filepath.Walk does not follow a symlink, so a link under src/ would hide the files behind it
+			// from this scan. None exists; one appearing is an error to be looked at, not a gap.
+			t.Errorf("%s is a symlink under src/: the scan does not follow it", p)
+			return nil
+		}
 		if werr != nil || info.IsDir() || !exts[filepath.Ext(p)] {
 			return werr
 		}
@@ -524,6 +558,33 @@ func sentinelLinkViolations(ninja string) []string {
 }
 
 // The real, configured link line of the built sentinel.
+// The sentinel's DT_NEEDED list is exactly the forward-to-original plus bionic. Everything else it uses at
+// run time (libvulkan, libEGL, libGLESv3, libandroid, libvrapi, libopenxr_loader for the hardware dump, #335)
+// is reached with dlopen/dlsym, so a stray -l link shows up here instead of as a new load-time dependency of
+// the game.
+func TestSentinelNeededList(t *testing.T) {
+	requireArtifact(t)
+	dyn := run(t, "readelf", "-d", soPath(t))
+	var got []string
+	for _, line := range strings.Split(dyn, "\n") {
+		if !strings.Contains(line, "(NEEDED)") {
+			continue
+		}
+		if i, j := strings.Index(line, "["), strings.LastIndex(line, "]"); i >= 0 && j > i {
+			got = append(got, line[i+1:j])
+		}
+	}
+	want := map[string]bool{"libovrplatformloader_orig.so": true, "liblog.so": true, "libdl.so": true, "libm.so": true, "libc.so": true}
+	for _, lib := range got {
+		if !want[lib] {
+			t.Errorf("sentinel NEEDs %s; reach it with dlopen/dlsym instead (DT_NEEDED: %v)", lib, got)
+		}
+	}
+	if len(got) == 0 {
+		t.Errorf("no DT_NEEDED entries read from readelf -d: the check is blind\n%s", dyn)
+	}
+}
+
 func TestSentinelLinkLineGuard(t *testing.T) {
 	requireArtifact(t)
 	p, err := filepath.Abs("../../build/android-arm64/build.ninja")

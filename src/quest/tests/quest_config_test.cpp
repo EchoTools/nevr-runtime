@@ -46,7 +46,9 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
   return false;
 }
 
-bool AllOff(const nevr_quest::Features& f) { return !f.redirect && !f.bridge && !f.login && !f.social; }
+bool AllOff(const nevr_quest::Features& f) {
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip;
+}
 
 // Index of the first event whose message contains `needle`, or -1.
 int EventIndex(const LoadResult& r, const std::string& needle) {
@@ -67,6 +69,14 @@ void DefaultsWithoutFile() {
   CHECK(EventsContain(r, "feature=login requested=off effective=off"));
   CHECK(EventsContain(r, "feature=social requested=off effective=off"));
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  // The hardware dump (#335) is a diagnostic: off unless a file turns it on.
+  CHECK(!r.config.requested.hwdump && !r.config.effective.hwdump);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
+  CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
+  // The OBB-mount skip (#319) is off until a file turns it on.
+  CHECK(!r.config.requested.obbSkip && !r.config.effective.obbSkip);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+  CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
   CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
   CHECK(!HasLevel(r, LogLevel::kError));
 }
@@ -342,6 +352,49 @@ void RedirectIsGatedByActivation() {
 
 }  // namespace
 
+// The hardware dump (#335) needs nothing else: the file's boolean alone turns it on, and anything but a
+// JSON true leaves it off.
+void HwDumpIsOnlyEverOnByAFileBoolean() {
+  {
+    const LoadResult r = Load(Full(), R"({"features":{"hwdump":true}})");
+    CHECK(r.config.requested.hwdump && r.config.effective.hwdump);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
+    CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
+          !r.config.effective.social);
+    CHECK(EventsContain(r, "feature=hwdump requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  for (const char* text : {R"({"features":{"hwdump":"true"}})", R"({"features":{"hwdump":1}})",
+                           R"({"hwdump":true})", R"({"features":{}})"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.hwdump);
+    CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
+  }
+}
+
+// The OBB-mount skip (#319) needs nothing else: the file's boolean alone turns it on, and anything but a
+// JSON true leaves it off.
+void ObbSkipIsOnlyEverOnByAFileBoolean() {
+  {
+    const LoadResult r = Load(Full(), R"({"features":{"obb_skip":true}})");
+    CHECK(r.config.requested.obbSkip && r.config.effective.obbSkip);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+    CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
+          !r.config.effective.social && !r.config.effective.hwdump);
+    CHECK(EventsContain(r, "feature=obb_skip requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  for (const char* text : {R"({"features":{"obb_skip":"true"}})", R"({"features":{"obb_skip":1}})",
+                           R"({"obb_skip":true})", R"({"features":{}})"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.obbSkip);
+    CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
+  }
+  // A rejected file contributes nothing, so the feature stays off.
+  const LoadResult rejected = Load(Full(), R"({"features":{"obb_skip":true})");
+  CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
+}
+
 int main() {
   DefaultsWithoutFile();
   EmptyEmbeddedIsAbsent();
@@ -362,6 +415,8 @@ int main() {
   AnEmptyFileValueCannotClearAnEmbeddedDefault();
   ConfigPathIsNeverGameConfigJson();
   RedirectIsGatedByActivation();
+  HwDumpIsOnlyEverOnByAFileBoolean();
+  ObbSkipIsOnlyEverOnByAFileBoolean();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
     return 1;

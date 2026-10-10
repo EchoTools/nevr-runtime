@@ -5,7 +5,7 @@ Runtime patches for Echo VR (`echovr.exe`) that let it connect to
 client and the dedicated server load these DLLs to talk to the Nakama-based
 backend.
 
-Part of the **nEVR** project — keeping Echo VR alive.
+Part of the **NEVR** project — keeping Echo VR alive.
 
 > Working in this repo as an agent? Start at [`AGENTS.md`](AGENTS.md).
 

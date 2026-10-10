@@ -33,22 +33,12 @@ FROZEN_NVR = frozenset({
 })
 # Existing non-canonical spellings, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
-    "README.md": {"nEVR"},
     "certs/code-signing.conf": {"nEVR"},
     "certs/generate-ca.sh": {"nEVR"},
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
-    "plugins/common/include/address_registry.h": {"nEVR"},
-    "plugins/example/README.md": {"nEVR"},
     "plugins/example/src/plugin.cpp": {"nEVR"},
-    "src/extension/plugin_interface.h": {"nEVR"},
-    "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
-    "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_callbacks.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_internal.h": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_serverdb.cpp": {"NevRUPnPConfig"},
 }
 
 
@@ -96,6 +86,12 @@ class NamingTest(unittest.TestCase):
             if extra:
                 offenders[path] = sorted(extra)
         self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
+
+    def test_one_spelling_of_the_lifecycle_namespace(self):
+        # The runtime's lifecycle code is in `nevr::lifecycle`; the two older spellings were unified (#131).
+        old = re.compile(r"nevr_runtime::lifecycle|Nevr::Lifecycle|nevr::Lifecycle")
+        found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
+        self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
 
     def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())

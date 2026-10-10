@@ -6,6 +6,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/console_ctrl_policy.h"
+#include "runtime/lifecycle/veh_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
@@ -27,6 +28,8 @@
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/export_tracer.h"
+#include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
@@ -39,15 +42,18 @@ jmp_buf g_gameLoopJmpBuf;
 volatile bool g_gameLoopJmpBufValid = false;
 
 // --- game-loop wrapper: the setjmp side of the recovery pair ---------------
-typedef VOID GameMainWrapperFunc(INT64 arg1);
+// The game's WinMain uses the wrapper's return value (RAX) as the process exit code: the wrapper at
+// echovr.exe+0xCD510 stores GameMain's RAX and returns it. Declaring these VOID let whatever the hook
+// computed last (a bool from a call before `return;`) become the exit code.
+typedef INT64 GameMainWrapperFunc(INT64 arg1);
 static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
 
 /// Direct pointer to the game's main function (fcn.1400cd550) so we can call
 /// it directly in the restart loop without going through the wrapper.
-typedef VOID GameMainFunc(INT64 arg1);
+typedef INT64 GameMainFunc(INT64 arg1);
 static GameMainFunc* GameMain = nullptr;
 
-static VOID GameMainWrapperHook(INT64 arg1) {
+static INT64 GameMainWrapperHook(INT64 arg1) {
   // Always set up the longjmp recovery point — g_isServer isn't set yet when this
   // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
   int crashCount = setjmp(g_gameLoopJmpBuf);
@@ -77,7 +83,7 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   }
 
   // Run the game main loop
-  GameMain(arg1);
+  const INT64 gameResult = GameMain(arg1);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
@@ -86,7 +92,10 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   if (!g_isServer) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
-    return;
+    // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
+    AssetCDN::StopBackgroundFetch();
+    ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+    return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
   // Holding here would never exit: ExitProcess is suppressed in server mode, so returning does not
@@ -96,8 +105,10 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
       requested ? "true" : "false", requested ? 0 : 1);
+  ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
   PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
+  return gameResult;
 }
 
 void InstallGameMainHook() {
@@ -991,16 +1002,17 @@ void InstallCrashFilterInstrumentation() {
   }
 }
 
-void InstallVEH() {
+bool InstallVEH() {
   // Wine's own first-chance stack-overflow handling is active during client
   // startup. A first-priority foreign VEH changes that handler ordering even
   // when it returns CONTINUE_SEARCH, so keep this server-only recovery hook
   // out of Wine client processes.
   HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-  if (!g_isServer && ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr) {
+  const bool isWineClient = ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+  if (!VehPolicy::ShouldInstall(g_isServer, isWineClient)) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CRASH] VEH disabled for Wine client; native exception handling retained");
-    return;
+    return false;
   }
 
   // N70: snapshot the module table now, while the loader lock is safe to take.
@@ -1018,6 +1030,7 @@ void InstallVEH() {
       "[NEVR.PATCH] veh installed handler=BreakpointVEH priority=1 modules_cached=%ld "
       "stack_reserve_bytes=%lu",
       g_moduleCacheCount, static_cast<unsigned long>(kCrashHandlerStackReserve));
+  return true;
 }
 
 // POSIX signal handler — initiates shutdown DIRECTLY.

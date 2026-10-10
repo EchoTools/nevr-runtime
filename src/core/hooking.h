@@ -10,6 +10,9 @@
 
 #include <windows.h>
 
+#include <mutex>
+#include <unordered_map>
+
 #include "core/hook_lifecycle.h"
 
 namespace Hooking {
@@ -47,6 +50,19 @@ inline const char* LastAttachError() { return LastAttachErrorRef(); }
 using nevr::hook::CreatePublishEnable;
 
 #ifdef USE_MINHOOK
+// MinHook identifies a hook by its target address, which Attach() overwrites in
+// *ppOriginal with the trampoline. Detach() is handed only the trampoline, so each
+// successful Attach records trampoline -> target here. The trampoline is unique per
+// MinHook hook, which a detour pointer is not (one detour may serve several targets).
+struct MinHookTargets {
+  std::mutex mutex;
+  std::unordered_map<PVOID, PVOID> targetByTrampoline;
+};
+inline MinHookTargets& MinHookTargetsRef() {
+  static MinHookTargets s;
+  return s;
+}
+
 template <typename Create, typename Enable, typename Remove>
 inline BOOL AttachMinHookWith(PVOID* ppOriginal, PVOID pDetour,
                               Create&& create, Enable&& enable, Remove&& remove) {
@@ -66,8 +82,12 @@ inline BOOL AttachMinHookWith(PVOID* ppOriginal, PVOID pDetour,
       },
       [&] { remove(target); });
   switch (stage) {
-    case nevr::hook::AttachStage::kAttached:
+    case nevr::hook::AttachStage::kAttached: {
+      MinHookTargets& targets = MinHookTargetsRef();
+      std::lock_guard<std::mutex> lock(targets.mutex);
+      targets.targetByTrampoline[*ppOriginal] = target;
       return TRUE;
+    }
     case nevr::hook::AttachStage::kCreateFailed:
       LastAttachErrorRef() = MH_StatusToString(createStatus);
       break;
@@ -79,6 +99,25 @@ inline BOOL AttachMinHookWith(PVOID* ppOriginal, PVOID pDetour,
       break;
   }
   return FALSE;
+}
+
+// Disable only the hook whose trampoline *ppOriginal holds. A trampoline this layer did
+// not attach is refused: never fall back to MH_ALL_HOOKS, which would switch off every
+// other runtime patch in the process.
+template <typename Disable>
+inline BOOL DetachMinHookWith(PVOID* ppOriginal, Disable&& disable) {
+  MinHookTargets& targets = MinHookTargetsRef();
+  PVOID target = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(targets.mutex);
+    const auto it = targets.targetByTrampoline.find(*ppOriginal);
+    if (it == targets.targetByTrampoline.end()) return FALSE;
+    target = it->second;
+  }
+  if (disable(target) != MH_OK) return FALSE;
+  std::lock_guard<std::mutex> lock(targets.mutex);
+  targets.targetByTrampoline.erase(*ppOriginal);
+  return TRUE;
 }
 #endif
 
@@ -101,14 +140,11 @@ inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
 
 // Detach a hook from a function
 // ppOriginal: Pointer to the trampoline (will be restored to original)
-// pDetour: The hook function
+// pDetour: The hook function (Detours only; MinHook finds the hook by its trampoline)
 inline BOOL Detach(PVOID* ppOriginal, PVOID pDetour) {
 #ifdef USE_MINHOOK
-  // MinHook uses the original target to identify the hook
-  // We need to disable the hook - but we don't have the original target anymore
-  // This is a limitation - we'd need to track the mapping
-  // For now, just disable all hooks (not ideal but works for cleanup)
-  return MH_DisableHook(MH_ALL_HOOKS) == MH_OK;
+  static_cast<void>(pDetour);
+  return DetachMinHookWith(ppOriginal, MH_DisableHook);
 #else
   DetourTransactionBegin();
   DetourUpdateThread(GetCurrentThread());

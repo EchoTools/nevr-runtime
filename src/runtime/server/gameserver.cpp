@@ -46,7 +46,7 @@
 #include "gameservice/v1/gameservice.pb.h"
 
 /// Read UPnP config from gamepatches globals (same DLL now).
-bool ReadUPnPConfig(NevRUPnPConfig& out) {
+bool ReadUPnPConfig(NevrUPnPConfig& out) {
     out.enabled = g_upnpEnabled;
     out.port    = g_upnpPort;
     memcpy(out.internalIp, g_internalIpOverride, sizeof(out.internalIp));

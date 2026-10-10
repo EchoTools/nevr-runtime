@@ -8,7 +8,8 @@
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
 //   2  ResolveConfig                 InitActivation: embedded defaults + nevr-quest.json, every state logged
-//   3  RegisterCounters              every counter of every hook that will be installed, BEFORE ...
+//   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
+//                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
@@ -20,6 +21,10 @@
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
+//      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
+//                                    AStorageManager_getMountedObbPath); independent of every feature above,
+//                                    runs right after the clock hook so it is in place before libr15 runs
+//                                    CSysFile::Init. Its counters are registered with the others (step 3).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -27,8 +32,10 @@
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
+//   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
+//   obb counters fail       -> the OBB-mount skip is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -58,16 +65,20 @@ enum class StepId : std::uint8_t {
   kRegisterClockCounters,
   kRegisterRedirectCounters,
   kRegisterDlopenCounters,
+  kRegisterLoginCounters,
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
+  kRegisterObbSkipCounters,
   kStartReporter,
   kInstallClockHook,
+  kInstallObbSkip,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
   kInstallRedirect,
   kInstallSocial,
   kInstallDlopenHook,
+  kInstallHwDump,
   kCount,
 };
 
@@ -97,11 +108,17 @@ class Steps {
   virtual bool RegisterClockCounters() = 0;
   virtual bool RegisterRedirectCounters() = 0;
   virtual bool RegisterDlopenCounters() = 0;
+  virtual bool RegisterLoginCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
   virtual bool RegisterLoginPromptCounters() = 0;
+  // The OBB-mount skip's counters (#319), registered when the obb_skip feature is on.
+  virtual bool RegisterObbSkipCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
+  // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
+  // logs the skip and installs nothing). True when both slots hold their thunks.
+  virtual bool InstallObbSkip(bool countersRegistered) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
@@ -111,6 +128,8 @@ class Steps {
   virtual bool InstallSocial() = 0;
   // `login` / `matchmaking`: which post-load installs the dlopen hook is for.
   virtual bool InstallDlopenHook(bool login, bool matchmaking) = 0;
+  // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
+  virtual bool StartHwDump() = 0;
 
   // One line per step outcome and per decision. `step` and `reason` are fixed tokens.
   virtual void Note(const char* step, const char* state, const char* reason) = 0;
