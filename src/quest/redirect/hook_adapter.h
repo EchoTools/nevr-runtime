@@ -16,7 +16,7 @@
 // The caller's contract (nothing in this directory calls these; the sentinel does):
 //   1. RegisterRedirectCounters() before sentinel::StartReporter (the reporter refuses a
 //      registration after it starts; 10 of the reporter's counter slots, hook_report.h).
-//   2. InstallRedirectHooks(config) from the sentinel's ELF constructor, early enough to precede
+//   2. InstallRedirectHooks(config, intern, bridge) from the sentinel's ELF constructor, early enough to precede
 //      CR15NetGame::Initialize, which reads config_host and configservice_host (libr15.so
 //      0x1286060). A value the game read before the slot was hooked stays as the game parsed it. That
 //      ordering rests on Bionic running the constructor before game code and is not tested on a
@@ -34,8 +34,8 @@
 //      redirector in place: retry libr15's slot with InstallLibR15Redirect() (or by calling
 //      InstallRedirectHooks again) and the matchmaking slot with InstallMatchmakingRedirect().
 //      A poisoned slot (kSlotPoisoned) is logged once and not retried.
-// The bridge feature has no effect on Quest yet: the production install passes no BridgeProbe, so
-// every redirect uses the configured target.
+// The bridge feature selects the loopback target through the BridgeProbe the caller passes to
+// InstallRedirectHooks; without one every redirect uses the configured target.
 #pragma once
 
 #include "got_hook.h"
@@ -55,8 +55,12 @@ struct InstallReport {
 // Call before sentinel::StartReporter. False if a counter was refused.
 bool RegisterRedirectCounters() noexcept;
 
-// Production entry: pinned targets, the process-wide pool, no bridge probe.
-InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config);
+// Production entry: pinned targets and the loaded-image lookup, with the caller's string pool and
+// bridge probe. `intern` null means the process-wide pool (InternStableCStr); `bridge` null means no
+// probe, so every redirect uses the configured target. Both are fixed by the first call that enables
+// the redirect (contract 4 above).
+InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config, InternFn intern = nullptr,
+                                   BridgeProbe bridge = nullptr);
 
 // Retries libr15's slot with the options the first call fixed. kNotInstalled if the redirect was
 // never enabled; kAlreadyInstalled if installed; kSlotPoisoned if an earlier attempt poisoned it.
@@ -80,6 +84,10 @@ struct InstallOptions {
 InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config, const InstallOptions& options);
 sentinel::GotStatus InstallMatchmakingRedirectWith(sentinel::ImageLookup lookup);
 sentinel::GotStatus InstallLibR15RedirectWith(sentinel::ImageLookup lookup);
+
+// Test seam: the redirector the install fixed (null before a call that enables the redirect, and after
+// RemoveRedirectHooks).
+ServiceRedirector* InstalledRedirectorForTest();
 
 // Test seam: arms the typed handlers on `redirector` (or disarms with nullptr) without touching
 // any GOT slot. A test then calls each ThunkEntry(slot) with a fake original.

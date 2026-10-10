@@ -22,7 +22,7 @@ jobs:
     env:
       IMAGE: ghcr.io/echotools/nevr-runtime-builder
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Tag from the Dockerfile
       id: tag

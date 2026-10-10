@@ -73,6 +73,7 @@ struct FakeSteps final : Steps {
   bool RegisterClockCounters() override { return Step("reg_clock"); }
   bool RegisterRedirectCounters() override { return Step("reg_redirect"); }
   bool RegisterDlopenCounters() override { return Step("reg_dlopen"); }
+  bool RegisterLoginCounters() override { return Step("reg_login"); }
   bool RegisterSocialCounters() override { return Step("reg_social"); }
   bool RegisterLoginPromptCounters() override { return Step("reg_prompt"); }
   bool StartReporter() override { return Step("reporter"); }
@@ -118,9 +119,10 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm",        "config",     "reg_clock", "reg_redirect", "reg_dlopen",
-                                         "reg_social", "reg_prompt", "reporter",  "clock",        "token",
-                                         "prompt",     "bridge",     "redirect",  "social",       "dlopen"};
+  const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
+                                         "reg_login", "reg_social", "reg_prompt", "reporter",     "clock",
+                                         "token",     "prompt",     "bridge",     "redirect",     "social",
+                                         "dlopen"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
@@ -134,7 +136,7 @@ void TestCountersBeforeTheSingleReporterStart() {
   for (const std::string& c : s.calls) if (c == "reporter") ++starts;
   QCHECK(starts == 1);
   const int reporter = s.Index("reporter");
-  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt"}) {
+  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_login", "reg_social", "reg_prompt"}) {
     QCHECK(s.Index(reg) >= 0 && s.Index(reg) < reporter);
   }
   // No hook is installed before the reporter is up.
