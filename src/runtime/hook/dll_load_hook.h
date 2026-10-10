@@ -7,7 +7,7 @@
 #include <windows.h>
 #endif
 
-namespace DllLoadHook {
+namespace nevr_dll_load_hook {
 
 /* Callback signature: called after a DLL loads successfully.
  * dll_name: lowercase filename (e.g., "pnsdemo.dll")
@@ -46,4 +46,4 @@ void OnLoad(const char* dll_name, PatchCallback callback);
  * (e.g., the game's CSysDLL_Load). Only fires each callback once per DLL. */
 void FireCallbacksForModule(const char* lower_name, HMODULE module);
 
-} // namespace DllLoadHook
+} // namespace nevr_dll_load_hook

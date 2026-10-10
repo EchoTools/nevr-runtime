@@ -112,10 +112,10 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
-  static const bool tracerConfigured = (ExportTracer::ConfigureFromCommandLine(), true);
+  static const bool tracerConfigured = (nevr_export_tracer::ConfigureFromCommandLine(), true);
   static_cast<void>(tracerConfigured);
   const auto traced = [dll_handle, symbol_name](void* resolved) {
-    return ExportTracer::WrapSymbol(dll_handle, symbol_name, resolved);
+    return nevr_export_tracer::WrapSymbol(dll_handle, symbol_name, resolved);
   };
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
@@ -319,7 +319,7 @@ static VOID InitializeAfterGameImageGuard() {
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
-  DllLoadHook::Install();
+  nevr_dll_load_hook::Install();
   BootLogTee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
 
   // --- Headless graphics stubs (DXGI/D3D11 interception) ---

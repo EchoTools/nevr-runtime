@@ -18,12 +18,12 @@ bool BlocksVersionDll(const wchar_t* lowerPath) { return std::wcsstr(lowerPath, 
 
 TEST(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAlone) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
-  DllLoadHook::Install();
+  nevr_dll_load_hook::Install();
 
   // Before a filter exists the load goes through.
   ASSERT_NE(LoadLibraryW(L"version.dll"), nullptr) << "precondition: version.dll loads";
 
-  DllLoadHook::AddLoadFilter("test-filter", BlocksVersionDll);
+  nevr_dll_load_hook::AddLoadFilter("test-filter", BlocksVersionDll);
 
   SetLastError(0);
   EXPECT_EQ(LoadLibraryW(L"version.dll"), nullptr);
@@ -43,30 +43,30 @@ TEST(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAl
 
   EXPECT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr) << "a load no filter matches must go through";
 
-  DllLoadHook::Shutdown();
+  nevr_dll_load_hook::Shutdown();
   MH_Uninitialize();
 }
 
 TEST(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
-  DllLoadHook::AddLoadFilter("named-filter", BlocksVersionDll);
+  nevr_dll_load_hook::AddLoadFilter("named-filter", BlocksVersionDll);
   const char* by = nullptr;
-  EXPECT_TRUE(DllLoadHook::IsLoadBlocked(L"c:\\x\\version.dll", &by));
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"c:\\x\\version.dll", &by));
   ASSERT_NE(by, nullptr);
   EXPECT_STREQ(by, "named-filter");
-  EXPECT_FALSE(DllLoadHook::IsLoadBlocked(L"kernel32.dll", &by));
-  DllLoadHook::Shutdown();
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"kernel32.dll", &by));
+  nevr_dll_load_hook::Shutdown();
 }
 
 // #363 review: the Oculus predicate matches the file name, not any folder on the path.
 TEST(OculusPlatformPath, RefusesTheSdkLibraryByFileName) {
-  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"libovrplatform64_1.dll"));
-  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"c:\\game\\bin\\libovrplatform64_1.dll"));
-  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"c:/game/bin/libovrplatform64_1.dll"));
+  EXPECT_TRUE(nevr_dll_load_hook::IsOculusPlatformPath(L"libovrplatform64_1.dll"));
+  EXPECT_TRUE(nevr_dll_load_hook::IsOculusPlatformPath(L"c:\\game\\bin\\libovrplatform64_1.dll"));
+  EXPECT_TRUE(nevr_dll_load_hook::IsOculusPlatformPath(L"c:/game/bin/libovrplatform64_1.dll"));
 }
 
 TEST(OculusPlatformPath, AllowsAFileWhoseFolderIsNamedLikeTheSdk) {
-  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"c:\\mods\\ovrplatform\\helper.dll"));
-  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"c:/libovrplatform64_1/readme.dll"));
-  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"kernel32.dll"));
-  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"c:\\mods\\ovrplatform\\helper.dll"));
+  EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"c:/libovrplatform64_1/readme.dll"));
+  EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"kernel32.dll"));
+  EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(nullptr));
 }

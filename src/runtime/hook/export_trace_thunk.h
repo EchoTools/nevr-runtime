@@ -21,7 +21,7 @@
 
 #include "core/call_ring.h"
 
-namespace ExportTrace {
+namespace nevr_export_trace {
 
 /// Most thunks one process can hold. Pnsrad exports 41 names and pnsovr about 52; the game resolves each once.
 constexpr std::uint32_t kMaxThunks = 256;
@@ -44,4 +44,4 @@ bool Pop(nevr::CallRecord* out);
 std::uint64_t Pushed();
 std::uint64_t Dropped();
 
-}  // namespace ExportTrace
+}  // namespace nevr_export_trace

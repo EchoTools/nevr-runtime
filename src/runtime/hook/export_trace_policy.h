@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace ExportTracePolicy {
+namespace nevr_export_trace_policy {
 
 enum : std::uint32_t {
   kPnsrad = 1,
@@ -129,4 +129,4 @@ inline const char* ModuleName(std::uint32_t bit) {
   }
 }
 
-}  // namespace ExportTracePolicy
+}  // namespace nevr_export_trace_policy
