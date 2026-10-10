@@ -1,10 +1,8 @@
 /*
  * tick.cpp — the runtime's per-frame work dispatcher.
  *
- * Extracted from patch/binary_bug_fixes.cpp (was wave0_instrumentation.cpp) on
- * 2026-07-29. It had been sitting in a file of engine bug-fix hooks because the
- * hook that drives it lives there, not because it belongs there: it shares no
- * state with any of them.
+ * It lives apart from patch/binary_bug_fixes.cpp, whose hook drives it: it shares
+ * no state with any of the engine bug-fix hooks there.
  *
  * WHICH SITE DRIVES THIS, AND WHY IT MATTERS (N86)
  *

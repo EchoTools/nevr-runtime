@@ -455,8 +455,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // N131: cosmetics are client-only — a headless server has nothing to render and
   // must not open the CDN connection (it opens ServerDB + login only). AssetCDN
   // was called UNCONDITIONALLY from initialize.cpp:364, which runs before the CLI
-  // is parsed, so g_isServer was still FALSE there and a server fetched tints it
-  // never draws. Moved here, post-CLI-parse where g_isServer is known, gated on
+  // is parsed, so g_isServer would still be FALSE there and a server would fetch tints it
+  // never draws. It is called here, post-CLI-parse where g_isServer is known, gated on
   // client — the same deferral InstallResourceOverride uses (boot.cpp:29). The
   // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
   // so gating it off on a server does not affect loadout handling.

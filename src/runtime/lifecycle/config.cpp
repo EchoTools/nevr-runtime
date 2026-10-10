@@ -192,8 +192,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   if (g_localConfig != NULL) {
     const CHAR* customCdnUrl = NevrCfgGetFlat("asset_cdn_url");
     if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
-      // nevr_asset_cdn::SetCustomCdnUrl(customCdnUrl);  // still inert — the use was
-      // commented out long before the cutover; only the READ moved to config.yaml.
+      // nevr_asset_cdn::SetCustomCdnUrl(customCdnUrl);  // inert: only the READ comes from config.yaml;
+      // the use is commented out.
     }
 
     // exitonerror

@@ -7,10 +7,10 @@
 //     gate is not ready it keeps the logging-in page from replacing the screen that shows the code, and it
 //     poisons the attempt it did that for.
 //
-// Why one word and a poison bit. The two decisions used to read two flags the token-auth poll set
-// separately, so a RETRY in the gap could get its logging-in page skipped while the login itself went on to
-// succeed, stranding the player on the login-failed screen while logged in. Now there is one atomic: the
-// skip stops in the same instant the login may proceed, and an attempt whose page was skipped fails its
+// Why one word and a poison bit. Two decisions reading two flags the token-auth poll sets separately would
+// let a RETRY in the gap get its logging-in page skipped while the login itself went on to succeed,
+// stranding the player on the login-failed screen while logged in. With one atomic the skip stops in the
+// same instant the login may proceed, and an attempt whose page was skipped fails its
 // prerequisites for as long as that attempt runs (the sentinel clears the poison when the game leaves
 // "logging in"), even if the gate turns ready meanwhile.
 //

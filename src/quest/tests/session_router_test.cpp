@@ -443,7 +443,7 @@ void TestLoginSuccessAndFailureHandling() {
   if (sent.size() == 2) QCHECK(sent[1].data == nevr_evr_codec::BuildFriendListSubscribe());
 
   std::string failurePayload;
-  // The codec no longer exports a little-endian appender; the payload layout is three u64 fields.
+  // The codec exports no little-endian appender; the payload layout is three u64 fields, written out here.
   const auto appendLE64 = [&failurePayload](uint64_t v) {
     for (int i = 0; i < 8; ++i) failurePayload.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
   };
@@ -873,8 +873,8 @@ void TestInterleavedUnrequiresReachTheConnectionThatOwesThem() {
 }
 
 // Failure caught (RE M2): ping discovery sends LobbyPingRequest on the login session right after the login
-// and an Unrequire after it. With no matchmaker connection the ping used to fall to the login connection, whose
-// count then went below zero. The ping and the Unrequire that follows it are dropped; the login connection's
+// and an Unrequire after it. With no matchmaker connection the ping must not fall to the login connection, whose
+// count would go below zero. The ping and the Unrequire that follows it are dropped; the login connection's
 // count is untouched, so its own update's Unrequire still arrives.
 void TestPingDiscoveryAfterLoginWithoutAMatchmakerDoesNotWrapTheLoginCount() {
   Rig rig;

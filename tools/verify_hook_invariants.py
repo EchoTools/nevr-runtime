@@ -76,7 +76,7 @@ KNOWN_DOUBLE_DETOURS = {
                          "detour entirely and this closes permanently. Runtime HookGuard reports "
                          "the collision at ERROR if the plugin's install actually overwrites ours."),
     # 0x140F87AA0 is not registered here: broadcaster_bridge (a plugin outside this
-    # repo) hooks it as VA_BROADCASTER_RECEIVE_LOCAL and gamepatches no longer detours
+    # repo) hooks it as VA_BROADCASTER_RECEIVE_LOCAL and gamepatches does not detour
     # it as ENGINE_ENTITY_PROP_DISPATCH, so the plugin is its sole owner. If a second
     # owner reappears, that is a NEW violation and fails hard.
 }
