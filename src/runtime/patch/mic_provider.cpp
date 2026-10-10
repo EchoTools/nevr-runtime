@@ -39,6 +39,7 @@
 #include <objbase.h>
 
 #include <atomic>
+#include <chrono>
 
 // The precompiled header already pulled in <mmdeviceapi.h>/<audioclient.h>
 // (via core/pch.h -> windows.h) without INITGUID, so their DEFINE_GUID
@@ -71,6 +72,11 @@ constexpr uint32_t kRingCapacitySamples = 24000;  // ~500ms at 48kHz mono
 // WASAPI packets into it.
 MicRingBuffer g_ring(kRingCapacitySamples);
 bool g_ringOverflowLogged = false;
+// How often the game actually reads the microphone (#95): the ring overflows when the game does not
+// drain MicRead, and nothing else says whether it ever calls MicAvailable/MicRead.
+std::atomic<uint64_t> g_availableCalls{0};
+std::atomic<uint64_t> g_readCalls{0};
+std::atomic<uint64_t> g_samplesRead{0};
 
 // --- WASAPI state ------------------------------------------------------
 // Every public create/start/stop/destroy call is marshalled onto
@@ -125,6 +131,18 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
     const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
     isFloat = (ext->SubFormat.Data1 == kSubtypeIeeeFloatData1);
   }
+  {
+    // One Info line every 30 s while capturing: whether the game reads the mic at all (#95).
+    static auto lastReport = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastReport >= std::chrono::seconds(30)) {
+      lastReport = now;
+      Log(EchoVR::LogLevel::Info, "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu",
+          static_cast<unsigned long long>(g_availableCalls.load()),
+          static_cast<unsigned long long>(g_readCalls.load()),
+          static_cast<unsigned long long>(g_samplesRead.load()));
+    }
+  }
   const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
   const size_t bytes = silent ? 0 : static_cast<size_t>(frameCount) * fmt->nBlockAlign;
   const MicCapturePacketResult result = g_captureAdapter.Process(
@@ -138,7 +156,11 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
   }
   if (result.ringOverflow && !g_ringOverflowLogged) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped");
+        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
+        "(game calls so far: MicAvailable=%llu MicRead=%llu samples_read=%llu)",
+        static_cast<unsigned long long>(g_availableCalls.load()),
+        static_cast<unsigned long long>(g_readCalls.load()),
+        static_cast<unsigned long long>(g_samplesRead.load()));
     g_ringOverflowLogged = true;
   }
 }
@@ -527,6 +549,7 @@ bool DispatchMicCall(MicCall call, MicCallRequest* request) {
 }  // namespace
 
 uint64_t MicProvider::MicAvailable() {
+  g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   return static_cast<uint64_t>(g_ring.Available());
 }
 
@@ -570,7 +593,10 @@ uint64_t MicProvider::MicDetected() {
 uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
-  return g_ring.Pop(static_cast<int16_t*>(buffer), count);
+  const uint64_t got = g_ring.Pop(static_cast<int16_t*>(buffer), count);
+  g_readCalls.fetch_add(1, std::memory_order_relaxed);
+  g_samplesRead.fetch_add(got, std::memory_order_relaxed);
+  return got;
 }
 
 void MicProvider::MicStart() {
