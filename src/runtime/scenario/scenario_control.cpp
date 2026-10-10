@@ -32,7 +32,7 @@
 #include "runtime/patch/social_facade.h"
 #include "runtime/scenario/scenario_protocol.h"
 
-namespace ScenarioControl {
+namespace nevr_scenario_control {
 namespace {
 
 // The friend row's invite button, measured in ReVault (echovr.exe):
@@ -120,7 +120,7 @@ std::string FireNode(bool addFriend, const std::string& user) {
   // first bytes are its jump, and calling the address goes through the trace, as the script node's
   // call does.
   void* handler = addFriend ? Checked(kAddFriendHandlerVA, kAddFriendHandlerPrologue, "add friend handler", &error)
-                  : PartyInviteGate::InviteHandlerTraced()
+                  : nevr_party_invite_gate::InviteHandlerTraced()
                       ? nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), kInviteHandlerVA)
                       : Checked(kInviteHandlerVA, kInviteHandlerPrologue, "friend invite handler", &error);
   auto* defer = reinterpret_cast<DeferredCallFn>(Checked(kDeferredCallVA, kDeferredCallPrologue, "deferred call", &error));
@@ -299,7 +299,7 @@ std::uint64_t* NetGameFlags(void* netGame) {
 }
 
 // Game thread.
-std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
+std::string FireEarlyQuit(void* netGame, const nevr_scenario_protocol::Command& cmd) {
   std::string error;
   auto* bytes = static_cast<std::uint8_t*>(netGame);
   std::uint64_t* flags = NetGameFlags(netGame);
@@ -308,7 +308,7 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
   // prologue is our jump: call through our detour, which runs the original. Anything else is refused.
   void* dispatchTarget = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kDispatchEventVA);
   auto* dispatch = reinterpret_cast<DispatchEventFn>(
-      HookGuard::IsOurDetour(dispatchTarget) ? dispatchTarget
+      nevr_hook_guard::IsOurDetour(dispatchTarget) ? dispatchTarget
                                               : Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
   if (dispatch == nullptr) return error;
   if (cmd.action == "early_quit_countdown_active") {
@@ -380,7 +380,7 @@ std::string PostUserId(void* netGame, void* handler, const std::string& user, st
 }
 
 // Game thread.
-std::string FireAction(const ScenarioProtocol::Command& cmd) {
+std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
   std::string error;
   void* netGame = NetGame();
   if (netGame == nullptr) return "no NetGame yet";
@@ -415,7 +415,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     // The game's own handling of a join-failure code (PartyJoinFailedCB 0x140189590: 1 not found,
     // 2 timeout, 3 no permission, 4 locked, 5 full, 6 version, else unknown), without the bridge's
     // mapping of the game service's codes in between.
-    SocialFacade::FireJoinFailedForTest(static_cast<std::uint32_t>(cmd.number));
+    nevr_social_facade::FireJoinFailedForTest(static_cast<std::uint32_t>(cmd.number));
     return std::string();
   }
   if (cmd.action == "find_arena") {
@@ -486,7 +486,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     std::uint64_t count = 0;
     std::memcpy(&count, static_cast<const std::uint8_t*>(groups) + 0x40, sizeof(count));
     std::uint64_t index = cmd.number;
-    if (index == ScenarioProtocol::kCurrentGroup) {
+    if (index == nevr_scenario_protocol::kCurrentGroup) {
       std::uint32_t active = 0;
       std::memcpy(&active, static_cast<const std::uint8_t*>(groups) + 0xC, sizeof(active));
       index = active;
@@ -582,7 +582,7 @@ nlohmann::json StateJson() {
   nlohmann::json out;
   out["ok"] = true;
   out["netgame"] = NetGame() != nullptr;
-  const SocialFacade::PartyStateForTest party = SocialFacade::PartyForTest();
+  const nevr_social_facade::PartyStateForTest party = nevr_social_facade::PartyForTest();
   out["party"] = {{"id", party.partyId},           {"room", party.roomId},
                   {"joining", party.joining},      {"joinable", party.joinable},
                   {"locked", party.locked},        {"join_policy", party.joinPolicy},
@@ -598,21 +598,21 @@ nlohmann::json StateJson() {
   for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
     friends.push_back({{"id", id},
                        {"online", SocialRoster::Global().OnlineAt(index)},
-                       {"invitable", SocialFacade::FriendInvitableForTest(id)},
+                       {"invitable", nevr_social_facade::FriendInvitableForTest(id)},
                        {"text", SocialRoster::Global().StatusTextAt(index)},
                        {"party", SocialRoster::Global().PartyIdAt(index)}});
   }
   out["friends"] = friends;
   nlohmann::json recent = nlohmann::json::array();
-  for (const SocialFacade::RecentlyMetForTest& user : SocialFacade::RecentlyMetUsersForTest()) {
+  for (const nevr_social_facade::RecentlyMetForTest& user : nevr_social_facade::RecentlyMetUsersForTest()) {
     recent.push_back({{"id", user.id}, {"name", user.name}, {"status", user.status}, {"text", user.text},
                       {"invitable", user.invitable}, {"joinable", user.joinable}, {"party", user.partyId}});
   }
-  out["recently_met"] = {{"refreshing", SocialFacade::RecentlyMetRefreshingForTest()},
+  out["recently_met"] = {{"refreshing", nevr_social_facade::RecentlyMetRefreshingForTest()},
                          {"count", recent.size()},
                          {"users", recent}};
   nlohmann::json invites = nlohmann::json::array();
-  for (const SocialFacade::InviteForTest& invite : SocialFacade::InvitesForTest()) {
+  for (const nevr_social_facade::InviteForTest& invite : nevr_social_facade::InvitesForTest()) {
     invites.push_back({{"party", invite.partyId}, {"sender", invite.senderId}});
   }
   out["invites"] = invites;
@@ -623,89 +623,89 @@ nlohmann::json StateJson() {
 nlohmann::json Fail(const std::string& why) { return {{"ok", false}, {"error", why}}; }
 
 nlohmann::json Handle(const std::string& line) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  if (!ScenarioProtocol::ParseCommand(line, &cmd, &error)) return Fail(error);
+  if (!nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) return Fail(error);
   switch (cmd.op) {
-    case ScenarioProtocol::Op::kState:
+    case nevr_scenario_protocol::Op::kState:
       return StateJson();
-    case ScenarioProtocol::Op::kInjectFriendStatus: {
+    case nevr_scenario_protocol::Op::kInjectFriendStatus: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendStatusNotify id=%llu status=%u",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned>(cmd.status));
-      const std::string frame = ScenarioProtocol::BuildFriendStatusNotify(cmd.friendId, cmd.status);
+      const std::string frame = nevr_scenario_protocol::BuildFriendStatusNotify(cmd.friendId, cmd.status);
       if (!InjectServerFrameForTest(frame, &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectFriendNotify: {
+    case nevr_scenario_protocol::Op::kInjectFriendNotify: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s id=%llu", cmd.notifyName.c_str(),
           static_cast<unsigned long long>(cmd.friendId));
-      const ScenarioProtocol::FriendNotify* notify = ScenarioProtocol::FindFriendNotify(cmd.notifyName);
+      const nevr_scenario_protocol::FriendNotify* notify = nevr_scenario_protocol::FindFriendNotify(cmd.notifyName);
       if (notify == nullptr) return Fail("unknown notify " + cmd.notifyName);
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyInvite: {
+    case nevr_scenario_protocol::Op::kInjectPartyInvite: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyInviteNotify party=%llu inviter=%llu",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned long long>(cmd.inviterId));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyJoinFailure: {
+    case nevr_scenario_protocol::Op::kInjectPartyJoinFailure: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyJoinFailure party=%llu code=%u",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned>(cmd.failureCode));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectFriendPresence: {
+    case nevr_scenario_protocol::Op::kInjectFriendPresence: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendPresenceNotify id=%llu party=%llu joinable=%d text=%s",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned long long>(cmd.partyId), cmd.flag ? 1 : 0,
           cmd.value.c_str());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendPresenceNotify(cmd.friendId, cmd.partyId, cmd.flag, cmd.value),
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildFriendPresenceNotify(cmd.friendId, cmd.partyId, cmd.flag, cmd.value),
                                     &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyMember: {
-      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+    case nevr_scenario_protocol::Op::kInjectPartyMember: {
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject " + cmd.notifyName + ": no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s party=%llu member=%llu", cmd.notifyName.c_str(),
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyMemberNotify(cmd.notifyName.c_str(), party, cmd.memberId),
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyMemberNotify(cmd.notifyName.c_str(), party, cmd.memberId),
                                     &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectRecentlyMet: {
+    case nevr_scenario_protocol::Op::kInjectRecentlyMet: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject RecentlyMetListResponse users=%zu", cmd.people.size());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyData: {
-      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+    case nevr_scenario_protocol::Op::kInjectPartyData: {
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : nevr_social_facade::PartyForTest().partyId;
       if (party == 0) return Fail("inject PartyDataNotify: no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyDataNotify party=%llu member=%llu bytes=%zu",
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId), cmd.value.size());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyDataNotify(party, cmd.memberId, 1, cmd.value), &error))
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyDataNotify(party, cmd.memberId, 1, cmd.value), &error))
         return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kFireFriendInvite:
-    case ScenarioProtocol::Op::kFireAddFriend:
-    case ScenarioProtocol::Op::kFireRespondInvite:
-    case ScenarioProtocol::Op::kFireAction: {
+    case nevr_scenario_protocol::Op::kFireFriendInvite:
+    case nevr_scenario_protocol::Op::kFireAddFriend:
+    case nevr_scenario_protocol::Op::kFireRespondInvite:
+    case nevr_scenario_protocol::Op::kFireAction: {
       auto request = std::make_shared<FireRequest>();
-      if (cmd.op == ScenarioProtocol::Op::kFireAction)
+      if (cmd.op == nevr_scenario_protocol::Op::kFireAction)
         request->job = [cmd] { return FireAction(cmd); };
-      else if (cmd.op == ScenarioProtocol::Op::kFireRespondInvite)
+      else if (cmd.op == nevr_scenario_protocol::Op::kFireRespondInvite)
         request->job = [cmd] { return FireRespondInvite(cmd.inviteIndex, cmd.accept); };
       else
-        request->job = [cmd] { return FireNode(cmd.op == ScenarioProtocol::Op::kFireAddFriend, cmd.user); };
+        request->job = [cmd] { return FireNode(cmd.op == nevr_scenario_protocol::Op::kFireAddFriend, cmd.user); };
       std::future<std::string> done = request->result.get_future();
       {
         std::lock_guard<std::mutex> lock(g_fireMutex);
@@ -717,7 +717,7 @@ nlohmann::json Handle(const std::string& line) {
       const std::string why = done.get();
       if (!why.empty()) return Fail(why);
       nlohmann::json reply = {{"ok", true}, {"posted", true}};
-      if (cmd.op == ScenarioProtocol::Op::kFireAction) {
+      if (cmd.op == nevr_scenario_protocol::Op::kFireAction) {
         std::lock_guard<std::mutex> lock(g_fireMutex);
         reply["user"] = g_lastFireUser;
       }
@@ -816,4 +816,4 @@ void Stop() {
   Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] control endpoint stopped");
 }
 
-}  // namespace ScenarioControl
+}  // namespace nevr_scenario_control

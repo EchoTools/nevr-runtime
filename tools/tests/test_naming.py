@@ -15,6 +15,11 @@ NVR = re.compile(r"(?<![A-Za-z])Nvr[A-Z][A-Za-z0-9_]*")
 # Any spelling of the name made of the letters n-e-v-r in some case, not preceded by a letter.
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
 CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+# The brand is spelled nEVR in prose (docs/standards/naming.md); these project-name phrasings in the prose of a
+# document are the uppercase spelling.
+UPPERCASE_BRAND_IN_DOCS = re.compile(
+    r"(?<![A-Za-z])NEVR(?: Runtime| project|['’]s| refuses| subsystem|-authored)\b"
+)
 # These files define the anti-patterns themselves.
 SELF = frozenset({"docs/standards/naming.md", "tools/tests/test_naming.py"})
 EXCLUDED_PREFIXES = ("src/legacy/", "extern/", "gen/", "docs/audits/")
@@ -39,7 +44,7 @@ FROZEN_NVR = frozenset({
 RENAMED_NAMESPACES = {}
 for _area_file in sorted((REPO / "tools/tests/renamed_namespaces").glob("*.json")):
     RENAMED_NAMESPACES.update(json.loads(_area_file.read_text(encoding="utf-8")))
-# Existing non-canonical spellings, per file and exact token. The map only shrinks.
+# Existing non-canonical spellings outside prose, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
     "certs/code-signing.conf": {"nEVR"},
     "certs/generate-ca.sh": {"nEVR"},
@@ -47,6 +52,21 @@ LEGACY_SPELLINGS = {
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
     "plugins/example/src/plugin.cpp": {"nEVR"},
+}
+# Documents and comments whose prose spells the brand `nEVR`, per file and exact token.
+BRAND_PROSE_SPELLINGS = {
+    "AGENTS.md": {"nEVR"},
+    "CONTRIBUTING.md": {"nEVR"},
+    "README.md": {"nEVR"},
+    "docs/README.md": {"nEVR"},
+    "docs/adr/0003-quest-networking-port.md": {"nEVR"},
+    "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
+    "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
+    "docs/reference/example-config.yaml": {"nEVR"},
+    "docs/standards/logging.md": {"nEVR"},
+    "docs/standards/verification.md": {"nEVR"},
+    "plugins/example/README.md": {"nEVR"},
+    "tools/winvm/README.md": {"nEVR"},
 }
 
 
@@ -90,16 +110,46 @@ class NamingTest(unittest.TestCase):
     def test_no_new_noncanonical_spelling(self):
         offenders = {}
         for path, text in project_files():
-            extra = noncanonical(text) - LEGACY_SPELLINGS.get(path, set())
+            extra = noncanonical(text) - LEGACY_SPELLINGS.get(path, set()) - BRAND_PROSE_SPELLINGS.get(path, set())
             if extra:
                 offenders[path] = sorted(extra)
-        self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
+        self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr in a name, and nEVR in prose (docs/standards/naming.md)")
 
     def test_one_spelling_of_the_lifecycle_namespace(self):
         # The runtime's lifecycle code is in `nevr::lifecycle`; the two older spellings were unified (#131).
         old = re.compile(r"nevr_runtime::lifecycle|Nevr::Lifecycle|nevr::Lifecycle")
         found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
         self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
+
+    def test_cmake_targets_carry_the_prefix(self):
+        # A library or executable target is nevr_<name> (#131); the output file name is OUTPUT_NAME and does
+        # not move. These four are a file name users touch or a third party's name.
+        exceptions = {"echovr_server", "LibOVRPlatform64_1", "ovrplatformloader", "breakpad_client"}
+        add = re.compile(r"^\s*add_(?:library|executable)\(\s*([A-Za-z0-9_]+)", re.M)
+        stray = {}
+        for path, text in project_files():
+            if not (path.endswith("CMakeLists.txt") or path.endswith(".cmake")):
+                continue
+            names = {n for n in add.findall(text)
+                     if not n.startswith(("nevr", "test_")) and not n.endswith(("_test", "_probe", "_probe_", "_test_hooks"))}
+            names -= exceptions
+            if names:
+                stray[path] = sorted(names)
+        self.assertEqual(stray, {}, "CMake targets are nevr_<name> (docs/standards/naming.md)")
+
+    def test_project_macros_carry_the_prefix(self):
+        # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
+        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and
+        # reads the old names: the root CMakeLists gives those two targets the unprefixed definitions.
+        macro = re.compile(r"(?<![A-Za-z0-9_${])(USE_MINHOOK|PROJECT_VERSION|GIT_COMMIT_HASH|GIT_DESCRIBE)(?![A-Za-z0-9_}])")
+        stray = {}
+        for path, text in project_files():
+            if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")):
+                continue
+            found = sorted({m.group(1) for m in macro.finditer(text)})
+            if found:
+                stray[path] = found
+        self.assertEqual(stray, {}, "project macros are NEVR_<NAME> (docs/standards/naming.md)")
 
     def test_renamed_namespaces_do_not_come_back(self):
         def in_string(line, pos):
@@ -128,6 +178,22 @@ class NamingTest(unittest.TestCase):
         gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()
                 if tokens - noncanonical(files.get(p, ""))}
         self.assertEqual(gone, {}, "remove cleaned entries from LEGACY_SPELLINGS")
+
+    def test_every_brand_prose_spelling_is_still_present(self):
+        files = dict(project_files())
+        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in BRAND_PROSE_SPELLINGS.items()
+                if tokens - noncanonical(files.get(p, ""))}
+        self.assertEqual(gone, {}, "remove cleaned entries from BRAND_PROSE_SPELLINGS")
+
+    def test_project_brand_spelling_in_docs(self):
+        offenders = {}
+        for path, text in project_files():
+            if not path.endswith((".md", ".yaml", ".yml")):
+                continue
+            matches = sorted({m.group() for m in UPPERCASE_BRAND_IN_DOCS.finditer(text)})
+            if matches:
+                offenders[path] = matches
+        self.assertEqual(offenders, {}, "spell the project brand nEVR in prose (docs/standards/naming.md)")
 
 
 if __name__ == "__main__":

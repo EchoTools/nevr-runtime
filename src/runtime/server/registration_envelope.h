@@ -11,7 +11,7 @@
 
 #include "gameservice/v1/gameservice.pb.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 struct RegistrationParams {
   std::string loginSessionId;  // UUID string of the server's login session
@@ -30,4 +30,4 @@ std::string FormatRegistrationVersion(std::string_view gitDescribe, std::string_
 
 gameservice::v1::Envelope BuildRegistrationEnvelope(const RegistrationParams& params);
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

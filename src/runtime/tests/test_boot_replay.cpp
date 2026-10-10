@@ -17,9 +17,9 @@ namespace {
 
 std::string Record(const char* ts, const char* run, const std::string& rawMsg) {
   char escaped[512];
-  JsonEscape::Into(rawMsg.data(), static_cast<int>(rawMsg.size()), escaped, sizeof(escaped));
+  nevr_json_escape::Into(rawMsg.data(), static_cast<int>(rawMsg.size()), escaped, sizeof(escaped));
   char line[1024];
-  const int n = BootLines::Build(line, sizeof(line), ts, run, escaped);
+  const int n = nevr_boot_lines::Build(line, sizeof(line), ts, run, escaped);
   EXPECT_GT(n, 0);
   return std::string(line, static_cast<size_t>(n));
 }
@@ -36,7 +36,7 @@ TEST(BootLines, RecordIsOneJsonLineWithATimestamp) {
 
 TEST(BootLines, BuildReportsATooSmallBuffer) {
   char tiny[16];
-  EXPECT_EQ(BootLines::Build(tiny, sizeof(tiny), "2026-10-09T01:02:03.004Z", "run-1", "x"), -1);
+  EXPECT_EQ(nevr_boot_lines::Build(tiny, sizeof(tiny), "2026-10-09T01:02:03.004Z", "run-1", "x"), -1);
 }
 
 TEST(BootReplay, ReplaysOnlyThisRunInFileOrder) {
@@ -44,7 +44,7 @@ TEST(BootReplay, ReplaysOnlyThisRunInFileOrder) {
                            Record("2026-10-09T02:00:00.001Z", "run-2", "first") +
                            Record("2026-10-09T01:30:00.000Z", "other", "someone else") +
                            Record("2026-10-09T02:00:00.002Z", "run-2", "second \x1b[0m ctl");
-  const auto lines = BootReplay::ParseRun(file, "run-2");
+  const auto lines = nevr_boot_replay::ParseRun(file, "run-2");
   ASSERT_EQ(lines.size(), 2U);
   EXPECT_EQ(lines[0].ts, "2026-10-09T02:00:00.001Z");
   EXPECT_EQ(lines[0].msg, "first");
@@ -69,15 +69,15 @@ class BootReplayFile : public ::testing::Test {
     out << text;
   }
   std::vector<std::string> Next() {
-    std::vector<BootReplay::Line> lines;
+    std::vector<nevr_boot_replay::Line> lines;
     int err = 0;
-    EXPECT_TRUE(BootReplay::ReadNew(path_.c_str(), "run-2", cursor_, lines, &err)) << "errno " << err;
+    EXPECT_TRUE(nevr_boot_replay::ReadNew(path_.c_str(), "run-2", cursor_, lines, &err)) << "errno " << err;
     std::vector<std::string> msgs;
     for (const auto& line : lines) msgs.push_back(line.msg);
     return msgs;
   }
   std::string path_;
-  BootReplay::Cursor cursor_;
+  nevr_boot_replay::Cursor cursor_;
 };
 
 TEST_F(BootReplayFile, TheTailAddsEachLaterLineOnceInOrderAndWaitsForAHalfWrittenOne) {
@@ -115,9 +115,9 @@ TEST_F(BootReplayFile, TheFirstCallReadsOnlyTheLastMiBAndDropsItsPartialFirstLin
 }
 
 TEST_F(BootReplayFile, AnUnreadableFileIsReported) {
-  std::vector<BootReplay::Line> lines;
+  std::vector<nevr_boot_replay::Line> lines;
   int err = 0;
-  EXPECT_FALSE(BootReplay::ReadNew(path_.c_str(), "run-2", cursor_, lines, &err));
+  EXPECT_FALSE(nevr_boot_replay::ReadNew(path_.c_str(), "run-2", cursor_, lines, &err));
   EXPECT_NE(err, 0);
 }
 
@@ -127,10 +127,10 @@ TEST(BootReplay, SkipsLinesItCannotPlace) {
                            "{\"ts\":\"2026-10-09T02:00:00.000Z\",\"run\":\"run-2\",\"level\":\"info\"}\n" +
                            "{\"ts\":5,\"run\":\"run-2\",\"msg\":\"ts not a string\"}\n" +
                            Record("2026-10-09T02:00:00.003Z", "run-2", "kept") + "{\"truncated\":";
-  const auto lines = BootReplay::ParseRun(file, "run-2");
+  const auto lines = nevr_boot_replay::ParseRun(file, "run-2");
   ASSERT_EQ(lines.size(), 1U);
   EXPECT_EQ(lines[0].msg, "kept");
-  EXPECT_TRUE(BootReplay::ParseRun("", "run-2").empty());
+  EXPECT_TRUE(nevr_boot_replay::ParseRun("", "run-2").empty());
 }
 
 }  // namespace

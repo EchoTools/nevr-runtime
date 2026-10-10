@@ -23,29 +23,29 @@ using Slot = std::uintptr_t;
 const Slot* Vtable(void* object) { return *static_cast<const Slot**>(object); }
 
 TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
-  std::vector<SocialFacade::Probe> requests;
-  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, false, fakeInstall);
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, false, fakeInstall);
+  std::vector<nevr_social_facade::Probe> requests;
+  const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kBoot, false, fakeInstall);
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kFacadeSelected, false, fakeInstall);
   ASSERT_EQ(requests.size(), 1u);
-  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
-  EXPECT_EQ(SocialFacade::Select(false, nullptr), nullptr);
+  EXPECT_EQ(requests[0], nevr_social_facade::Probe::kAccessor);
+  EXPECT_EQ(nevr_social_facade::Select(false, nullptr), nullptr);
 
   int providerObject = 0;
-  EXPECT_EQ(SocialFacade::Select(false, &providerObject), &providerObject);
-  EXPECT_EQ(SocialFacade::Select(true, &providerObject), &providerObject);
+  EXPECT_EQ(nevr_social_facade::Select(false, &providerObject), &providerObject);
+  EXPECT_EQ(nevr_social_facade::Select(true, &providerObject), &providerObject);
 }
 
 TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
-  std::vector<SocialFacade::Probe> requests;
-  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, true, fakeInstall);
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, true, fakeInstall);
+  std::vector<nevr_social_facade::Probe> requests;
+  const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kBoot, true, fakeInstall);
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kFacadeSelected, true, fakeInstall);
   ASSERT_EQ(requests.size(), 4u);
-  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
-  EXPECT_EQ(requests[1], SocialFacade::Probe::kSocialJson);
-  EXPECT_EQ(requests[2], SocialFacade::Probe::kJsonSet);
-  EXPECT_EQ(requests[3], SocialFacade::Probe::kJsonNavigateForWrite);
+  EXPECT_EQ(requests[0], nevr_social_facade::Probe::kAccessor);
+  EXPECT_EQ(requests[1], nevr_social_facade::Probe::kSocialJson);
+  EXPECT_EQ(requests[2], nevr_social_facade::Probe::kJsonSet);
+  EXPECT_EQ(requests[3], nevr_social_facade::Probe::kJsonNavigateForWrite);
 
   for (std::size_t i = 1; i < requests.size(); ++i) {
     std::vector<std::string> calls;
@@ -78,40 +78,40 @@ TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
 }
 
 TEST(SocialFacade, JsonTraceRoundTripDrainsOnlyOnce) {
-  std::vector<SocialFacade::JsonTraceRecord> records;
-  const auto collect = [](const SocialFacade::JsonTraceRecord& record, void* context) {
-    static_cast<std::vector<SocialFacade::JsonTraceRecord>*>(context)->push_back(record);
+  std::vector<nevr_social_facade::JsonTraceRecord> records;
+  const auto collect = [](const nevr_social_facade::JsonTraceRecord& record, void* context) {
+    static_cast<std::vector<nevr_social_facade::JsonTraceRecord>*>(context)->push_back(record);
   };
-  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kSet, 19, "mm|status", 1, 2, 3, 4);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::QueueJsonTrace(nevr_social_facade::JsonTraceKind::kSet, 19, "mm|status", 1, 2, 3, 4);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   ASSERT_EQ(records.size(), 1u);
-  EXPECT_EQ(records[0].kind, SocialFacade::JsonTraceKind::kSet);
+  EXPECT_EQ(records[0].kind, nevr_social_facade::JsonTraceKind::kSet);
   EXPECT_EQ(records[0].callCount, 19u);
   EXPECT_STREQ(records[0].path, "mm|status");
   EXPECT_EQ(records[0].argument, 1u);
   EXPECT_EQ(records[0].result, 2u);
   EXPECT_EQ(records[0].root, 3u);
   EXPECT_EQ(records[0].cache, 4u);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   EXPECT_EQ(records.size(), 1u);
 
   const char* longPath = "01234567890123456789012345678901234567890123456789";
-  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kNavigateForWrite, 20, longPath, 5, 6, 7, 8);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::QueueJsonTrace(nevr_social_facade::JsonTraceKind::kNavigateForWrite, 20, longPath, 5, 6, 7, 8);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(std::strlen(records[1].path), 47u);
   EXPECT_EQ(records[1].path[47], '\0');
 }
 
 TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {
-  static_assert(SocialFacade::kRealVtableSlotCount == 75);
-  static_assert(SocialFacade::kMaxObservedGameVtableSlot == 76);
-  static_assert(SocialFacade::kVtableSlotCount == 85);
-  void* first = SocialFacade::Object();
-  void* second = SocialFacade::Object();
+  static_assert(nevr_social_facade::kRealVtableSlotCount == 75);
+  static_assert(nevr_social_facade::kMaxObservedGameVtableSlot == 76);
+  static_assert(nevr_social_facade::kVtableSlotCount == 85);
+  void* first = nevr_social_facade::Object();
+  void* second = nevr_social_facade::Object();
   ASSERT_EQ(first, second);
   ASSERT_NE(Vtable(first), nullptr);
-  for (std::size_t i = 0; i < SocialFacade::kVtableSlotCount; ++i) {
+  for (std::size_t i = 0; i < nevr_social_facade::kVtableSlotCount; ++i) {
     EXPECT_NE(Vtable(first)[i], 0u) << "slot " << i;
   }
 }
@@ -120,21 +120,21 @@ TEST(SocialFacade, ProcessLifetimeObjectIsSafeToConstructConcurrently) {
   std::array<void*, 8> objects{};
   std::array<std::thread, 8> threads;
   for (std::size_t i = 0; i < threads.size(); ++i) {
-    threads[i] = std::thread([&objects, i] { objects[i] = SocialFacade::Object(); });
+    threads[i] = std::thread([&objects, i] { objects[i] = nevr_social_facade::Object(); });
   }
   for (auto& thread : threads) thread.join();
   for (void* object : objects) EXPECT_EQ(object, objects[0]);
 }
 
 TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   std::array<std::uint8_t, 0x1E0> callbacks{};
   for (std::size_t i = 0; i < callbacks.size(); ++i) callbacks[i] = static_cast<std::uint8_t>(i);
   using InitializeFn = std::uint64_t (*)(void*, std::uint32_t, const void*);
   const auto initialize = reinterpret_cast<InitializeFn>(Vtable(object)[9]);
   EXPECT_EQ(initialize(object, 16, callbacks.data()), 0u);
   EXPECT_EQ(std::memcmp(static_cast<std::uint8_t*>(object) + 8, callbacks.data(), callbacks.size()), 0);
-  EXPECT_EQ(SocialFacade::TestMaxUsers(), 16u);
+  EXPECT_EQ(nevr_social_facade::TestMaxUsers(), 16u);
   const auto* bytes = static_cast<const std::uint8_t*>(object);
   std::uint64_t arrayPointer = UINT64_MAX;
   std::uint64_t arrayCount = UINT64_MAX;
@@ -145,12 +145,12 @@ TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {
   EXPECT_EQ(arrayPointer, 0u);
   EXPECT_EQ(arrayCount, 0u);
   EXPECT_EQ(arrayAllocator, 0u);
-  EXPECT_EQ(SocialFacade::TestCallbacksSource(), callbacks.data());
-  EXPECT_GE(SocialFacade::TestInitializeCallCount(), 1u);
+  EXPECT_EQ(nevr_social_facade::TestCallbacksSource(), callbacks.data());
+  EXPECT_GE(nevr_social_facade::TestInitializeCallCount(), 1u);
 }
 
 TEST(SocialFacade, EmptyQueriesReturnSafeDefaults) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   using CountFn = std::uint64_t (*)(void*);
   using NameFn = const char* (*)(void*, std::uint32_t);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -162,7 +162,7 @@ TEST(SocialFacade, EmptyQueriesReturnSafeDefaults) {
 }
 
 TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   using UpdateFn = void (*)(void*, const void*);
   using SetLocalUserFn = void (*)(void*, std::uint32_t);
   using QueryFn = std::uint32_t (*)(void*);
@@ -183,7 +183,7 @@ TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
 }
 
 TEST(SocialFacade, ConstructorDefaultsAndPaddedSlotAreSafe) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const auto* bytes = static_cast<const std::uint8_t*>(object);
   std::uint64_t jsonRoot = UINT64_MAX;
   std::uint64_t jsonCache = UINT64_MAX;
@@ -203,13 +203,13 @@ TEST(SocialFacade, ConstructorDefaultsAndPaddedSlotAreSafe) {
 }
 
 TEST(SocialFacade, ShutdownKeepsObjectAndVtableAlive) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* before = Vtable(object);
   using ShutdownFn = void (*)(void*);
   reinterpret_cast<ShutdownFn>(before[10])(object);
-  EXPECT_EQ(SocialFacade::Object(), object);
+  EXPECT_EQ(nevr_social_facade::Object(), object);
   EXPECT_EQ(Vtable(object), before);
-  EXPECT_GE(SocialFacade::TestShutdownCallCount(), 1u);
+  EXPECT_GE(nevr_social_facade::TestShutdownCallCount(), 1u);
 }
 
 
@@ -310,7 +310,7 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   SocialRoster::Global().Notify(99, SocialRoster::kStatusOffline);
   SocialRoster::Global().Notify(42, SocialRoster::kStatusOnline);
 
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using CountFn = std::uint32_t (*)(void*);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -350,7 +350,7 @@ TEST(SocialFacade, TheRefreshAnswerReplacesTheRosterWithTheServersCurrentFriends
     feed("FriendStatusNotify", notify.data(), notify.size());
   }
 
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using CountFn = std::uint32_t (*)(void*);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -562,7 +562,7 @@ TEST(SocialFacade, FriendIdAndNameFollowTheirIndexArgument) {
   SocialRoster::Global().Notify(300, SocialRoster::kStatusOffline);
   SocialRoster::Global().Notify(100, SocialRoster::kStatusOnline);
   SocialRoster::Global().Notify(200, SocialRoster::kStatusOnline);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
   using NameFn = const char* (*)(void*, std::uint32_t);
@@ -655,7 +655,7 @@ TEST(SocialParty, ThePollNeverBeatsTheRefreshFloor) {
 
 TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   SocialParty::Global().SetSelf(77, "Me");
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   using UpdateFn = void (*)(void*, const void*);
@@ -717,7 +717,7 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
   SocialRoster::Global().Notify(400, SocialRoster::kStatusOffline);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
@@ -750,18 +750,18 @@ TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
   SocialRoster::Global().Clear();
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
-  const std::uint32_t clampedBefore = SocialFacade::TestMembersClamped();
+  const std::uint32_t clampedBefore = nevr_social_facade::TestMembersClamped();
 
   FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77}));
   for (std::uint64_t id = 301; id <= 311; ++id) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({7, id}));
   ASSERT_EQ(SocialParty::Global().Snapshot().members.size(), 12U) << "the party model itself holds all twelve";
   publish();
   EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
-  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1);
+  EXPECT_EQ(nevr_social_facade::TestMembersClamped(), clampedBefore + 1);
   std::uint64_t id = 0;
   reinterpret_cast<IdFn>(vtable[27])(object, &id, 9);
   EXPECT_EQ(id, 309U) << "index 9 is the last reported member";
@@ -769,7 +769,7 @@ TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
   EXPECT_EQ(id, 0U) << "index 10 names nobody";
 
   publish();
-  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
+  EXPECT_EQ(nevr_social_facade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
 
   // The 10/11 boundary: exactly ten members is not clamped.
   SocialParty::Global().ResetParty();
@@ -1038,7 +1038,7 @@ TEST(SocialFacade, AcceptInviteJoinsThatPartyAndIdShowsItWhileTheJoinIsInFlight)
   using UpdateFn = void (*)(void*, const void*);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyInviteNotify", U64s({51, 4242})));
@@ -1087,7 +1087,7 @@ TEST(SocialFacade, TheHostsLockBitLocksThePartyOnTheServerAndJoinableFollowsIt) 
   using UpdateFn = void (*)(void*, const void*);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77})));
@@ -1120,7 +1120,7 @@ TEST(SocialFacade, AFriendsPresenceFillsTheStatusTextAndJoinablePartySlots) {
   using TextFn = const char* (*)(void*, std::uint32_t);
   using JoinableFn = std::uint32_t (*)(void*, std::uint32_t);
   using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
-  const std::string frame = ScenarioProtocol::BuildFriendPresenceNotify(4242, 77, true, "Public Arena Match");
+  const std::string frame = nevr_scenario_protocol::BuildFriendPresenceNotify(4242, 77, true, "Public Arena Match");
   std::uint64_t id = 0;
   SocialRoster::Presence presence;
   ASSERT_TRUE(SocialRoster::ParsePresenceNotify(reinterpret_cast<const std::uint8_t*>(frame.data()) + 24,
@@ -1136,7 +1136,7 @@ TEST(SocialFacade, AFriendsPresenceFillsTheStatusTextAndJoinablePartySlots) {
   SocialRoster::Global().SetPresence(4242, presence);  // before the friend is listed: remembered
   SocialRoster::Global().BeginList(1);
   SocialRoster::Global().Notify(4242, SocialRoster::kStatusOnline);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[52])(object, 0), "Public Arena Match");
   EXPECT_EQ(reinterpret_cast<JoinableFn>(vtable[54])(object, 0), 1u);
@@ -1290,60 +1290,60 @@ TEST(SocialParty, OnlyPartyMessagesAreHandled) {
 }  // namespace
 
 TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 0), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 1), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|other", 0), 0u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("other", 1), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult(nullptr, 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed", 0), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed", 1), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|other", 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("other", 1), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult(nullptr, 0), 0u);
 }
 
 // Scenario control protocol (src/runtime/scenario/scenario_protocol.h). Pure, so it is covered in
 // every build even though the endpoint itself only exists in the mingw-scenario preset.
 TEST(ScenarioProtocol, ParsesTheThreeOps) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"state"})", &cmd, &error)) << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kState);
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"state"})", &cmd, &error)) << error;
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kState);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"FriendStatusNotify","id":4242,"status":0})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendStatus);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectFriendStatus);
   EXPECT_EQ(cmd.friendId, 4242ULL);
   EXPECT_EQ(cmd.status, 0);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"fire","action":"friend_invite","user":"OVR-ORG-4242"})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireFriendInvite);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireFriendInvite);
   EXPECT_EQ(cmd.user, "OVR-ORG-4242");
 }
 
 TEST(ScenarioProtocol, RejectionsNameWhatWasWrong) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand("not json", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand("not json", &cmd, &error));
   EXPECT_NE(error.find("not a JSON object"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"kick"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"kick"})", &cmd, &error));
   EXPECT_NE(error.find("unknown op \"kick\""), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
                                               &cmd, &error));
   EXPECT_NE(error.find("supports msg \"FriendStatusNotify\""), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
                                               &cmd, &error));
   EXPECT_NE(error.find("nonzero"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":5,"status":7})",
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":5,"status":7})",
                                               &cmd, &error));
   EXPECT_NE(error.find("status"), std::string::npos);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"friend_invite"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"friend_invite"})", &cmd, &error));
   EXPECT_NE(error.find("\"user\""), std::string::npos);
 }
 
 // The injected frame must be one the bridge's own roster feed reads back, so an injected friend is
 // the same thing as a friend the server announced.
 TEST(ScenarioProtocol, FriendStatusNotifyFrameRoundTripsThroughTheRosterParser) {
-  const std::string frame = ScenarioProtocol::BuildFriendStatusNotify(4242ULL, 0);
+  const std::string frame = nevr_scenario_protocol::BuildFriendStatusNotify(4242ULL, 0);
   ASSERT_EQ(frame.size(), 24U + 24U);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
@@ -1369,7 +1369,7 @@ TEST(ScenarioProtocol, FriendStatusNotifyFrameRoundTripsThroughTheRosterParser) 
 // pnsrad's UserProviderID must report the provider whose CSymbol64 code is 4, the code SNSUserID
 // gives every "OVR-ORG-" id the game builds; otherwise the friend invite handler drops the click.
 TEST(ProviderIdentity, UserProviderIdPatchReturnsTheOvrSymbolAndFitsTheSite) {
-  using namespace ProviderIdentity;
+  using namespace nevr_provider_identity;
   const auto code = ReturnConstant(kOvrProviderSymbol);
   const std::array<std::uint8_t, 11> expected = {0x48, 0xB8, 0xF8, 0xF4, 0x9F, 0xA8, 0xB1, 0xD0, 0xE8, 0xC8, 0xC3};
   EXPECT_EQ(code, expected);
@@ -1416,34 +1416,34 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
 }
 
 TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendAcceptNotify","id":4242})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"FriendAcceptNotify","id":4242})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendNotify);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectFriendNotify);
   EXPECT_EQ(cmd.notifySymbol, 0xc237c84c31d3ae05ULL);
   const std::string frame =
-      ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendAcceptNotify"), 4242);
+      nevr_scenario_protocol::BuildFriendNotify(*nevr_scenario_protocol::FindFriendNotify("FriendAcceptNotify"), 4242);
   ASSERT_EQ(frame.size(), 24U + 24U);
   std::uint64_t id = 0;
   std::memcpy(&id, frame.data() + 24 + 8, sizeof(id));
   EXPECT_EQ(id, 4242U);
-  EXPECT_EQ(ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendRemoveNotify"), 4242).size(),
+  EXPECT_EQ(nevr_scenario_protocol::BuildFriendNotify(*nevr_scenario_protocol::FindFriendNotify("FriendRemoveNotify"), 4242).size(),
             24U + 16U);
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"add_friend","user":"OVR-ORG-4242"})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"add_friend","user":"OVR-ORG-4242"})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAddFriend);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireAddFriend);
 }
 
 // An injected party invite is the frame Nakama sends the invitee, and the facade lists it.
 TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyInviteNotify","party":77,"inviter":4242})",
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyInviteNotify","party":77,"inviter":4242})",
                                              &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyInvite);
-  const std::string frame = ScenarioProtocol::BuildPartyInviteNotify(77, 4242);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyInvite);
+  const std::string frame = nevr_scenario_protocol::BuildPartyInviteNotify(77, 4242);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
@@ -1458,35 +1458,35 @@ TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) 
   EXPECT_EQ(view.invites[0].partyId, 77U);
   EXPECT_EQ(view.invites[0].senderId, 4242U);
 
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0,"accept":true})",
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0,"accept":true})",
                                              &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireRespondInvite);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireRespondInvite);
   EXPECT_TRUE(cmd.accept);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
   EXPECT_NE(error.find("\"accept\""), std::string::npos);
 }
 
 TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinNotify","member":4242})", &cmd, &error))
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinNotify","member":4242})", &cmd, &error))
       << error;
-  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  ASSERT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyMember);
   EXPECT_EQ(cmd.partyId, 0U) << "no party given: the current one";
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7,"owner":4242})", &cmd,
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7,"owner":4242})", &cmd,
                                              &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyMember);
   EXPECT_EQ(cmd.memberId, 4242U);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7})", &cmd, &error));
   SocialParty::State party;
   party.SetSelf(1);
   ASSERT_TRUE(FeedParty(party, "PartyCreateSuccess", U64s({7, 1})));
   party.DrainEvents();
   const auto feed = [&](const char* name) {
-    const std::string frame = ScenarioProtocol::BuildPartyMemberNotify(name, 7, 4242);
+    const std::string frame = nevr_scenario_protocol::BuildPartyMemberNotify(name, 7, 4242);
     std::uint64_t symbol = 0;
     std::memcpy(&symbol, frame.data() + 8, 8);
     EXPECT_STREQ(SocialParty::ReplyName(symbol), name);
@@ -1503,7 +1503,7 @@ TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
 }
 
 TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
   const char* good[] = {
       R"({"op":"fire","action":"invite_users","mode":1,"user":"OVR-ORG-4242"})",
@@ -1525,10 +1525,10 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
   };
   for (const char* line : good) {
     error.clear();
-    EXPECT_TRUE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line << ": " << error;
-    EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAction) << line;
+    EXPECT_TRUE(nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) << line << ": " << error;
+    EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kFireAction) << line;
   }
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"party_lock","lock":false,"mask":4})", &cmd, &error));
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"fire","action":"party_lock","lock":false,"mask":4})", &cmd, &error));
   EXPECT_FALSE(cmd.flag);
   EXPECT_EQ(cmd.number, 4u);
   const char* bad[] = {
@@ -1542,20 +1542,20 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
   };
   for (const char* line : bad) {
     error.clear();
-    EXPECT_FALSE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line;
+    EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) << line;
     EXPECT_FALSE(error.empty()) << line;
   }
 }
 
 TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77,"code":2})", &cmd,
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77,"code":2})", &cmd,
                                              &error))
       << error;
-  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyJoinFailure);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77})", &cmd, &error));
-  const std::string frame = ScenarioProtocol::BuildPartyJoinFailure(77, 2);
+  ASSERT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyJoinFailure);
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77})", &cmd, &error));
+  const std::string frame = nevr_scenario_protocol::BuildPartyJoinFailure(77, 2);
   std::uint64_t symbol = 0;
   std::uint64_t length = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
@@ -1669,7 +1669,7 @@ TEST(SocialPartyData, ShareDataIsTheRequestNakamaReadsNumberedPerSend) {
 }
 
 TEST(SocialPartyData, TheNotifyFrameRoundTripsAndATruncatedOneIsRefused) {
-  const std::string frame = ScenarioProtocol::BuildPartyDataNotify(9, 200, 4, R"({"headsettype":2})");
+  const std::string frame = nevr_scenario_protocol::BuildPartyDataNotify(9, 200, 4, R"({"headsettype":2})");
   std::uint64_t symbol = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
   EXPECT_EQ(symbol, SocialParty::kPartyDataNotify);
@@ -1684,15 +1684,15 @@ TEST(SocialPartyData, TheNotifyFrameRoundTripsAndATruncatedOneIsRefused) {
   EXPECT_FALSE(SocialParty::ParseDataNotify(payload, 23, &notify));
   EXPECT_EQ(SocialParty::ReplyName(SocialParty::kPartyDataNotify), nullptr) << "the bridge routes it, not Feed";
 
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"PartyDataNotify","member":200,"json":{"headsettype":2}})", &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyData);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectPartyData);
   EXPECT_EQ(cmd.memberId, 200U);
   EXPECT_EQ(cmd.value, R"({"headsettype":2})");
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyDataNotify","member":200})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"PartyDataNotify","member":200})", &cmd, &error));
 }
 
 // A fake CJson for the facade tests: [+0] holds a heap string with the document's text.
@@ -1761,15 +1761,15 @@ TEST(SocialFacadeData, ReceivedDataIsInTheGamesJsonBeforeMemberJoinedAndLocalWri
   using InitializeFn = std::uint64_t (*)(void*, std::uint32_t, const void*);
   using WritableFn = std::uint64_t (*)(void*, std::int32_t);
   using ShutdownFn = void (*)(void*);
-  SocialFacade::JsonOps ops;
+  nevr_social_facade::JsonOps ops;
   ops.load = &FakeLoad;
   ops.clear = &FakeClear;
   ops.serialize = &FakeSerialize;
   ops.blockReset = &FakeBlockReset;
   ops.blockDestroy = &FakeBlockDestroy;
-  SocialFacade::SetJsonOps(ops);
+  nevr_social_facade::SetJsonOps(ops);
   SocialParty::SetSender(&CaptureSend);
-  g_object = SocialFacade::Object();
+  g_object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(g_object);
   std::array<std::uint8_t, 0x1E0> table{};
   Bind(table, 1, "Joined", reinterpret_cast<void*>(&OnVoid));
@@ -1830,20 +1830,20 @@ TEST(SocialFacadeData, ReceivedDataIsInTheGamesJsonBeforeMemberJoinedAndLocalWri
   party.DrainEvents();
   reinterpret_cast<ShutdownFn>(vtable[10])(g_object);
   SocialParty::SetSender(nullptr);
-  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+  nevr_social_facade::SetJsonOps(nevr_social_facade::JsonOps{});
 }
 
 TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared) {
   using UpdateFn = void (*)(void*, const void*);
-  SocialFacade::JsonOps ops;
+  nevr_social_facade::JsonOps ops;
   ops.load = &FakeLoad;
   ops.clear = &FakeClear;
   ops.serialize = &FakeSerialize;
   ops.blockReset = &FakeBlockReset;
   ops.blockDestroy = &FakeBlockDestroy;
-  SocialFacade::SetJsonOps(ops);
+  nevr_social_facade::SetJsonOps(ops);
   SocialParty::SetSender(&CaptureSend);
-  g_object = SocialFacade::Object();
+  g_object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(g_object);
   SocialParty::State& party = SocialParty::Global();
   party.SetSelf(100, "Me");
@@ -1874,7 +1874,7 @@ TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared
   using ResetFn = void (*)(void*);
   reinterpret_cast<ResetFn>(vtable[12])(g_object);
   SocialParty::SetSender(nullptr);
-  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+  nevr_social_facade::SetJsonOps(nevr_social_facade::JsonOps{});
 }
 
 }  // namespace partydata
@@ -1899,7 +1899,7 @@ std::vector<SocialRoster::Entry> TwoPeople() {
 }
 
 TEST(SocialRecentlyMet, TheResponseRoundTripsAndATruncatedOneIsRefused) {
-  const std::string frame = ScenarioProtocol::BuildRecentlyMetListResponse(TwoPeople());
+  const std::string frame = nevr_scenario_protocol::BuildRecentlyMetListResponse(TwoPeople());
   std::uint64_t symbol = 0;
   std::memcpy(&symbol, frame.data() + 8, 8);
   EXPECT_EQ(symbol, 0xbc3ee692bb03328fULL);
@@ -1958,7 +1958,7 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
   using TextFn = const char* (*)(void*, std::int32_t);
   using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
   using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   SocialParty::Global().SetSelf(100, "Me");
   SocialParty::SetSender(&Capture);
@@ -2004,17 +2004,17 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
 }
 
 TEST(ScenarioProtocol, RecentlyMetInjectParses) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+  ASSERT_TRUE(nevr_scenario_protocol::ParseCommand(
       R"({"op":"inject","msg":"RecentlyMetListResponse","users":[{"id":7,"name":"A","online":true,"party":3,"text":"In Main Menu"},{"id":8}]})",
       &cmd, &error))
       << error;
-  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectRecentlyMet);
+  EXPECT_EQ(cmd.op, nevr_scenario_protocol::Op::kInjectRecentlyMet);
   ASSERT_EQ(cmd.people.size(), 2U);
   EXPECT_TRUE(cmd.people[0].presence.joinable);
   EXPECT_FALSE(cmd.people[1].online);
-  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"RecentlyMetListResponse"})", &cmd, &error));
+  EXPECT_FALSE(nevr_scenario_protocol::ParseCommand(R"({"op":"inject","msg":"RecentlyMetListResponse"})", &cmd, &error));
 }
 
 }  // namespace recentlymet

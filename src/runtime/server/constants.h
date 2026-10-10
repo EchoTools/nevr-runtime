@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace GameServer {
+namespace nevr_game_server {
 
 // Player slot limits
 constexpr uint32_t MAX_PLAYER_SLOTS = 8;
@@ -22,6 +22,6 @@ constexpr uint64_t MIN_LOADOUT_MSG_SIZE = 4;
 // ServerDB symbol for websocket service
 constexpr int64_t SYMBOL_SERVERDB = 0x25E886012CED8064;
 
-}  // namespace GameServer
+}  // namespace nevr_game_server
 
 #endif  // GAMESERVER_CONSTANTS_H

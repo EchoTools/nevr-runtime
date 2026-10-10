@@ -55,7 +55,7 @@ void FormatBytes(const unsigned char* src, int n, char* out, size_t out_cap) {
 
 }  // namespace
 
-namespace HookGuard {
+namespace nevr_hook_guard {
 
 void Record(const void* target, const char* name) {
   if (target == nullptr) return;
@@ -150,4 +150,4 @@ void ResetForTest() {
 }
 #endif
 
-}  // namespace HookGuard
+}  // namespace nevr_hook_guard

@@ -1,6 +1,6 @@
-# nevr_example -- Reference Plugin (BAC for NEVR Plugin API v5)
+# nevr_example -- Reference Plugin (BAC for nEVR Plugin API v5)
 
-This is THE reference plugin for the NEVR runtime plugin API. Community plugin
+This is THE reference plugin for the nEVR runtime plugin API. Community plugin
 authors copy from it. Every plugin feature the host supports is demonstrated in
 `plugins/example/src/plugin.cpp` with comments that explain WHY, not just WHAT.
 

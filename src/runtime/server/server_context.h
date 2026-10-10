@@ -7,7 +7,7 @@
 #include "abi/echovr.h"
 #include "core/pch.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 // Server lifecycle states
 enum class ServerState : int32_t {
@@ -154,4 +154,4 @@ class ServerContext {
   CallbackRegistry m_callbacks;
 };
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

@@ -6,13 +6,24 @@ shared today (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/compat/ev
 The social facade is implemented and host-tested in `src/quest/social/`. The rest is not
 implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
-## Outcome
+## Context
+
+The Quest client needs to reach the same community services as PCVR while using Android-specific
+loading, game ABI, hook installation, configuration, logging, and socket integration. Duplicating
+protocol behavior would make the clients diverge.
+
+## Decision
+
+Keep protocol and social rules in shared source and isolate platform-specific behavior in adapters.
+The Quest client must use the same implementation of each nEVR protocol and social rule as PCVR.
+
+## Consequences
 
 The Android/arm64 Quest client reaches the community service, completes config and login,
 connects to matchmaking, enters a social lobby, and supports the Windows client's friends and
-party behavior. There is one implementation of each NEVR protocol and social rule. Android
-supplies its own loader, game ABI, hook installation, logging, configuration discovery and
-socket adapter, and the original Oculus loader stays available to the game.
+party behavior. Android supplies its own loader, game ABI, hook installation, logging,
+configuration discovery and socket adapter, and the original Oculus loader stays available to
+the game.
 
 Scope is the client. The dedicated server, `src/legacy/` and production server deployment are
 out of scope.
@@ -1090,7 +1101,7 @@ needs no protobuf matchmaking frame and no mixed-format session. A public endpoi
 | EVR client route | Upgrade URL and header | Behavior |
 | --- | --- | --- |
 | Token-auth account | `/nevr?format=evr` with `Authorization: Bearer <Nakama account JWT>`, no `discordid/password` query | The `/nevr` ingress forwards the bearer; Nakama validates the JWT and links the login XPID to the account. The production `/ws` catch-all replaces Authorization with its server key, so the JWT is not sent there (issue #52). |
-| Configured legacy account | `/nevr?format=evr&discordid=<percent-encoded id>&password=<percent-encoded password>` with `Authorization: Bearer <public socket server key>` | The ingress admits the upgrade with the server key and Nakama authenticates from the URL credentials. `ServerDbUri::BuildBridgeCredentialUri` percent-encodes; a password is never concatenated into a URL. With URL credentials present, the bridge chooses the server key over a JWT. |
+| Configured legacy account | `/nevr?format=evr&discordid=<percent-encoded id>&password=<percent-encoded password>` with `Authorization: Bearer <public socket server key>` | The ingress admits the upgrade with the server key and Nakama authenticates from the URL credentials. `nevr_serverdb_uri::BuildBridgeCredentialUri` percent-encodes; a password is never concatenated into a URL. With URL credentials present, the bridge chooses the server key over a JWT. |
 
 The Quest adapter selects the route from the auth material it actually has and logs only route
 names. Missing JWT and missing configured credentials are a login failure, not permission to

@@ -32,8 +32,8 @@ struct ThunkRecord {
 static_assert(offsetof(ThunkRecord, original) == 0, "NevrTraceEntry calls [record]");
 
 // Static storage, zero-initialized, no dynamic initializer (a tracer that is off costs nothing).
-ThunkRecord g_records[ExportTrace::kMaxThunks];
-nevr::CallRing<ExportTrace::kRingRecords> g_ring;
+ThunkRecord g_records[nevr_export_trace::kMaxThunks];
+nevr::CallRing<nevr_export_trace::kRingRecords> g_ring;
 std::uint32_t g_thunkCount = 0;
 unsigned char* g_stubPool = nullptr;
 
@@ -143,7 +143,7 @@ NevrTraceEntry:
     .seh_endproc
 )");
 
-namespace ExportTrace {
+namespace nevr_export_trace {
 
 void Reset() {
   std::lock_guard<std::mutex> lock(MakeMutex());
@@ -191,4 +191,4 @@ bool Pop(nevr::CallRecord* out) { return g_ring.Pop(out); }
 std::uint64_t Pushed() { return g_ring.Pushed(); }
 std::uint64_t Dropped() { return g_ring.Dropped(); }
 
-}  // namespace ExportTrace
+}  // namespace nevr_export_trace

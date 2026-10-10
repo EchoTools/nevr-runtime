@@ -12,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-namespace ServerDbUri {
+namespace nevr_serverdb_uri {
 
 // RFC 3986 percent-encoding via libcurl's curl_easy_escape: every byte except
 // ALPHA / DIGIT / '-' / '.' / '_' / '~' becomes %XX (uppercase hex). Space is
@@ -58,4 +58,4 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
 // Removes only the first match; these query strings never repeat a key.
 std::string RemoveQueryParam(std::string_view uri, std::string_view param);
 
-}  // namespace ServerDbUri
+}  // namespace nevr_serverdb_uri

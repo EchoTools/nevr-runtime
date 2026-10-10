@@ -3,7 +3,7 @@
 // Operator-facing cause text for the two ServerFatal sites in gameserver_callbacks.cpp and gameserver_serverdb.cpp, which must say more
 // than "failed" (#35): the registration rejection and the ServerDB token acquisition. Pure functions: no
 // logging, no global state, no secrets (callers pass reasons built from HTTP status and curl codes,
-// never from credentials; URLs go through LogDiagnostics::RedactUrlForDiagnostics).
+// never from credentials; URLs go through nevr_log_diagnostics::RedactUrlForDiagnostics).
 
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +14,7 @@
 
 #include "runtime/log/url_diagnostics.h"
 
-namespace FailureDetail {
+namespace nevr_failure_detail {
 
 // How many payload bytes DescribeRegistrationRejection quotes.
 inline constexpr size_t kPayloadPreviewBytes = 64;
@@ -53,12 +53,12 @@ inline std::string DescribeRegistrationRejection(const void* payload, uint64_t s
 // Password-auth failure reasons. The URL is operator config and may carry userinfo or a query token,
 // so it is always redacted.
 inline std::string PasswordAuthRequestFailed(std::string_view httpUri, std::string_view curlMessage, int curlCode) {
-  return "password auth: request to " + LogDiagnostics::RedactUrlForDiagnostics(httpUri) + " failed: " +
+  return "password auth: request to " + nevr_log_diagnostics::RedactUrlForDiagnostics(httpUri) + " failed: " +
          std::string(curlMessage) + " (curl code " + std::to_string(curlCode) + ")";
 }
 
 inline std::string PasswordAuthHttpStatus(std::string_view httpUri, long httpCode) {
-  return "password auth: " + LogDiagnostics::RedactUrlForDiagnostics(httpUri) + " answered HTTP " +
+  return "password auth: " + nevr_log_diagnostics::RedactUrlForDiagnostics(httpUri) + " answered HTTP " +
          std::to_string(httpCode);
 }
 
@@ -96,4 +96,4 @@ inline std::string WithCause(std::string_view base, std::string_view reason) {
   return out;
 }
 
-}  // namespace FailureDetail
+}  // namespace nevr_failure_detail

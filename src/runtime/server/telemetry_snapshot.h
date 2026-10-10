@@ -68,7 +68,7 @@ struct TelemetrySnapshot {
 //   CR15NetGame.h: GetNetGameFromContext = *(context + 0x8518), global at DAT_1420a0478
 //   CR15NetGameLayout.h: loadout table, game flags, broadcaster offsets
 //   CServerConfig.h: EntrantData field offsets (player array matches)
-namespace GameOffsets {
+namespace nevr_game_offsets {
 
 constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;  // DAT_1420a0478 (global game context)
 constexpr uint64_t NETGAME_OFFSET = 0x8518;           // GetNetGameFromContext: *(context + 0x8518)
@@ -124,7 +124,7 @@ constexpr uint64_t LAST_SCORE_DISTANCE_THROWN_OFFSET = 0x50;
 constexpr uint64_t LAST_SCORE_ASSIST_PACKED_OFFSET = 0x68;
 constexpr uint64_t LAST_SCORE_SCORER_PACKED_OFFSET = 0x6C;
 
-}  // namespace GameOffsets
+}  // namespace nevr_game_offsets
 
 // Game function pointer typedefs (cast known VAs to these)
 // FUN_140d5ced0(CR15NetGame, hash) → uint64_t (game_status symbol hash)
@@ -152,15 +152,15 @@ using GetBoneCountFn = uint32_t(__fastcall*)(void* entity);
 using GetTransformComponentFn = void*(__fastcall*)(void* entity, uint16_t slot);
 
 // Property hashes for game function calls
-namespace PropertyHash {
+namespace nevr_property_hash {
 constexpr uint64_t GAME_STATUS = 0xB29936AD399FC0FF;
 constexpr uint64_t GAME_CLOCK = 0xB29936D484F1D1E8;
 constexpr uint64_t BLUE_POINTS = 0x1C97052A21E09F11;
 constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;
-}  // namespace PropertyHash
+}  // namespace nevr_property_hash
 
 // Game function virtual addresses (offsets from base)
-namespace GameFuncAddr {
+namespace nevr_game_func_addr {
 constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;       // FUN_140d5ced0
 constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;    // FUN_140d36750
 constexpr uint64_t GET_INT_PROPERTY = 0xd05730;      // FUN_140d05730
@@ -169,10 +169,10 @@ constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver,
 constexpr uint64_t GET_BONE_DATA = 0x8f8090;          // FUN_1408f8090(entity, slot)
 constexpr uint64_t GET_BONE_COUNT = 0x8f8080;         // FUN_1408f8080() → 0x17
 constexpr uint64_t GET_TRANSFORM_COMPONENT = 0x42d690; // FUN_14042d690(entity, slot)
-}  // namespace GameFuncAddr
+}  // namespace nevr_game_func_addr
 
 // Game status symbol hash → proto enum mapping
-namespace GameStatusHash {
+namespace nevr_game_status_hash {
 // PRE_MATCH
 constexpr uint64_t PRE_MATCH_1 = 0x6C19A96227539FAC;
 constexpr uint64_t PRE_MATCH_2 = 0x3979BA686488BA64;
@@ -202,4 +202,4 @@ constexpr uint64_t SUDDEN_DEATH_2 = 0x939313B41BE27085;
 // POST_SUDDEN_DEATH
 constexpr uint64_t POST_SUDDEN_DEATH_1 = 0x9D3569956C5E79A0;
 constexpr uint64_t POST_SUDDEN_DEATH_2 = 0xF09C446F72B86057;
-}  // namespace GameStatusHash
+}  // namespace nevr_game_status_hash

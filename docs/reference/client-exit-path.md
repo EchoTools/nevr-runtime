@@ -1,8 +1,8 @@
 # How the client leaves the process when its window goes away
 
-Issue #53: after the window is closed, a Wine client sometimes stays alive. This pins the paths that
-exist and which of them the measurements cover. Static (ReVault `echovr.exe`, runtime source) plus the
-measurements recorded on the issue; no run was made for this document.
+After the window is closed, a Wine client sometimes stays alive (issues #53 and #341). This pins the paths that
+exist and which of them the measurements cover: static (ReVault `echovr.exe`, runtime source) plus the
+outcomes recorded on those issues.
 
 ## The runtime's part
 
@@ -22,25 +22,26 @@ The window procedure with the keyboard/IME handling is `FUN_1400eaa10` (`0x1400e
 (`2`) it looks the window up in the game's window table (`DAT_14209faa0`) and ORs `0x10` into that
 window's flag word; the same table receives `0x1`, `0x2`, `0x8` for other messages. Nothing in this
 procedure posts a quit message (`PostQuitMessage` has no call site in `echovr.exe` per
-`revault search code`), so the game loop must observe the `0x10` flag to end. I did not trace the
-consumer of that flag.
+`revault search code`), so the game loop must observe the `0x10` flag to end. The consumer of that flag is not
+traced.
 
-## What was measured (issue #53, 2026-10-07, GE-Proton 11-3, nested Xephyr)
+## Measured outcomes (issues #53 and #341; Wine under a nested Xephyr)
 
 | Close method | Window manager | Result |
 | --- | --- | --- |
-| `WM_DELETE_WINDOW` (`xdotool windowquit`) | present | clean exit within 10 s; both runtime lines above in `nevr-2026-10-07T21-04-19.813.jsonl` |
-| `XDestroyWindow` (`xdotool windowclose`) | none | process alive for the whole 60 s watched; no shutdown lines (`nevr-2026-10-07T21-01-10.287.jsonl`) |
+| `WM_DELETE_WINDOW` (`xdotool windowquit`) | present | clean exit within 10 s; both runtime lines above in the game log |
+| `XDestroyWindow` (`xdotool windowclose`) | none | the process stays alive and keeps logging; no shutdown lines |
 
-The first path goes `WM_CLOSE` -> `DestroyWindow` -> `WM_DESTROY` in the table above. The second never
-shows the runtime's `game loop returned` line, so the game loop did not return: either the destroy
-produces no `WM_CLOSE`/`WM_DESTROY` in the game's procedure under Wine, or the flag it sets is not
-consumed. Which of the two is not established.
+The first path goes `WM_CLOSE` -> `DestroyWindow` -> `WM_DESTROY` in the table above. The second never shows the
+runtime's `game loop returned` line, so the game loop does not return. The window handle stays valid under
+Wine after an outside `XDestroyWindow` (`IsWindow` and `IsWindowVisible` both stay true over 371 samples,
+Wine's "destroyed from the outside"), so a poll of the handle cannot detect it; #341 stays open, and the
+candidate signal is the swapchain/present results after the destroy, which is not measured.
 
-## What a run must show to settle it
+## Not established
 
-Under Wine without a window manager, destroy the X window and log, from inside the process, whether
-`FUN_1400eaa10` receives `2` (a breakpoint-free way is a runtime detour on `0x1400eaa10` logging
-`param_2` for messages `0x10` and `2`, and the window-table flag word after `2`). Received and flag set but
-no exit: trace the flag's consumer. Not received: the cause is Wine's handling of a foreign `XDestroyWindow`
+Whether `FUN_1400eaa10` receives `2` (`WM_DESTROY`) for a foreign `XDestroyWindow` under Wine, and what
+consumes the window table's `0x10` flag. A breakpoint-free way to settle it is a runtime detour on `0x1400eaa10`
+that logs `param_2` for messages `0x10` and `2`, and the window-table flag word after `2`. Received and flag set
+but no exit: trace the flag's consumer. Not received: the cause is Wine's handling of a foreign `XDestroyWindow`,
 and the `wineserver -k` in `launch-client.sh` is the only cleanup.

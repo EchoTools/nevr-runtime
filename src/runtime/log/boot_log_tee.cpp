@@ -26,7 +26,7 @@ static std::atomic<bool> g_boot_phase{false};
 // Public API
 // ---------------------------------------------------------------------------
 
-void BootLogTee::Init() {
+void nevr_boot_log_tee::Init() {
     g_boot_phase.store(true, std::memory_order_release);
     // Get the EXE directory
     char exe_path[MAX_PATH];
@@ -88,7 +88,7 @@ void BootLogTee::Init() {
     TeeFprintf("[NEVR.PATCH] boot log opened run=%s", GetRunId());
 }
 
-void BootLogTee::TeeFprintf(const char* fmt, ...) {
+void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
     // --- stderr (always) ---
     {
         va_list args;
@@ -121,7 +121,7 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
 
     // JSON-escape the message
     char escaped[4096];
-    JsonEscape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
+    nevr_json_escape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
 
     // Build the JSONL line (boot_lines.h). N80: the run ID is what lets these lines be joined to
     // the runtime log and, because this file is opened in append mode across runs, what lets one
@@ -133,7 +133,7 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     snprintf(ts, sizeof(ts), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", st.wYear, st.wMonth, st.wDay, st.wHour,
              st.wMinute, st.wSecond, st.wMilliseconds);
     char line_buf[4288];  // 4096 escaped + overhead
-    const int line_len = BootLines::Build(line_buf, sizeof(line_buf), ts, GetRunId(), escaped);
+    const int line_len = nevr_boot_lines::Build(line_buf, sizeof(line_buf), ts, GetRunId(), escaped);
     if (line_len < 0) {
         return;
     }
@@ -143,11 +143,11 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     // Failure is silent — nothing to do with a failed write at boot time
 }
 
-const char* BootLogTee::Path() { return g_boot_path; }
+const char* nevr_boot_log_tee::Path() { return g_boot_path; }
 
-bool BootLogTee::InBootPhase() { return g_boot_phase.load(std::memory_order_acquire); }
+bool nevr_boot_log_tee::InBootPhase() { return g_boot_phase.load(std::memory_order_acquire); }
 
-void BootLogTee::Close() {
+void nevr_boot_log_tee::Close() {
     g_boot_phase.store(false, std::memory_order_release);
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);

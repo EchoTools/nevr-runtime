@@ -179,7 +179,7 @@ static inline uint64_t QpcMicroseconds() {
 }
 
 static uint64_t __fastcall GetTimeMicrosecondsHook() {
-    HookLiveness::Mark(HookLiveness::kGetTimeMicroseconds);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kGetTimeMicroseconds);
     // Replicate the original's global override check.
     // When the engine pauses or fixes time, it sets a flag and cached value.
     volatile int64_t* override_flag = reinterpret_cast<volatile int64_t*>(
@@ -193,7 +193,7 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
 
     // N86: drive per-frame work from here — this site is live in server mode,
     // PrecisionSleep::Wait is not. Rate-limited and re-entrancy-guarded inside.
-    Frame::DispatchPerFrameWork(nowUs);
+    nevr_frame::DispatchPerFrameWork(nowUs);
 
     return nowUs;
 }
@@ -224,7 +224,7 @@ using GetTimeMilliseconds_t = uint64_t(__fastcall*)();
 static GetTimeMilliseconds_t s_origGetTimeMilliseconds = nullptr;
 
 static uint64_t __fastcall GetTimeMillisecondsHook() {
-    HookLiveness::Mark(HookLiveness::kGetTimeMilliseconds);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kGetTimeMilliseconds);
     // Replicate the original's global override check.
     // When time is paused/fixed, the override stores microseconds.
     // CTimer_GetMilliSeconds returns that cached us value / 1000.
@@ -260,7 +260,7 @@ static EndMultiplayer_t s_origEndMultiplayer = nullptr;
 static volatile LONG s_null_deref_count = 0;
 
 static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
-    HookLiveness::Mark(HookLiveness::kEndMultiplayer);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kEndMultiplayer);
     if (arg1 != 0) {
         int64_t* session_ptr = reinterpret_cast<int64_t*>(arg1 + 0x2DA0);
         if (*session_ptr == 0) {
@@ -307,7 +307,7 @@ using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk
 static PrecisionSleepWait_t s_origPrecisionSleepWait = nullptr;
 
 static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk, void* unk2) {
-    HookLiveness::Mark(HookLiveness::kPrecisionSleepWait);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kPrecisionSleepWait);
     (void)unk;
     (void)unk2;
 
@@ -317,7 +317,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
 
-    // (HookLiveness::Mark above is the entry evidence this hook needs; no frame
+    // (nevr_hook_liveness::Mark above is the entry evidence this hook needs; no frame
     // counter is kept here.)
 
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
@@ -335,7 +335,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
     // was running on a server. The shared dispatcher derives the flags and gives
     // the client path the rate limit and re-entrancy guard the server path has.
-    Frame::DispatchPerFrameWork(QpcMicroseconds());
+    nevr_frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
         SwitchToThread();
@@ -381,7 +381,7 @@ static constexpr uint32_t SPIN_LIMIT_MAX = 50000;
 static constexpr uint32_t SPIN_LIMIT_DEFAULT = 4000;
 
 static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expected, uint32_t mask) {
-    HookLiveness::Mark(HookLiveness::kSpinWaitForValue);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kSpinWaitForValue);
     // Read configurable spin limit from game's global data.
     // Validated against bounds to catch version-drift silent misread (N31).
     uint32_t spin_limit = *reinterpret_cast<volatile uint32_t*>(g_base + OFF_SPINWAIT_SPIN_LIMIT);
@@ -435,7 +435,7 @@ using HttpListenerBringup_t = uint64_t(__fastcall*)(int64_t* state, const char* 
 static HttpListenerBringup_t s_origHttpListenerBringup = nullptr;
 
 static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* address, uint16_t port) {
-    HookLiveness::Mark(HookLiveness::kHttpListenerBringup);
+    nevr_hook_liveness::Mark(nevr_hook_liveness::kHttpListenerBringup);
     uint64_t result = s_origHttpListenerBringup(state, address, port);
     if (result == 0 && g_isServer) {
         // PB1 (Rule 9): the RE finding that a 0 return means "bind failed, port
@@ -503,11 +503,11 @@ static uint64_t __fastcall NetGameHostCheckHook(int64_t* netgameThis, int64_t pa
  * Public API
  * ==================================================================== */
 
-void BinaryBugFixes::Init(uintptr_t base_addr) {
+void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
     if (g_initialized) {
-        // BinaryBugFixes::Init has exactly one call site (initialize.cpp:374),
+        // nevr_binary_bug_fixes::Init has exactly one call site (initialize.cpp:374),
         // itself gated by Initialize()'s own one-shot guard (initialize.cpp:212-
         // 213). Under the current call graph this branch is unreachable; if it
         // ever fires, that means the single-call invariant was violated
@@ -783,7 +783,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
 #endif
 }
 
-void BinaryBugFixes::Shutdown() {
+void nevr_binary_bug_fixes::Shutdown() {
     if (!g_initialized) return;
     // N86-class checkpoint: the DIAG hook's own payload line (NetGameHostCheckHook)
     // is confirmed to never fire in the exact hang scenario it was built to

@@ -49,7 +49,7 @@ VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
   std::vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   std::lock_guard<std::mutex> lock(g_logMutex);
-  TestLogCap::Append(g_logLines, buffer);
+  nevr_test_log_cap::Append(g_logLines, buffer);
 }
 
 namespace {
@@ -233,8 +233,8 @@ static void CountCapOverflow(size_t) { ++g_capOverflowCalls; }
 TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
   ClearLog();
   g_capOverflowCalls = 0;
-  TestLogCap::g_overflowHandler = CountCapOverflow;
-  for (size_t i = 0; i < TestLogCap::kMaxLines + 20; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+  nevr_test_log_cap::g_overflowHandler = CountCapOverflow;
+  for (size_t i = 0; i < nevr_test_log_cap::kMaxLines + 20; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
   // Empty the sink before the default handler comes back (see test_behavioral.cpp).
   size_t held = 0;
   {
@@ -242,9 +242,9 @@ TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
     held = g_logLines.size();
     g_logLines.clear();
   }
-  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  nevr_test_log_cap::g_overflowHandler = nevr_test_log_cap::EndProcessOnOverflow;
   EXPECT_EQ(held, 10000u);
-  EXPECT_EQ(TestLogCap::kMaxLines, 10000u);
+  EXPECT_EQ(nevr_test_log_cap::kMaxLines, 10000u);
   EXPECT_EQ(g_capOverflowCalls, 20u);
 }
 
@@ -529,7 +529,7 @@ TEST(SerializedMint, ConcurrentMintsNeverOverlap) {
   };
   std::vector<std::thread> threads;
   for (int i = 0; i < 4; ++i) {
-    threads.emplace_back([&]() { EXPECT_EQ(ServerDbAuth::RunSerializedMint(mint), "tok"); });
+    threads.emplace_back([&]() { EXPECT_EQ(nevr_serverdb_auth::RunSerializedMint(mint), "tok"); });
   }
   for (auto& t : threads) t.join();
   EXPECT_EQ(maxActive.load(), 1);

@@ -20,7 +20,7 @@
 // trigger loader-lock re-entry through filesystem filter drivers in
 // practice.
 
-namespace BootLogTee {
+namespace nevr_boot_log_tee {
 
 /// Call ONCE before the first TeeFprintf.  Creates logs/nevr-boot.jsonl
 /// alongside the EXE (appending if it already exists from a prior run).
@@ -46,4 +46,4 @@ const char* Path();
 /// to stderr but the file mirror stops.
 void Close();
 
-}  // namespace BootLogTee
+}  // namespace nevr_boot_log_tee

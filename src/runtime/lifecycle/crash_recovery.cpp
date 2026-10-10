@@ -93,8 +93,8 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
-    AssetCDN::StopBackgroundFetch();
-    ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+    nevr_asset_cdn::StopBackgroundFetch();
+    nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
@@ -105,7 +105,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
       requested ? "true" : "false", requested ? 0 : 1);
-  ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+  nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
   PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return gameResult;
@@ -113,13 +113,13 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
 
 void InstallGameMainHook() {
   // Hook game main wrapper — longjmp recovery on crash keeps server alive
-  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
   OriginalGameMainWrapper =
-      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
   // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (BootLogTee::InBootPhase()) {
-    BootLogTee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
+  if (nevr_boot_log_tee::InBootPhase()) {
+    nevr_boot_log_tee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
                                   : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
                                     "longjmp is NOT armed\n");
   } else if (hooked) {
@@ -509,13 +509,13 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   const INT64 ripRva = rva(ctx->Rip);
   ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
-  if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
+  if (const char* site = nevr_crash_recovery::LookupKnownNullDerefSite(ripRva)) {
     VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref "
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
   }
   char exception_summary[256] = {};
-  CrashRecovery::FormatCrashExceptionSummary(
+  nevr_crash_recovery::FormatCrashExceptionSummary(
       exception_summary, sizeof(exception_summary), rec->ExceptionCode, ctx->Rip,
       base, GetCurrentThreadId());
   VehPrintf("%s", exception_summary);
@@ -554,7 +554,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   DWORD64* sp = reinterpret_cast<DWORD64*>(ctx->Rsp);
   int found = 0;
   for (int i = 0; i < 512 && found < 24; i++) {
-    if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
+    if (!nevr_crash_recovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     const INT64 r = rva(v);
     if (r >= 0 && r < 0x1800000) {
@@ -799,11 +799,11 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   // a3 is EXCEPTION_POINTERS** (the caller at 0x1401CEE70 is the
   // SetUnhandledExceptionFilter callback: it spills RCX to the stack and passes
   // its address). Decode it to name the actual fault.
-  if (a3 != nullptr && CrashRecovery::IsReadableMemory(a3, sizeof(void*))) {
+  if (a3 != nullptr && nevr_crash_recovery::IsReadableMemory(a3, sizeof(void*))) {
     PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
-    if (ep != nullptr && CrashRecovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) &&
+    if (ep != nullptr && nevr_crash_recovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) &&
         ep->ExceptionRecord != nullptr &&
-        CrashRecovery::IsReadableMemory(ep->ExceptionRecord, sizeof(EXCEPTION_RECORD))) {
+        nevr_crash_recovery::IsReadableMemory(ep->ExceptionRecord, sizeof(EXCEPTION_RECORD))) {
       const DWORD64 ea = reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress);
       VehPrintf("[NEVR.CRASH] >>> EXCEPTION code=0x%08lX flags=0x%lX addr=0x%llX rva=%s0x%llX "
                 "nparams=%lu p0=0x%llX p1=0x%llX",
@@ -816,7 +816,7 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
                                                     ? ep->ExceptionRecord->ExceptionInformation[0] : 0),
                 static_cast<unsigned long long>(ep->ExceptionRecord->NumberParameters > 1
                                                     ? ep->ExceptionRecord->ExceptionInformation[1] : 0));
-      if (ep->ContextRecord != nullptr && CrashRecovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+      if (ep->ContextRecord != nullptr && nevr_crash_recovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
         const DWORD64 rip = ep->ContextRecord->Rip;
         VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX rsp=0x%llX rcx=0x%llX rdx=0x%llX",
                   static_cast<unsigned long long>(rip),
@@ -835,10 +835,10 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   // dispatcher, not the caller (#68: __acrt_FlsGetValue, a hash lookup).
   DWORD64* sp = reinterpret_cast<DWORD64*>(&a1);
   const char* scanFrom = "handler_frame";
-  if (a3 != nullptr && CrashRecovery::IsReadableMemory(a3, sizeof(void*))) {
+  if (a3 != nullptr && nevr_crash_recovery::IsReadableMemory(a3, sizeof(void*))) {
     PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
-    if (ep != nullptr && CrashRecovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) && ep->ContextRecord != nullptr &&
-        CrashRecovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+    if (ep != nullptr && nevr_crash_recovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) && ep->ContextRecord != nullptr &&
+        nevr_crash_recovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
       sp = reinterpret_cast<DWORD64*>(ep->ContextRecord->Rsp);
       scanFrom = "fault_rsp";
     }
@@ -846,7 +846,7 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   VehPrintf("[NEVR.CRASH]   callers from=%s (stack scan for return addresses into the game)", scanFrom);
   int found = 0;
   for (int i = 0; i < 512 && found < 16; i++) {
-    if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
+    if (!nevr_crash_recovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     if (v >= base && v < base + 0x1800000) {
       VehPrintf("[NEVR.CRASH]   caller#%d game+0x%llX", found,
@@ -895,7 +895,7 @@ static long long StackDirectAllocProbe(void* self, long long request, long long 
         memcpy(&b, entries + count * 16 - 8, sizeof(b));
         memcpy(&field38, allocator + 0x38, sizeof(field38));
         memcpy(&field40, allocator + 0x40, sizeof(field40));
-        const StackAllocCheck::Result r = StackAllocCheck::Check(
+        const nevr_stack_alloc_check::Result r = nevr_stack_alloc_check::Check(
             field38, field40, a + b, static_cast<unsigned long long>(request), static_cast<unsigned long long>(align));
         if (!r.fits) {
           const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
@@ -929,9 +929,9 @@ static INT64 GameConsoleHandlerInstallHook(void* arg) {
 }
 
 static void InstallGameConsoleHandlerRearmHook() {
-  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL);
-  if (memcmp(target, PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
-             sizeof(PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
+  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL);
+  if (memcmp(target, nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
+             sizeof(nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] hook skipped name=GameConsoleHandlerInstall reason=prologue_mismatch — CTRL+C may be "
         "consumed by the game's handler before ours");
@@ -956,9 +956,9 @@ void InstallCrashFilterInstrumentation() {
     Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: no LOCALAPPDATA or module path");
   }
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
-                                       PatchAddresses::CRASH_EXCEPTION_FILTER);
-  if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
-             sizeof(PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
+                                       nevr_patch_addresses::CRASH_EXCEPTION_FILTER);
+  if (memcmp(filt, nevr_patch_addresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
+             sizeof(nevr_patch_addresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
     OriginalCrashExceptionFilter = reinterpret_cast<CrashExceptionFilterFunc>(filt);
     if (PatchDetour(&OriginalCrashExceptionFilter,
                     reinterpret_cast<PVOID>(CrashExceptionFilterHook), "CrashExceptionFilter")) {
@@ -1009,7 +1009,7 @@ bool InstallVEH() {
   // out of Wine client processes.
   HMODULE ntdll = GetModuleHandleA("ntdll.dll");
   const bool isWineClient = ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
-  if (!VehPolicy::ShouldInstall(g_isServer, isWineClient)) {
+  if (!nevr_veh_policy::ShouldInstall(g_isServer, isWineClient)) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CRASH] VEH disabled for Wine client; native exception handling retained");
     return false;
@@ -1173,7 +1173,7 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
 
   const bool handlerBehind = s_gameHandlerBehindUs != 0;
   const bool libStarted = s_gameServerLibStarted != 0;
-  const bool defer = ConsoleCtrlPolicy::ShouldDeferToGame(handlerBehind, libStarted);
+  const bool defer = nevr_console_ctrl_policy::ShouldDeferToGame(handlerBehind, libStarted);
   ShutdownReport(EchoVR::LogLevel::Info,
                  "[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
                  "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s game_handler_behind=%s "
@@ -1195,7 +1195,7 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
 
   // The game's teardown cannot finish this for us — do it ourselves.
   ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] shutting down directly: %s",
-                 ConsoleCtrlPolicy::NoDeferReason(handlerBehind, libStarted));
+                 nevr_console_ctrl_policy::NoDeferReason(handlerBehind, libStarted));
   PerformGracefulShutdown(0);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return TRUE;
@@ -1407,11 +1407,11 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
 #ifdef NEVR_SCENARIO_CONTROL
-  ScenarioControl::Stop();  // test builds only
+  nevr_scenario_control::Stop();  // test builds only
 #endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
-  BinaryBugFixes::Shutdown();
+  nevr_binary_bug_fixes::Shutdown();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
   //    ForceFatalExit sets g_forceExitInProgress, then calls

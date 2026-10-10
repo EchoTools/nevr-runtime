@@ -7,7 +7,7 @@
 #include <functional>
 #include <mutex>
 
-namespace GameServer {
+namespace nevr_game_server {
 
 /// Hands one task from a background thread to the thread that calls Service()
 /// — in production GameServerLib::Update(), which the game calls on its main
@@ -78,4 +78,4 @@ class MainThreadHandoff {
 
 const char* MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome outcome);
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

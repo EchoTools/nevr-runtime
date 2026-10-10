@@ -41,7 +41,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/log/builtin_filter.h"
 
-namespace Frame {
+namespace nevr_frame {
 
 namespace {
 
@@ -64,8 +64,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     g_lastTickUs = nowUs;
 
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
-    BuiltinLogFilter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
-    BuiltinLogFilter::PollHealth();         // N89: health must not depend on the hook it watches
+    nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
+    nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
 
     // Liveness + N83/N84 evidence.
     {
@@ -80,7 +80,7 @@ void DispatchPerFrameWork(uint64_t nowUs) {
             // N86-class standing check: name every hook that installed and has
             // never been entered. This is the measurement whose absence let a
             // dead per-frame tick ship for a day.
-            HookLiveness::Report("periodic");
+            nevr_hook_liveness::Report("periodic");
 
             // N84's only production call site was plugin_loader.cpp, gated on a
             // plugin finishing its init — a server that loads zero plugins (a
@@ -89,11 +89,11 @@ void DispatchPerFrameWork(uint64_t nowUs) {
             // something other than a plugin double-detour was structurally
             // undetectable. VerifyAll's own ERROR log fires on mismatch; a clean
             // pass gets one quiet heartbeat line instead of nothing.
-            const int hookCollisions = HookGuard::VerifyAll("periodic");
+            const int hookCollisions = nevr_hook_guard::VerifyAll("periodic");
             if (hookCollisions == 0) {
                 Log(EchoVR::LogLevel::Debug,
                     "[NEVR.PATCH] hook guard: %d guarded address(es) verified clean (periodic)",
-                    HookGuard::RecordedCount());
+                    nevr_hook_guard::RecordedCount());
             } else {
                 // Deliberate severity asymmetry, not an inconsistency: this periodic
                 // check reports and keeps the process running (VerifyAll's own ERROR
@@ -135,10 +135,10 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     TickModules(&mctx);
 
 #ifdef NEVR_SCENARIO_CONTROL
-    ScenarioControl::OnFrame();  // test builds only: queued scenario actions run on the loop's thread
+    nevr_scenario_control::OnFrame();  // test builds only: queued scenario actions run on the loop's thread
 #endif
 
     InterlockedExchange(&g_tickReentry, 0);
 }
 
-}  // namespace Frame
+}  // namespace nevr_frame

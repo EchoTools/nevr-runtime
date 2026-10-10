@@ -3,7 +3,7 @@
 #include <cstring>
 #include <utility>
 
-namespace GameServer {
+namespace nevr_game_server {
 namespace {
 constexpr uint64_t kWireMagic = 0xBB8CE7A278BB40F6ULL;
 constexpr size_t kHeaderSize = sizeof(uint64_t) + sizeof(EchoVR::SymbolId) + sizeof(uint64_t);
@@ -92,4 +92,4 @@ ParsedWebSocketFrame ParseServerDbFrame(std::string_view frame, size_t queueLimi
   return result;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

@@ -54,7 +54,7 @@ struct InternalDeviceAuthFlowOps {
     std::function<std::string()> requestDeviceCode;
     std::function<intptr_t(const std::string&)> openBrowser;
     std::function<int(const std::string&, const std::string&, intptr_t)> showOpenFailure;
-    std::function<TokenAuth::DevicePollResponse(const std::string&)> poll;
+    std::function<nevr_token_auth::DevicePollResponse(const std::string&)> poll;
     std::function<void(Clock::duration)> sleep;
     std::function<bool()> save;
     std::function<void(EchoVR::LogLevel, const std::string&)> log;
@@ -76,7 +76,7 @@ public:
     bool TryLoadCachedToken();
     bool RunDeviceAuthFlow(bool is_server);
     // Sleeps wait on `cancel` and the flow stops once it is requested (nullptr: plain sleeps).
-    bool RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* cancel);
+    bool RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel);
     bool RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops);
     bool SaveToken();
     bool IsAuthenticated() const;
@@ -95,14 +95,14 @@ public:
 
 private:
     std::string RequestDeviceCode();
-    TokenAuth::DevicePollResponse PollDeviceCode(const std::string& code);
-    void ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
+    nevr_token_auth::DevicePollResponse PollDeviceCode(const std::string& code);
+    void ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResponse& response,
                                    const InternalDeviceAuthFlowOps& ops);
     std::string HttpPostPublic(const std::string& url, const std::string& body);
 
 #ifdef NEVR_TEST_HOOKS
 public:
-    void SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& state);
+    void SetStateForTest(const nevr_token_auth::test_hook::DeviceAuthState& state);
 #endif
 
 private:
@@ -126,7 +126,7 @@ void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, c
     m_serverKey = serverKey;
     m_configured = true;
     const std::string diagnostic =
-        LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
+        nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
     Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 }
 
@@ -248,7 +248,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
             "[NEVR.AUTH] POST ", url, " failed");
         Log(EchoVR::LogLevel::Warning, "%s curl_code=%d", diagnostic.c_str(), static_cast<int>(res));
         return "";
@@ -279,20 +279,20 @@ std::string DeviceAuth::RequestDeviceCode() {
     }
 }
 
-TokenAuth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string& code) {
+nevr_token_auth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string& code) {
     std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
     std::string response = HttpPostPublic(url, reqBody.dump());
     if (response.empty()) return {};
-    return TokenAuth::ParseDevicePollResponse(response);
+    return nevr_token_auth::ParseDevicePollResponse(response);
 }
 
-void DeviceAuth::ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
+void DeviceAuth::ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResponse& response,
                                           const InternalDeviceAuthFlowOps& ops) {
     const uint64_t now = static_cast<uint64_t>(time(nullptr));
     std::string token = response.access_token;
-    const uint64_t tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, token, response.expires_in);
+    const uint64_t tokenExpiry = nevr_token_auth::ResolveAccessTokenExpiry(now, token, response.expires_in);
     CachedAuthToken tokenClaims;
     tokenClaims.token = token;
     const uint64_t jwtExpiry = tokenClaims.GetJwtExpiry();
@@ -339,7 +339,7 @@ void DeviceAuth::ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& 
 
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server) { return RunDeviceAuthFlow(is_server, nullptr); }
 
-bool DeviceAuth::RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* cancel) {
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel) {
     InternalDeviceAuthFlowOps ops;
     ops.now = []() { return InternalDeviceAuthFlowOps::Clock::now(); };
     ops.requestDeviceCode = [this]() { return RequestDeviceCode(); };
@@ -368,7 +368,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* 
     return RunDeviceAuthFlow(is_server, ops);
 }
 
-// TokenAuth::Init runs this on a worker thread and waits for it before module
+// nevr_token_auth::Init runs this on a worker thread and waits for it before module
 // initialization returns, pumping the bootstrap thread's messages meanwhile
 // (#37). HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
 // beyond the five-minute deadline. When those calls return after it, the
@@ -424,7 +424,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
 }
 
 #ifdef NEVR_TEST_HOOKS
-void DeviceAuth::SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& state) {
+void DeviceAuth::SetStateForTest(const nevr_token_auth::test_hook::DeviceAuthState& state) {
     m_token = state.token;
     m_tokenExpiry = state.token_expiry;
     m_refreshToken = state.refresh_token;
@@ -440,7 +440,7 @@ void DeviceAuth::SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& sta
 // Module state
 // ---------------------------------------------------------------------------
 
-static TokenAuth::AuthSnapshotStore s_snapshotStore;
+static nevr_token_auth::AuthSnapshotStore s_snapshotStore;
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
 static std::thread* s_refreshThread = nullptr;
@@ -451,9 +451,9 @@ static std::mutex s_tokenMutex;
 // (early_config). May be NULL if loaded by a pre-v2 host.
 static const char* (*s_configGet)(const char*) = nullptr;
 
-static std::shared_ptr<const TokenAuth::AuthSnapshot> PublishAuthSnapshot(
-    const DeviceAuth* auth, TokenAuth::AuthReadiness emptyState = TokenAuth::AuthReadiness::Failed) {
-    TokenAuth::AuthSnapshot snapshot;
+static std::shared_ptr<const nevr_token_auth::AuthSnapshot> PublishAuthSnapshot(
+    const DeviceAuth* auth, nevr_token_auth::AuthReadiness emptyState = nevr_token_auth::AuthReadiness::Failed) {
+    nevr_token_auth::AuthSnapshot snapshot;
     if (auth != nullptr) {
         snapshot.access_token = auth->GetTokenValue();
         snapshot.access_expiry = auth->GetTokenExpiryValue();
@@ -461,9 +461,9 @@ static std::shared_ptr<const TokenAuth::AuthSnapshot> PublishAuthSnapshot(
         snapshot.user_id = auth->GetUserIdValue();
         snapshot.username = auth->GetUsernameValue();
         if (auth->IsAuthenticated()) {
-            snapshot.readiness = TokenAuth::AuthReadiness::Ready;
+            snapshot.readiness = nevr_token_auth::AuthReadiness::Ready;
         } else if (!snapshot.access_token.empty()) {
-            snapshot.readiness = TokenAuth::AuthReadiness::Expired;
+            snapshot.readiness = nevr_token_auth::AuthReadiness::Expired;
         } else {
             snapshot.readiness = emptyState;
         }
@@ -552,7 +552,7 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
             auth = s_auth;
             if (!auth) continue;
             if (auth->GetTokenExpiryValue() <= now) {
-                (void)PublishAuthSnapshot(auth, TokenAuth::AuthReadiness::Expired);
+                (void)PublishAuthSnapshot(auth, nevr_token_auth::AuthReadiness::Expired);
             }
             if (!ShouldRefreshAccessToken(*auth, now)) continue;  // Still valid for >5 min
         }
@@ -599,7 +599,7 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
     }
 }
 
-std::string TokenAuth::GetToken() {
+std::string nevr_token_auth::GetToken() {
     const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
     if (!snapshot || snapshot->readiness != AuthReadiness::Ready ||
         snapshot->access_expiry <= static_cast<uint64_t>(time(nullptr))) {
@@ -608,7 +608,7 @@ std::string TokenAuth::GetToken() {
     return snapshot->access_token;
 }
 
-uint64_t TokenAuth::GetDiscordId() {
+uint64_t nevr_token_auth::GetDiscordId() {
     const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
     return snapshot ? snapshot->discord_id : 0;
 }
@@ -618,17 +618,17 @@ uint64_t TokenAuth::GetDiscordId() {
 // login payload sent a hardcoded literal instead. Deliberately does NOT require
 // IsAuthenticated(): a cached username from a previous session is still a truer
 // answer than a constant, and the caller falls back on empty.
-std::string TokenAuth::GetUsername() {
+std::string nevr_token_auth::GetUsername() {
     const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
     return snapshot ? snapshot->username : "";
 }
 
-std::shared_ptr<const TokenAuth::AuthSnapshot> TokenAuth::GetAuthSnapshot() {
+std::shared_ptr<const nevr_token_auth::AuthSnapshot> nevr_token_auth::GetAuthSnapshot() {
     return s_snapshotStore.Read();
 }
 
 #ifdef NEVR_TEST_HOOKS
-namespace TokenAuth::TestHook {
+namespace nevr_token_auth::test_hook {
 namespace {
 
 DeviceAuthState SnapshotDeviceAuth(const DeviceAuth& auth) {
@@ -681,7 +681,7 @@ bool InspectRefreshDecision(const CachedAuthToken& live, uint64_t now) {
 }
 
 DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& initial,
-                                       const TokenAuth::TestHook::DeviceAuthFlowOps& injected) {
+                                       const nevr_token_auth::test_hook::DeviceAuthFlowOps& injected) {
     DeviceAuth auth;
     auth.SetStateForTest(initial);
     InternalDeviceAuthFlowOps ops;
@@ -701,7 +701,7 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
     return result;
 }
 
-}  // namespace TokenAuth::TestHook
+}  // namespace nevr_token_auth::test_hook
 #endif  // NEVR_TEST_HOOKS
 
 // ---------------------------------------------------------------------------
@@ -721,7 +721,7 @@ constexpr std::chrono::milliseconds kSignInPumpInterval{50};
 // as in any pumping thread. Thread messages are re-posted and a WM_QUIT re-issued when the wait ends.
 class SignInWindowWait {
 public:
-    explicit SignInWindowWait(TokenAuth::AuthCancellation& cancel) : m_cancel(cancel) {
+    explicit SignInWindowWait(nevr_token_auth::AuthCancellation& cancel) : m_cancel(cancel) {
         EnumThreadWindows(GetCurrentThreadId(), &SignInWindowWait::CollectThreadWindow,
                           reinterpret_cast<LPARAM>(this));
         EnumWindows(&SignInWindowWait::CountProcessWindow, reinterpret_cast<LPARAM>(this));
@@ -781,7 +781,7 @@ private:
         return TRUE;
     }
 
-    TokenAuth::AuthCancellation& m_cancel;
+    nevr_token_auth::AuthCancellation& m_cancel;
     std::vector<Retitled> m_windows;
     std::vector<MSG> m_threadMessages;
     size_t m_processWindows = 0;
@@ -810,7 +810,7 @@ private:
 // Runs the device flow without freezing the game window: on a worker thread, while the bootstrap
 // thread pumps its messages (Windows), and returns once the flow has finished.
 static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
-    TokenAuth::AuthCancellation cancel;
+    nevr_token_auth::AuthCancellation cancel;
 #ifdef _WIN32
     SignInWindowWait wait(cancel);
     Log(EchoVR::LogLevel::Info,
@@ -818,7 +818,7 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
         "(retitled while waiting)",
         wait.ThreadWindows(), wait.ProcessWindows());
     const auto start = std::chrono::steady_clock::now();
-    const TokenAuth::OffThreadWaitResult r = TokenAuth::RunWhilePumping(
+    const nevr_token_auth::OffThreadWaitResult r = nevr_token_auth::RunWhilePumping(
         [&auth, &cancel]() {
             ComApartment com;
             return auth.RunDeviceAuthFlow(false, &cancel);
@@ -841,7 +841,7 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
 // Public API
 // ---------------------------------------------------------------------------
 
-void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
+void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
     if (s_authAttempted) return;
     AuthSnapshot initialSnapshot;
     initialSnapshot.readiness = AuthReadiness::Starting;
@@ -892,7 +892,7 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
     }
 }
 
-void TokenAuth::Shutdown() {
+void nevr_token_auth::Shutdown() {
     // On a server, s_auth is never created (early return in Init above), so
     // this is a structurally-guaranteed no-op there — say so instead of
     // logging the same "complete" line regardless of whether anything ran.
@@ -942,12 +942,12 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     s_configGet = ctx->config_get;  // N133 S5: read config.yaml, not early_config JSON
 
     bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
-    TokenAuth::Init(ctx->base_addr, is_server);
+    nevr_token_auth::Init(ctx->base_addr, is_server);
 
     // Carry the real outcome, matching the richer sibling pattern in
     // platform_compat_Init (tls=%s createdir=%s msxml6=%s). Servers skip
-    // token auth entirely (early return in TokenAuth::Init), hence "n/a".
-    const bool authOk = !TokenAuth::GetToken().empty();
+    // token auth entirely (early return in nevr_token_auth::Init), hence "n/a".
+    const bool authOk = !nevr_token_auth::GetToken().empty();
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
         is_server ? "server" : "client",
         is_server ? "n/a" : (authOk ? "ok" : "failed"));
@@ -955,22 +955,22 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
 }
 
 NEVR_MODULE_API void token_auth_Shutdown(void) {
-    TokenAuth::Shutdown();
+    nevr_token_auth::Shutdown();
 }
 
 // C exports for cross-module resolution (ws_bridge reads these via get_proc)
 NEVR_MODULE_API const char* TokenAuth_GetToken(void) {
-    s_tokenBuf = TokenAuth::GetToken();
+    s_tokenBuf = nevr_token_auth::GetToken();
     return s_tokenBuf.c_str();
 }
 
 NEVR_MODULE_API uint64_t TokenAuth_GetDiscordId(void) {
-    return TokenAuth::GetDiscordId();
+    return nevr_token_auth::GetDiscordId();
 }
 
 // N123. Returns "" when unknown — the caller decides what to do with an absent
 // name. Same static-buffer shape as TokenAuth_GetToken above.
 NEVR_MODULE_API const char* TokenAuth_GetUsername(void) {
-    s_usernameBuf = TokenAuth::GetUsername();
+    s_usernameBuf = nevr_token_auth::GetUsername();
     return s_usernameBuf.c_str();
 }

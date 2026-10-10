@@ -68,7 +68,7 @@ static auto GuardWsCallback(const char* what, Fn&& fn) {
     try {
       fn(std::forward<decltype(args)>(args)...);
     } catch (const std::exception&) {
-      const std::string diagnostic = LogDiagnostics::FormatCallbackFailureDiagnostic(what);
+      const std::string diagnostic = nevr_log_diagnostics::FormatCallbackFailureDiagnostic(what);
       Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     }
   };
@@ -750,7 +750,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
   // not. N112.
-  const SystemInfo::Host& host = SystemInfo::Get();
+  const nevr_system_info::Host& host = nevr_system_info::Get();
   const std::string driverVersion =
       host.IsWine() ? ("Wine " + host.wine_version +
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
@@ -759,7 +759,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format.
   // Keep its construction portable so Quest and Windows use the same fields
   // and JSON escaping rules.
-  const BuildIdentity::Info& buildId = BuildIdentity::Get();
+  const nevr_build_identity::Info& buildId = nevr_build_identity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
   // The serial is the one the stock client sends: the game's serial buffer in
   // VR, "N/A" with no VR, "unknown" only when the game has none. Only its source
@@ -873,7 +873,7 @@ void InstallWebSocketBridge() {
       break;
     }
 
-    const std::string diagnostic = LogDiagnostics::FormatBindFailureDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatBindFailureDiagnostic(
         "Proxy", tryPort, attempt + 1, kMaxBindAttempts);
     Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
     g_server.reset();
@@ -985,7 +985,7 @@ void InstallWebSocketBridge() {
             {
               const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
               const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-              std::optional<std::string> withCredentials = ServerDbUri::BuildBridgeCredentialUri(
+              std::optional<std::string> withCredentials = nevr_serverdb_uri::BuildBridgeCredentialUri(
                   remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
                   cfgPassword ? std::string_view(cfgPassword) : std::string_view());
               if (withCredentials) {
@@ -1005,11 +1005,11 @@ void InstallWebSocketBridge() {
             // carries it before the credentials block above appends
             // discordid/password. A naive "delete the preceding
             // ? or &" deleted the URI's only '?' and glued the path to the
-            // remaining query. ServerDbUri::RemoveQueryParam handles leading/
+            // remaining query. nevr_serverdb_uri::RemoveQueryParam handles leading/
             // middle/trailing/sole position correctly; see its own tests.
             if (connIdx >= 2) {
-              remoteUrl = ServerDbUri::RemoveQueryParam(remoteUrl, "format=evr");
-              const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+              remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
+              const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
                   "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
               Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
             }
@@ -1115,7 +1115,7 @@ void InstallWebSocketBridge() {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
                           "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
                           g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1216,7 +1216,7 @@ void InstallWebSocketBridge() {
                       if (rsym == EvrCodec::kSymLoginFailure && rmsg->str.size() > 48) {
                         const std::optional<EvrCodec::LoginFailure> diagnostic =
                             EvrCodec::ParseLoginFailure(rmsg->str);
-                        const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+                        const std::string message = nevr_log_diagnostics::FormatLoginFailureDiagnostic(
                             diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0,
                             diagnostic ? diagnostic->messageBytes : 0, g_isServer != FALSE);
                         Log(EchoVR::LogLevel::Warning, "%s", message.c_str());
@@ -1383,7 +1383,7 @@ void InstallWebSocketBridge() {
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
                 ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
-                LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+                nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
@@ -1471,7 +1471,7 @@ void InstallWebSocketBridge() {
   g_bridgeEnabled = true;
 
   const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
-  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
       "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
@@ -1513,7 +1513,7 @@ void InstallWebSocketBridge() {
         break;
       }
       const std::string diagnostic =
-          LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
+          nevr_log_diagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
       Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
       s_matchServer.reset();
@@ -1658,7 +1658,7 @@ bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out) {
 
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode) {
   const std::optional<EvrCodec::LoginFailure> diagnostic = EvrCodec::ParseLoginFailure(frame);
-  const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+  const std::string message = nevr_log_diagnostics::FormatLoginFailureDiagnostic(
       diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0, diagnostic ? diagnostic->messageBytes : 0,
       serverMode);
   Log(EchoVR::LogLevel::Warning, "%s", message.c_str());

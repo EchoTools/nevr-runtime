@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace LogDiagnostics {
+namespace nevr_log_diagnostics {
 namespace {
 constexpr size_t kMaximumDiagnosticUrlSize = 8192;
 constexpr char kMalformedUrl[] = "[redacted malformed URL]";
@@ -95,4 +95,4 @@ std::string FormatRedactedUrlPairDiagnostic(std::string_view prefix, std::string
   return message;
 }
 
-}  // namespace LogDiagnostics
+}  // namespace nevr_log_diagnostics

@@ -46,7 +46,7 @@ static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expe
 }
 
 VOID PatchDscProvider() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   const CHAR* base = EchoVR::g_GameBaseAddress;
 
   // Validate all four sites before patching any.
@@ -78,7 +78,7 @@ VOID PatchDscProvider() {
     // mode-correct level (Error+exit on server, Warning+continue on client) —
     // this also resolves severity being decided in one place instead of split
     // across this line and ServerFatal.
-    BootLogTee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
     // Every other address in addresses.h is then suspect too — continuing would
@@ -105,7 +105,7 @@ VOID PatchDscProvider() {
   ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
 
   Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
-  BootLogTee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
 }
 
 // ============================================================================
@@ -122,22 +122,22 @@ static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
   // LobbyPlayerSessions, three Send() paths, and 7 more callers — all carry
   // the same prefix without touching any string table or CNSUser nibble.
   // GetUserIDString's callers are not affected.
-  return EchoVR::g_GameBaseAddress + PatchAddresses::PROVIDER_STRING_OVR_ORG;
+  return EchoVR::g_GameBaseAddress + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG;
 }
 
 VOID PatchProviderPrefixOvrOrg() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   void* target = EchoVR::g_GameBaseAddress + GET_PROVIDER_PREFIX;
   MH_STATUS st = MH_CreateHook(target, (void*)GetProviderPrefixHook,
                                 (void**)&g_RealGetProviderPrefix);
   if (st == MH_OK) st = MH_EnableHook(target);
   if (st == MH_OK) {
     Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
-    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
         target, MH_StatusToString(st));
-    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
                            MH_StatusToString(st));
   }
 }
