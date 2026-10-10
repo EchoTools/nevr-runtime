@@ -4,16 +4,16 @@
 // Fallbacks match the pattern in src/core/globals.h — a build without
 // CMake (manual compiler invocation) gets safe defaults.
 
-#ifndef PROJECT_VERSION
-#define PROJECT_VERSION "0.0.0"
+#ifndef NEVR_PROJECT_VERSION
+#define NEVR_PROJECT_VERSION "0.0.0"
 #endif
 
-#ifndef GIT_COMMIT_HASH
-#define GIT_COMMIT_HASH "unknown"
+#ifndef NEVR_GIT_COMMIT_HASH
+#define NEVR_GIT_COMMIT_HASH "unknown"
 #endif
 
-#ifndef GIT_DESCRIBE
-#define GIT_DESCRIBE "unknown"
+#ifndef NEVR_GIT_DESCRIBE
+#define NEVR_GIT_DESCRIBE "unknown"
 #endif
 
 // CMake sets CMAKE_BUILD_TYPE; plain Makefile/IDE builds do not, and
@@ -32,14 +32,14 @@ namespace BuildIdentity {
 const Info& Get() {
   static const Info info = []() {
     Info i;
-    // PROJECT_VERSION et al. are already string literals (defined by CMake's
+    // NEVR_PROJECT_VERSION et al. are already string literals (defined by CMake's
     // add_compile_definitions with quoted values).  Assigning them directly
     // avoids NEVR_STR() double-stringification, which produced strings
     // containing literal double-quote characters that broke JSON encoding
     // in BuildLoginRequest (N146).
-    i.project_version = PROJECT_VERSION;
-    i.git_commit      = GIT_COMMIT_HASH;
-    i.git_describe    = GIT_DESCRIBE;
+    i.project_version = NEVR_PROJECT_VERSION;
+    i.git_commit      = NEVR_GIT_COMMIT_HASH;
+    i.git_describe    = NEVR_GIT_DESCRIBE;
     i.build_type      = CMAKE_BUILD_TYPE;
     // git describe --dirty appends "-dirty" when the working tree has
     // uncommitted changes. Derive the flag from the string the build

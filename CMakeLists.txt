@@ -36,13 +36,13 @@ set_project_version_from_git()
 
 # Define the version and git hash as compile definitions
 add_compile_definitions(
-  PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"
-  PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}"
-  PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}"
-  PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
-  PROJECT_VERSION="${PROJECT_VERSION}"
-  GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-  GIT_DESCRIBE="${GIT_DESCRIBE}")
+  NEVR_PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"
+  NEVR_PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}"
+  NEVR_PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}"
+  NEVR_PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
+  NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
+  NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+  NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}")
 
 # Print out the version that was set by set_project_version_from_git()
 message(STATUS "Project version: ${PROJECT_VERSION} (${GIT_COMMIT_HASH})")
@@ -233,6 +233,15 @@ endif()
 # echovr-reconstruction; nothing here may symlink into a private repo, which
 # breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
+# The frozen legacy sources read the unprefixed macro names (PROJECT_VERSION, GIT_COMMIT_HASH, USE_MINHOOK);
+# the shared definitions above carry the NEVR_ spelling, so the two legacy targets get the old names here.
+foreach(_legacy_target gamepatcheslegacy gameserverlegacy)
+  target_compile_definitions(${_legacy_target} PRIVATE
+    PROJECT_VERSION="${PROJECT_VERSION}"
+    GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
+endforeach()
+# src/core/hooking.h (shared with the legacy build through src/legacy-compat) selects MinHook on NEVR_USE_MINHOOK.
+target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 # telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
 # refactor before it could be reintegrated here
 

@@ -295,7 +295,7 @@ static VOID InitializeAfterGameImageGuard() {
   // static-CRT build (see boot_log_tee.h DESIGN DECISION and N43).
   BootLogTee::Init();
 
-  BootLogTee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", PROJECT_VERSION, EchoVR::g_GameBaseAddress);
+  BootLogTee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   EchoVR::InitializeFunctionPointers();
   BootLogTee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 

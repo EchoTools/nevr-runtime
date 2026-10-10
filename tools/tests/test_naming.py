@@ -93,6 +93,20 @@ class NamingTest(unittest.TestCase):
         found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
         self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
 
+    def test_project_macros_carry_the_prefix(self):
+        # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
+        # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and
+        # reads the old names: the root CMakeLists gives those two targets the unprefixed definitions.
+        macro = re.compile(r"(?<![A-Za-z0-9_${])(USE_MINHOOK|PROJECT_VERSION|GIT_COMMIT_HASH|GIT_DESCRIBE)(?![A-Za-z0-9_}])")
+        stray = {}
+        for path, text in project_files():
+            if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")):
+                continue
+            found = sorted({m.group(1) for m in macro.finditer(text)})
+            if found:
+                stray[path] = found
+        self.assertEqual(stray, {}, "project macros are NEVR_<NAME> (docs/standards/naming.md)")
+
     def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())
         gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()
