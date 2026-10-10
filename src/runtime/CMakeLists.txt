@@ -645,6 +645,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_codec DISCOVERY_MODE PRE_TEST)
 
+    # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
+    # rules, so it also builds and runs on its own.
+    add_executable(test_legacy_session
+      tests/test_legacy_session.cpp
+      compat/legacy_session.cpp
+      compat/legacy_codec.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_legacy_session.cpp compat/legacy_session.cpp compat/legacy_codec.cpp
+      compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_legacy_session PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_legacy_session PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
+    gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_social_facade
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
