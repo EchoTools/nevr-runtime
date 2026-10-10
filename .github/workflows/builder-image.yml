@@ -1,0 +1,51 @@
+name: Builder image
+
+# Builds .github/builder/Dockerfile and pushes it to ghcr.io/echotools/nevr-runtime-builder:<tag>, the
+# image build.yml, vcpkg-cache.yml and defender-scan.yml run in. <tag> is the first 12 hex digits of the
+# Dockerfile's sha256, which those workflows name literally (tools/tests/test_builder_image.py checks
+# they agree). Run it by hand after the Dockerfile changes, before dispatching a workflow that names the
+# new tag: `gh workflow run builder-image.yml --ref <branch>`. A tag that already exists is not rebuilt.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: builder-image-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/echotools/nevr-runtime-builder
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Tag from the Dockerfile
+      id: tag
+      run: |
+        set -euo pipefail
+        tag="$(sha256sum .github/builder/Dockerfile | cut -c1-12)"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "image: $IMAGE:$tag"
+
+    - name: Log in to ghcr.io
+      env:
+        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USER: ${{ github.actor }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+    - name: Build and push
+      run: |
+        set -euo pipefail
+        ref="$IMAGE:${{ steps.tag.outputs.tag }}"
+        if docker manifest inspect "$ref" >/dev/null 2>&1; then
+          echo "$ref already exists; nothing to build"
+          exit 0
+        fi
+        docker build --pull -t "$ref" .github/builder
+        docker push "$ref"
+        docker run --rm "$ref" bash -c 'x86_64-w64-mingw32-g++ --version | head -n 1; cmake --version | head -n 1; osslsigncode --version; buf --version; ls -l /usr/x86_64-w64-mingw32/lib/libCrypt32.a'

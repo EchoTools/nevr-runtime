@@ -30,9 +30,11 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout,
+# and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
 worktree-setup:
     tools/worktree-setup.sh
+    tools/vcpkg_root.sh
 
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
@@ -2537,7 +2539,10 @@ _vcpkg-mingw:
     set -euo pipefail
     if [[ "{{ preset }}" == mingw-* ]]; then
         mkdir -p build/{{ preset }}/vcpkg_installed
-        cd "$HOME/.vcpkg"
+        # This checkout's own vcpkg root (tools/vcpkg_root.sh), so concurrent builds in other
+        # worktrees do not wait on a shared root's lock; the binary cache is still shared.
+        root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
+        cd "$root"
         unset VCPKG_ROOT
         ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
