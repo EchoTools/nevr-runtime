@@ -532,6 +532,9 @@ bool Router::ReleaseRemoteLocked(GameId game, Game& g, Effects& fx) {
     loginGame_ = kNoGame;
     owedUnrequires_.clear();
     connectionCount_ = 1;
+    // The session the game's login was on is gone with its only connection (a reconnect that turned out not
+    // to be the login socket, or a close): the game's next login socket reconnects silently too.
+    if (options_.replayLoginOnReconnect && !lastLoginFrame_.empty()) replayPending_ = true;
   }
   g.required = 0;  // the requests it sent went with the remote it leaves
   remoteTable_.erase(g.remote);

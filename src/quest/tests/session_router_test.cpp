@@ -1442,6 +1442,28 @@ void TestOneReplayPerLostSession() {
   QCHECK(rig.router->GetStats().loginsReplayed == 2);
 }
 
+// Failure caught: the replay spent on a connection that was not the login socket. After a loss the game's
+// first reconnect can be another socket (config): the provisional login connection is reclassified, its
+// session ends with it, and the real login socket that follows must still get the replay.
+void TestReplayStillDueWhenTheFirstReconnectWasNotTheLoginSocket() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId provisional = LoseSessionAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(provisional);
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);  // spent on the provisional login connection
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // it is the config socket
+  const std::size_t before = rig.remotes.Opens().size();
+  rig.router->OnGameOpen(5);  // the real login socket
+  const auto after = rig.remotes.Opens();
+  QCHECK(after.size() > before);
+  const RemoteId login = after.back().remote;
+  QCHECK(after.back().role == Role::Login);
+  rig.router->OnRemoteOpen(login);
+  const auto sent = SentOn(rig, login);
+  QCHECK(sent.size() == 1 && sent[0] == kGameLogin);
+  QCHECK(rig.router->GetStats().loginsReplayed == 2);
+}
+
 // Failure caught: a replay on a session that never had a login to replay (a game that never logged in).
 void TestNothingToReplayBeforeTheGameHasLoggedIn() {
   Rig rig(ReplayOptions());
@@ -1492,6 +1514,7 @@ int main() {
   TestTheNewestLoginIsTheOneReplayed();
   TestLogoutClearsTheReplay();
   TestOneReplayPerLostSession();
+  TestReplayStillDueWhenTheFirstReconnectWasNotTheLoginSocket();
   TestNothingToReplayBeforeTheGameHasLoggedIn();
   TestMatchmakerConnectionsAreCapped();
   TestExtraConnectionNeverBecomesASecondLogin();
