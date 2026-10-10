@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 
 AuthSnapshotStore::AuthSnapshotStore()
     : current_(std::make_shared<const AuthSnapshot>()) {}
@@ -37,4 +37,4 @@ bool AuthCancellation::WaitFor(std::chrono::steady_clock::duration duration) {
   return condition_.wait_for(lock, duration, [this] { return stopRequested_; });
 }
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

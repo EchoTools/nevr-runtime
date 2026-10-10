@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 
 DevicePollResponse ParseDevicePollResponse(std::string_view response) {
   try {
@@ -50,4 +50,4 @@ uint64_t ResolveAccessTokenExpiry(uint64_t now, const std::string& access_token,
   return ResolveAccessTokenExpirySec(now, access_token, expires_in);
 }
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

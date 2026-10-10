@@ -632,13 +632,13 @@ static std::string GetDefaultLogDir() {
 static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
     if (g_config.file_jsonl) {
         std::string line = "{\"ts\":\"";
-        JsonEscape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
+        nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
         line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
         line += GetRunId();
         line += "\",\"level\":\"";
-        JsonEscape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
+        nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
         line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
-        JsonEscape::AppendTo(line, message, len);
+        nevr_json_escape::AppendTo(line, message, len);
         line += "\"}\n";
 
         size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);

@@ -750,7 +750,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
   // not. N112.
-  const SystemInfo::Host& host = SystemInfo::Get();
+  const nevr_system_info::Host& host = nevr_system_info::Get();
   const std::string driverVersion =
       host.IsWine() ? ("Wine " + host.wine_version +
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
@@ -759,7 +759,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format.
   // Keep its construction portable so Quest and Windows use the same fields
   // and JSON escaping rules.
-  const BuildIdentity::Info& buildId = BuildIdentity::Get();
+  const nevr_build_identity::Info& buildId = nevr_build_identity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
   // The serial is the one the stock client sends: the game's serial buffer in
   // VR, "N/A" with no VR, "unknown" only when the game has none. Only its source

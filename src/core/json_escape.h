@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <string>
 
-namespace JsonEscape {
+namespace nevr_json_escape {
 
 /// The escaped form of `c` in `out` (not NUL-terminated); returns its length, or 0 when `c` is
 /// written as itself.
@@ -61,4 +61,4 @@ inline void AppendTo(std::string& out, const char* s, int len) {
   }
 }
 
-}  // namespace JsonEscape
+}  // namespace nevr_json_escape
