@@ -56,6 +56,14 @@ class FakeConnection : public WsConnection {
     cv.notify_all();
   }
   void SendClose(uint16_t) override {}
+  // The remote breaks under the session (a network error).
+  void Fail() {
+    std::lock_guard<std::mutex> lock(mutex);
+    RecvResult r;
+    r.status = RecvStatus::Error;
+    incoming.push_back(std::move(r));
+    cv.notify_all();
+  }
   void Push(std::string data) {
     std::lock_guard<std::mutex> lock(mutex);
     RecvResult r;
@@ -486,6 +494,86 @@ void TestSideChannelRefusesWhenNothingIsConnected() {
   bridge.Stop();
 }
 
+// #320: the remote session fails under a logged-in game; the game reconnects its login socket WITHOUT a new
+// login. The bridge sends that socket a login-removed notice for the account the service logged in, so the
+// game shows RETRY and logs in itself; nothing of the old login is replayed to the new session. Everything real
+// except the service: the loopback server, the router, the remote transport.
+void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
+  FakeConnector connector;
+  Observed seen;
+  SessionBridge::Config cfg = MakeConfig(&connector, &seen, "JWT-A");
+  cfg.loopback.silentNotifyMs = 300;  // the silent login socket is recognised after 0.3 s here (1.5 s in production)
+  SessionBridge bridge(std::move(cfg));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(connector.WaitConnects(1));
+  QCHECK(login.Upgrade(path));
+  QCHECK(connector.WaitConnects(2));
+  const std::string gameLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-own-login-SECRET");
+  login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
+  FakeConnection* first = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    for (FakeConnection* c : connector.connections) {
+      if (!c->Sent().empty()) { first = c; return true; }
+    }
+    return false;
+  }));
+  if (first == nullptr) return;
+  // The service's reply carries its Unrequire in the same frame: nothing is outstanding afterwards.
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 5150) +
+                              nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "u");
+  first->Push(success);
+  const std::string successWire = BuildFrame(Opcode::Binary, success);
+  QCHECK(login.Read(successWire.size()) == successWire);
+
+  // The network drops the session; the router closes the game's sockets; the game reconnects its login socket.
+  const std::size_t connectsBefore = connector.Calls();
+  first->Fail();
+  bool eof = false;
+  login.Read(1u << 16, 3000, &eof);  // the router's close frame, then the end of the socket
+  QCHECK(eof);
+  // Armed by the loss, before the login socket reconnects: only a bridge that handed the router the notice JSON
+  // arms it (the silence report that sends it comes 0.3 s after the reconnect, so this is not yet consumed).
+  QCHECK(WaitFor([&] { return bridge.LoginRemovedDue(); }));
+  Client reconnected(port);
+  QCHECK(reconnected.Upgrade(path));
+  QCHECK(connector.WaitConnects(connectsBefore + 1));
+
+  // The silent login socket is told its login was removed (the frame, as the game parses it).
+  const std::string notice = nevr_evr_codec::BuildLoginRemovedNotify(
+      {nevr_evr_codec::kBridgeLoginPlatform, 5150}, nevr_evr_codec::kLoginRemovedReasonText,
+      "{\"message\":\"Connection lost. Select RETRY to sign in again.\"}");
+  const std::string noticeWire = BuildFrame(Opcode::Binary, notice);
+  QCHECK(reconnected.Read(noticeWire.size()) == noticeWire);
+  // Sent because the loopback server reported the socket silent (the router counts it, one notice).
+  QCHECK(WaitFor([&] { return bridge.LoginsRemoved() == 1; }));
+  QCHECK(bridge.LoginRemovedDue());  // armed until the game's own login: this socket may not be the login peer
+
+  // No credential was replayed: the new session has been sent nothing of the game's old login.
+  FakeConnection* second = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    if (connector.connections.size() > connectsBefore) second = connector.connections.back();
+  }
+  QCHECK(second != nullptr);
+  if (second != nullptr) QCHECK(second->Sent().empty());
+
+  // The game's own login (RETRY) then goes through the same socket as the first frame on the new session.
+  const std::string retry = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-retry-login");
+  reconnected.Write(BuildMaskedFrame(Opcode::Binary, retry, kMask));
+  if (second != nullptr) {
+    QCHECK(second->WaitSent(1));
+    QCHECK(second->Sent()[0] == retry);
+  }
+  QCHECK(WaitFor([&] { return !bridge.LoginRemovedDue(); }));  // the game's own login disarms it
+  bridge.Stop();
+}
+
 }  // namespace
 
 int main() {
@@ -496,6 +584,7 @@ int main() {
   TestHeldLoginIsClosedWhenSignInFails();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
+  TestReconnectedLoginSocketIsToldItsLoginWasRemoved();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

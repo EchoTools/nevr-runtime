@@ -74,6 +74,10 @@ class LoopbackGameServer final : public nevr_session_router::GameTransport {
     std::size_t maxWriteBufferBytes = 8u * 1024u * 1024u;  // unsent bytes kept per connection
     int handshakeTimeoutMs = 5000;
     int idleFirstFrameMs = 30000;  // an upgraded connection that sends no data frame in this long is closed
+    // An upgraded connection that has sent no data frame in this long is reported to the router once
+    // (Router::OnGameSilent): a game's login socket reconnected without a new login is such a connection,
+    // while a config or matchmaker socket sends its request at once.
+    int silentNotifyMs = 1500;
     int closeFlushTimeoutMs = 1000;
     int listenerCheckMs = 2000;  // how often the listening socket is proven to still be ours and listening
     nevr_session_router::LogSink log;

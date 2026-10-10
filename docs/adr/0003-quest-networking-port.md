@@ -137,8 +137,9 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
 - `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines and
   calls `SetErrorMessage`, which writes the error block at `CR15NetGame+0x63308` (a byte that is 0
   for one line and 1 for two or four, then four 64-byte lines), logs `[NETGAME] %s %s %s %s`, and
-  builds a JSON record of the lines that it hands to a logger through an indirect call
-  (`0x12413f4`). `CR15NetErrorMessageExpression`
+  builds a JSON record of the lines in a stack-allocated temporary string that it finishes through
+  the temporary's own vtable (the indirect call at `0x12413f4`/`0x1241858`) and frees; the record is
+  not passed to a logger or anything else. `CR15NetErrorMessageExpression`
   (`0x23225d0`) copies the block to the UI script.
 - The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
@@ -533,6 +534,27 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    in place (PR #221), is the only login: `SessionBridge::Config` has no login builder, the
    Quest router runs with the defaults, and `TestQuestDefaultsInjectNothing` pins that it sends
    exactly the frames the game sent. Enabling both would send two logins.
+
+   **A lost login session under a silent game (#320).** When the remote session ends and the game's login
+   connection has nothing outstanding, `SConnection::DisconnectCB` (`libr15.so` `0x24fc17c`) raises no Lost
+   event and the game reconnects the socket without logging in, so the new session would sit
+   unauthenticated. The router does not replay a login and keeps no credential: with
+   `Options::loginRemovedJson` set (Quest) it keeps the 16-byte account id of the last `LoginSuccess` and
+   sends the game an `SNSLoginRemovedNotify` (`nevr_evr_codec::BuildLoginRemovedNotify`) on each
+   game socket that reconnects, once per socket. The game's own handler (`CNSUser::LoginRemovedCB` `0x1933a28`,
+   `CR15NetGame::LoginRemovedCB` `0x125f908`) acts only on the login peer, for the account it holds, when
+   it is logged in: reason 1 shows the JSON `message` on the login-failed screen (`SwitchTo(-94)`), whose
+   RETRY runs the game's own login with the current token. Nothing in that path persists anything (every
+   call is listed in the PR for #320). The router cannot tell the login socket from the others (connection order and silence are guesses),
+   so the notice goes to every socket that reconnects after the loss: on its first frame, or when it has
+   stayed silent for `silentNotifyMs` (`Router::OnGameSilent`), once per socket; the game drops it on any
+   peer but its login peer. It stays armed until the game sends its own `LoginRequest` or the next session
+   answers `LoginSuccess`, and is not armed when the login connection had requests outstanding (the
+   game's Lost path, -95, already shows RETRY) or its socket had already closed. The
+   fixed part of the frame (0x18 bytes) is derived from the callbacks, not captured: the 4 bytes at `+0x10`
+   and the id word order are the constants `kLoginRemovedWord10` and `kLoginRemovedUserIdSwapped`, the first
+   things a headset run checks. The player leaves the current lobby when it arrives (`QuitOnError` ->
+   `CR15Game::EndMultiplayer`, the same as any login failure from a logged-in state).
 
    `src/quest/net/` holds the Android adapters.
    - `loopback_game_server`: a POSIX WebSocket server bound to `127.0.0.2` (`kListenAddress`) on an

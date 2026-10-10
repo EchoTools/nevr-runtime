@@ -488,6 +488,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   FrameDecoder decoder(config_.maxMessageBytes);
   bool handshaken = false;
   bool sawDataFrame = false;
+  bool silentReported = false;
   std::chrono::steady_clock::time_point upgradedAt;
 
   auto queueWrite = [&](const std::string& bytes, bool bypassCap) {
@@ -534,6 +535,11 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       Log(LogLevel::Warning, Dump(record));
       beginClose(nevr_session_router::kClosePolicyViolation, "idle");
       endReason = "idle_before_first_frame";
+    }
+    if (handshaken && opened && !sawDataFrame && !closing && !silentReported &&
+        std::chrono::steady_clock::now() - upgradedAt >= std::chrono::milliseconds(config_.silentNotifyMs)) {
+      silentReported = true;
+      router_->OnGameSilent(id);
     }
     const short interest = static_cast<short>((closing ? 0 : POLLIN) | (wantWrite ? POLLOUT : 0));
     pollfd fds[2] = {{conn->fd, interest, 0}, {conn->wake[0], POLLIN, 0}};

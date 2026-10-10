@@ -84,6 +84,23 @@ inline constexpr uint64_t kSymConfigFailure = 0x9e687a63dddd3870ULL;            
 // A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
 inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
 
+// SNSLoginRemovedNotify: the service tells a logged-in game its login is gone. The game's own handler
+// (CNSUser::LoginRemovedCB libr15 0x1933a28 -> CR15NetGame::LoginRemovedCB 0x125f908) puts a logged-in game on
+// the login-failed screen, whose RETRY runs the game's own login. DERIVED from the callbacks, never captured:
+// no frame, struct or sender exists in our logs, captures or the service sources (the name only).
+//   fixed part, 0x18 bytes (CTcpBroadcaster::ListenProxy 0x1938358 takes size - 0x18 as the variable part):
+//     +0x00  the user's id, 16 bytes, compared with the game's own (SNSUserID::Compare 0x12ca74c)
+//     +0x10  4 bytes the callbacks do not read
+//     +0x14  reason: 1 = text from the JSON "message" (login-failed screen), 0 = "login replaced"
+//     +0x15  3 bytes padding
+//   then, for reason 1, the JSON (not NUL terminated).
+// The two UNMEASURED parts are one-line constants, the first falsifiers of a headset run.
+inline constexpr uint64_t kSymLoginRemovedNotify = 0x73c0a8cbf5c697abULL;           // SNSLoginRemovedNotify
+inline constexpr std::size_t kLoginRemovedFixedSize = 0x18;
+inline constexpr uint32_t kLoginRemovedWord10 = 0;           // UNMEASURED: the 4 bytes at +0x10
+inline constexpr bool kLoginRemovedUserIdSwapped = false;    // UNMEASURED: (platform, account) as in LoginSuccess
+inline constexpr uint8_t kLoginRemovedReasonText = 1;
+
 // The friend-list subscribe the bridge sends after LoginSuccess (payload ignored by the server).
 inline constexpr uint64_t kSymFriendListSubscribe = 0xcdc02fd1dbee3aaaULL;
 constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;
@@ -109,6 +126,15 @@ std::optional<std::string> BuildLoginRequest(uint64_t platformCode, uint64_t acc
 std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId);
 
 std::string BuildFriendListSubscribe();
+
+// An account as the service names it in LoginSuccess (and the game in SNSUserID): platform code, account id.
+struct UserId {
+  uint64_t platformCode = 0;
+  uint64_t accountId = 0;
+};
+
+// The SNSLoginRemovedNotify for `user` (see kSymLoginRemovedNotify above). `json` is the whole JSON document.
+std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json);
 
 // ---- parsing --------------------------------------------------------------------------------
 
@@ -137,6 +163,10 @@ struct LoginFailure {
   uint64_t statusCode = 0;
   std::size_t messageBytes = 0;  // length of the server's message text; the text is never read out
 };
+
+// The user id a LoginSuccess names (payload offsets 16..32: after the session UUID); nullopt when the frame's
+// first message is not a complete LoginSuccess.
+std::optional<UserId> ParseLoginSuccessUserId(const std::string& frame);
 
 // The numeric diagnostics of a LoginFailure that is the frame's first message; nullopt when the frame is
 // not one or is truncated.

@@ -67,6 +67,35 @@ std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId) {
   return BuildMessage(kSymLoginSuccess, payload);
 }
 
+std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json) {
+  std::string payload;
+  payload.reserve(kLoginRemovedFixedSize + json.size());
+  if (kLoginRemovedUserIdSwapped) {
+    AppendLE64(payload, user.accountId);
+    AppendLE64(payload, user.platformCode);
+  } else {
+    AppendLE64(payload, user.platformCode);
+    AppendLE64(payload, user.accountId);
+  }
+  for (int i = 0; i < 4; ++i) payload.push_back(static_cast<char>((kLoginRemovedWord10 >> (8 * i)) & 0xff));
+  payload.push_back(static_cast<char>(reason));
+  payload.append(kLoginRemovedFixedSize - payload.size(), '\0');
+  payload.append(json.data(), json.size());
+  return BuildMessage(kSymLoginRemovedNotify, payload);
+}
+
+std::optional<UserId> ParseLoginSuccessUserId(const std::string& frame) {
+  Message message;
+  if (ReadMessage(frame, 0, &message) != ReadStatus::Ok || message.symbol != kSymLoginSuccess ||
+      message.length < kUuidSize + 16) {
+    return std::nullopt;
+  }
+  UserId id;
+  id.platformCode = ReadLE64(message.payload + kUuidSize);
+  id.accountId = ReadLE64(message.payload + kUuidSize + 8);
+  return id;
+}
+
 std::string BuildFriendListSubscribe() {
   return BuildMessage(kSymFriendListSubscribe, std::string(kFriendListSubscribePayloadSize, '\0'));
 }
