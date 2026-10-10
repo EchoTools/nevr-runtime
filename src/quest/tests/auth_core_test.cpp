@@ -1481,6 +1481,74 @@ TEST(session_an_outage_while_polling_is_waited_out_until_the_codes_own_deadline)
   s.Stop();
 }
 
+// #202 on Quest: a run of failed polls of every transient kind (server error, rate limit, no connection,
+// a 200 the parser cannot read) does not cost the player the code on the screen; the next answer logs in.
+TEST(session_seven_transient_poll_failures_then_verified_end_in_a_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto polls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [polls](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    switch (++*polls) {
+      case 1: return Status(503);
+      case 2: return Status(429);
+      case 3: return NoTransport(28);
+      case 4: return Status(200, "<html>captive portal</html>");
+      case 5: return Status(503);
+      case 6: return NoTransport(7);
+      case 7: return Status(429);
+      default:
+        return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+                   {"refresh_token_expires_in", 2592000}});
+    }
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(8);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("poll"), 8);
+  CHECK_EQ(http.Count("request"), 1);  // the same code throughout
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK_EQ(store.SaveCount(), size_t(1));
+  CHECK(log.All().find("device poll request failed (transient, 1 consecutive)") != std::string::npos);
+  CHECK(log.All().find("refused by the server") == std::string::npos);
+  s.Stop();
+}
+
+// Quest keeps DeviceFlowOps::max_consecutive_poll_errors at 1: the core only ever sees Error for the
+// server's own refusal, which is final, so a refusal after a run of transient failures ends the login on
+// that poll and is not polled again.
+TEST(session_a_refusal_after_transient_failures_ends_the_login_on_that_poll) {
+  const std::vector<std::pair<HttpResponse, HttpResponse>> cases = {
+      {Status(503), Ok({{"error", "bad code"}})},
+      {NoTransport(28), Status(403, "Forbidden")},
+  };
+  for (const auto& [transient, refusal] : cases) {
+    FakeClock clock;
+    FakeHttp http;
+    FakeStore store;
+    FakePresenter presenter;
+    auto polls = std::make_shared<std::atomic<int>>(0);
+    http.handler = [polls, transient = transient, refusal = refusal](const std::string& endpoint,
+                                                                      const std::string&) -> HttpResponse {
+      if (endpoint == "request") return Ok({{"code", "C"}});
+      return ++*polls <= 3 ? transient : refusal;
+    };
+    Session s(TestConfig(), http, clock, store, presenter, nullptr);
+    s.Start();
+    clock.Allow(20);
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK_EQ(http.Count("poll"), 4);
+    CHECK_EQ(http.Count("request"), 1);
+    CHECK_EQ(store.SaveCount(), size_t(0));
+    s.Stop();
+  }
+}
+
 TEST(session_an_expired_device_code_is_replaced_and_the_prompt_stays_up_until_the_sign_in) {
   FakeClock clock;
   FakeHttp http;
