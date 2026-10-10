@@ -1,6 +1,8 @@
 #include "runtime/patch/mode_patches.h"
+#include "runtime/hook/dll_load_hook.h"
 
 #include <algorithm>
+#include <cwchar>
 #include <string>
 
 #include <psapi.h>
@@ -711,69 +713,12 @@ VOID PatchDeadlockMonitor() {
 // Oculus Platform SDK Blocking
 // =============================================================================
 
-typedef HMODULE(WINAPI* LoadLibraryW_t)(LPCWSTR lpLibFileName);
-typedef HMODULE(WINAPI* LoadLibraryExW_t)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
-
-static LoadLibraryW_t Original_LoadLibraryW = nullptr;
-static LoadLibraryExW_t Original_LoadLibraryExW = nullptr;
-
-static HMODULE WINAPI LoadLibraryW_Hook(LPCWSTR lpLibFileName) {
-  if (lpLibFileName != nullptr) {
-    std::wstring dllName(lpLibFileName);
-    std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-
-    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
-      SetLastError(ERROR_MOD_NOT_FOUND);
-      return NULL;
-    }
-  }
-  return Original_LoadLibraryW(lpLibFileName);
-}
-
-static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-  if (lpLibFileName != nullptr) {
-    std::wstring dllName(lpLibFileName);
-    std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-
-    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
-      SetLastError(ERROR_MOD_NOT_FOUND);
-      return NULL;
-    }
-  }
-  return Original_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-}
-
+// The Oculus Platform SDK is refused through DllLoadHook, which owns the LoadLibraryA/W/ExA/ExW detours.
+// This used to install its own detours on LoadLibraryW/ExW; MinHook allows one per target, so on every
+// run the second installer failed with MH_ERROR_ALREADY_CREATED and the block never took effect (#361).
 VOID PatchBlockOculusSDK() {
-  Original_LoadLibraryW = LoadLibraryW;
-  Original_LoadLibraryExW = LoadLibraryExW;
-  // N128 (corrects N127). These fail with MH_ERROR_ALREADY_CREATED, NOT a Wine
-  // limitation — my earlier "forwarder thunk" guess was wrong, and the MH_STATUS
-  // capability added in N128 disproved it. DllLoadHook::Install() (N75 search-path
-  // hardening, initialize.cpp:238) hooks LoadLibraryW/ExW FIRST and wins; this
-  // second detour on the same two addresses loses. MinHook allows one detour per
-  // target. So the Oculus filter here never installs — but it is moot on a
-  // headless server anyway (the OVR SDK is never loaded), and DllLoadHook's own
-  // hook does not do Oculus blocking. PatchDetour reports the failure with its
-  // reason (N126/N128), so this log must not claim "Installed" unconditionally.
-  // Proper fix (flagged, not done): fold the ovrplatform filter into DllLoadHook's
-  // HookedLoadLibraryW so one hook serves both, or drop these as redundant.
-  //
-  // Harmless in practice: a headless server never loads the Oculus Platform SDK
-  // (the OVR platform branch is bypassed by PatchBypassOvrPlatform and pnsrad's
-  // OVR-branch NOP, and no captured run ever attempts an ovrplatform LoadLibrary),
-  // so there is nothing for these hooks to block. NOT made fatal deliberately —
-  // "all server errors are fatal" is for degradations that matter; bricking every
-  // Wine server over a redundant optimization that can't install is not that.
-  // PatchDetour logs the concrete failure reason. Report the feature as
-  // installed only when both entry points actually accepted their detours.
-  const BOOL loadLibraryWAttached = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
-  const BOOL loadLibraryExWAttached =
-      PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
-  if (loadLibraryWAttached && loadLibraryExWAttached) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking hooks installed");
-  }
+  DllLoadHook::AddLoadFilter("oculus-platform-sdk", DllLoadHook::IsOculusPlatformPath);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking registered with the DLL load hook");
 }
 
 // ===================================================================================================

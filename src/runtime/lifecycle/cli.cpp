@@ -47,6 +47,12 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-exitonerror",
       "[NEVR] Deprecated — exit-on-error is now the default");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-traceexports",
+                           "[NEVR] Trace the export calls of platform DLLs: pnsrad, pnsovr, pnsdemo or all (comma "
+                           "separated); logs [NEVR.TRACE] lines. Off by default. Read from the command line by "
+                           "runtime/hook/export_tracer.cpp");
+
   EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-notelemetry", "[NEVR] Disable telemetry streaming");
 

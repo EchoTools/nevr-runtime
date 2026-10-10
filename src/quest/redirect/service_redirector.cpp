@@ -85,8 +85,8 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
 
   const char* published = nullptr;  // null: leave the original
   if (replacement && *replacement != std::string_view(result, length)) {
-    const nevr_runtime::lifecycle::InternResult interned = intern_(*replacement);
-    if (interned.status != nevr_runtime::lifecycle::InternStatus::kSuccess || interned.pointer == nullptr) {
+    const nevr::lifecycle::InternResult interned = intern_(*replacement);
+    if (interned.status != nevr::lifecycle::InternStatus::kSuccess || interned.pointer == nullptr) {
       GlobalCounters().poolRefused.fetch_add(1, std::memory_order_relaxed);
       *outcome = Outcome::kFailed;
       return result;
