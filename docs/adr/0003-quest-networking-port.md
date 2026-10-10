@@ -1063,6 +1063,35 @@ on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (
 no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
 and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
 
+The four user requests are answered without Meta either (local answers, `login_prerequisites.h` namespace
+`local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
+the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
+`ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
+`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
+code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
+`ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
+are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
+pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
+when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
+new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
+`prereq_local_delivered` and `prereq_local_dropped` (a full table of 32 slots: the request still gets a local
+id and never reaches Meta, nothing is queued behind it, and its callback does not run) are the counters.
+
+`ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
+`GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
+`GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
+`CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
+the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`); every other caller goes to the SDK. The other
+three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
+in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
+and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
+by the walk: `blr`/`br` and a PLT stub into the library's own exports.
+`UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
+its flag first, so one `GotUserProofCB` runs per `LogIn` call.
+
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
