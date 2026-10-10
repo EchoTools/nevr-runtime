@@ -25,12 +25,12 @@
 #include "quest/integration/entry_hooks.h"
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
-#include "quest/integration/integrated_bridge.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
+#include "quest/net/session_bridge.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
@@ -64,7 +64,7 @@ struct Runtime {
   std::condition_variable pollCv;
   bool stopPoll = false;
   std::unique_ptr<quest_net::CurlWsConnector> connector;
-  std::atomic<IntegratedBridge*> bridge{nullptr};
+  std::atomic<quest_net::SessionBridge*> bridge{nullptr};
   // The router's login gate, kept current by the token-auth poll (TokenIdentitySource::GateFor); the router
   // reads it with its lock held, so it is a plain atomic. Awaiting until the first poll says otherwise.
   std::atomic<int> loginGate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
@@ -139,7 +139,7 @@ void PollTokenAuthState() {
     if (rt.identity) rt.identity->Observe(snap);
     // The held login connection opens when the account appears and closes when it will not (router gate).
     // One structured line each time the router has dropped more Unrequires (a drop is deliberate; see drop_report.h).
-    if (IntegratedBridge* const reporting = rt.bridge.load(std::memory_order_acquire)) {
+    if (quest_net::SessionBridge* const reporting = rt.bridge.load(std::memory_order_acquire)) {
       std::uint64_t delta = 0, unmatchedDelta = 0;
       const bool dropped = DropsChanged(reporting->DroppedUnrequires(), &lastDropped, &delta);
       const bool unmatched = DropsChanged(reporting->UnmatchedEmbeddedUnrequires(), &lastUnmatched, &unmatchedDelta);
@@ -153,7 +153,7 @@ void PollTokenAuthState() {
     }
     const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
     if (rt.loginGate.exchange(gate) != gate) {
-      if (IntegratedBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
+      if (quest_net::SessionBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
     }
     if (static_cast<int>(snap.readiness) != last) {
       last = static_cast<int>(snap.readiness);
@@ -170,7 +170,7 @@ void PollTokenAuthState() {
 // --- bridge --------------------------------------------------------------------------------------
 
 bool SendSocialFrame(const std::string& frame) {
-  IntegratedBridge* const bridge = R().bridge.load(std::memory_order_acquire);
+  quest_net::SessionBridge* const bridge = R().bridge.load(std::memory_order_acquire);
   return bridge != nullptr && bridge->SendToLogin(frame);
 }
 
@@ -358,7 +358,7 @@ class ProductionSteps final : public Steps {
     tls.log = RouterLog();
     rt.connector = std::make_unique<quest_net::CurlWsConnector>(std::move(tls));
 
-    IntegratedBridge::Config config;
+    quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
     config.connector = rt.connector.get();
@@ -388,15 +388,15 @@ class ProductionSteps final : public Steps {
       detail_ = "socket_uri_not_wss";
       return false;
     }
-    auto bridge = std::make_unique<IntegratedBridge>(std::move(config));
+    auto bridge = std::make_unique<quest_net::SessionBridge>(std::move(config));
     const std::uint16_t port = bridge->Start();
     if (port == 0) {
       detail_ = "listener_failed";
       return false;
     }
     port_ = port;
-    rt.loopbackUri = bridge->LoopbackUri();
-    IntegratedBridge* const published = bridge.release();
+    rt.loopbackUri = bridge->LocalUri();
+    quest_net::SessionBridge* const published = bridge.release();
     rt.bridge.store(published, std::memory_order_release);  // leaked: threads and hooks outlive statics
     published->ReevaluateLoginGate();  // a gate change that raced the publication
     rt.bridgePort.store(port, std::memory_order_release);
@@ -493,7 +493,7 @@ void ShutdownIntegration() noexcept {
     }
     rt.pollCv.notify_all();
     if (rt.authThread.joinable()) rt.authThread.join();
-    if (IntegratedBridge* const bridge = rt.bridge.exchange(nullptr)) {
+    if (quest_net::SessionBridge* const bridge = rt.bridge.exchange(nullptr)) {
       bridge->Stop();
       delete bridge;
     }

@@ -23,9 +23,6 @@ add_library(nevr_quest_integration STATIC
   identity_source.cpp
   stage_log.cpp
   bridge_uri.cpp
-  frame_tap.cpp
-  tapped_transports.cpp
-  integrated_bridge.cpp
   production_steps.cpp
   dlopen_hook.cpp
   social_shim.cpp)
@@ -50,7 +47,7 @@ set_source_files_properties(production_steps.cpp PROPERTIES COMPILE_DEFINITIONS
 
 # Android-linkable builds of the host tests (they cannot execute on the build machine); the same
 # sources run on the host in `just test-quest-integration`.
-foreach(test_name integration_sequence_test integration_hooks_test integrated_bridge_test)
+foreach(test_name integration_sequence_test integration_hooks_test)
   add_executable(${test_name} "${CMAKE_CURRENT_SOURCE_DIR}/../tests/${test_name}.cpp")
   target_link_libraries(${test_name} PRIVATE nevr_quest_integration)
   target_include_directories(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
