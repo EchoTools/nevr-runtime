@@ -146,6 +146,7 @@ add_library(nevr_quest_token_auth STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_auth_flow.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_poll_response.cpp"
   auth/session.cpp
+  auth/atomic_write.cpp
   auth/file_store.cpp
   auth/prompt_presenters.cpp
   auth/ca_bundle.cpp

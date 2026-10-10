@@ -489,7 +489,7 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
@@ -499,7 +499,7 @@ test-quest-shared:
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
