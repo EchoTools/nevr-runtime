@@ -239,6 +239,8 @@ void TestInviteGateThroughThunk() {
 
 // ---- rich presence trace (#393) ------------------------------------------------------------------------
 
+bool Is(const char* actual, const char* expected) { return actual != nullptr && std::strcmp(actual, expected) == 0; }
+
 constexpr std::size_t kVtableWords = 2 + kOvrRichPresenceSlotCount;
 std::uintptr_t g_fakeVtable[kVtableWords];
 std::uintptr_t g_presenceBias = 0;
@@ -420,8 +422,6 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
 
 // #393 (a2): with the feature on and no destination found by the game, the table answers by the game type of the
 // presence just set; the game's own answer wins when it found one; off, nothing changes.
-bool Is(const char* actual, const char* expected) { return actual != nullptr && std::strcmp(actual, expected) == 0; }
-
 void TestPresenceNameTable() {
   QCHECK(Is(PresenceDisplayName("social_2.0"), "Social Lobby"));
   QCHECK(Is(PresenceDisplayName("Social_2.0"), "Social Lobby"));  // the game's spelling
