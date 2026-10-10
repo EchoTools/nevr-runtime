@@ -127,6 +127,43 @@ inline constexpr std::size_t kEnablePageNodeOffset = 0x20;
 inline constexpr std::uint64_t kErrorDisplayPage = 0x4b8a0630361f3ac5ULL;       // error_display_page
 inline constexpr std::uint64_t kFatalErrorDisplayPage = 0xe26415a8c369eb2eULL;  // fatal_error_display_page
 inline constexpr std::uint64_t kLoggingInPage = 0xee753e35461e0ef4ULL;          // logging_in_page
+
+// Page actor ids seen in ui_page_enter lines, with the name the level's scripts give each. A page's id is a
+// level actor id, not CSymbol64 of its name, so the names come from the pinned build's data: each script
+// component of the three levels that hold UIPage2 components (resource type f31aed40bf478d4e; levels
+// f927772b9e2aefb1 main menu, 05361c73bb73db19, e962a897e2cb8f07) binds script variables to actors in its
+// array at record +0x228 ({key, 0xffffffffffffffff, target actor id, 0}); the script library's
+// script_set_variable lists, per slot, the CSymbol64 hash of each variable's name followed by the key, and
+// every name here is a string in that library's .rodata (or a CSymbol64 hash match for a word the library
+// carries only as a constant: empty_page, home_page, error_display_page). Scripts name a page
+// relative to themselves, so a few ids have more than one name: the one most bindings use is listed
+// (home_page: 8c94450216e31162 by 20 of 23 bindings, 80d0b99e73cf486a by 14 of 17; initial_popups_page 6 of
+// 8; empty_select_page 3 of 4; page_quit_confirm 2 of 3). An id no binding names
+// (202763036b7f6f23, the boot page) and the no-actor id 0xffffffffffffffff stay "unknown".
+struct PageName {
+  std::uint64_t id;
+  const char* name;
+};
+inline constexpr PageName kPageNames[] = {
+    {0x05ce113632359ce3ULL, "home_page"},
+    {0x1a92c34885065c11ULL, "empty_page"},
+    {0x1f5bccac7f496eddULL, "loading_page"},
+    {0x25cbdc13a0ccdf42ULL, "empty_select_page"},
+    {0x2fe7102931d1c4e0ULL, "begin_multiplayer_page"},
+    {kErrorDisplayPage, "error_display_page"},
+    {0x68db70ece7c24901ULL, "home_page"},
+    {0x80d0b99e73cf486aULL, "home_page"},
+    {0x8c94450216e31162ULL, "home_page"},
+    {0x9143e219cb923869ULL, "store_empty_intermediate_page"},
+    {0x9733f27f738d9595ULL, "home_page"},
+    {0xb245345073f0d3b3ULL, "connecting_page"},
+    {0xc615ef51fe8c7e5bULL, "initial_popups_page"},
+    {0xd436ecc9f7f9164dULL, "page_quit_confirm"},
+    {0xdadda9a8c9c49f8dULL, "group_popups_page"},
+    {kFatalErrorDisplayPage, "fatal_error_display_page"},
+    {kLoggingInPage, "logging_in_page"},
+    {0xfbc6a43d068f418dULL, "transition_to_game_page"},
+};
 }  // namespace ui_layout
 
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,

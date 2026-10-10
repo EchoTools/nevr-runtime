@@ -465,9 +465,9 @@ PageLogSlot g_pageLog[kPageLogSlots];
 std::atomic<std::uint64_t> g_pageLogFull{0};
 
 const char* KnownPageName(std::uint64_t page) noexcept {
-  if (page == ui::kErrorDisplayPage) return "error_display_page";
-  if (page == ui::kFatalErrorDisplayPage) return "fatal_error_display_page";
-  if (page == ui::kLoggingInPage) return "logging_in_page";
+  for (const ui::PageName& known : ui::kPageNames) {
+    if (known.id == page) return known.name;
+  }
   return "unknown";
 }
 

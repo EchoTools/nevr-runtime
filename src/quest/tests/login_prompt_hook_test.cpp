@@ -938,6 +938,60 @@ void EveryPageEnableIsLoggedOncePerSymbolPerSecond() {
   lp::SetClockForTest(nullptr);
 }
 
+// #391: the page ids smoke #5 run 2 logged as "unknown" (the 16 level actor ids and the no-actor id), each with
+// the name the pinned build's level scripts bind to it (ui::kPageNames documents where the names come from).
+// Two ids no script names stay unknown.
+void PageEnterLinesNameTheSmokePagesFromTheGameData() {
+  struct Expected {
+    std::uint64_t id;
+    const char* name;
+  };
+  const Expected expected[] = {
+      {0x9733f27f738d9595ULL, "home_page"},
+      {0xfbc6a43d068f418dULL, "transition_to_game_page"},
+      {0xdadda9a8c9c49f8dULL, "group_popups_page"},
+      {0x9143e219cb923869ULL, "store_empty_intermediate_page"},
+      {0x25cbdc13a0ccdf42ULL, "empty_select_page"},
+      {0x1a92c34885065c11ULL, "empty_page"},
+      {0x80d0b99e73cf486aULL, "home_page"},
+      {0x1f5bccac7f496eddULL, "loading_page"},
+      {0xffffffffffffffffULL, "unknown"},
+      {0xd436ecc9f7f9164dULL, "page_quit_confirm"},
+      {0x68db70ece7c24901ULL, "home_page"},
+      {0xb245345073f0d3b3ULL, "connecting_page"},
+      {0x2fe7102931d1c4e0ULL, "begin_multiplayer_page"},
+      {0x05ce113632359ce3ULL, "home_page"},
+      {0x8c94450216e31162ULL, "home_page"},
+      {0xc615ef51fe8c7e5bULL, "initial_popups_page"},
+      {0x202763036b7f6f23ULL, "unknown"},
+      {ui::kErrorDisplayPage, "error_display_page"},
+      {ui::kFatalErrorDisplayPage, "fatal_error_display_page"},
+      {ui::kLoggingInPage, "logging_in_page"},
+  };
+  lp::ResetLatchForTest();
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(&FakeClock);
+  g_now = 3'000'000'000;
+  g_lines.clear();
+  for (const Expected& e : expected) {
+    char want[96];
+    std::snprintf(want, sizeof(want), "\"page\":\"0x%016llx\",\"name\":\"%s\"",
+                  static_cast<unsigned long long>(e.id), e.name);
+    const int before = CountLines(want);
+    QCHECK(Enabled(e.id));
+    QCHECK(CountLines(want) == before + 1);
+  }
+  QCHECK(CountLines("\"name\":\"unknown\"") == 2);
+  // The table holds no id twice (the first match would hide the second).
+  for (const ui::PageName& a : ui::kPageNames) {
+    int same = 0;
+    for (const ui::PageName& b : ui::kPageNames) same += a.id == b.id ? 1 : 0;
+    QCHECK(same == 1);
+  }
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(nullptr);
+}
+
 // The volume: one hot page enabled 60 times a second for ten minutes, and a handful of others, stay at
 // one line per symbol per second at most, and the latch state is carried.
 void PageEnterLogVolumeIsBounded() {
@@ -1014,6 +1068,7 @@ int main() {
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   EveryPageEnableIsLoggedOncePerSymbolPerSecond();
+  PageEnterLinesNameTheSmokePagesFromTheGameData();
   PageEnterLogVolumeIsBounded();
   APageTableThatIsFullStillPassesEveryEnable();
   AWithdrawnBoardKeepsNoCode();
