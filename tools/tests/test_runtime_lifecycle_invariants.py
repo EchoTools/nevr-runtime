@@ -525,7 +525,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # because extract_braced_function strips comments before returning.
         callbacks = (ROOT / "src/runtime/server/gameserver_callbacks.cpp").read_text()
         register = extract_braced_function(callbacks, "void GameServerLib::RegisterBroadcasterCallbacks(")
-        record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
+        record = re.search(r"\bnevr_game_server::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
         first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
         self.assertIsNotNone(first_listen, "subject vanished: no ListenForBroadcasterMessage calls")
