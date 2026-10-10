@@ -53,6 +53,23 @@ inline constexpr std::size_t kRichPresenceSlotSet = 15;              // void Set
 // SyncRichPresence turns the index into a name only when it is not -1; every non -1 value reaches slot 8 unchanged.
 // A table-answered destination is reported as kPresenceNameBase + its table position, far above any list size.
 inline constexpr int kPresenceNameBase = 0x4e455652;
+// The three slots that talk to Meta's platform service (#396), by the pinned libpnsovr's own relocation table
+// (readelf -rW over 0x6a13e0..0x6a1468; the file's sha256 is 26e9a216...): slot 0 ShareData 0x1f044c (sends
+// group_presence set; CNSIRichPresence::Update 0x369a2c calls it while the dirty bit is set and Ready()), slot 11
+// RefreshDestinations 0x1f1c2c (sends group_presence get_destinations unless RefreshingDestinations() is true:
+// *(this+0xe8) != 0) and slot 16 Clear 0x1f1cf0 (sends group_presence clear and sets bit 2 until its result arrives).
+inline constexpr std::size_t kRichPresenceSlotShareData = 0;
+inline constexpr std::size_t kRichPresenceSlotRefreshDestinations = 11;
+inline constexpr std::size_t kRichPresenceSlotClear = 16;
+inline constexpr std::uint64_t kOvrRichPresenceShareDataVaddr = 0x1f044cULL;
+inline constexpr std::uint64_t kOvrRichPresenceRefreshDestinationsVaddr = 0x1f1c2cULL;
+inline constexpr std::uint64_t kOvrRichPresenceClearVaddr = 0x1f1cf0ULL;
+// The object's state word (uint32 at this+0x30), from Set 0x1f1ccc (|= 1), ShareData (gated on (flags & 6) == 0,
+// ends with (flags & ~3) | 2), SetUserPresenceCB 0x1f0b80 (&= ~2) and Clear (|= 4).
+inline constexpr std::size_t kRichPresenceFlagsOffset = 0x30;
+inline constexpr std::uint32_t kRichPresenceFlagDirty = 0x1;     // Set stored a document not yet shared
+inline constexpr std::uint32_t kRichPresenceFlagInFlight = 0x2;  // ShareData sent a request, its callback is pending
+inline constexpr std::uint32_t kRichPresenceFlagClearing = 0x4;  // a Clear request is in flight (its callback clears it)
 // The link-time addresses those slots hold in the pinned libpnsovr (social_pinned_test checks them).
 inline constexpr std::uint64_t kOvrRichPresenceDestinationCountVaddr = 0x1f1b74ULL;
 inline constexpr std::uint64_t kOvrRichPresenceDestinationNameVaddr = 0x1f1b88ULL;
