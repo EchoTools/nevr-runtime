@@ -19,8 +19,17 @@ class MicRingBuffer {
   void Reset();
   uint32_t capacity() const { return capacity_; }
 
+  /// Called on every game MicAvailable/MicRead. The first call after the stream (re)started drops
+  /// whatever was captured before the game was listening, so the first read gets only fresh audio
+  /// (#95), and returns how many samples that was. Every later call returns 0 until Reset().
+  uint32_t NoteReaderActive();
+  /// True once the game has asked for audio since the last Reset(). Before that a full ring is
+  /// the normal state (nobody is listening yet), not a game that stopped draining.
+  bool ReaderActive() const;
+
  private:
   mutable std::mutex mutex_;
+  bool readerActive_ = false;
   uint32_t capacity_;
   std::vector<int16_t> data_;
   uint32_t head_ = 0;

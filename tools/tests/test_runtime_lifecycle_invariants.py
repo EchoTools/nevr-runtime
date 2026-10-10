@@ -227,6 +227,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from VehPolicy::BootLine")
 
+    def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
+        # #95: the ring fills before the game's first read of a stream. The first MicAvailable/MicRead
+        # drops that backlog, the overflow warning is for a game that read and then stopped, and the
+        # ring is capped at 200 ms.
+        source = strip_comments((ROOT / "src/runtime/patch/mic_provider.cpp").read_text())
+        for name in ("uint64_t MicProvider::MicAvailable(", "uint64_t MicProvider::MicRead("):
+            body = extract_braced_function(source, name)
+            self.assertRegex(body, r"\bNoteGameReader\s*\(\s*\)", name)
+        self.assertRegex(source, r"result\.ringOverflow\s*&&\s*g_ring\.ReaderActive\(\)")
+        cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
+        self.assertIsNotNone(cap)
+        self.assertLessEqual(int(cap.group(1)), 9600)
+
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
         # RadPluginShutdown guard has to be inside that hook; a second detour on the

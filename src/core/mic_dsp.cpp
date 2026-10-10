@@ -45,6 +45,21 @@ void MicRingBuffer::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   head_ = 0;
   count_ = 0;
+  readerActive_ = false;
+}
+
+uint32_t MicRingBuffer::NoteReaderActive() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (readerActive_) return 0;
+  readerActive_ = true;
+  const uint32_t dropped = count_;
+  count_ = 0;
+  return dropped;
+}
+
+bool MicRingBuffer::ReaderActive() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return readerActive_;
 }
 
 namespace {

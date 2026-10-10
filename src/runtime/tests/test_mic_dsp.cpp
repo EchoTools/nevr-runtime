@@ -163,6 +163,51 @@ TEST(MicRingBuffer, PushPopOverflowAndResetPreserveOrder) {
   EXPECT_EQ(ring.Available(), 0u);
 }
 
+// #95: audio captured before the game's first read of a stream is stale and is dropped.
+TEST(MicRingBuffer, FirstReaderCallDropsAudioCapturedBeforeItAndReportsHowMuch) {
+  MicRingBuffer ring(8);
+  const int16_t before[] = {1, 2, 3, 4, 5};
+  ring.Push(before, 5);
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 5u);
+  EXPECT_TRUE(ring.ReaderActive());
+  EXPECT_EQ(ring.Available(), 0u);
+  const int16_t fresh[] = {9, 8};
+  ring.Push(fresh, 2);
+  int16_t out[2] = {};
+  EXPECT_EQ(ring.Pop(out, 2), 2u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 2), (std::vector<int16_t>{9, 8}));
+}
+
+TEST(MicRingBuffer, LaterReaderCallsDropNothing) {
+  MicRingBuffer ring(8);
+  ring.NoteReaderActive();
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_EQ(ring.Available(), 3u);
+}
+
+TEST(MicRingBuffer, ResetStartsANewStreamTheNextReaderCallDropsAgain) {
+  MicRingBuffer ring(8);
+  ring.NoteReaderActive();
+  ring.Reset();
+  EXPECT_FALSE(ring.ReaderActive());
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 3u);
+}
+
+TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
+  MicRingBuffer ring(4);
+  ring.NoteReaderActive();
+  const int16_t s[] = {1, 2, 3, 4, 5, 6};
+  EXPECT_TRUE(ring.Push(s, 6));
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 4), (std::vector<int16_t>{3, 4, 5, 6}));
+}
+
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
   struct RatePair { uint32_t source; uint32_t target; size_t frames; };
   const RatePair rates[] = {
