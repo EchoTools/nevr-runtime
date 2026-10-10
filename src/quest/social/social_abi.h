@@ -50,6 +50,9 @@ inline constexpr std::size_t kRichPresenceSlotDestinationCount = 6;  // unsigned
 inline constexpr std::size_t kRichPresenceSlotDestinationName = 8;   // const char* DestinationName(unsigned) const, 0x1f1b88
 inline constexpr std::size_t kRichPresenceSlotDestination = 9;       // int Destination() const, 0x1f1b94: -1 when none
 inline constexpr std::size_t kRichPresenceSlotSet = 15;              // void Set(CJson const&), 0x1f1ccc
+// SyncRichPresence turns the index into a name only when it is not -1; every non -1 value reaches slot 8 unchanged.
+// A table-answered destination is reported as kPresenceNameBase + its table position, far above any list size.
+inline constexpr int kPresenceNameBase = 0x4e455652;
 // The link-time addresses those slots hold in the pinned libpnsovr (social_pinned_test checks them).
 inline constexpr std::uint64_t kOvrRichPresenceDestinationCountVaddr = 0x1f1b74ULL;
 inline constexpr std::uint64_t kOvrRichPresenceDestinationNameVaddr = 0x1f1b88ULL;
