@@ -731,7 +731,7 @@ void TestInviteNotificationsAreMerged() {
 
 // The carry queue's drop policy. 256 is the soft limit. Events that say something nothing later repeats
 // (Created, MemberJoined, JoinFailed, HostChanged) are never dropped to make room; the oldest Updated or
-// MemberUpdated is. Dropping the newest (the old policy) loses the tail, dropping the oldest of any kind loses
+// MemberUpdated is. Dropping the newest loses the tail, dropping the oldest of any kind loses
 // the head: both are pinned here.
 void TestEventQueueDropsOnlyWhatALaterEventRepeats() {
   World w;

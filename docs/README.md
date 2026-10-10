@@ -59,6 +59,4 @@ one subsystem, protocol surface, or measured game path.
 
 ## Audits
 
-No audit records are kept in the tree. Findings that were still open when the
-records were retired are tracked as GitHub issues; `audits/README.md` lists each
-retired record with the `git show <sha>:<path>` command that returns it.
+`audits/README.md` indexes the audit records; their open findings are GitHub issues.

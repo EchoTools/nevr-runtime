@@ -116,8 +116,8 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {
   // Keys no consumer reads through the flat map: publisher_lock is read elsewhere
   // (or not at all); anything unknown is empty. (nevr_http_uri, nevr_serverdb_uri,
-  // telemetry_uri/token moved to the migrated set above in S4b;
-  // nevr_discord_id/nevr_password moved in S4a; nevr_server_key moved in S5.)
+  // telemetry_uri/token, nevr_discord_id/nevr_password and nevr_server_key are in
+  // the migrated set above.)
   EXPECT_EQ(FlatKeyToYamlPath("publisher_lock"), "");
   EXPECT_EQ(FlatKeyToYamlPath("bogus_key"), "");
   EXPECT_EQ(FlatKeyToYamlPath(""), "");

@@ -382,9 +382,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing broadcaster guard...\n");
   nevr_broadcaster_guard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   // Truthful outcome: Install() is an empty placeholder (broadcaster_guard.cpp).
-  // The previous line here read "broadcaster guard installed" — a log line
-  // asserting a fact that is false in the source it describes. An operator (or
-  // an agent) reading it would conclude a dispatch guard exists. None does.
+  // A line saying "broadcaster guard installed" would assert a fact that is false in
+  // the source it describes: an operator (or an agent) would conclude a dispatch
+  // guard exists. None does.
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] broadcaster guard: no-op placeholder, nothing installed\n");
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
@@ -474,7 +474,7 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] binary bug fix hooks installed\n");
 
   // --- CDN asset loading ---
-  // N131: moved to boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
+  // N131: lives in boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
   // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
   // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
   // is known, so a headless server never opens the CDN connection.

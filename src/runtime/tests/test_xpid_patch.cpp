@@ -240,7 +240,7 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // Wave I fix verification: these tests prove the fix logic is correct.
 // Runtime call-site verification (N59, N60, N61, N63, N64, N68) is done
 // by just-verify verifier scripts that grep the source for the call sites.
-// Those scripts fail before the fix (call site missing) and pass after —
+// Those scripts fail when a call site is missing and pass when it is present —
 // they are the automated red→green tests for the call-site class of fix.
 
 // N65: gate count derived from nevr_patch_addresses::HEADLESS_GATE_COUNT, which comes
