@@ -9,7 +9,9 @@ import subprocess
 import tempfile
 import unittest
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+import yaml
+
+REPO =pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO / ".github/workflows"
 
 
@@ -33,13 +35,13 @@ class VcpkgPinTest(unittest.TestCase):
                 self.assertLess(text.index("actions/checkout"), text.index("Microsoft/vcpkg.git"),
                                 f"{workflow.name}: .vcpkg-commit is read before the checkout")
 
-    def test_a_pin_bump_on_main_reseeds_the_cache(self):
-        # The cache key includes the pinned revision; without .vcpkg-commit in the push paths a bump
-        # waits for the daily cron and the first PRs after it rebuild every port.
+    def test_the_cache_seed_runs_only_on_demand(self):
+        # Nothing triggers a run automatically: the seed is dispatched by hand on main after a pin bump.
         text = (WORKFLOWS / "vcpkg-cache.yml").read_text()
-        push = text[text.index("  push:"):text.index("  schedule:")]
-        self.assertIn("- .vcpkg-commit", push)
-        self.assertNotIn("revision, which moves", text)
+        triggers = yaml.safe_load(text)
+        triggers = triggers.get("on", triggers.get(True))
+        self.assertEqual(set(triggers), {"workflow_dispatch"})
+        self.assertIn(".vcpkg-commit", text)
 
     def test_the_builder_image_provides_the_case_folded_crypt32(self):
         # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only; every
