@@ -29,17 +29,17 @@ namespace quest_social {
 // Everything outside the facade it talks to. Production wires the process-wide models and the
 // bridge's sender; a test wires private ones and a recording sender.
 struct Ports {
-  SocialParty::State* party = nullptr;
-  SocialRoster::Roster* friends = nullptr;
-  SocialRoster::RecentList* recent = nullptr;
+  nevr_social_party::State* party = nullptr;
+  nevr_social_roster::Roster* friends = nullptr;
+  nevr_social_roster::RecentList* recent = nullptr;
   // Frames and sends requests toward the NEVR service. Returns true only if all were accepted.
   // nullptr: nothing leaves (every request reports "NOT sent").
-  bool (*send)(const std::vector<SocialParty::Message>& messages) = nullptr;
+  bool (*send)(const std::vector<nevr_social_party::Message>& messages) = nullptr;
   // Monotonic seconds. nullptr: a steady clock.
   std::uint64_t (*nowSeconds)() = nullptr;
 };
 
-// The process-wide models and SocialParty::Send, returned by reference.
+// The process-wide models and nevr_social_party::Send, returned by reference.
 const Ports& ProductionPorts();
 
 // The game's CJson functions (social_abi.h): Reset on the party and member CJson when the social object is reset,

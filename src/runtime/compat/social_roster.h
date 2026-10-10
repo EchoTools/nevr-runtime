@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-namespace SocialRoster {
+namespace nevr_social_roster {
 
 // SNSFriendStatusNotify.StatusCode as Nakama's friendStatusCode sends it.
 constexpr std::uint8_t kStatusOnline = 0;
@@ -458,4 +458,4 @@ inline bool Feed(Roster& roster, const char* name, const std::uint8_t* payload, 
   return false;
 }
 
-}  // namespace SocialRoster
+}  // namespace nevr_social_roster

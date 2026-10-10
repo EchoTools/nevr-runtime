@@ -29,7 +29,7 @@
 // because a request before it would reach the service unauthenticated.
 //
 // Identity: the bridge reads the credentials for each remote session from the caller's IdentityProvider
-// when the session starts, mirrors the PC route selection (EvrCodec::SelectRemoteBearer), and never
+// when the session starts, mirrors the PC route selection (nevr_evr_codec::SelectRemoteBearer), and never
 // stores, logs or caches a value. With neither a JWT nor URL credentials the session is not started.
 
 #include <atomic>
@@ -65,15 +65,15 @@ class SessionBridge {
     // owned; must outlive the bridge. A host test passes a fake to drive the whole path without TLS.
     WsConnector* connector = nullptr;
     LoopbackGameServer::Config loopback;
-    SessionRouter::Limits limits;
+    nevr_session_router::Limits limits;
     // Send the friend-list subscribe once the service accepts the login. The Quest game never asks for the
     // NEVR friend list itself (its own friend code talks to the Oculus platform, which the social facade
     // replaces), so the bridge asks, exactly as the PC bridge does after LoginSuccess.
     bool subscribeFriendList = false;
-    SessionRouter::LogSink log;
+    nevr_session_router::LogSink log;
     // Whether the account the login needs is available (see "A held login"). Null: always available.
     // Called with the router lock held: a lock-free read of a flag the owner keeps current.
-    SessionRouter::LoginGateFn loginGate;
+    nevr_session_router::LoginGateFn loginGate;
     FrameTapSinks tap;                                      // consumers of the relayed frames
   };
 
@@ -104,7 +104,7 @@ class SessionBridge {
   bool SendToLogin(std::string_view frame);
 
  private:
-  std::optional<ConnectRequest> BuildRequest(const SessionRouter::RemoteOpenRequest& request);
+  std::optional<ConnectRequest> BuildRequest(const nevr_session_router::RemoteOpenRequest& request);
 
   class TappedGames;
   class TappedRemotes;
@@ -116,7 +116,7 @@ class SessionBridge {
   std::unique_ptr<LoopbackGameServer> server_;
   std::unique_ptr<TappedGames> gamesTap_;
   std::unique_ptr<TappedRemotes> remotesTap_;
-  std::unique_ptr<SessionRouter::Router> router_;
+  std::unique_ptr<nevr_session_router::Router> router_;
   std::atomic<bool> started_{false};  // Start/Stop are the owner's to call (see LoopbackGameServer)
 };
 

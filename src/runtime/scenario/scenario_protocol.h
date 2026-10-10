@@ -36,7 +36,7 @@ struct Command {
   std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
-  std::vector<SocialRoster::Entry> people;  // inject RecentlyMetListResponse
+  std::vector<nevr_social_roster::Entry> people;  // inject RecentlyMetListResponse
 };
 
 /// SNSPartyInviteNotify: PartyID(8) InviterID(8) (nakama server/evr_pipeline_party.go sends it to
@@ -246,7 +246,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
           *error = "inject RecentlyMetListResponse: each user needs an unsigned \"id\"";
           return false;
         }
-        SocialRoster::Entry e;
+        nevr_social_roster::Entry e;
         e.id = u["id"].get<std::uint64_t>();
         e.name = u.contains("name") && u["name"].is_string() ? u["name"].get<std::string>() : std::string();
         e.online = u.contains("online") && u["online"].is_boolean() && u["online"].get<bool>();
@@ -358,99 +358,99 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
 /// The SNSFriendStatusNotify frame Nakama sends when a friend's presence changes: Header(8)
 /// FriendID(8) StatusCode(1) Reserved(7) (nakama server/evr/sns_friends.go).
 inline std::string BuildFriendStatusNotify(std::uint64_t friendId, std::uint8_t status) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = kFriendStatusNotifySymbol;
-  SocialParty::AppendLe(m.payload, 0, 8);
-  SocialParty::AppendLe(m.payload, friendId, 8);
-  SocialParty::AppendLe(m.payload, status, 1);
-  SocialParty::AppendLe(m.payload, 0, 7);
-  return SocialParty::Frame(m);
+  nevr_social_party::AppendLe(m.payload, 0, 8);
+  nevr_social_party::AppendLe(m.payload, friendId, 8);
+  nevr_social_party::AppendLe(m.payload, status, 1);
+  nevr_social_party::AppendLe(m.payload, 0, 7);
+  return nevr_social_party::Frame(m);
 }
 
 /// A friend-change notify frame: Header(8) FriendID(8), and StatusCode(1) Reserved(7) when the
 /// message has a status (accept notify / success; 0 = success).
 inline std::string BuildFriendNotify(const FriendNotify& notify, std::uint64_t friendId) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = notify.symbol;
-  SocialParty::AppendLe(m.payload, 0, 8);
-  SocialParty::AppendLe(m.payload, friendId, 8);
-  if (notify.hasStatus) SocialParty::AppendLe(m.payload, 0, 8);
-  return SocialParty::Frame(m);
+  nevr_social_party::AppendLe(m.payload, 0, 8);
+  nevr_social_party::AppendLe(m.payload, friendId, 8);
+  if (notify.hasStatus) nevr_social_party::AppendLe(m.payload, 0, 8);
+  return nevr_social_party::Frame(m);
 }
 
 /// SNSPartyJoinNotify / SNSPartyLeaveNotify: PartyID(8) MemberID(8); SNSPartyJoinSuccess: PartyID(8)
 /// OwnerID(8) (nakama server/evr/sns_party.go).
 inline std::string BuildPartyMemberNotify(const char* name, std::uint64_t partyId, std::uint64_t memberId) {
-  SocialParty::Message m;
-  m.symbol = SocialParty::ReplySymbol(name);
-  SocialParty::AppendLe(m.payload, partyId, 8);
-  SocialParty::AppendLe(m.payload, memberId, 8);
-  return SocialParty::Frame(m);
+  nevr_social_party::Message m;
+  m.symbol = nevr_social_party::ReplySymbol(name);
+  nevr_social_party::AppendLe(m.payload, partyId, 8);
+  nevr_social_party::AppendLe(m.payload, memberId, 8);
+  return nevr_social_party::Frame(m);
 }
 
 /// SNSFriendPresenceNotify (social_roster.h kFriendPresenceNotify): Header(8) FriendID(8) PartyID(8)
 /// Joinable(1) StatusCode(1, online) Reserved(6) TextLen(2) Text.
 inline std::string BuildFriendPresenceNotify(std::uint64_t friendId, std::uint64_t partyId, bool joinable,
                                              const std::string& text) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = 0xbdd8dd00c5e97a63ULL;
-  SocialParty::AppendLe(m.payload, 0, 8);
-  SocialParty::AppendLe(m.payload, friendId, 8);
-  SocialParty::AppendLe(m.payload, partyId, 8);
-  SocialParty::AppendLe(m.payload, joinable ? 1 : 0, 1);
-  SocialParty::AppendLe(m.payload, 0, 1);
-  SocialParty::AppendLe(m.payload, 0, 6);
-  SocialParty::AppendLe(m.payload, text.size(), 2);
+  nevr_social_party::AppendLe(m.payload, 0, 8);
+  nevr_social_party::AppendLe(m.payload, friendId, 8);
+  nevr_social_party::AppendLe(m.payload, partyId, 8);
+  nevr_social_party::AppendLe(m.payload, joinable ? 1 : 0, 1);
+  nevr_social_party::AppendLe(m.payload, 0, 1);
+  nevr_social_party::AppendLe(m.payload, 0, 6);
+  nevr_social_party::AppendLe(m.payload, text.size(), 2);
   m.payload += text;
-  return SocialParty::Frame(m);
+  return nevr_social_party::Frame(m);
 }
 
 /// SNSRecentlyMetListResponse (social_roster.h kRecentlyMetListResponse).
-inline std::string BuildRecentlyMetListResponse(const std::vector<SocialRoster::Entry>& people) {
-  SocialParty::Message m;
-  m.symbol = SocialRoster::kRecentlyMetListResponse;
-  SocialParty::AppendLe(m.payload, people.size(), 4);
-  for (const SocialRoster::Entry& e : people) {
-    SocialParty::AppendLe(m.payload, e.id, 8);
-    SocialParty::AppendLe(m.payload, e.presence.partyId, 8);
-    SocialParty::AppendLe(m.payload, e.presence.joinable ? 1 : 0, 1);
-    SocialParty::AppendLe(m.payload, e.online ? SocialRoster::kStatusOnline : SocialRoster::kStatusOffline, 1);
-    SocialParty::AppendLe(m.payload, 0, 6);
-    SocialParty::AppendLe(m.payload, e.name.size(), 2);
+inline std::string BuildRecentlyMetListResponse(const std::vector<nevr_social_roster::Entry>& people) {
+  nevr_social_party::Message m;
+  m.symbol = nevr_social_roster::kRecentlyMetListResponse;
+  nevr_social_party::AppendLe(m.payload, people.size(), 4);
+  for (const nevr_social_roster::Entry& e : people) {
+    nevr_social_party::AppendLe(m.payload, e.id, 8);
+    nevr_social_party::AppendLe(m.payload, e.presence.partyId, 8);
+    nevr_social_party::AppendLe(m.payload, e.presence.joinable ? 1 : 0, 1);
+    nevr_social_party::AppendLe(m.payload, e.online ? nevr_social_roster::kStatusOnline : nevr_social_roster::kStatusOffline, 1);
+    nevr_social_party::AppendLe(m.payload, 0, 6);
+    nevr_social_party::AppendLe(m.payload, e.name.size(), 2);
     m.payload += e.name;
-    SocialParty::AppendLe(m.payload, e.presence.text.size(), 2);
+    nevr_social_party::AppendLe(m.payload, e.presence.text.size(), 2);
     m.payload += e.presence.text;
   }
-  return SocialParty::Frame(m);
+  return nevr_social_party::Frame(m);
 }
 
 /// SNSPartyDataNotify (social_party.h kPartyDataNotify): PartyID(8) MemberID(8) Seq(4) JsonLen(4) Json.
 inline std::string BuildPartyDataNotify(std::uint64_t partyId, std::uint64_t memberId, std::uint32_t seq,
                                         const std::string& json) {
-  SocialParty::Message m;
-  m.symbol = SocialParty::kPartyDataNotify;
-  SocialParty::AppendLe(m.payload, partyId, 8);
-  SocialParty::AppendLe(m.payload, memberId, 8);
-  SocialParty::AppendLe(m.payload, seq, 4);
-  SocialParty::AppendLe(m.payload, json.size(), 4);
+  nevr_social_party::Message m;
+  m.symbol = nevr_social_party::kPartyDataNotify;
+  nevr_social_party::AppendLe(m.payload, partyId, 8);
+  nevr_social_party::AppendLe(m.payload, memberId, 8);
+  nevr_social_party::AppendLe(m.payload, seq, 4);
+  nevr_social_party::AppendLe(m.payload, json.size(), 4);
   m.payload += json;
-  return SocialParty::Frame(m);
+  return nevr_social_party::Frame(m);
 }
 
 inline std::string BuildPartyJoinFailure(std::uint64_t partyId, std::uint8_t code) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = kPartyJoinFailureSymbol;
-  SocialParty::AppendLe(m.payload, partyId, 8);
-  SocialParty::AppendLe(m.payload, code, 1);
-  return SocialParty::Frame(m);
+  nevr_social_party::AppendLe(m.payload, partyId, 8);
+  nevr_social_party::AppendLe(m.payload, code, 1);
+  return nevr_social_party::Frame(m);
 }
 
 inline std::string BuildPartyInviteNotify(std::uint64_t partyId, std::uint64_t inviterId) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = kPartyInviteNotifySymbol;
-  SocialParty::AppendLe(m.payload, partyId, 8);
-  SocialParty::AppendLe(m.payload, inviterId, 8);
-  return SocialParty::Frame(m);
+  nevr_social_party::AppendLe(m.payload, partyId, 8);
+  nevr_social_party::AppendLe(m.payload, inviterId, 8);
+  return nevr_social_party::Frame(m);
 }
 
 }  // namespace nevr_scenario_protocol

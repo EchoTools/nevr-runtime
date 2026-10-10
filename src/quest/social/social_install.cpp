@@ -168,7 +168,7 @@ InstallResult InstallSocialHook(bool enabled) {
   static sentinel::GotHook hook;
   // The friend-name decoder (zstd) is registered by this explicit call: the PC registers it from a static
   // initializer, which the sentinel may not carry. Without it no profile is requested and rows show ids.
-  SocialNames::RegisterDefaultDecoder();
+  nevr_social_names::RegisterDefaultDecoder();
   // Allocate and wire the models before any game thread can reach the handler.
   PublishFacadeObject();
   const GameJson gameJson = ResolveGameJson(&sentinel::FindLoadedImage);

@@ -9,7 +9,7 @@
 // Wire format of one message:   [marker(8)][symbol(8)][length(8)][payload(length)]
 // A WebSocket binary frame carries one or more messages back to back. Integers are little endian.
 // LoginRequest payload:         [session UUID(16)][platform code(8)][account id(8)][profile JSON][NUL]
-// The profile JSON is built by LoginProfile::BuildLoginProfileJson (nlohmann::json); this codec only
+// The profile JSON is built by nevr_login_profile::BuildLoginProfileJson (nlohmann::json); this codec only
 // frames it.
 
 #include <cstddef>
@@ -18,7 +18,7 @@
 #include <string>
 #include <string_view>
 
-namespace EvrCodec {
+namespace nevr_evr_codec {
 
 constexpr std::size_t kMarkerSize = 8;
 constexpr std::size_t kHeaderSize = 24;  // marker + symbol + length
@@ -100,7 +100,7 @@ std::string BuildMessage(uint64_t symbol, std::string_view payload);
 
 // A LoginRequest message with an all-zero session UUID (no previous session). nullopt when
 // profileJson contains a NUL byte: the payload is NUL terminated, so the server would read a
-// truncated profile. LoginProfile::BuildLoginProfileJson never emits one (JSON escapes it).
+// truncated profile. nevr_login_profile::BuildLoginProfileJson never emits one (JSON escapes it).
 std::optional<std::string> BuildLoginRequest(uint64_t platformCode, uint64_t accountId,
                                              std::string_view profileJson);
 
@@ -165,4 +165,4 @@ std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt, c
 // key: a token-auth login sent there arrives unauthenticated.
 bool IsBearerReplacingPath(const std::string& url);
 
-}  // namespace EvrCodec
+}  // namespace nevr_evr_codec

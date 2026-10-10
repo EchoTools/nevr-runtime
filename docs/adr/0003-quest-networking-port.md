@@ -645,7 +645,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    provider adapter over the same models with the 76-slot Quest vtable (section "Social provider").
    `nevr_social` is declared
    only when the social feature is effective AND the social facade is actually installed;
-   otherwise the login carries 0. The shared value is `SocialParty::kSocialLevel`
+   otherwise the login carries 0. The shared value is `nevr_social_party::kSocialLevel`
    (`runtime/compat/social_level.h`, the PCVR login's constant); the production
    `IdentitySource` sets `Identity::social_level` to it when, and only when, both conditions
    hold, and the default is 0. The server sends friend presence, recently met, the lobby tablet
@@ -1222,7 +1222,7 @@ pnsrad exports no `Social`, so on PCVR the social accessor (`echovr.exe` 0x14061
 runtime's social facade (`src/runtime/patch/social_facade*.cpp`) supplies a `CNSISocial` object whose
 vtable mirrors `CNSOVRSocial`'s, and `ObserveSocialFrames` in `src/runtime/compat/ws_bridge.cpp` feeds
 `SocialRoster` and `SocialParty` from the service's SNS messages. Every id in that path is a NEVR
-account id (`SocialParty::MemberUuid` derives the party UUID from `OVR-ORG-<id>`). On PCVR the enabler is
+account id (`nevr_social_party::MemberUuid` derives the party UUID from `OVR-ORG-<id>`). On PCVR the enabler is
 what removes the Oculus provider; the facade is what provides the social object. Both are needed there.
 
 ### Id spaces on Quest
@@ -1254,7 +1254,7 @@ Traced in the pinned libraries (ELF vaddrs):
   match gives 0. pnsovr's `UserProviderID` and `ProviderID` exports both return the word at libpnsovr 0x70e380 (.bss,
   written at run time; no store to it was found by static search). pnsovr's own `SNSUserID` constructor and
   `OpenFriendRequestUI` compare that word with the same "OVR" hash and make code 4, and the login rewrite refuses to run
-  unless `CNSOVRUser`'s platform word is 4 (the platform the NEVR login carries and `SocialParty::MemberUuid`
+  unless `CNSOVRUser`'s platform word is 4 (the platform the NEVR login carries and `nevr_social_party::MemberUuid`
   derives ids for: `OVR-ORG-<id>`). So the chain is consistent when the word holds the "OVR" hash, which is what pnsovr's
   native friend flow needs; the value itself was not read from a running process. `Initialize` reads the word once and
   logs `social_provider` (symbol, the platform code the game will derive, the code the login carries, match yes/NO), at
@@ -1333,7 +1333,7 @@ Traced in the pinned libraries (ELF vaddrs):
   service's messages fill; the local member is the account passed to `SetLocalAccount`.
 - **Frames.** `ObserveFrames` walks the EVR frames the loopback bridge relays and applies the
   server-to-game ones by CSymbol64 hash, as `ObserveSocialFrames` does by name. Requests the models ask
-  for go out through `SocialParty::SetSender`.
+  for go out through `nevr_social_party::SetSender`.
 - **Exceptions.** None crosses between game frames and sentinel frames in either direction
   (`callback_thunk.h`). The slots that call the game (`Update` delivering the party callbacks,
   `JoinInternal` and `AcceptInvite` asking the accept gate) are in `social_game_calls.cpp`, built
@@ -1358,7 +1358,7 @@ Traced in the pinned libraries (ELF vaddrs):
   reports no local member.
 - **Refused requests.** A create, join or lock request the sender refuses (no `SetSender` yet, a closed
   connection) is logged `NOT_sent`, counted (`social_send_failed`) and rolled back in the model
-  (`SocialParty::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
+  (`nevr_social_party::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
   "creating" or "joining" and defer every later join. What happens next differs by request. A create is asked
   again by `Update` once the game still wants a party and five seconds have passed since the last attempt
   (pnsovr's own interval, libpnsovr 0x2045f4, `cmp w8, #5`). A lock is asked again by `Update` on the same
@@ -1378,7 +1378,7 @@ Traced in the pinned libraries (ELF vaddrs):
   applied as usual. A create asked twice is not two parties: Nakama leaves the caller's current party before it
   creates the new one (`snsPartyCreateRequest`), so the later `PartyCreateSuccess` is the party the model ends
   in. Reply times of a live server were not measured.
-- **Sender contract.** `SocialParty::Send` returns false when any frame of the batch was refused, and still
+- **Sender contract.** `nevr_social_party::Send` returns false when any frame of the batch was refused, and still
   hands the remaining frames of the batch to the sender; a false return means that frame was not written. The
   PCVR sender returns false only with no login connection or when the websocket refused the frame, and true
   for a frame queued while the connection opens, which is the unanswered case above. The Quest network
@@ -1412,7 +1412,7 @@ Traced in the pinned libraries (ELF vaddrs):
 Party and member data (headset type per member, the lobby id a non-host member follows) is carried as on the PC:
 
 - **Receive.** `ObserveFrames` takes `SNSPartyDataNotify` (`social_frames.cpp`), checks it is a JSON object and hands
-  it to `SocialParty::State::ReceiveData`. The first `Update` after it loads it into the game's CJson before the
+  it to `nevr_social_party::State::ReceiveData`. The first `Update` after it loads it into the game's CJson before the
   callbacks fire (a `MemberJoined` callback already finds the member's `headsettype`, `PartyMemberJoinedCB`
   0x126f8ac): each remote member's data into its slot of the member array at +0x248 (16 bytes per slot, slot 0 is the
   local member's own and is never loaded), the party's into +0x1f0 for a member (the leader's party data is its own).
@@ -1463,7 +1463,7 @@ sentinel, which links `-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and
 game's `libr15.so` and `libpnsovr.so` each export their own 138 `ZSTD_*` symbols, which a hidden static copy does
 not meet). The PC registers the decoder from a namespace-scope initializer, which the sentinel may not carry
 (`tools/check_quest_static_init.sh`), so the Quest compile defines `NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION` and
-`InstallSocialHook` calls `SocialNames::RegisterDefaultDecoder()`. Without that call no profile is requested and
+`InstallSocialHook` calls `nevr_social_names::RegisterDefaultDecoder()`. Without that call no profile is requested and
 rows show account ids. `social_names_test` decodes the real zstd frame the PC tests use and shows the name on a
 friend row.
 
@@ -1526,7 +1526,7 @@ What the integration commit calls, and when:
    different slots, no shared state.
 3. **Login adapter:** `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the
    login (the NEVR account id, the id space of everything the facade reports).
-4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then a
+4. **Network adapter:** `nevr_social_party::SetSender(fn)` before the first request can be sent (until then a
    request logs `NOT_sent`, is counted and is rolled back; the create and the lock are asked again by `Update`,
    a join is reported to the game as failed), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
    nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
@@ -1636,7 +1636,7 @@ no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
 `nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `quest_net::SessionBridge` (`net/session_bridge.cpp`); its
 `Config::tap` (`net/frame_tap.cpp`) sees every relayed frame, which feeds `quest_social::ObserveFrames` and, on the
 service's `LoginSuccess` (account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's
-requests go out through `SocialParty::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
+requests go out through `nevr_social_party::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
 until the login is accepted.
 
 **Sensor annotation.** `NEVR_OUTSIDE_GAME_CALL` (`sentinel/outside_game_call.h`) places a function in the

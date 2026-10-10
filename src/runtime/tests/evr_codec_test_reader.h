@@ -9,7 +9,7 @@
 #include <cstring>
 #include <string>
 
-namespace EvrCodecTest {
+namespace nevr_evr_codec_test {
 
 enum class LoginRequestStatus {
   Ok,
@@ -52,4 +52,4 @@ inline LoginRequestStatus ParseLoginRequest(const std::string& frame, LoginReque
   return LoginRequestStatus::Ok;
 }
 
-}  // namespace EvrCodecTest
+}  // namespace nevr_evr_codec_test

@@ -1,5 +1,5 @@
 #pragma once
-// The service-facing half of the Quest transport: SessionRouter::RemoteTransport over an abstract,
+// The service-facing half of the Quest transport: nevr_session_router::RemoteTransport over an abstract,
 // blocking-free WebSocket client (WsConnector). Platform neutral: the libcurl implementation lives in
 // curl_ws_connector.{h,cpp}; tests supply a fake.
 //
@@ -98,14 +98,14 @@ bool IsAcceptableRemoteUrl(const std::string& url);
 
 // Builds the URL and headers for one remote session (auth route, matchmaker query changes). nullopt means
 // the identity needed for the route is missing; the session ends rather than connecting unauthenticated.
-using RequestBuilder = std::function<std::optional<ConnectRequest>(const SessionRouter::RemoteOpenRequest&)>;
+using RequestBuilder = std::function<std::optional<ConnectRequest>(const nevr_session_router::RemoteOpenRequest&)>;
 
-class ConnectorRemoteTransport final : public SessionRouter::RemoteTransport {
+class ConnectorRemoteTransport final : public nevr_session_router::RemoteTransport {
  public:
   struct Config {
     std::size_t maxQueuedBytes = 4u * 1024u * 1024u;  // frames waiting for the worker to write
     int pollMs = 200;
-    SessionRouter::LogSink log;
+    nevr_session_router::LogSink log;
   };
 
   ConnectorRemoteTransport(WsConnector* connector, RequestBuilder builder, Config config);
@@ -113,28 +113,28 @@ class ConnectorRemoteTransport final : public SessionRouter::RemoteTransport {
   ConnectorRemoteTransport(const ConnectorRemoteTransport&) = delete;
   ConnectorRemoteTransport& operator=(const ConnectorRemoteTransport&) = delete;
 
-  void Attach(SessionRouter::Router* router) { router_ = router; }
+  void Attach(nevr_session_router::Router* router) { router_ = router; }
   // Ends every session (close frame, no router callbacks) and joins the workers. A worker still inside
   // WsConnector::Connect finishes that call first, so Stop can wait up to the connector's connect timeout.
   void Stop();
 
-  bool Open(const SessionRouter::RemoteOpenRequest& request) override;
-  SessionRouter::SendResult Send(SessionRouter::RemoteId remote, std::string_view frame, bool binary) override;
-  void Close(SessionRouter::RemoteId remote, uint16_t code) override;
+  bool Open(const nevr_session_router::RemoteOpenRequest& request) override;
+  nevr_session_router::SendResult Send(nevr_session_router::RemoteId remote, std::string_view frame, bool binary) override;
+  void Close(nevr_session_router::RemoteId remote, uint16_t code) override;
 
  private:
   struct State;
   void Worker(std::shared_ptr<State> state, ConnectRequest request);
-  std::shared_ptr<State> Find(SessionRouter::RemoteId remote);
+  std::shared_ptr<State> Find(nevr_session_router::RemoteId remote);
   void Reap();
-  void Log(SessionRouter::LogLevel level, const std::string& line);
+  void Log(nevr_session_router::LogLevel level, const std::string& line);
 
   WsConnector* connector_;
   RequestBuilder builder_;
   Config config_;
-  SessionRouter::Router* router_ = nullptr;
+  nevr_session_router::Router* router_ = nullptr;
   std::mutex mutex_;  // guards states_ only
-  std::map<SessionRouter::RemoteId, std::shared_ptr<State>> states_;
+  std::map<nevr_session_router::RemoteId, std::shared_ptr<State>> states_;
   std::atomic<bool> stopped_{false};
 };
 

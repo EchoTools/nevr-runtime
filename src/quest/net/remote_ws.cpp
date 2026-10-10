@@ -5,9 +5,9 @@
 
 namespace quest_net {
 
-using SessionRouter::LogLevel;
-using SessionRouter::RemoteId;
-using SessionRouter::SendResult;
+using nevr_session_router::LogLevel;
+using nevr_session_router::RemoteId;
+using nevr_session_router::SendResult;
 
 const char* ConnectStatusName(ConnectStatus status) {
   switch (status) {
@@ -86,7 +86,7 @@ void ConnectorRemoteTransport::Reap() {
   }
 }
 
-bool ConnectorRemoteTransport::Open(const SessionRouter::RemoteOpenRequest& request) {
+bool ConnectorRemoteTransport::Open(const nevr_session_router::RemoteOpenRequest& request) {
   if (router_ == nullptr || stopped_) return false;
   Reap();
   std::optional<ConnectRequest> built = builder_ ? builder_(request) : std::nullopt;

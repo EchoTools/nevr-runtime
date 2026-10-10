@@ -22,7 +22,7 @@ State 2 waits until that queued request has been consumed (compares the queue co
 `RefreshFriends` slot 45 of the social facade (`src/runtime/patch/social_facade_object.cpp`,
 `TRACED(45, RefreshFriends)`; `src/runtime/scenario/scenario_control.cpp`
 `kRefreshFriendsHandlerVA`). On our side that slot sends `FriendListRefreshRequest`
-(`SocialParty::RefreshFriends`, `src/runtime/compat/social_party.h`).
+(`nevr_social_party::RefreshFriends`, `src/runtime/compat/social_party.h`).
 
 ## Which script runs the node
 

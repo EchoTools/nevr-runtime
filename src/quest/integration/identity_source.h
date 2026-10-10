@@ -25,7 +25,7 @@ class TokenIdentitySource final : public nevr_quest_login::IdentitySource {
  public:
   using SnapshotFn = std::function<nevr::quest_auth::Snapshot()>;
   // `socialLevel` is asked on every Fetch and answers the level the login declares ("nevr_social"):
-  // SocialParty::kSocialLevel only when the social facade is installed, else 0.
+  // nevr_social_party::kSocialLevel only when the social facade is installed, else 0.
   // The readiness it publishes is process-wide (the attempt gate), so constructing a source starts it not ready
   // and not poisoned: the process has one.
   explicit TokenIdentitySource(SnapshotFn snapshot, std::function<int()> socialLevel = nullptr)
@@ -41,7 +41,7 @@ class TokenIdentitySource final : public nevr_quest_login::IdentitySource {
   // login connection is held through all of these. Refused only when no token will come: a final failure
   // (Snapshot::will_retry false), a stopped session, a token without an account. Allocation-free; the answer is exactly Classify's, so the gate and the login rewrite cannot
   // disagree.
-  static SessionRouter::LoginGate GateFor(const nevr::quest_auth::Snapshot& snap) noexcept;
+  static nevr_session_router::LoginGate GateFor(const nevr::quest_auth::Snapshot& snap) noexcept;
 
   // The #240 login prerequisites ask this from the Oculus message pump before they stand in for an Oculus
   // answer (login_rewrite.h). It is one lock-free atomic load of the process-wide attempt gate

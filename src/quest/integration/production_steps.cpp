@@ -68,12 +68,12 @@ struct Runtime {
   std::atomic<quest_net::SessionBridge*> bridge{nullptr};
   // The router's login gate, kept current by the token-auth poll (TokenIdentitySource::GateFor); the router
   // reads it with its lock held, so it is a plain atomic. Awaiting until the first poll says otherwise.
-  std::atomic<int> loginGate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
+  std::atomic<int> loginGate{static_cast<int>(nevr_session_router::LoginGate::Awaiting)};
   std::atomic<unsigned> bridgePort{0};
   std::string loopbackUri;  // "ws://127.0.0.2:<port>/<token>/"; written once before the redirect is installed
   std::unique_ptr<TokenIdentitySource> identity;
   bool socialWanted = false;
-  std::atomic<int> socialLevel{0};  // SocialParty::kSocialLevel once the facade is installed
+  std::atomic<int> socialLevel{0};  // nevr_social_party::kSocialLevel once the facade is installed
 };
 
 Runtime& R() {
@@ -95,12 +95,12 @@ void HookLogToDisk(sentinel::LogLevel level, const char* line) {
   }
 }
 
-nevr_quest::LogLevel MapRouter(SessionRouter::LogLevel level) {
+nevr_quest::LogLevel MapRouter(nevr_session_router::LogLevel level) {
   switch (level) {
-    case SessionRouter::LogLevel::Warning: return nevr_quest::LogLevel::kWarn;
-    case SessionRouter::LogLevel::Error: return nevr_quest::LogLevel::kError;
-    case SessionRouter::LogLevel::Debug:
-    case SessionRouter::LogLevel::Info: break;
+    case nevr_session_router::LogLevel::Warning: return nevr_quest::LogLevel::kWarn;
+    case nevr_session_router::LogLevel::Error: return nevr_quest::LogLevel::kError;
+    case nevr_session_router::LogLevel::Debug:
+    case nevr_session_router::LogLevel::Info: break;
   }
   return nevr_quest::LogLevel::kInfo;
 }
@@ -371,7 +371,7 @@ class ProductionSteps final : public Steps {
     config.subscribeFriendList = rt.socialWanted;
     config.connector = rt.connector.get();
     config.log = RouterLog();
-    config.loginGate = [] { return static_cast<SessionRouter::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
+    config.loginGate = [] { return static_cast<nevr_session_router::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
     config.identity = [serverKey] {
       quest_net::Identity id;
       nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
@@ -390,7 +390,7 @@ class ProductionSteps final : public Steps {
         const nevr::quest_auth::Snapshot snap = AuthSnapshot();
         quest_social::SetLocalAccount(account, snap.username.c_str());
       };
-      SocialParty::SetSender(&SendSocialFrame);
+      nevr_social_party::SetSender(&SendSocialFrame);
     }
     if (!quest_net::IsAcceptableRemoteUrl(config.remoteUri)) {
       detail_ = "socket_uri_not_wss";
@@ -425,7 +425,7 @@ class ProductionSteps final : public Steps {
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
-    if (ok) R().socialLevel.store(SocialParty::kSocialLevel);
+    if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
     return ok;
   }
 
@@ -470,8 +470,8 @@ class ProductionSteps final : public Steps {
  private:
   const char* detail_ = nullptr;  // set by a step to say why it ended as it did (a fixed token)
   unsigned port_ = 0;
-  static SessionRouter::LogSink RouterLog() {
-    return [](SessionRouter::LogLevel level, const std::string& line) {
+  static nevr_session_router::LogSink RouterLog() {
+    return [](nevr_session_router::LogLevel level, const std::string& line) {
       try {
         sentinel::Emit(MapRouter(level), line);
         // The stage lines (stage_log.h) that only the router's own log can tell: a remote session

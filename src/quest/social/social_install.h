@@ -92,7 +92,7 @@ void* OnSocialHandler(SocialThunk::Fn original, std::uint64_t handle) noexcept;
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup);
 void PublishFacadeObject();
 
-// Registers the friend-name decoder (SocialNames::RegisterDefaultDecoder, the zstd profile reader), builds the
+// Registers the friend-name decoder (nevr_social_names::RegisterDefaultDecoder, the zstd profile reader), builds the
 // process-wide facade (outside any game frame), arms the callback and redirects the slot. Once that has worked it also
 // installs the party-invite gate override (social_invite_gate.h), whose outcome is logged, not returned.
 // `enabled` is the caller's activation decision; false touches nothing.

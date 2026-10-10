@@ -1,6 +1,6 @@
 #pragma once
 // The game-facing half of the Quest transport: a WebSocket server on kListenAddress (127.0.0.2) that the
-// game's redirected connections reach, implementing SessionRouter::GameTransport. POSIX sockets only
+// game's redirected connections reach, implementing nevr_session_router::GameTransport. POSIX sockets only
 // (builds for Android and for the Linux host, where the tests drive it with real loopback connections).
 //
 // Why not 127.0.0.1: the game never dials 127.0.0.1. Its TCP peers resolve their host through
@@ -66,7 +66,7 @@ constexpr bool GameDialsHostVerbatim(const char* host) {
 }
 static_assert(GameDialsHostVerbatim(kListenAddress), "the game would not dial the listener's address");
 
-class LoopbackGameServer final : public SessionRouter::GameTransport {
+class LoopbackGameServer final : public nevr_session_router::GameTransport {
  public:
   struct Config {
     std::size_t maxMessageBytes = 4u * 1024u * 1024u;  // one WebSocket message from the game
@@ -76,7 +76,7 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
     int idleFirstFrameMs = 30000;  // an upgraded connection that sends no data frame in this long is closed
     int closeFlushTimeoutMs = 1000;
     int listenerCheckMs = 2000;  // how often the listening socket is proven to still be ours and listening
-    SessionRouter::LogSink log;
+    nevr_session_router::LogSink log;
   };
 
   explicit LoopbackGameServer(Config config);
@@ -85,7 +85,7 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   LoopbackGameServer& operator=(const LoopbackGameServer&) = delete;
 
   // Must be called before Start. The router must outlive Stop().
-  void Attach(SessionRouter::Router* router) { router_ = router; }
+  void Attach(nevr_session_router::Router* router) { router_ = router; }
 
   // Binds kListenAddress on an ephemeral port and starts accepting. Returns the port, or 0 on failure (logged).
   // Start() and Stop() are the startup owner's to call; they must NOT be called from a router callback
@@ -109,21 +109,21 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   uint64_t ListenerLosses() const { return listenerLosses_.load(); }
   uint64_t ListenerRestores() const { return listenerRestores_.load(); }
 
-  // SessionRouter::GameTransport
-  SessionRouter::SendResult Send(SessionRouter::GameId game, std::string_view frame, bool binary) override;
-  void Close(SessionRouter::GameId game, uint16_t code, std::string_view reason) override;
+  // nevr_session_router::GameTransport
+  nevr_session_router::SendResult Send(nevr_session_router::GameId game, std::string_view frame, bool binary) override;
+  void Close(nevr_session_router::GameId game, uint16_t code, std::string_view reason) override;
   // The login connection is silent until the game's LogInRequest, which can be minutes after it connects (the
   // player has to sign in first), so it is exempt from the idle-before-first-frame close for as long as it is
   // the login connection. It is still answered to pings and closed by the router, the peer or Stop().
-  void SetIdleExempt(SessionRouter::GameId game, bool exempt) override;
+  void SetIdleExempt(nevr_session_router::GameId game, bool exempt) override;
 
  private:
   struct Conn;
   void AcceptLoop();
   void ConnLoop(std::shared_ptr<Conn> conn);
-  std::shared_ptr<Conn> Find(SessionRouter::GameId game);
+  std::shared_ptr<Conn> Find(nevr_session_router::GameId game);
   void Reap();
-  void Log(SessionRouter::LogLevel level, const std::string& line);
+  void Log(nevr_session_router::LogLevel level, const std::string& line);
   // Accepts every queued connection. Returns 0, or the errno of an accept() failure that says the listener
   // itself is broken; sets *resourceBlocked when accept() failed for lack of descriptors or memory, and
   // *identityLost when the descriptor stopped being our listening socket mid-drain (re-checked per accept).
@@ -139,7 +139,7 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   bool ListenerStillOurs() const;
 
   Config config_;
-  SessionRouter::Router* router_ = nullptr;
+  nevr_session_router::Router* router_ = nullptr;
   std::mutex lifecycleMutex_;    // serializes Start() and Stop() so the accept thread is created/joined once
   std::atomic<int> listenFd_{-1};  // written by the accept thread (CheckListener/TryRestoreListener) and by
                                  // Start/Stop around it; atomic so those reads/writes are defined
@@ -159,8 +159,8 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   std::atomic<bool> stop_{false};
   std::thread acceptThread_;
   std::mutex mutex_;  // guards conns_ only
-  std::map<SessionRouter::GameId, std::shared_ptr<Conn>> conns_;
-  SessionRouter::GameId nextId_ = 1;
+  std::map<nevr_session_router::GameId, std::shared_ptr<Conn>> conns_;
+  nevr_session_router::GameId nextId_ = 1;
 };
 
 }  // namespace quest_net

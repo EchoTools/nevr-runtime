@@ -28,7 +28,7 @@
 
 #include "runtime/compat/social_level.h"
 
-namespace SocialParty {
+namespace nevr_social_party {
 
 // ---------------------------------------------------------------------------------------------
 // Symbols (the 64-bit message hashes, evr/core_packet.go)
@@ -1091,4 +1091,4 @@ inline State& Global() {
   return state;
 }
 
-}  // namespace SocialParty
+}  // namespace nevr_social_party
