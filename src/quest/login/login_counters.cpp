@@ -8,7 +8,7 @@ namespace nevr_quest_login {
 // A hook never logs on the game's call path; the reporter thread reads these (hook_report.h). Without
 // them a smoke test cannot tell from the reporter lines whether CNSUser::SendLogInRequest was reached.
 //
-// The login-prerequisite hooks (login_prerequisites.h) register one calls counter each, 16 in all: which
+// The login-prerequisite hooks (login_prerequisites.h) register one calls counter each, 17 in all: which
 // Oculus answer the game asked for and which callback ran says how far a login got. No fault counter:
 // like the dlopen hook's, a thunk GotHook installed has its original published, so it cannot move, and a
 // failed install is its own `quest_login_prerequisites_install` line.
@@ -32,6 +32,8 @@ bool RegisterLoginHookCounters() noexcept {
   ok = sentinel::RegisterReportCounter("prereq_user_request_calls", &UserRequestThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_token_request_calls", &TokenRequestThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_proof_request_calls", &ProofRequestThunk::CallCounter()) && ok;
+  // The entitlement request answered locally (#411): every call is one request that did not reach Meta.
+  ok = sentinel::RegisterReportCounter("prereq_entitlement_local_calls", &EntitlementRequestThunk::CallCounter()) && ok;
   return ok;
 }
 

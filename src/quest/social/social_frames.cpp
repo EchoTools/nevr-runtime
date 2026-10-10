@@ -10,6 +10,7 @@
 
 #include "hook_log.h"
 #include "quest/social/social_request_log.h"
+#include "runtime/compat/evr_codec.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -48,7 +49,14 @@ void WantName(const Ports& ports, const char* what, std::uint64_t accountId) {
   Send(ports, what, nevr_social_names::GlobalResolver().Want(accountId));
 }
 
+// SNSFriendInviteSuccess / SNSFriendInviteFailure (src/abi/symbols.h): the server's answers to a friend request
+// this player sent. The failure payload is Header(8) + FriendID(8) + StatusCode(1) (nakama FriendInviteError).
+constexpr std::uint64_t kSymFriendInviteSuccess = 0x7f0c6a3ac83c6f77ULL;
+constexpr std::uint64_t kSymFriendInviteFailure = 0x7f197e30c72c6e61ULL;
+
 const char* KnownName(std::uint64_t symbol) {
+  if (symbol == kSymFriendInviteSuccess) return "FriendInviteSuccess";
+  if (symbol == kSymFriendInviteFailure) return "FriendInviteFailure";
   if (symbol == kSymFriendStatusNotify) return "FriendStatusNotify";
   if (symbol == kSymFriendListResponse) return "FriendListResponse";
   if (symbol == nevr_social_roster::kFriendPresenceNotify) return "FriendPresenceNotify";
@@ -102,6 +110,10 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
     if (nevr_social_names::DecodeProfile(payload, len, &accountId, &displayName)) {
       ports.friends->SetName(accountId, displayName);
       ports.party->SetName(accountId, displayName);
+      if (ports.recent->SetRequestName(accountId, displayName)) {
+        LogFields(LogLevel::kInfo, "social_friend_request",
+                  {{"result", "named"}, {"account", static_cast<long long>(accountId)}, {"name_bytes", displayName.size()}});
+      }
       consumed = true;
     }
   } else if (sym == nevr_social_roster::kFriendPresenceNotify) {
@@ -140,6 +152,47 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
 
   if (sym == nevr_social_party::kPartyDataNotify) consumed = ApplyPartyData(ports, payload, len, why) || consumed;
 
+  // A new session (first login, reconnect, another account): the friend requests that were pending belonged to
+  // the last one. The server replays this player's after the friend-list subscribe that follows.
+  if (sym == nevr_evr_codec::kSymLoginSuccess) {
+    const std::size_t cleared = ports.recent->ClearRequests();
+    if (cleared != 0) {
+      LogFields(LogLevel::kInfo, "social_friend_request",
+                {{"result", "cleared"}, {"reason", "login_success"}, {"removed", static_cast<long long>(cleared)}});
+    }
+  }
+  // An incoming friend request is listed first in the recently-met list (the game has no prompt of its own,
+  // #405), and its requester's profile is asked for like a friend's.
+  {
+    const nevr_social_roster::RequestEvent request =
+        nevr_social_roster::ApplyFriendMessage(*ports.recent, sym, payload, len);
+    if (request.change == nevr_social_roster::RequestChange::kAdded) {
+      LogFields(LogLevel::kInfo, "social_friend_request",
+                {{"result", "received"}, {"account", static_cast<long long>(request.account)},
+                 {"pending", static_cast<long long>(request.pending)}});
+      WantName(ports, "friend request name lookup", request.account);
+      consumed = true;
+    } else if (request.change == nevr_social_roster::RequestChange::kCleared) {
+      LogFields(LogLevel::kInfo, "social_friend_request",
+                {{"result", "cleared"}, {"account", static_cast<long long>(request.account)},
+                 {"reason", request.reason}, {"pending", static_cast<long long>(request.pending)}});
+      consumed = true;
+    }
+  }
+  // The answers to a request this player sent (#405): without a line the sender never learns it was refused.
+  if (sym == kSymFriendInviteSuccess) {
+    LogFields(LogLevel::kInfo, "social_friend_request",
+              {{"result", "sent"}, {"account", static_cast<long long>(len >= 16 ? Le64(payload + 8) : 0)}});
+    consumed = true;
+  } else if (sym == kSymFriendInviteFailure) {
+    const std::uint8_t error = len >= 17 ? payload[16] : 0xff;
+    const char* reason = error == 0 ? "bad_request" : error == 1 ? "not_found" : error == 2 ? "self"
+                         : error == 3 ? "already_friends" : error == 4 ? "pending" : error == 5 ? "full" : "unknown";
+    LogFields(LogLevel::kWarn, "social_friend_request",
+              {{"result", "failed"}, {"account", static_cast<long long>(len >= 16 ? Le64(payload + 8) : 0)},
+               {"error", error}, {"reason", reason}});
+    consumed = true;
+  }
   // A friend added, accepted, removed or withdrawn carries no presence: ask for the list again.
   if (nevr_social_roster::IsFriendChangeSymbol(sym)) {
     Send(ports, "friend list refresh", ports.party->RefreshFriends());

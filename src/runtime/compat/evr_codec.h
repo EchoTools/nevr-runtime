@@ -110,6 +110,10 @@ constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;
 // requester up under the platform the LoginRequest carried. OVR_ORG in the game's numbering.
 inline constexpr uint64_t kBridgeLoginPlatform = 4;
 
+// Little-endian 64-bit integer helpers, shared with compat/legacy_codec.
+uint64_t ReadLE64(const uint8_t* p);
+void AppendLE64(std::string& buffer, uint64_t value);
+
 // ---- building -------------------------------------------------------------------------------
 
 // One message: marker, symbol, payload length, payload.

@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
+#include <utility>
 
 namespace nevr_matchmaker_host_patch {
 
@@ -43,6 +45,36 @@ Result Apply(std::uint8_t* base, std::uint16_t port, Write&& write) {
   std::uint8_t* site = base + kHostRva;
   if (std::memcmp(site, kHostExpected, sizeof(kHostExpected) - 1) != 0) return Result::BytesMismatch;
   return write(site, replacement, static_cast<std::size_t>(length) + 1) ? Result::Patched : Result::WriteFailed;
+}
+
+// ntdll's LDR_DLL_NOTIFICATION_REASON_LOADED / _UNLOADED, the `reason` of an LdrRegisterDllNotification callback.
+constexpr unsigned kNotificationLoaded = 1;
+constexpr unsigned kNotificationUnloaded = 2;
+constexpr char kModuleName[] = "pnsradmatchmaking.dll";
+
+/// Whether the loader's BaseDllName (`nameChars` UTF-16 code units, not NUL-terminated) is the matchmaking
+/// module: ASCII case-insensitive, whole name.
+template <typename Ch>
+bool IsMatchmakingModule(const Ch* name, std::size_t nameChars) {
+  constexpr std::size_t kLength = sizeof(kModuleName) - 1;
+  if (name == nullptr || nameChars != kLength) return false;
+  for (std::size_t i = 0; i < kLength; ++i) {
+    auto c = static_cast<unsigned>(name[i]);
+    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+    if (c != static_cast<unsigned char>(kModuleName[i])) return false;
+  }
+  return true;
+}
+
+/// One loader notification. Only a LOAD of the matchmaking module acts: the image at `base` is rewritten
+/// (Apply) and the outcome returned. Every other notification returns nullopt and writes nothing, an unload
+/// included: the freed image takes its patch with it, so nothing is held per module and nothing needs
+/// undoing. There is no once-only guard: each load is a fresh image (#18).
+template <typename Ch, typename Write>
+std::optional<Result> OnModuleNotification(unsigned reason, const Ch* name, std::size_t nameChars, std::uint8_t* base,
+                                           std::uint16_t port, Write&& write) {
+  if (reason != kNotificationLoaded || base == nullptr || !IsMatchmakingModule(name, nameChars)) return std::nullopt;
+  return Apply(base, port, std::forward<Write>(write));
 }
 
 }  // namespace nevr_matchmaker_host_patch

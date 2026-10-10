@@ -9,7 +9,9 @@
 
 #include <cstdio>
 
+#include "quest/login/login_prerequisite_thunks.h"
 #include "quest/login/login_prerequisites.h"
+#include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/got_hook.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
@@ -43,6 +45,13 @@ void Sink(sentinel::LogLevel, const char* line) {
 // is off (the handler passes through), so its body only has to exist.
 bool IsError(const void*) { return true; }
 const char* ErrMsg(const void*) { return ""; }
+
+int g_entitlementOriginalCalls = 0;
+std::uint64_t FakeEntitlementOriginal() {
+  ++g_entitlementOriginalCalls;
+  return 0xBEEF;  // a request id the SDK would have returned
+}
+NEVR_HOOK_RECORD(kTestEntitlementHook, nevr_quest_login::EntitlementRequestThunk, &nevr_quest_login::OnEntitlementRequest);
 
 }  // namespace
 
@@ -88,6 +97,27 @@ int main() {
                                      reinterpret_cast<void*>(0x1));
   QCHECK(seen_is_error == 1);         // the game saw the real error (not forced false)
   QCHECK(g_lines == before + 1);      // one record was logged
+
+  // #411: the entitlement request is answered with request id 0 and the SDK function is never called; nothing is
+  // logged on the game's call path. Driven through the real thunk entry the slot would point at.
+  {
+    using Thunk = nevr_quest_login::EntitlementRequestThunk;
+    Thunk::Reset();
+    *Thunk::OriginalOut() = reinterpret_cast<void*>(&FakeEntitlementOriginal);
+    Thunk::Arm(kTestEntitlementHook);
+    using Entry = std::uint64_t (*)();
+    Entry entry = nullptr;
+    void* address = Thunk::EntryAddress();
+    __builtin_memcpy(&entry, &address, sizeof(entry));
+    const int linesBefore = g_lines;
+    QCHECK(entry() == 0);
+    QCHECK(entry() == 0);
+    QCHECK(g_entitlementOriginalCalls == 0);  // no request reached the Platform SDK
+    QCHECK(Thunk::Calls() == 2);              // each one counted (prereq_entitlement_local_calls)
+    QCHECK(g_lines == linesBefore);           // the handler never logs
+    Thunk::Disarm();
+    Thunk::Reset();
+  }
 
   sentinel::SetLogSink(nullptr);
   if (quest_test::Failures() != 0) {

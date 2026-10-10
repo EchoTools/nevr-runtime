@@ -517,6 +517,10 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       if (decoded) {
         nevr_social_roster::Global().SetName(accountId, displayName);
         nevr_social_party::Global().SetName(accountId, displayName);
+        if (nevr_social_roster::RecentlyMet().SetRequestName(accountId, displayName)) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend request named account=%llu name=\"%s\"",
+              static_cast<unsigned long long>(accountId), displayName.c_str());
+        }
       }
       if (nevr_social_roster::Global().Contains(replyFor)) {
         Log(EchoVR::LogLevel::Info,
@@ -565,6 +569,15 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       } else {
         Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
             name, static_cast<unsigned long long>(len));
+      }
+    }
+    if (fromServer && sym == nevr_evr_codec::kSymLoginSuccess) {
+      // A new session (first login, reconnect or another account): the friend requests that were pending
+      // belonged to the last one. The server replays this player's after the subscribe that follows.
+      const size_t cleared = nevr_social_roster::RecentlyMet().ClearRequests();
+      if (cleared != 0) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend requests cleared: new session (login success) removed=%zu",
+            cleared);
       }
     }
     if (fromServer && sym == nevr_social_roster::kFriendPresenceNotify) {
@@ -634,6 +647,24 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
       // server for the list again; the reply rebuilds the roster (a friend added on the website
       // would otherwise stay invisible until the next login).
+      {
+        // An incoming friend request is listed first in the recently-met list (the game has no prompt of its
+        // own, #405); its requester's profile is asked for like a friend's.
+        const nevr_social_roster::RequestEvent request = nevr_social_roster::ApplyFriendMessage(
+            nevr_social_roster::RecentlyMet(), sym, payload, static_cast<size_t>(len));
+        if (request.change == nevr_social_roster::RequestChange::kAdded) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend request received account=%llu pending=%zu",
+              static_cast<unsigned long long>(request.account), request.pending);
+          const std::vector<nevr_social_party::Message> asks = nevr_social_names::GlobalResolver().Want(request.account);
+          if (!asks.empty()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name lookup requested account=%llu sent=%d",
+                static_cast<unsigned long long>(request.account), nevr_social_party::Send(asks) ? 1 : 0);
+          }
+        } else if (request.change == nevr_social_roster::RequestChange::kCleared) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend request cleared account=%llu reason=%s pending=%zu",
+              static_cast<unsigned long long>(request.account), request.reason, request.pending);
+        }
+      }
       if (nevr_social_roster::IsFriendChangeSymbol(sym) || nevr_social_roster::IsFriendChange(gameName)) {
         uint64_t friendId = 0;
         if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));

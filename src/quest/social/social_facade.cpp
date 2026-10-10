@@ -1281,6 +1281,17 @@ void ShareOne(Impl& impl, const char* what, std::uint64_t scope, bool ok, const 
                                                       {"note", "the game's JSON is not an object"}});
     return;
   }
+  // The local member's document carries the status text the game built from its rich presence ("<destination
+  // name> | <second field>", or the second field alone when no destination resolved; #393): the Social Lobby
+  // shows what precedes the first '|'. One line per share, which is event-driven (a party entered, the game wrote).
+  if (scope == nevr_social_party::kPartyDataScopeMember) {
+    const auto status = parsed.find("status");
+    if (status != parsed.end() && status->is_string()) {
+      LogFields(LogLevel::kInfo, "social_member_status", {{"status", status->get<std::string>().c_str()}});
+    } else {
+      LogFields(LogLevel::kInfo, "social_member_status", {{"status", "(absent)"}});
+    }
+  }
   SendParty(impl, what, Party(impl).ShareData(scope, text));
 }
 
