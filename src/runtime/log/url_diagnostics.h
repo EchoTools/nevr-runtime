@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace LogDiagnostics {
+namespace nevr_log_diagnostics {
 
 // Allocates and parses a URL for diagnostics, removing userinfo, the full query,
 // and fragment. Unparseable or suspicious input is hidden entirely. Not safe to
@@ -18,4 +18,4 @@ std::string FormatRedactedUrlPairDiagnostic(std::string_view prefix, std::string
                                             std::string_view separator, std::string_view secondUrl,
                                             std::string_view suffix = {});
 
-}  // namespace LogDiagnostics
+}  // namespace nevr_log_diagnostics

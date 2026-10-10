@@ -32,7 +32,7 @@
 #include "runtime/patch/social_facade.h"
 #include "runtime/scenario/scenario_protocol.h"
 
-namespace ScenarioControl {
+namespace nevr_scenario_control {
 namespace {
 
 // The friend row's invite button, measured in ReVault (echovr.exe):
@@ -299,7 +299,7 @@ std::uint64_t* NetGameFlags(void* netGame) {
 }
 
 // Game thread.
-std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
+std::string FireEarlyQuit(void* netGame, const nevr_scenario_protocol::Command& cmd) {
   std::string error;
   auto* bytes = static_cast<std::uint8_t*>(netGame);
   std::uint64_t* flags = NetGameFlags(netGame);
@@ -380,7 +380,7 @@ std::string PostUserId(void* netGame, void* handler, const std::string& user, st
 }
 
 // Game thread.
-std::string FireAction(const ScenarioProtocol::Command& cmd) {
+std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
   std::string error;
   void* netGame = NetGame();
   if (netGame == nullptr) return "no NetGame yet";
@@ -486,7 +486,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     std::uint64_t count = 0;
     std::memcpy(&count, static_cast<const std::uint8_t*>(groups) + 0x40, sizeof(count));
     std::uint64_t index = cmd.number;
-    if (index == ScenarioProtocol::kCurrentGroup) {
+    if (index == nevr_scenario_protocol::kCurrentGroup) {
       std::uint32_t active = 0;
       std::memcpy(&active, static_cast<const std::uint8_t*>(groups) + 0xC, sizeof(active));
       index = active;
@@ -623,89 +623,89 @@ nlohmann::json StateJson() {
 nlohmann::json Fail(const std::string& why) { return {{"ok", false}, {"error", why}}; }
 
 nlohmann::json Handle(const std::string& line) {
-  ScenarioProtocol::Command cmd;
+  nevr_scenario_protocol::Command cmd;
   std::string error;
-  if (!ScenarioProtocol::ParseCommand(line, &cmd, &error)) return Fail(error);
+  if (!nevr_scenario_protocol::ParseCommand(line, &cmd, &error)) return Fail(error);
   switch (cmd.op) {
-    case ScenarioProtocol::Op::kState:
+    case nevr_scenario_protocol::Op::kState:
       return StateJson();
-    case ScenarioProtocol::Op::kInjectFriendStatus: {
+    case nevr_scenario_protocol::Op::kInjectFriendStatus: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendStatusNotify id=%llu status=%u",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned>(cmd.status));
-      const std::string frame = ScenarioProtocol::BuildFriendStatusNotify(cmd.friendId, cmd.status);
+      const std::string frame = nevr_scenario_protocol::BuildFriendStatusNotify(cmd.friendId, cmd.status);
       if (!InjectServerFrameForTest(frame, &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectFriendNotify: {
+    case nevr_scenario_protocol::Op::kInjectFriendNotify: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s id=%llu", cmd.notifyName.c_str(),
           static_cast<unsigned long long>(cmd.friendId));
-      const ScenarioProtocol::FriendNotify* notify = ScenarioProtocol::FindFriendNotify(cmd.notifyName);
+      const nevr_scenario_protocol::FriendNotify* notify = nevr_scenario_protocol::FindFriendNotify(cmd.notifyName);
       if (notify == nullptr) return Fail("unknown notify " + cmd.notifyName);
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyInvite: {
+    case nevr_scenario_protocol::Op::kInjectPartyInvite: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyInviteNotify party=%llu inviter=%llu",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned long long>(cmd.inviterId));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyJoinFailure: {
+    case nevr_scenario_protocol::Op::kInjectPartyJoinFailure: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyJoinFailure party=%llu code=%u",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned>(cmd.failureCode));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectFriendPresence: {
+    case nevr_scenario_protocol::Op::kInjectFriendPresence: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendPresenceNotify id=%llu party=%llu joinable=%d text=%s",
           static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned long long>(cmd.partyId), cmd.flag ? 1 : 0,
           cmd.value.c_str());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendPresenceNotify(cmd.friendId, cmd.partyId, cmd.flag, cmd.value),
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildFriendPresenceNotify(cmd.friendId, cmd.partyId, cmd.flag, cmd.value),
                                     &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyMember: {
+    case nevr_scenario_protocol::Op::kInjectPartyMember: {
       const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
       if (party == 0) return Fail("inject " + cmd.notifyName + ": no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s party=%llu member=%llu", cmd.notifyName.c_str(),
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId));
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyMemberNotify(cmd.notifyName.c_str(), party, cmd.memberId),
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyMemberNotify(cmd.notifyName.c_str(), party, cmd.memberId),
                                     &error)) {
         return Fail(error);
       }
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectRecentlyMet: {
+    case nevr_scenario_protocol::Op::kInjectRecentlyMet: {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject RecentlyMetListResponse users=%zu", cmd.people.size());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kInjectPartyData: {
+    case nevr_scenario_protocol::Op::kInjectPartyData: {
       const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
       if (party == 0) return Fail("inject PartyDataNotify: no current party and no \"party\" given");
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyDataNotify party=%llu member=%llu bytes=%zu",
           static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId), cmd.value.size());
-      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyDataNotify(party, cmd.memberId, 1, cmd.value), &error))
+      if (!InjectServerFrameForTest(nevr_scenario_protocol::BuildPartyDataNotify(party, cmd.memberId, 1, cmd.value), &error))
         return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kFireFriendInvite:
-    case ScenarioProtocol::Op::kFireAddFriend:
-    case ScenarioProtocol::Op::kFireRespondInvite:
-    case ScenarioProtocol::Op::kFireAction: {
+    case nevr_scenario_protocol::Op::kFireFriendInvite:
+    case nevr_scenario_protocol::Op::kFireAddFriend:
+    case nevr_scenario_protocol::Op::kFireRespondInvite:
+    case nevr_scenario_protocol::Op::kFireAction: {
       auto request = std::make_shared<FireRequest>();
-      if (cmd.op == ScenarioProtocol::Op::kFireAction)
+      if (cmd.op == nevr_scenario_protocol::Op::kFireAction)
         request->job = [cmd] { return FireAction(cmd); };
-      else if (cmd.op == ScenarioProtocol::Op::kFireRespondInvite)
+      else if (cmd.op == nevr_scenario_protocol::Op::kFireRespondInvite)
         request->job = [cmd] { return FireRespondInvite(cmd.inviteIndex, cmd.accept); };
       else
-        request->job = [cmd] { return FireNode(cmd.op == ScenarioProtocol::Op::kFireAddFriend, cmd.user); };
+        request->job = [cmd] { return FireNode(cmd.op == nevr_scenario_protocol::Op::kFireAddFriend, cmd.user); };
       std::future<std::string> done = request->result.get_future();
       {
         std::lock_guard<std::mutex> lock(g_fireMutex);
@@ -717,7 +717,7 @@ nlohmann::json Handle(const std::string& line) {
       const std::string why = done.get();
       if (!why.empty()) return Fail(why);
       nlohmann::json reply = {{"ok", true}, {"posted", true}};
-      if (cmd.op == ScenarioProtocol::Op::kFireAction) {
+      if (cmd.op == nevr_scenario_protocol::Op::kFireAction) {
         std::lock_guard<std::mutex> lock(g_fireMutex);
         reply["user"] = g_lastFireUser;
       }
@@ -816,4 +816,4 @@ void Stop() {
   Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] control endpoint stopped");
 }
 
-}  // namespace ScenarioControl
+}  // namespace nevr_scenario_control

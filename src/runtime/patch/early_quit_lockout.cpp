@@ -114,26 +114,26 @@ void HookChecked(std::uint64_t va, const std::array<std::uint8_t, Size>& prologu
                  const char* name) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, va);
   if (!nevr::ValidatePrologue(target, prologue.data(), prologue.size())) {
-    BootLogTee::TeeFprintf("[NEVR.EARLYQUIT] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] %s hook skipped va=0x%llx reason=prologue_mismatch\n", name,
                            static_cast<unsigned long long>(va));
     return;
   }
   original = reinterpret_cast<Fn>(target);
   if (PatchDetour(&original, detour, name))
-    BootLogTee::TeeFprintf("[NEVR.EARLYQUIT] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] %s hook installed va=0x%llx\n", name, static_cast<unsigned long long>(va));
 }
 
 void KeepFeatureFlagBit1() {
   void* target = nevr::ResolveVA_Checked(g_gameBase, kFeatureFlagsCallbackVA);
   if (!nevr::ValidatePrologue(target, kFeatureFlagsCallbackBytes.data(), kFeatureFlagsCallbackBytes.size())) {
-    BootLogTee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask patch skipped va=0x%llx reason=bytes_mismatch\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask patch skipped va=0x%llx reason=bytes_mismatch\n",
                            static_cast<unsigned long long>(kFeatureFlagsCallbackVA));
     return;
   }
   // The game service decides which bits are set; the client keeps them all.
   std::uint8_t keepAll = 0xFF;
   ProcessMemcpy(static_cast<std::uint8_t*>(target) + kFeatureFlagsMaskOffset, &keepAll, sizeof(keepAll));
-  BootLogTee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx\n",
+  nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx\n",
                          static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset));
 }
 

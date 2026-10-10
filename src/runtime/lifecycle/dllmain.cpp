@@ -97,7 +97,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         AssetCDN::Shutdown();
         BinaryBugFixes::Shutdown();
         BroadcasterGuard::Shutdown();
-        BuiltinLogFilter::Shutdown();
+        nevr_builtin_log_filter::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
         // Dynamic unload only: FreeLibrary during process termination can leave a module in use

@@ -78,7 +78,7 @@ VOID PatchDscProvider() {
     // mode-correct level (Error+exit on server, Warning+continue on client) —
     // this also resolves severity being decided in one place instead of split
     // across this line and ServerFatal.
-    BootLogTee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
     // Every other address in addresses.h is then suspect too — continuing would
@@ -105,7 +105,7 @@ VOID PatchDscProvider() {
   ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
 
   Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
-  BootLogTee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
+  nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
 }
 
 // ============================================================================
@@ -133,11 +133,11 @@ VOID PatchProviderPrefixOvrOrg() {
   if (st == MH_OK) st = MH_EnableHook(target);
   if (st == MH_OK) {
     Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
-    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
         target, MH_StatusToString(st));
-    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
                            MH_StatusToString(st));
   }
 }

@@ -1303,8 +1303,8 @@ verify:
     # N36: Log() is unsafe under the loader lock. InitializeAfterGameImageGuard() runs from DllMain, and
     # the Log() fallback to stderr stops applying the moment
     # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
-    # that point in guarded initialization must use BootLogTee::TeeFprintf. Exactly one Log()
-    # call is permitted — the final line, emitted after BootLogTee::Close().
+    # that point in guarded initialization must use nevr_boot_log_tee::TeeFprintf. Exactly one Log()
+    # call is permitted — the final line, emitted after nevr_boot_log_tee::Close().
     N36_RC=0; N36_BODY=$(awk '/^static VOID InitializeAfterGameImageGuard\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
     sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
     sensor_nonempty "N36 Initialize Log census" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
@@ -1315,7 +1315,7 @@ verify:
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
         echo "verify: FAIL — N36 guarded initialization contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
         echo "InitializeAfterGameImageGuard() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
-        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use BootLogTee::TeeFprintf." >&2
+        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use nevr_boot_log_tee::TeeFprintf." >&2
         exit 1
     fi
     # Plugin shutdown can join threads and release module references. DllMain
@@ -1652,7 +1652,7 @@ verify:
     N120_RC3=0; N120_XPID=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/xpid_patch.cpp) || N120_RC3=$?
     sensor_stage1 "N120 xpid outcome observable" "src/runtime/patch/xpid_patch.cpp" "$N120_RC3"
     sensor_nonempty "N120 xpid outcome observable" "non-comment lines of patch/xpid_patch.cpp" "$N120_XPID"
-    if [ "$(grep -c 'BootLogTee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
+    if [ "$(grep -c 'nevr_boot_log_tee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
         echo "verify: FAIL — N120 the XPID patch no longer tees BOTH outcomes to the boot log." >&2
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
@@ -1962,7 +1962,7 @@ verify:
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
     fi
-    if ! grep -q 'Frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'nevr_frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
         exit 1
     fi
@@ -2092,7 +2092,7 @@ verify:
         echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
         exit 1
     fi
-    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' <<<"$TICK_CODE"; then
+    if ! grep -q 'nevr_builtin_log_filter::InstallPnsradHook();' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1

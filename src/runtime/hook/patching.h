@@ -50,8 +50,8 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
     // While boot runs, DllMain still holds the loader lock and Log() would enter the game
     // logger once EchoVR::WriteLog is resolved (#92), so the report goes through BootLogTee.
     const char* const shown = name ? name : "(unnamed)";
-    if (BootLogTee::InBootPhase()) {
-      BootLogTee::TeeFprintf(
+    if (nevr_boot_log_tee::InBootPhase()) {
+      nevr_boot_log_tee::TeeFprintf(
           "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed\n",
           shown, target, Hooking::LastAttachError());
     } else {

@@ -46,7 +46,7 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
     return FALSE;
   }
 
-  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri);
+  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // Set the URL
@@ -227,7 +227,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
 
     case ix::WebSocketMessageType::Close:
       {
-        const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatWebSocketCloseDiagnostic(
             "[NEVR.SERVERDB] Disconnected from ServerDB ", msg->closeInfo.code, s_wsReconnectCount);
         Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
       }
@@ -236,7 +236,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
 
     case ix::WebSocketMessageType::Error:
       {
-        const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatWebSocketErrorDiagnostic(
             "[NEVR.SERVERDB] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
             s_wsReconnectCount);
         Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());

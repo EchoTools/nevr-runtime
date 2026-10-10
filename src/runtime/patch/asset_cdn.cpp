@@ -591,7 +591,7 @@ bool AssetCDN::FetchManifest() {
 
     if (res != CURLE_OK) {
         const std::string diagnostic =
-            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Manifest fetch failed ", static_cast<int>(res));
+            nevr_log_diagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Manifest fetch failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }
@@ -703,7 +703,7 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
 
     if (res != CURLE_OK) {
         const std::string diagnostic =
-            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Package download failed ", static_cast<int>(res));
+            nevr_log_diagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Package download failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }

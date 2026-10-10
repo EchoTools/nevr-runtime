@@ -68,7 +68,7 @@ static auto GuardWsCallback(const char* what, Fn&& fn) {
     try {
       fn(std::forward<decltype(args)>(args)...);
     } catch (const std::exception&) {
-      const std::string diagnostic = LogDiagnostics::FormatCallbackFailureDiagnostic(what);
+      const std::string diagnostic = nevr_log_diagnostics::FormatCallbackFailureDiagnostic(what);
       Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     }
   };
@@ -873,7 +873,7 @@ void InstallWebSocketBridge() {
       break;
     }
 
-    const std::string diagnostic = LogDiagnostics::FormatBindFailureDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatBindFailureDiagnostic(
         "Proxy", tryPort, attempt + 1, kMaxBindAttempts);
     Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
     g_server.reset();
@@ -1009,7 +1009,7 @@ void InstallWebSocketBridge() {
             // middle/trailing/sole position correctly; see its own tests.
             if (connIdx >= 2) {
               remoteUrl = ServerDbUri::RemoveQueryParam(remoteUrl, "format=evr");
-              const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+              const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
                   "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
               Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
             }
@@ -1115,7 +1115,7 @@ void InstallWebSocketBridge() {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
                           "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
                           g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1216,7 +1216,7 @@ void InstallWebSocketBridge() {
                       if (rsym == EvrCodec::kSymLoginFailure && rmsg->str.size() > 48) {
                         const std::optional<EvrCodec::LoginFailure> diagnostic =
                             EvrCodec::ParseLoginFailure(rmsg->str);
-                        const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+                        const std::string message = nevr_log_diagnostics::FormatLoginFailureDiagnostic(
                             diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0,
                             diagnostic ? diagnostic->messageBytes : 0, g_isServer != FALSE);
                         Log(EchoVR::LogLevel::Warning, "%s", message.c_str());
@@ -1383,7 +1383,7 @@ void InstallWebSocketBridge() {
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
                 ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
-                LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+                nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
@@ -1471,7 +1471,7 @@ void InstallWebSocketBridge() {
   g_bridgeEnabled = true;
 
   const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
-  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
       "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
@@ -1513,7 +1513,7 @@ void InstallWebSocketBridge() {
         break;
       }
       const std::string diagnostic =
-          LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
+          nevr_log_diagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
       Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
       s_matchServer.reset();
@@ -1658,7 +1658,7 @@ bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out) {
 
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode) {
   const std::optional<EvrCodec::LoginFailure> diagnostic = EvrCodec::ParseLoginFailure(frame);
-  const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+  const std::string message = nevr_log_diagnostics::FormatLoginFailureDiagnostic(
       diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0, diagnostic ? diagnostic->messageBytes : 0,
       serverMode);
   Log(EchoVR::LogLevel::Warning, "%s", message.c_str());

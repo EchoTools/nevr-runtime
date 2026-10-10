@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace BootReplay {
+namespace nevr_boot_replay {
 
 struct Line {
   std::string ts;
@@ -108,4 +108,4 @@ inline bool ReadNew(const char* path, std::string_view runId, Cursor& cursor, st
   return true;
 }
 
-}  // namespace BootReplay
+}  // namespace nevr_boot_replay

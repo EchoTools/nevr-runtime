@@ -193,7 +193,7 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
 
     // N86: drive per-frame work from here — this site is live in server mode,
     // PrecisionSleep::Wait is not. Rate-limited and re-entrancy-guarded inside.
-    Frame::DispatchPerFrameWork(nowUs);
+    nevr_frame::DispatchPerFrameWork(nowUs);
 
     return nowUs;
 }
@@ -335,7 +335,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
     // was running on a server. The shared dispatcher derives the flags and gives
     // the client path the rate limit and re-entrancy guard the server path has.
-    Frame::DispatchPerFrameWork(QpcMicroseconds());
+    nevr_frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
         SwitchToThread();

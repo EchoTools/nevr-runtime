@@ -455,25 +455,25 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
         self.assertNotIn("ReplayBootLines", rotate)
         replay = extract_braced_function(filt, "static void ReplayBootLines(")
-        self.assertIn("BootReplay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
+        self.assertIn("nevr_boot_replay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
         self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
         self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
                          "ts and level come from the parsed boot file and are escaped like the message")
         # The tee stays open until initialize() closes it; the lines it writes after the main log
         # opened are replayed once more, under the file lock, just before the tee closes.
-        tail = extract_braced_function(filt, "void BuiltinLogFilter::ReplayBootTail(")
+        tail = extract_braced_function(filt, "void nevr_builtin_log_filter::ReplayBootTail(")
         self.assertIn("g_file_mutex", tail)
         self.assertIn("ReplayBootLines()", tail)
         init_cpp = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(init_cpp, r"BootLogTee::Close\(\);\s*BuiltinLogFilter::ReplayBootTail\(\);",
+        self.assertRegex(init_cpp, r"nevr_boot_log_tee::Close\(\);\s*nevr_builtin_log_filter::ReplayBootTail\(\);",
                          "the tail is read after Close(), when nothing can append any more")
         for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
-        self.assertIn("BootLines::Build(", tee)
+        self.assertIn("nevr_boot_lines::Build(", tee)
         self.assertIn("GetSystemTime(", tee)
-        close = extract_braced_function(tee, "void BootLogTee::Close(")
+        close = extract_braced_function(tee, "void nevr_boot_log_tee::Close(")
         self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):

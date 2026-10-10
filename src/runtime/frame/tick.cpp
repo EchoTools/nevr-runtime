@@ -41,7 +41,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/log/builtin_filter.h"
 
-namespace Frame {
+namespace nevr_frame {
 
 namespace {
 
@@ -64,8 +64,8 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     g_lastTickUs = nowUs;
 
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
-    BuiltinLogFilter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
-    BuiltinLogFilter::PollHealth();         // N89: health must not depend on the hook it watches
+    nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
+    nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
 
     // Liveness + N83/N84 evidence.
     {
@@ -135,10 +135,10 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     TickModules(&mctx);
 
 #ifdef NEVR_SCENARIO_CONTROL
-    ScenarioControl::OnFrame();  // test builds only: queued scenario actions run on the loop's thread
+    nevr_scenario_control::OnFrame();  // test builds only: queued scenario actions run on the loop's thread
 #endif
 
     InterlockedExchange(&g_tickReentry, 0);
 }
 
-}  // namespace Frame
+}  // namespace nevr_frame

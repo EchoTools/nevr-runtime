@@ -67,7 +67,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
         break;
       case ix::WebSocketMessageType::Close:
         {
-          const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
+          const std::string diagnostic = nevr_log_diagnostics::FormatWebSocketCloseDiagnostic(
               "[NEVR.TELEMETRY] Disconnected from telemetry server ", msg->closeInfo.code,
               m_reconnectCount);
           Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
@@ -76,7 +76,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
         break;
       case ix::WebSocketMessageType::Error:
         {
-          const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
+          const std::string diagnostic = nevr_log_diagnostics::FormatWebSocketErrorDiagnostic(
               "[NEVR.TELEMETRY] Connection error: ", msg->errorInfo.http_status,
               msg->errorInfo.retries, m_reconnectCount);
           Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
@@ -93,7 +93,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     }
   });
 
-  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
+  const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   m_ws->start();
   return true;
