@@ -263,7 +263,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y zstd
-        python -m pip install cmake==4.0.0
+        python -m pip install cmake==4.4.4
 
     - uses: actions/download-artifact@v8
       with:
