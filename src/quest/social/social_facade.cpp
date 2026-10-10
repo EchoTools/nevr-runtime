@@ -403,7 +403,6 @@ bool PartyJoinable(const Impl& impl, const nevr_social_party::View& view) {
 void SlotNothing(void*) {}
 void SlotNothingU32(void*, std::uint32_t) {}
 void SlotNothingU32U32(void*, std::uint32_t, std::uint32_t) {}
-void SlotNothingU32U64(void*, std::uint32_t, std::uint64_t) {}
 void SlotNothingPtr(void*, const void*) {}
 std::uint32_t SlotZero32(void*) { return 0; }
 
@@ -712,6 +711,28 @@ std::uint32_t SlotFriendIsInvitable(void* self, std::uint32_t index) {
   return PartyJoinable(impl, *view) && !IsMember(*view, id) ? 1U : 0U;
 }
 
+// OpenSendInviteUI / OpenNewSendInviteUI(LocalUserID): the party tab's "Invite Members" (#318). pnsovr opened
+// the Oculus friend picker here and the game passes no target; the NEVR facade has no picker, so no invite is
+// sent (inviting every online friend on one tap would send invites nobody asked for). The Friends tab's
+// invite works and is the way to invite. OpenPartyUI (slot 43, no target) is called when the tab opens and
+// must never invite.
+void SlotInviteUINoTarget(void*, std::uint32_t) {
+  LogFields(LogLevel::kInfo, "social_invite_ui",
+            {{"result", "no_target_no_invite_sent"}, {"hint", "use the Friends tab"}});
+}
+
+// OpenNewSendInviteUI(LocalUserID, UserAccountID): the game names the user to invite, so this is the same
+// invite SlotSendInvite sends for the Friends tab.
+void SlotInviteUITarget(void* self, std::uint32_t, std::uint64_t target) { SlotSendInvite(self, target); }
+
+// OpenPartyUI(LocalUserID, UserAccountID): open the party UI for a user. Nothing shows the game calls it from
+// an invite action (it may be "view this user's party"), so it sends nothing and says so. It becomes an invite
+// only once a headset logcat shows the game reaches it from one.
+void SlotPartyUITarget(void*, std::uint32_t, std::uint64_t target) {
+  LogFields(LogLevel::kInfo, "social_party_ui",
+            {{"result", "no_invite_sent"}, {"slot", 44}, {"target", static_cast<long long>(target)}});
+}
+
 std::uint64_t SlotFriendPartyId(void* self, std::uint32_t index) { return Friends(*OwnerOf(self)).PartyIdAt(index); }
 
 // CNSISocial::FriendIsJoinable (libpnsovr 0x208510) is FriendPartyId(i) != 0.
@@ -885,12 +906,12 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kEnterGame] = Entry<kEnterGame, &SlotNothingPtr>();
   t[kExitGame] = Entry<kExitGame, &SlotNothing>();
   t[kOpenFriendRequestUI] = Entry<kOpenFriendRequestUI, &SlotOpenFriendRequestUI>();
-  t[kOpenSendInviteUI] = Entry<kOpenSendInviteUI, &SlotNothingU32>();
-  t[kOpenNewSendInviteUI] = Entry<kOpenNewSendInviteUI, &SlotNothingU32>();
-  t[kOpenNewSendInviteUITarget] = Entry<kOpenNewSendInviteUITarget, &SlotNothingU32U64>();
+  t[kOpenSendInviteUI] = Entry<kOpenSendInviteUI, &SlotInviteUINoTarget>();
+  t[kOpenNewSendInviteUI] = Entry<kOpenNewSendInviteUI, &SlotInviteUINoTarget>();
+  t[kOpenNewSendInviteUITarget] = Entry<kOpenNewSendInviteUITarget, &SlotInviteUITarget>();
   t[kOpenRecvInviteUI] = Entry<kOpenRecvInviteUI, &SlotNothingU32>();
   t[kOpenPartyUI] = Entry<kOpenPartyUI, &SlotNothingU32>();
-  t[kOpenPartyUITarget] = Entry<kOpenPartyUITarget, &SlotNothingU32U64>();
+  t[kOpenPartyUITarget] = Entry<kOpenPartyUITarget, &SlotPartyUITarget>();
   t[kRefreshingFriends] = Entry<kRefreshingFriends, &SlotZero32>();
   t[kRefreshFriends] = Entry<kRefreshFriends, &SlotRefreshFriends>();
   t[kFriendCount] = Entry<kFriendCount, &SlotFriendCount>();
