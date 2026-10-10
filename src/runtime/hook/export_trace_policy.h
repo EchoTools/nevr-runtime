@@ -1,0 +1,83 @@
+#pragma once
+// The export tracer's pure decisions (#20): which DLLs a `-traceexports` list selects, and which loaded
+// file is which. Header-only and free of windows.h, so the unit test needs neither Wine nor the game.
+
+#include <cstdint>
+#include <cstring>
+
+namespace ExportTracePolicy {
+
+enum : std::uint32_t {
+  kPnsrad = 1,
+  kPnsovr = 2,
+  kPnsdemo = 4,
+  kAllModules = kPnsrad | kPnsovr | kPnsdemo,
+};
+
+/// Calls of one export logged line by line before only its summary is.
+constexpr std::uint64_t kFullLogCalls = 64;
+
+/// Seconds between summary lines.
+constexpr std::uint64_t kSummarySeconds = 10;
+
+inline char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+
+inline bool EqualsNoCase(const char* a, std::size_t aLen, const char* b) {
+  if (std::strlen(b) != aLen) return false;
+  for (std::size_t i = 0; i < aLen; ++i) {
+    if (Lower(a[i]) != Lower(b[i])) return false;
+  }
+  return true;
+}
+
+/// "pnsrad,pnsovr", "all", "pnsrad pnsdemo": the modules named, case-insensitive, separated by commas,
+/// semicolons or spaces, with or without ".dll". An empty or null list selects nothing (the tracer is off).
+/// `*unknown` (optional) is set when a token names no module.
+inline std::uint32_t ParseModules(const char* list, bool* unknown = nullptr) {
+  std::uint32_t mask = 0;
+  if (unknown != nullptr) *unknown = false;
+  if (list == nullptr) return 0;
+  const char* p = list;
+  while (*p != '\0') {
+    while (*p == ',' || *p == ';' || *p == ' ') ++p;
+    const char* const start = p;
+    while (*p != '\0' && *p != ',' && *p != ';' && *p != ' ') ++p;
+    std::size_t len = static_cast<std::size_t>(p - start);
+    if (len == 0) continue;
+    if (len > 4 && EqualsNoCase(start + len - 4, 4, ".dll")) len -= 4;
+    std::uint32_t bit = 0;
+    if (EqualsNoCase(start, len, "pnsrad")) bit = kPnsrad;
+    else if (EqualsNoCase(start, len, "pnsovr")) bit = kPnsovr;
+    else if (EqualsNoCase(start, len, "pnsdemo")) bit = kPnsdemo;
+    else if (EqualsNoCase(start, len, "all")) bit = kAllModules;
+    if (bit == 0 && unknown != nullptr) *unknown = true;
+    mask |= bit;
+  }
+  return mask;
+}
+
+/// The module bit for a loaded file's path, by its file name: "...\\pnsrad.dll" -> kPnsrad; 0 for any
+/// other file (pnsradmatchmaking.dll and pnsradgameserver.dll are not the platform interface).
+inline std::uint32_t ModuleOfPath(const char* path) {
+  if (path == nullptr) return 0;
+  const char* name = path;
+  for (const char* p = path; *p != '\0'; ++p) {
+    if (*p == '\\' || *p == '/') name = p + 1;
+  }
+  const std::size_t len = std::strlen(name);
+  if (EqualsNoCase(name, len, "pnsrad.dll")) return kPnsrad;
+  if (EqualsNoCase(name, len, "pnsovr.dll")) return kPnsovr;
+  if (EqualsNoCase(name, len, "pnsdemo.dll")) return kPnsdemo;
+  return 0;
+}
+
+inline const char* ModuleName(std::uint32_t bit) {
+  switch (bit) {
+    case kPnsrad: return "pnsrad";
+    case kPnsovr: return "pnsovr";
+    case kPnsdemo: return "pnsdemo";
+    default: return "other";
+  }
+}
+
+}  // namespace ExportTracePolicy

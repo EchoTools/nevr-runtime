@@ -24,6 +24,8 @@ set(PATCHES_SOURCES
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    "hook/export_trace_thunk.cpp"
+    "hook/export_tracer.cpp"
     "lifecycle/state_machine.cpp"
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
@@ -128,6 +130,9 @@ set(PATCHES_HEADERS
     "log/security_diagnostics.h"
     "patch/broadcaster_guard.h"
     "hook/dll_load_hook.h"
+    "hook/export_trace_policy.h"
+    "hook/export_trace_thunk.h"
+    "hook/export_tracer.h"
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
@@ -187,6 +192,8 @@ target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
+set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
@@ -298,6 +305,18 @@ if(BUILD_TESTING)
     target_include_directories(test_game_image_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
+
+    # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
+    # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
+    add_executable(test_export_trace
+      tests/test_export_trace.cpp
+      hook/export_trace_thunk.cpp
+      hook/export_tracer.cpp)
+    set_source_files_properties(tests/test_export_trace.cpp hook/export_trace_thunk.cpp hook/export_tracer.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_export_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_export_trace PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_export_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_system_module_loader
       tests/test_system_module_loader.cpp

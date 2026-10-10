@@ -299,6 +299,11 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
         ++i;
       }
+    } else if (lstrcmpW(arg, L"-traceexports") == 0) {
+      if (i + 1 < argc) {
+        WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_traceExports, sizeof(g_traceExports), NULL, NULL);
+        ++i;
+      }
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
       // Deprecated — silently consume value arg if present
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;

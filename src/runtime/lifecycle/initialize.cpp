@@ -20,6 +20,7 @@
 #include "runtime/patch/broadcaster_guard.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/export_tracer.h"
 #include "runtime/patch/headless_graphics.h"
 #include "core/globals.h"
 #include "core/hooking.h"
@@ -108,6 +109,13 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 }
 
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
+  // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
+  // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
+  static const bool tracerConfigured = (ExportTracer::Configure(g_traceExports), true);
+  static_cast<void>(tracerConfigured);
+  const auto traced = [dll_handle, symbol_name](void* resolved) {
+    return ExportTracer::WrapSymbol(dll_handle, symbol_name, resolved);
+  };
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
     if (!logged) {
@@ -122,7 +130,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
       BootLogTee::TeeFprintf("[NEVR.MIC] pnsrad mic export(s) resolved -> WASAPI provider\n");
       logged = true;
     }
-    return micFn;
+    return traced(micFn);
   }
   // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
   // memory). They are recognised by the "Users" export they all define. The game's
@@ -157,7 +165,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
     if (strcmp(symbol_name, "XInputGetCapabilities") == 0) return reinterpret_cast<void*>(xinput_get_caps);
   }
 
-  return result;
+  return traced(result);
 }
 
 // ============================================================================

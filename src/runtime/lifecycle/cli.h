@@ -18,6 +18,10 @@ extern CHAR g_customConfigPath[MAX_PATH];
 /// Region override from -region or -serverregion CLI args. Empty = default.
 extern CHAR g_regionOverride[64];
 
+/// Platform DLLs whose exports the tracer records, from -traceexports <list> (pnsrad, pnsovr, pnsdemo, all;
+/// comma separated; runtime/hook/export_tracer.h). Empty = the tracer is off.
+extern CHAR g_traceExports[64];
+
 /// A detour hook for the game's method it uses to build CLI argument definitions.
 /// Adds additional definitions to the structure, so that they may be parsed successfully without error.
 UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax);
