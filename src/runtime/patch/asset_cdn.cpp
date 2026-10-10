@@ -2,6 +2,7 @@
 #include "runtime/patch/evrp_package.h"
 #include "core/bounded_thread.h"
 #include "core/curl_global.h"
+#include "core/transfer_abort.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -90,6 +91,9 @@ std::atomic<AssetCDN::FetchState> g_fetchState{AssetCDN::FetchState::Idle};
 nevr::BoundedThread g_fetchThread;
 std::atomic<bool> g_shutdownRequested{false};
 constexpr std::chrono::milliseconds kFetchJoinTimeout{3000};
+// True from Start() until the fetch thread function has returned. A thread that outlived a timed-out
+// join (detached) is still alive: nothing it reads may be freed and no second one may be started.
+std::atomic<bool> g_fetchThreadAlive{false};
 
 // ============================================================================
 // Loadout data structure offsets (from Task 2 RE findings)
@@ -193,7 +197,7 @@ static std::string ComputeSHA256(const std::vector<uint8_t>& data) {
 // Background fetch pipeline
 // ============================================================================
 
-static void BackgroundFetchThread() {
+static void BackgroundFetchBody() {
     Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Background fetch started");
 
     // Fetch manifest
@@ -412,15 +416,38 @@ void AssetCDN::Initialize() {
     StartBackgroundFetch();
 }
 
+static void BackgroundFetchThread() {
+    BackgroundFetchBody();
+    g_fetchThreadAlive.store(false, std::memory_order_release);
+}
+
+// libcurl progress hook (CURLOPT_XFERINFOFUNCTION): stops an in-flight transfer once shutdown is requested.
+static int CurlAbortOnShutdown(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return nevr::AbortTransferWhenRequested(static_cast<const std::atomic<bool>*>(clientp));
+}
+
+// Frees what the fetch thread reads. Only called once that thread has finished.
+static void ReleaseFetchData() {
+    {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        g_tintMap.store(nullptr, std::memory_order_release);
+        delete g_tintMapOwned;
+        g_tintMapOwned = nullptr;
+    }
+    g_manifestPackages.clear();
+}
+
 void AssetCDN::Shutdown() {
     // Signal background thread to stop
     g_shutdownRequested.store(true);
 
-    // Wait for background thread to finish (bounded: a download stuck in curl must not hang unload)
-    const bool fetchStopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
+    // Wait for background thread to finish (bounded: a download stuck in curl must not hang unload).
+    // The data it reads is released only if it finished; a detached thread keeps the maps it is
+    // iterating until it exits on its own (its transfers abort on g_shutdownRequested).
+    const bool fetchStopped = g_fetchThread.JoinForThenRelease(kFetchJoinTimeout, [] { ReleaseFetchData(); });
     if (!fetchStopped) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] background fetch did not stop within %lld ms — thread detached",
+            "[NEVR.CDN] background fetch did not stop within %lld ms — thread detached, its data left allocated",
             static_cast<long long>(kFetchJoinTimeout.count()));
     }
 
@@ -434,15 +461,6 @@ void AssetCDN::Shutdown() {
         g_originalFunc = nullptr;
     }
 
-    // Clean up tint map
-    {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
-        g_tintMap.store(nullptr, std::memory_order_release);
-        delete g_tintMapOwned;
-        g_tintMapOwned = nullptr;
-    }
-
-    g_manifestPackages.clear();
     g_fetchState.store(FetchState::Idle);
     // A detached thread still reads the flag; leave it set so it exits at its next check.
     if (fetchStopped) g_shutdownRequested.store(false);
@@ -452,6 +470,12 @@ void AssetCDN::Shutdown() {
 }
 
 void AssetCDN::StartBackgroundFetch() {
+    if (g_fetchThreadAlive.load(std::memory_order_acquire)) {
+        // A previous fetch was detached by a timed-out stop and is still unwinding; a second thread
+        // would share the manifest map and tint map with it.
+        Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] background fetch not started: the previous one is still running");
+        return;
+    }
     FetchState expected = FetchState::Idle;
     if (!g_fetchState.compare_exchange_strong(expected, FetchState::FetchingManifest)) {
         // Already running or completed
@@ -459,6 +483,7 @@ void AssetCDN::StartBackgroundFetch() {
     }
 
     g_shutdownRequested.store(false);
+    g_fetchThreadAlive.store(true, std::memory_order_release);
     g_fetchThread.Start(BackgroundFetchThread);
 }
 
@@ -525,6 +550,9 @@ bool AssetCDN::FetchManifest() {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlAbortOnShutdown);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &g_shutdownRequested);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "nevr-runtime/1.0");
 
@@ -634,6 +662,9 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlAbortOnShutdown);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &g_shutdownRequested);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "nevr-runtime/1.0");
 

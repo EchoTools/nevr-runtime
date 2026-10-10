@@ -63,6 +63,16 @@ class BoundedThread {
     return finished;
   }
 
+  /// JoinFor(), then release() only when the thread has finished. Whatever the thread reads (its
+  /// buffers, maps, handles) must be freed through this: a thread that was detached is still running
+  /// and still dereferencing them. Returns the JoinFor() result.
+  template <class Release>
+  bool JoinForThenRelease(std::chrono::milliseconds timeout, Release&& release) {
+    const bool finished = JoinFor(timeout);
+    if (finished) release();
+    return finished;
+  }
+
  private:
   struct State {
     std::mutex mutex;
