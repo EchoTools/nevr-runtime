@@ -99,6 +99,15 @@ void ResetPresenceForTest() noexcept;
 // returned for a test (the social facade works without it).
 sentinel::GotStatus InstallPresenceTrace();
 
+// The destination names (#393). The display names the player sees under his name, by the game's own game_type
+// (the api name of the destination; compared without regard to case, "Social_2.0" is the game's spelling).
+// nullptr for a name the table does not know and for null or empty text: the game's own answer stands.
+const char* PresenceDisplayName(const char* gameType) noexcept;
+
+// Whether the wrappers answer the destination lookup from the table when the game's own list has no match
+// (config feature presence_names; off by default). Pass-through logging is unconditional.
+void SetPresenceNames(bool enabled) noexcept;
+
 // Test seams: whether the four wrapped slots are checked against the pinned addresses (a test's fake
 // functions live elsewhere), and the game's EncodeToCompact the Set wrapper reads the document with (nullptr:
 // resolved from the loaded libr15 on first use).

@@ -135,6 +135,8 @@ std::uintptr_t g_presenceOrigSet = 0;
 std::atomic<std::uint64_t> g_presenceSelected{0};
 std::atomic<std::uint64_t> g_presencePassThrough{0};
 std::atomic<bool> g_presenceSlotCheck{true};
+std::atomic<bool> g_presenceNames{false};
+std::atomic<int> g_presenceCurrent{-1};  // table position of the game_type of the last Set (-1: none, unknown)
 std::atomic<CJsonEncodeToCompactFn> g_presenceEncode{nullptr};
 std::atomic<bool> g_presenceEncodeResolved{false};
 
@@ -158,6 +160,52 @@ Fn AsFn(std::uintptr_t address) noexcept {
   return fn;
 }
 
+struct PresenceName {
+  const char* apiName;
+  const char* display;
+};
+// The game's game_type values (symbol corpus: echo_arena, echo_arena_private, ...; the log's "Social_2.0") and
+// what the player sees. A game type that is not here is left to the game.
+constexpr PresenceName kPresenceNames[] = {
+    {"social_2.0", "Social Lobby"},         {"echo_arena", "Arena"},
+    {"echo_combat", "Combat"},              {"echo_arena_private", "Private Match"},
+    {"echo_combat_private", "Private Match"}, {"social_2.0_private", "Private Match"},
+};
+constexpr int kPresenceNameCount = static_cast<int>(sizeof(kPresenceNames) / sizeof(kPresenceNames[0]));
+
+char Lower(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+
+int PresenceNameIndex(const char* gameType) noexcept {
+  if (gameType == nullptr || gameType[0] == '\0') return -1;
+  for (int i = 0; i < kPresenceNameCount; ++i) {
+    const char* a = gameType;
+    const char* b = kPresenceNames[i].apiName;
+    while (*a != '\0' && *b != '\0' && Lower(*a) == *b) {
+      ++a;
+      ++b;
+    }
+    if (*a == '\0' && *b == '\0') return i;
+  }
+  return -1;
+}
+
+// The value of "game_type" in the compact JSON text the game's encoder wrote (a plain string: no escapes, short).
+bool GameTypeOf(const char* text, char (&out)[48]) noexcept {
+  static const char kKey[] = "\"game_type\":\"";
+  const char* at = std::strstr(text, kKey);
+  if (at == nullptr) return false;
+  at += sizeof(kKey) - 1;
+  std::size_t n = 0;
+  while (at[n] != '\0' && at[n] != '"') {
+    if (at[n] == '\\' || n + 1 >= sizeof(out)) return false;
+    out[n] = at[n];
+    ++n;
+  }
+  if (at[n] != '"') return false;
+  out[n] = '\0';
+  return true;
+}
+
 std::uint64_t Fnv(const char* text, std::uint64_t seed) noexcept {
   std::uint64_t h = 1469598103934665603ULL ^ seed;
   for (; text != nullptr && *text != '\0'; ++text) h = (h ^ static_cast<unsigned char>(*text)) * 1099511628211ULL;
@@ -167,22 +215,35 @@ std::uint64_t Fnv(const char* text, std::uint64_t seed) noexcept {
 // Slot 9: the index of the destination the presence's game_type names, -1 when none (the empty list of a failed
 // GetDestinations). The answer is the original's.
 int TracedDestination(const void* self) noexcept {
-  const int index = AsFn<DestinationFn>(g_presenceOrigDestination)(self);
+  int index = AsFn<DestinationFn>(g_presenceOrigDestination)(self);
   const unsigned count = AsFn<CountFn>(g_presenceOrigCount)(self);
+  bool fromTable = false;
+  // The game found none (Meta's list is empty or lacks this game type): answer from the table when enabled and
+  // the table knows the game type of the presence just set. Anything the game found is left alone.
+  if (index == -1 && g_presenceNames.load(std::memory_order_relaxed)) {
+    const int known = g_presenceCurrent.load(std::memory_order_relaxed);
+    if (known >= 0) {
+      index = kPresenceNameBase + known;
+      fromTable = true;
+    }
+  }
   const bool seen = g_destSeen.exchange(true, std::memory_order_relaxed);
   if (!seen || g_lastDestIndex.load(std::memory_order_relaxed) != index ||
       g_lastDestCount.load(std::memory_order_relaxed) != count) {
     g_lastDestIndex.store(index, std::memory_order_relaxed);
     g_lastDestCount.store(count, std::memory_order_relaxed);
     LogFields(LogLevel::kInfo, "rich_presence_destination",
-              {{"index", index}, {"count", static_cast<long long>(count)}});
+              {{"index", index}, {"count", static_cast<long long>(count)}, {"source", fromTable ? "table" : "game"}});
   }
   return index;
 }
 
 // Slot 8: the display name of destination `index`. Only asked for when slot 9 found one.
 const char* TracedName(const void* self, unsigned index) noexcept {
-  const char* const name = AsFn<NameFn>(g_presenceOrigName)(self, index);
+  const bool ours = index >= static_cast<unsigned>(kPresenceNameBase) &&
+                    index < static_cast<unsigned>(kPresenceNameBase + kPresenceNameCount);
+  const char* const name = ours ? kPresenceNames[index - static_cast<unsigned>(kPresenceNameBase)].display
+                                : AsFn<NameFn>(g_presenceOrigName)(self, index);
   const std::uint64_t key = Fnv(name, index + 1U);
   if (g_lastNameKey.exchange(key, std::memory_order_relaxed) != key) {
     LogFields(LogLevel::kInfo, "rich_presence_name",
@@ -202,6 +263,7 @@ void TracedSet(void* self, const void* json) noexcept {
     g_presenceEncodeResolved.store(true, std::memory_order_release);
   }
   const CJsonEncodeToCompactFn encode = g_presenceEncode.load(std::memory_order_relaxed);
+  g_presenceCurrent.store(-1, std::memory_order_relaxed);
   if (encode == nullptr || json == nullptr) {
     if (g_lastSetKey.exchange(1, std::memory_order_relaxed) != 1) {
       LogFields(LogLevel::kWarn, "rich_presence_set", {{"result", "game_json_unavailable"}});
@@ -215,6 +277,8 @@ void TracedSet(void* self, const void* json) noexcept {
     return;
   }
   text[size] = '\0';
+  char gameType[48];
+  if (GameTypeOf(text, gameType)) g_presenceCurrent.store(PresenceNameIndex(gameType), std::memory_order_relaxed);
   const std::uint64_t key = Fnv(text, 7);
   if (g_lastSetKey.exchange(key, std::memory_order_relaxed) != key) {
     LogFields(LogLevel::kInfo, "rich_presence_set", {{"json", text}});
@@ -286,12 +350,21 @@ void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept {
   return original;
 }
 
+const char* PresenceDisplayName(const char* gameType) noexcept {
+  const int i = PresenceNameIndex(gameType);
+  return i >= 0 ? kPresenceNames[i].display : nullptr;
+}
+
+void SetPresenceNames(bool enabled) noexcept { g_presenceNames.store(enabled, std::memory_order_relaxed); }
+
 PresenceCounters PresenceCountersView() noexcept { return PresenceCounters{g_presenceSelected, g_presencePassThrough}; }
 
 void ResetPresenceForTest() noexcept {
   g_presenceSelected.store(0, std::memory_order_relaxed);
   g_presencePassThrough.store(0, std::memory_order_relaxed);
   g_presenceSlotCheck.store(true, std::memory_order_relaxed);
+  g_presenceNames.store(false, std::memory_order_relaxed);
+  g_presenceCurrent.store(-1, std::memory_order_relaxed);
   g_presenceEncode.store(nullptr, std::memory_order_relaxed);
   g_presenceEncodeResolved.store(false, std::memory_order_relaxed);
   g_destSeen.store(false, std::memory_order_relaxed);
