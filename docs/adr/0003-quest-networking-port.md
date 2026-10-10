@@ -779,11 +779,21 @@ analysis found. Paths that can still reach Ready At Dawn with the redirect on, m
 PCVR redirects an `https://...readyatdawn.com` value under any key; Quest redirects values only under the
 service keys above.
 
-HTTP is not covered by this hook. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
-`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
+HTTP does not go through `TString`. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
+`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`; so does
 `CR15NetStoreTransactions::InitializeHttp`, which reads the key `env` (`0x126c214`) and, when it is
 not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateConnection`
-(`0x126c25c`). An HTTP hook is a separate tranche.
+(`0x126c25c`). `CreateConnection(unsigned long&, char const*)` is defined in `libr15.so` (`0xf96c08`) and
+called through its own PLT (JUMP_SLOT `0x36e8028`), the same shape as the `TString` slot, so it has its own
+thunk (`Slot::kCreateConnection`, installed with libr15's `TString` slot): a URL that starts `https://api.` or
+`https://api-` goes through `ServiceRedirector::ApplyUrl`, the same shared policy and string pool, so it
+reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot, the result and every
+other URL pass through. The strings of the game's service-status request
+(`status/services,news?env=%s&projectid=rad14`, `libr15.so` `0x2baa0d2`) and of its matchmaker queue API
+(`ready_at_dawn/join_queue`, `poll_queue_position`, `leave_queue`, `0x2bad4ea`, `0x2bad390`, `0x2bad547`) are in
+`libr15.so`, and the PC build sends both on the connection `InitializeHttp`-style code opens to the same base
+URL, so this redirect is what lets nakama answer them on Quest (nevr-runtime#408, #414); which libr15 function
+sends each on Quest is not decoded here.
 
 The PCVR runtime redirects by value for every key (`config.cpp`, `RedirectServiceUrl`) and uses a
 key list only for the login override. Quest keeps the shared value policy

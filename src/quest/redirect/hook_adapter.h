@@ -1,4 +1,5 @@
-// Installs the CJson::TString thunks for the redirect (docs/adr/0003, "Config-string seam").
+// Installs the CJson::TString thunks for the redirect (docs/adr/0003, "Config-string seam") and the
+// CSysHttp::CreateConnection thunk that sends the game's REST base URL to the configured HTTP service.
 //
 // Installation and lifetime: GotHook, the redirector, the process-wide state. This file is built with
 // exceptions. The thunks themselves (CallbackThunk, the pinned targets, the handler) are in
@@ -49,6 +50,7 @@ struct InstallReport {
   bool featureEnabled = false;  // the redirect feature was effective
   sentinel::GotStatus libr15 = sentinel::GotStatus::kNotInstalled;
   sentinel::GotStatus matchmaking = sentinel::GotStatus::kNotInstalled;
+  sentinel::GotStatus createConnection = sentinel::GotStatus::kNotInstalled;  // CSysHttp::CreateConnection
 };
 
 // Registers every counter the redirect and its thunks keep (nothing here logs from a hooked call).
