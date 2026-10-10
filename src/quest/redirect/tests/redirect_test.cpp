@@ -537,6 +537,19 @@ void HandlerAppliesAfterTheOriginalToItsResult() {
 
 // ---- CSysHttp::CreateConnection (#408) -------------------------------------
 
+// The match is the two real prefixes, not a bare "https://api" (a host the policy happens to decline would
+// hide the difference through the thunk, so the predicate is asserted directly).
+void IsApiBaseUrlMatchesOnlyTheTwoRealPrefixes() {
+  QCHECK(IsApiBaseUrl("https://api.readyatdawn.com"));
+  QCHECK(IsApiBaseUrl("https://api-dev.readyatdawn.com"));
+  QCHECK(!IsApiBaseUrl("https://apiary.example"));
+  QCHECK(!IsApiBaseUrl("https://api"));
+  QCHECK(!IsApiBaseUrl("https://apix.readyatdawn.com"));
+  QCHECK(!IsApiBaseUrl("http://api.readyatdawn.com"));
+  QCHECK(!IsApiBaseUrl("wss://login.readyatdawn.com"));
+  QCHECK(!IsApiBaseUrl(nullptr));
+}
+
 // The game's REST host goes to nevr_http_uri before the original connects; the handle slot, the result and
 // every other URL pass through untouched.
 void ApiBaseUrlIsRedirectedBeforeTheOriginalConnects() {
@@ -872,6 +885,7 @@ int main(int argc, char** argv) {
   PrewarmMakesTheBuiltinDefaultsHits();
   ThunkPassesExceptionsFromTheOriginal();
   HandlerAppliesAfterTheOriginalToItsResult();
+  IsApiBaseUrlMatchesOnlyTheTwoRealPrefixes();
   ApiBaseUrlIsRedirectedBeforeTheOriginalConnects();
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
