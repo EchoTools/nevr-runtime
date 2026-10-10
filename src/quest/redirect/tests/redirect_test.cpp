@@ -784,6 +784,8 @@ void RealHookEndToEnd(const std::string& dir) {
     QCHECK(connectA(api, &handle) == 7);
     QCHECK(lastUrl() == api);  // restored: the game's URL reaches the original again
   }
+  // The slot itself was restored (a disarmed thunk would also pass the URL through): the removal says so.
+  QCHECK(AnyLineContains("\"target\":\"libr15_create_connection_remove\""));
   if (b != nullptr) {
     const FxRead readB = reinterpret_cast<FxRead>(dlsym(b, "fx_read"));
     if (readB != nullptr) QCHECK(readB("matchmaker_host", kDefaultMatchmaker) == kDefaultMatchmaker);
