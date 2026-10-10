@@ -60,11 +60,10 @@ separate namespace is an open ABI decision, issue #130.
 
 ## Names in the tree that are not models
 
-- Casing variants of the project name: `NevRUPnPConfig` (`src/runtime/hook/patching.h`, the parameter
-  type of `NEVR_GetUPnPConfig`), and the brand spelling `nEVR` in prose, comments, the `-n` program name
-  in `cmake/codesign/sign.sh` and the certificate subjects under `certs/`. A certificate subject is a
-  trust identity, so changing one is the owner's call. `LEGACY_SPELLINGS` in `tools/tests/test_naming.py`
-  lists each file and token; the list only shrinks.
+- The brand spelling `nEVR`: the `-n` program name in `cmake/codesign/sign.sh`, the certificate subjects
+  under `certs/` (a certificate subject is a trust identity, so changing one is the owner's call), and the
+  reference plugin's reported description (`plugins/example/src/plugin.cpp`, a string that reaches logs).
+  `LEGACY_SPELLINGS` in `tools/tests/test_naming.py` lists each file and token; the list only shrinks.
 - Three spellings of one lifecycle namespace: `Nevr::Lifecycle` (`src/runtime/lifecycle/system_module_loader.h`),
   `nevr_runtime::lifecycle` (`src/runtime/lifecycle/stable_string_pool.h`) and `nevr::lifecycle`
   (`src/runtime/lifecycle/login_redirect_override.h`).
