@@ -8,13 +8,16 @@
 // 401 on every attempt, forever. Attach() stores the token as the Authorization header; OnError()
 // is fed each Error message's HTTP status and, on 401 only, mints a fresh token through the
 // refresher and stores that one for the next attempt. A network failure or a 5xx is not a token
-// problem and never calls the refresher.
+// problem and never calls the refresher. At most one mint is attempted per minRefreshInterval: a
+// server that rejects even a fresh token would otherwise cost a refresh POST, a credentials write
+// and log lines on every reconnect attempt, forever.
 //
 // Thread: OnError runs on ixwebsocket's own thread (an Error message is emitted only from its
 // connection check), the thread whose next connect() reads the stored headers, so writing the
 // header there orders it before that read. The refresher may block on HTTP.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -30,7 +33,11 @@ class BearerReconnectAuth {
   using Refresher = std::function<std::string()>;
 
   // `logTag` prefixes the log lines, e.g. "[NEVR.TELEMETRY]".
-  explicit BearerReconnectAuth(std::string logTag) : logTag_(std::move(logTag)) {}
+  static constexpr std::chrono::milliseconds kDefaultMinRefreshInterval{30000};
+
+  explicit BearerReconnectAuth(std::string logTag,
+                               std::chrono::milliseconds minRefreshInterval = kDefaultMinRefreshInterval)
+      : logTag_(std::move(logTag)), minRefreshInterval_(minRefreshInterval) {}
 
   // Stores `token` as the Authorization header of `ws`. An empty token sends no header and turns
   // OnError into a no-op. A null `refresher` means the token is fixed (configured by the operator):
@@ -40,13 +47,21 @@ class BearerReconnectAuth {
   // Call from the Error message handler with errorInfo.http_status.
   void OnError(int httpStatus);
 
+  // The socket is being torn down: later 401s start no mint (one already in flight finishes,
+  // bounded by its HTTP timeout). Attach() re-arms for the next connect.
+  void Cancel() { cancelled_.store(true, std::memory_order_release); }
+
   uint32_t RefreshCount() const { return refreshCount_.load(); }
 
  private:
   const std::string logTag_;
+  const std::chrono::milliseconds minRefreshInterval_;
+  bool attempted_ = false;
+  std::chrono::steady_clock::time_point lastAttempt_;
   ix::WebSocket* ws_ = nullptr;
   std::mutex mutex_;
   std::string token_;
   Refresher refresher_;
   std::atomic<uint32_t> refreshCount_{0};
+  std::atomic<bool> cancelled_{false};
 };

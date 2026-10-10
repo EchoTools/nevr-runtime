@@ -19,7 +19,7 @@ server key on it, so a caller's own `Authorization` header never reaches Nakama.
   (`POST {nevr_http_uri}/v2/rpc/account/authenticate/password?http_key=<key>&unwrap`,
   body `{"discord_id","password"}`) and sends it as the Bearer on the upgrade.
   The token TTL is about an hour, so it is re-acquired on every registration.
-  `src/runtime/server/gameserver.cpp` implements this.
+  `src/runtime/server/gameserver_serverdb.cpp` implements this.
 - `nevr_serverdb_uri` and `nevr_socket_uri` stay separate keys. Pointing
   `nevr_socket_uri` at `/nevr` breaks client login, which still authenticates with
   `discord_id` and `password` on `/spr`.

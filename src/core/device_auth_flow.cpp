@@ -62,6 +62,7 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
   }
 
   unsigned int pollCount = 0;
+  unsigned int consecutiveErrors = 0;
   while (true) {
     const DeviceFlowOps::Clock::time_point beforeSleep = ops.now();
     if (beforeSleep >= deadline) {
@@ -105,6 +106,7 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
         }
         return none;
       case TokenAuth::DevicePollStatus::Pending:
+        consecutiveErrors = 0;
         ++pollCount;
         if (pollCount % 10U == 0U) {
           const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - ops.now());
@@ -113,8 +115,14 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
         }
         break;
       case TokenAuth::DevicePollStatus::Error:
-        log(LogLevel::Warning, "[NEVR.AUTH] polling aborted after single error (no retry)");
-        return none;
+        if (++consecutiveErrors >= ops.max_consecutive_poll_errors) {
+          log(LogLevel::Warning,
+              "[NEVR.AUTH] polling aborted after " + std::to_string(consecutiveErrors) + " consecutive errors");
+          return none;
+        }
+        log(LogLevel::Warning, "[NEVR.AUTH] poll error " + std::to_string(consecutiveErrors) + " of " +
+                                   std::to_string(ops.max_consecutive_poll_errors) + ", retrying");
+        break;
     }
   }
 }

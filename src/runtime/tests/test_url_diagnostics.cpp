@@ -37,9 +37,9 @@ TEST(UrlDiagnostics, SafeEndpointWithoutSecretsIsRetained) {
 
 TEST(UrlDiagnostics, FormattedDiagnosticRedactsSecretsAndKeepsUsefulEndpoint) {
   const std::string message = LogDiagnostics::FormatRedactedUrlDiagnostic(
-      "[WEBSOCKET] Connecting to ServerDB at ",
+      "[NEVR.SERVERDB] Connecting to ServerDB at ",
       "wss://user-sentinel:password-sentinel@db.example:7443/serverdb?http_key=query-sentinel&x=2#fragment-sentinel");
-  EXPECT_EQ(message, "[WEBSOCKET] Connecting to ServerDB at wss://db.example:7443/serverdb");
+  EXPECT_EQ(message, "[NEVR.SERVERDB] Connecting to ServerDB at wss://db.example:7443/serverdb");
   EXPECT_EQ(message.find("user-sentinel"), std::string::npos);
   EXPECT_EQ(message.find("password-sentinel"), std::string::npos);
   EXPECT_EQ(message.find("query-sentinel"), std::string::npos);

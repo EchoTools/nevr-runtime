@@ -16,7 +16,11 @@ and logs the plain line (strings at `0x1416e90e0`, `0x1416e9110`, `0x1416e9140`)
 
 ## The caller, in order
 
-The only caller of the first-connect step is `0x140157bd0` (called from `0x140dd9950`). It runs when
+`0x1401f6fa0` has seven distinct callers (ReVault): `0x140157bd0`, `0x140157fb0` (the multiplayer init
+orchestrator named in `src/runtime/patch/mode_patches.cpp`), `0x140172850`, `0x1401728a0`,
+`0x14017c660`, `0x1401ac820` and `0x1401ac9d0`. The logged line does not say which of them ran, so
+#13's log does not identify the caller. This section follows the first-connect step `0x140157bd0`
+(called from `0x140dd9950`), the one whose next steps are listed below. It runs when
 the NetGame state is 0 or 1. After the SYSNET line (gate: mode bits at `NetGame+0x2da0`,
 `(bit2==0 && bit6!=0) || (bit41==0 && SYSNET())`), it does, in this order:
 
@@ -54,8 +58,10 @@ numeric-only and cannot do reverse DNS. The only name-resolution call left in th
 
 - No hang has been reproduced; #13's own measurements show the `getaddrinfo` takes 5.9 ms on a
   healthy Windows 11 guest.
-- Whether `BeginConnection` (`0x140f759c0`) or the `CoCreateInstance` in the SYSNET step can block on
-  native Windows was not read.
+- Whether `BeginConnection` (`0x140f759c0`) can block on native Windows was not read. The
+  `CoCreateInstance` in the SYSNET step returns before the line is logged, so it is not a blocker for
+  a log that ends on that line.
+- That #13's log came from `0x140157bd0` rather than another caller of `0x1401f6fa0`.
 - In server/headless mode the runtime replaces `0x1401f6fa0` with a function that returns 1
   (`PatchAddresses::SYSNET_CHECK`, `src/runtime/patch/mode_patches.cpp`), so such a run never logs
   the SYSNET line; a log that ends on it is a client run. No other address in the table is hooked

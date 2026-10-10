@@ -2,7 +2,7 @@
 """tools/check_quest_static_init.sh against canned llvm-nm / llvm-readelf output.
 
 The stubs stand in for the NDK tools so the parsing and the fail-closed paths are tested without
-an NDK. The real tools run in `just build-android`.
+an NDK. The real tools run in `just check-android-static-init`.
 """
 
 from __future__ import annotations

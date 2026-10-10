@@ -292,12 +292,12 @@ static LONG WINAPI CrashVEH(PEXCEPTION_POINTERS pEx) {
 static bool InstallKernelHook(HMODULE hK32, const char* name, void* hook, void** orig) {
     void* target = (void*)GetProcAddress(hK32, name);
     if (!target) {
-        PluginLog("hook target not found: %s (kernel32.dll)", name);
+        PluginLogWarning("hook target not found: %s (kernel32.dll)", name);
         return false;
     }
     MH_STATUS s = g_hooks.CreateAndEnable(target, hook, orig);
     if (s != MH_OK) {
-        PluginLog("hook failed for %s: %s", name, MH_StatusToString(s));
+        PluginLogError("hook failed for %s: %s", name, MH_StatusToString(s));
         return false;
     }
     PluginLog("hooked %s @ %p", name, target);
@@ -329,17 +329,17 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     g_gameBase = ctx->base_addr;
     g_isServer = (ctx->flags & NEVR_HOST_IS_SERVER) != 0;
 
-    // MinHook's init is process-wide: the host or an earlier plugin may already have
-    // run it, which is benign (as in the sibling plugins).
+    // Each plugin links its own static MinHook, so ALREADY_INITIALIZED only follows a
+    // second init inside this plugin; tolerated all the same.
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK && mhStatus != MH_ERROR_ALREADY_INITIALIZED) {
-        PluginLog("MH_Initialize failed: %s", MH_StatusToString(mhStatus));
+        PluginLogError("MH_Initialize failed: %s", MH_StatusToString(mhStatus));
         return -1;
     }
 
     HMODULE hK32 = GetModuleHandleA("kernel32.dll");
     if (!hK32) {
-        PluginLog("kernel32.dll not found (should be impossible in any live Windows process)");
+        PluginLogError("kernel32.dll not found (should be impossible in any live Windows process)");
         return -1;
     }
 
@@ -358,7 +358,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     if (g_vehHandle) {
         PluginLog("VEH installed");
     } else {
-        PluginLog("VEH install FAILED — crash dumps will not be captured, error=%lu", GetLastError());
+        PluginLogError("VEH install FAILED — crash dumps will not be captured, error=%lu", GetLastError());
     }
 
     PluginLog("initialized: server=%s hooks=%d/4 veh=%s",

@@ -14,8 +14,11 @@
 
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
+#include "core/json_escape.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/log/boot_replay.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -23,6 +26,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <mutex>
@@ -624,6 +628,57 @@ static std::string GetDefaultLogDir() {
 #endif
 }
 
+/* One record in the main log. fromBoot marks a line replayed from nevr-boot.jsonl (#5). */
+static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
+    if (g_config.file_jsonl) {
+        std::string line = "{\"ts\":\"";
+        JsonEscape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
+        line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
+        line += GetRunId();
+        line += "\",\"level\":\"";
+        JsonEscape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
+        line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
+        JsonEscape::AppendTo(line, message, len);
+        line += "\"}\n";
+
+        size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
+        g_file_bytes_written += written;
+    } else {
+        int n;
+        if (g_config.timestamps) {
+            n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
+        } else {
+            n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
+        }
+        if (n > 0) g_file_bytes_written += n;
+    }
+}
+
+/* Where the replay of this run's nevr-boot.jsonl stopped (#5). */
+static BootReplay::Cursor g_boot_cursor;
+
+/* #5: replay this run's nevr-boot.jsonl lines that are not yet in the main log, so boot and runtime
+ * events are one stream. Called at the main log's first open and once more after the boot tee has
+ * closed (BuiltinLogFilter::ReplayBootTail); not on rotation. The second call reads from the byte
+ * offset the first stopped at. The boot file stays where it is: it is the crash spool and is never
+ * deleted. The first read looks at the last 1 MiB only (the file accumulates every run). */
+static void ReplayBootLines() {
+    const char* path = BootLogTee::Path();
+    if (path == nullptr || path[0] == '\0' || !g_log_file) return;
+    std::vector<BootReplay::Line> lines;
+    int err = 0;
+    if (!BootReplay::ReadNew(path, GetRunId(), g_boot_cursor, lines, &err)) {
+        BlfLog("boot log %s is not readable (errno=%d); its lines are not replayed into this log", path, err);
+        return;
+    }
+    for (const BootReplay::Line& line : lines) {
+        WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
+                        /*fromBoot=*/true);
+    }
+    std::fflush(g_log_file);
+    BlfLog("replayed %zu boot line(s) from %s into this log", lines.size(), path);
+}
+
 static void InitFileLogging() {
     if (!g_config.file_enabled) return;
 
@@ -641,38 +696,17 @@ static void InitFileLogging() {
     }
 
     OpenLogFile();
+    ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
+}
+
+void BuiltinLogFilter::ReplayBootTail() {
+    std::lock_guard<std::mutex> lock(g_file_mutex);
+    ReplayBootLines();
 }
 
 static void ShutdownFileLogging() {
     std::lock_guard<std::mutex> lock(g_file_mutex);
     CloseLogFile();
-}
-
-/* ------------------------------------------------------------------ */
-/* JSON escaping for JSONL output                                      */
-/* ------------------------------------------------------------------ */
-
-static void JsonEscapeAppend(std::string& out, const char* s, int len) {
-    out.reserve(out.size() + len + 16);
-    for (int i = 0; i < len; i++) {
-        char c = s[i];
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char esc[8];
-                    snprintf(esc, sizeof(esc), "\\u%04x", static_cast<unsigned char>(c));
-                    out += esc;
-                } else {
-                    out += c;
-                }
-                break;
-        }
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -743,8 +777,8 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
  * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and
  * "ExitProcess(3) ... (call #42)" must collapse together, so runs of digits are
  * folded to a single sentinel before hashing. Fixed-size table, no heap in the hot
- * path, its own mutex (never g_file_mutex — that is the lock the crash path used to
- * deadlock on, see N70).
+ * path, its own mutex (never g_file_mutex — a fault raised while that lock was held
+ * would deadlock the crash path, see N70).
  */
 
 static constexpr uint32_t kRateWindowSec = 5;
@@ -887,29 +921,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     /* File output */
     if (g_config.file_enabled && g_log_file) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-
-        if (g_config.file_jsonl) {
-            std::string line = "{\"ts\":\"";
-            line += ts;
-            line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
-            line += GetRunId();
-            line += "\",\"level\":\"";
-            line += lvl;
-            line += "\",\"msg\":\"";
-            JsonEscapeAppend(line, message, len);
-            line += "\"}\n";
-
-            size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
-            g_file_bytes_written += written;
-        } else {
-            int n;
-            if (g_config.timestamps) {
-                n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
-            } else {
-                n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
-            }
-            if (n > 0) g_file_bytes_written += n;
-        }
+        WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
 
         std::fflush(g_log_file);
         RotateIfNeeded();
@@ -1100,9 +1112,9 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     EmitLine(level, buf, emit_len);
 
     if (g_config.passthrough_to_engine && orig_PrintfImpl) {
-        /* N89: max_line_length used to apply ONLY to our JSONL file. The
-         * passthrough below re-sent the ORIGINAL fmt+varargs, so the game
-         * reformatted the FULL line to console — which is what
+        /* N89: max_line_length must apply to the console too, not ONLY to our
+         * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
+         * reformat the FULL line to console — which is what
          * launch-server.sh captures. Measured: two `[NSUSER] saved ...` profile
          * dumps (5600 and 8192 bytes) were 30.5% of an entire server log while
          * max_line_length was 500. The setting silently did nothing for the

@@ -40,6 +40,9 @@ struct DeviceFlowOps {
   // True when the caller answers a code that runs out with a new one (the Quest session does):
   // the expiry and deadline lines then say so, at Info, instead of asking the player to restart.
   bool renews_expired_codes = false;
+  // Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up; an
+  // answered poll resets the run. The Windows module sets 5 (#202); 1 ends the wait on the first error.
+  unsigned max_consecutive_poll_errors = 1;
 };
 
 struct DeviceFlowResult {

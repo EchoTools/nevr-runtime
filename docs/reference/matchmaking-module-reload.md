@@ -23,11 +23,11 @@ reaches zero, so the next `LoadLibrary` maps new bytes at (possibly) a new base.
 | --- | --- |
 | Registration | `PnsradEnabler::Init` registers `OnDllLoaded` with `LdrRegisterDllNotification` (`src/runtime/patch/pnsrad_enabler.cpp`, "Patch 4") |
 | Per-load handler | `OnDllLoaded` in the same file: for a load notification whose `BaseDllName` is `pnsradmatchmaking.dll` it calls `PatchMatchmakingHost(DllBase)` with no one-shot guard (the `pnsrad.dll` branch below it does use `s_pnsradPatched`) |
-| The patch | `PatchMatchmakingHost`: reads `GetMatchmakerBridgePort()` (`src/runtime/compat/ws_bridge.cpp`) at call time, builds `ws://127.0.0.1:<port>`, `memcmp`s the 49-byte slot at RVA `0x1c84d8` against `wss://matchmaker.readyatdawn.com/rad/rad15_live`, then `PatchMemory`. A slot that does not match is left alone and logged as `reason=bytes_mismatch` |
-| History | the unguarded form is `b43925d` (`fix(pnsrad): re-patch matchmaker host on every pnsradmatchmaking.dll load`) |
+| The patch | `PatchMatchmakingHost`: reads `GetMatchmakerBridgePort()` (`src/runtime/compat/ws_bridge.cpp`) at call time, builds `ws://127.0.0.1:<port>`, `memcmp`s the 47 characters at RVA `0x1c84d8` (a 48-byte slot: the 47 characters and their NUL, `MatchmakerHostPatch::kHostSlotSize`) against `wss://matchmaker.readyatdawn.com/rad/rad15_live`, then `PatchMemory`. A slot that does not match is left alone and logged as `reason=bytes_mismatch` at Warning |
 
 Because the handler keys on the notification and not on a flag, a reload that maps a new image is
-patched again, and a load that maps the same already-patched image is skipped by the `memcmp`.
+patched again. A load that maps the same already-patched image fails the `memcmp` and logs the
+`reason=bytes_mismatch` warning; that line alone is not the failure from #18 (see below).
 
 ## What a run's log must show
 
@@ -37,13 +37,16 @@ module loaded N times:
 - game: `[NSLOBBY] loading matchmaking library 'pnsradmatchmaking'` (level 2, from `0x14060b810`)
 - runtime: `[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x1c84d8` (Info)
 
-A load without a following patch line, or a `pnsradmatchmaking host patch skipped` /
-`matchmaker listener never bound a port` warning, is the failure from #18.
+A load without a following patch line, or a `matchmaker listener never bound a port` warning, is the
+failure from #18. A `pnsradmatchmaking host patch skipped ... reason=bytes_mismatch` warning is the
+same failure only when the slot holds the original `wss://matchmaker.readyatdawn.com/...` text (the
+`actual=` field); with the patched `ws://127.0.0.1:<port>` text it is a re-load of an image that is
+already patched.
 
 ## Not proven
 
-- That the module is in fact unloaded and reloaded on a real PC session (the 2026-09-13 report is the
-  only observation). The path above shows when it would be: a lobby object teardown followed by a
+- That the module is in fact unloaded and reloaded on a real PC session (the original #18 report is
+  the only observation). The path above shows when it would be: a lobby object teardown followed by a
   new lobby.
 - That a reload patched by this path populates the PUBLIC MATCH screen; that needs the kiosk check
   from a client run.

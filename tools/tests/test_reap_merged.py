@@ -38,7 +38,7 @@ class ReapMergedTest(unittest.TestCase):
         self.ledger_rows = []
         self.gh_prs = {}  # branch -> list of {"number", "headRefOid", "state"}
 
-    def add_worktree(self, name, *, commit=True, push=False, owner="seat-a", lock=True):
+    def add_worktree(self, name, *, commit=True, push=False, owner="seat-a", lock=True, remote_name=None):
         wt = self.main / ".claude/worktrees" / name
         git(self.main, "worktree", "add", "-q", "--no-track", "-b", name, str(wt))
         if commit:
@@ -46,7 +46,7 @@ class ReapMergedTest(unittest.TestCase):
             git(wt, "add", f"{name}.txt")
             git(wt, "commit", "-q", "-m", name, "--no-gpg-sign")
         if push:
-            git(wt, "push", "-q", "origin", f"{name}:refs/heads/{name}")
+            git(wt, "push", "-q", "origin", f"{name}:refs/heads/{remote_name or name}")
         if lock:
             git(self.main, "worktree", "lock", "--reason", "test", str(wt))
         if owner:
@@ -66,7 +66,16 @@ class ReapMergedTest(unittest.TestCase):
                           + "\n".join(self.ledger_rows) + "\n")
         gh = self.tmp / "gh"
         gh.write_text("#!/usr/bin/env python3\nimport json,sys\nprs=json.load(open(%r))\n"
-                      "b=sys.argv[sys.argv.index('--head')+1]\nprint(json.dumps(prs.get(b,[])))\n" % str(self.tmp / "prs.json"))
+                      "if sys.argv[1:3]==['repo','view']:\n"
+                      "    print(json.dumps({'defaultBranchRef':{'name':'main'}})); sys.exit(0)\n"
+                      "out=[]\n"
+                      "if '--head' in sys.argv:\n"
+                      "    b=sys.argv[sys.argv.index('--head')+1]\n"
+                      "    out=[dict(p,headRefName=b) for p in prs.get(b,[])]\n"
+                      "elif '--search' in sys.argv:\n"
+                      "    q=sys.argv[sys.argv.index('--search')+1]\n"
+                      "    out=[dict(p,headRefName=b) for b,l in prs.items() for p in l if q in p.get('commits',[])]\n"
+                      "print(json.dumps(out))\n" % str(self.tmp / "prs.json"))
         gh.chmod(0o755)
         (self.tmp / "prs.json").write_text(json.dumps(self.gh_prs))
         env = dict(os.environ, REAP_LEDGER=str(ledger), REAP_LOG=str(self.tmp / "log/reap.jsonl"), REAP_GH=str(gh))
@@ -141,14 +150,150 @@ class ReapMergedTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(wt.exists())
         self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "squashed").stdout.strip(), "")
-        self.assertIn("origin branch deleted", result.stdout)
+        self.assertIn("origin branch squashed deleted", result.stdout)
+
+    def test_a_pr_whose_head_ref_differs_from_the_local_branch_name_is_found(self):
+        wt = self.add_worktree("local-name", push=True, remote_name="remote-name")
+        git(wt, "config", "branch.local-name.remote", "origin")
+        git(wt, "config", "branch.local-name.merge", "refs/heads/remote-name")  # its configured upstream
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["remote-name"] = [{"number": 9, "headRefOid": tip, "state": "MERGED"}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists())
+        self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "remote-name").stdout.strip(), "")
+        self.assertIn("origin branch remote-name deleted", result.stdout)
+
+    def test_a_pr_found_only_by_the_tip_sha_is_found(self):
+        wt = self.add_worktree("by-sha", push=True, remote_name="renamed-after-push")
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        git(self.main, "push", "-q", "origin", ":refs/heads/renamed-after-push")  # the ref name is gone
+        git(wt, "push", "-q", "origin", "by-sha:refs/heads/gone-name")
+        self.gh_prs["gone-name"] = [{"number": 11, "headRefOid": tip, "state": "MERGED", "commits": [tip]}]
+        git(self.main, "push", "-q", "origin", ":refs/heads/gone-name")
+        result = self.run_tool("--apply")
+        self.assertFalse(wt.exists(), result.stdout + result.stderr)
+        self.assertIn("origin branch gone-name already gone", result.stdout)
+
+    def test_main_merged_into_the_pr_branch_after_the_local_tip(self):
+        wt = self.add_worktree("with-merge", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        # Someone pushes a merge commit onto the PR branch; the PR merges at that head.
+        other = self.tmp / "other"
+        git(self.tmp, "clone", "-q", str(self.origin), str(other))
+        git(other, "checkout", "-q", "-B", "with-merge", "origin/with-merge")
+        git(other, "commit", "-q", "--allow-empty", "-m", "merge main into the PR branch", "--no-gpg-sign")
+        git(other, "push", "-q", "origin", "with-merge:refs/heads/with-merge")
+        head = git(other, "rev-parse", "HEAD").stdout.strip()
+        self.assertNotEqual(head, tip)
+        self.gh_prs["with-merge"] = [{"number": 12, "headRefOid": head, "state": "MERGED"}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists())
+        self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "with-merge").stdout.strip(), "")
+        self.assertIn("origin branch with-merge deleted", result.stdout)
+
+    def test_another_agents_merged_pr_that_carries_the_tip_never_costs_its_origin_branch(self):
+        # #310: a merged PR found only by the tip's sha can be someone else's branch that merged this
+        # work. It proves the work landed; it does not make its head ref ours to delete.
+        wt = self.add_worktree("mine", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        other = self.tmp / "other"
+        git(self.tmp, "clone", "-q", str(self.origin), str(other))
+        git(other, "checkout", "-q", "-b", "theirs", "origin/mine")
+        git(other, "commit", "-q", "--allow-empty", "-m", "their work on top of mine", "--no-gpg-sign")
+        git(other, "push", "-q", "origin", "theirs:refs/heads/theirs")
+        head = git(other, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["theirs"] = [{"number": 21, "headRefOid": head, "state": "MERGED", "commits": [tip]}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists(), "the work did land, so the worktree is redundant")
+        self.assertIn("theirs", git(self.main, "ls-remote", "--heads", "origin", "theirs").stdout)
+        self.assertIn("origin branch theirs kept (not this worktree's branch)", result.stdout)
+
+    def test_a_branch_under_another_name_without_an_upstream_is_kept(self):
+        # #310: pushed by explicit refspec under another name, no upstream configured: the merged PR
+        # proves the work landed, but nothing proves that origin branch is this worktree's.
+        wt = self.add_worktree("local-only-name", push=True, remote_name="pushed-name")
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["pushed-name"] = [{"number": 22, "headRefOid": tip, "state": "MERGED"}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists())
+        self.assertIn("pushed-name", git(self.main, "ls-remote", "--heads", "origin", "pushed-name").stdout)
+        self.assertIn("origin branch pushed-name kept (not this worktree's branch)", result.stdout)
+
+    def test_a_live_branch_found_only_by_the_tip_sha_is_kept(self):
+        wt = self.add_worktree("by-sha-live", push=True, remote_name="live-name")
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        git(self.main, "push", "-q", "origin", ":refs/heads/live-name")
+        git(wt, "push", "-q", "origin", "by-sha-live:refs/heads/other-live")
+        self.gh_prs["other-live"] = [{"number": 23, "headRefOid": tip, "state": "MERGED", "commits": [tip]}]
+        result = self.run_tool("--apply")
+        self.assertFalse(wt.exists(), result.stdout + result.stderr)
+        self.assertIn("other-live", git(self.main, "ls-remote", "--heads", "origin", "other-live").stdout)
+
+    def test_a_sibling_branch_at_the_same_tip_with_a_merged_pr_survives(self):
+        # Lane A's worktree tip is also the tip of lane B's origin branch, and B's PR merged.
+        wt = self.add_worktree("lane-a", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        git(wt, "push", "-q", "origin", "lane-a:refs/heads/lane-b")
+        self.gh_prs["lane-b"] = [{"number": 24, "headRefOid": tip, "state": "MERGED"}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists(), "the merged PR carries the tip")
+        self.assertIn("lane-b", git(self.main, "ls-remote", "--heads", "origin", "lane-b").stdout)
+        self.assertIn("origin branch lane-b kept (not this worktree's branch)", result.stdout)
+
+    def test_the_default_branch_is_never_deleted_whatever_the_pr_data_says(self):
+        wt = self.add_worktree("weird", push=True)
+        git(wt, "config", "branch.weird.remote", "origin")
+        git(wt, "config", "branch.weird.merge", "refs/heads/main")  # hostile: upstream is the default branch
+        self.land("weird")
+        main_tip = git(self.main, "rev-parse", "HEAD").stdout.strip()
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["main"] = [{"number": 25, "headRefOid": main_tip, "state": "MERGED", "commits": [tip]}]
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(main_tip, git(self.main, "ls-remote", "--heads", "origin", "main").stdout)
+        self.assertIn("refused: main is the default branch", result.stdout)
+
+    def test_a_detached_head_worktree_is_reaped_without_touching_any_branch(self):
+        wt = self.main / ".claude/worktrees/detached"
+        git(self.main, "worktree", "add", "-q", "--detach", str(wt))
+        (wt / "d.txt").write_text("d")
+        git(wt, "add", "d.txt")
+        git(wt, "commit", "-q", "-m", "detached work", "--no-gpg-sign")
+        sha = git(wt, "rev-parse", "HEAD").stdout.strip()
+        git(self.main, "worktree", "lock", "--reason", "test", str(wt))
+        self.ledger_rows.append("| .claude/worktrees/detached | seat-a | test | when merged |")
+        git(self.main, "checkout", "-q", "main")
+        git(self.main, "merge", "-q", "--no-ff", "--no-gpg-sign", "-m", "merge detached", sha)
+        git(self.main, "push", "-q", "origin", "main")
+        heads = git(self.main, "ls-remote", "--heads", "origin").stdout
+        result = self.run_tool("--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(wt.exists())
+        self.assertEqual(git(self.main, "ls-remote", "--heads", "origin").stdout, heads)
+
+    def test_origin_branch_pushed_after_the_pr_merged_is_kept(self):
+        wt = self.add_worktree("pushed-later", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["pushed-later"] = [{"number": 13, "headRefOid": tip, "state": "MERGED"}]
+        (wt / "later.txt").write_text("x")
+        git(wt, "add", "later.txt")
+        git(wt, "commit", "-q", "-m", "after the merge", "--no-gpg-sign")
+        git(wt, "push", "-q", "origin", "pushed-later:refs/heads/pushed-later")
+        result = self.run_tool("--apply")
+        self.assertTrue(wt.exists(), "the local commit made after the merge is not on any merged PR head")
+        self.assertIn("do not contain the tip", result.stdout)
 
     def test_a_merged_pr_with_a_different_head_keeps_the_worktree(self):
         wt = self.add_worktree("later", push=True)
         self.gh_prs["later"] = [{"number": 8, "headRefOid": "0" * 40, "state": "MERGED"}]
         result = self.run_tool("--apply")
         self.assertTrue(wt.exists())
-        self.assertIn("different head than the tip", result.stdout)
+        self.assertIn("do not contain the tip", result.stdout)
 
     def test_a_record_that_cannot_be_written_aborts(self):
         self.add_worktree("x")

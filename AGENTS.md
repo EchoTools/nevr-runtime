@@ -6,6 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
+## Branch lifecycle (every agent-created branch)
+
+**Whoever creates a branch deletes it.** Nobody else cleans up after you.
+
+Every branch an agent creates has a documented deletion point from the moment it exists. A merged branch is scratch: the PR keeps the commits, so never keep one "for reference".
+
+- **One branch per PR.** Name it `<seat>/<issue>-<slug>`.
+- **Create:** `git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
+- **Declare the end:** `git worktree lock --reason "<seat>: delete when PR #<n> merges or closes" .claude/worktrees/<branch>`, and the PR body carries the line `Branch lifecycle: deleted when this PR merges or closes.`
+- **Push only by explicit ref:** `git push origin HEAD:refs/heads/<branch>`.
+- **On merge:** the seat that created the branch removes its worktree and deletes the local and origin branch in the same turn it sees the merge. nevr-merge's `tools/reap_merged.py` is a backstop, not the plan.
+- **On close without merge:** same, the creator, same turn.
+- **No PR within 24 hours:** open one or delete the branch.
+- **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
+- **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
+
 ## Build Commands
 
 ```sh
@@ -73,7 +89,7 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -83,7 +99,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/hook/` | patching.h, addresses.h, process_memory.h, hook_guard, hook_liveness, dll_load_hook, symbol_corpus | *how* we attach to the binary at all |
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
-| `src/runtime/compat/` | ws_bridge, winhttp_stub | making the game's ageing network stack work against modern services |
+| `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -122,13 +138,13 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
 | `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
 Split by **what the knowledge is**, not by who uses it. A single directory named
-"common" used to hold all three — the classic junk drawer.
+"common" holding all three is the classic junk drawer.
 
 - **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
   (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
@@ -150,8 +166,9 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
 
 - **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
-  `common/nevr_plugin_interface.h` out of the old shared directory.
+  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
+  `common/nevr_plugin_interface.h`, which these headers provide from
+  `src/legacy-compat/common/`.
   Scoped to that
   one target. Delete with `src/legacy/`.
 
@@ -187,6 +204,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
+- **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
@@ -433,9 +451,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 ---
 
 The content after this separator is `CPP-MINGW-ADDENDUM` — binding rules
-for cross-compiling C++ Windows DLLs with mingw-w64.  It was previously a
-separate document in a private repository; inlining it here ensures every
-agent reads it (it is required reading per the pre-read gate above).
+for cross-compiling C++ Windows DLLs with mingw-w64.  It is inlined here
+so that every agent reads it (it is required reading per the pre-read gate above).
 
 ---
 

@@ -203,7 +203,9 @@ inline CachedAuthToken ParseCredentialsJson(std::string_view text, uint64_t now)
 /// NOT written -- it lives in memory only; the refresh token is the one
 /// persistent credential. (A live access token lasts as long as its own JWT
 /// `exp` says -- one hour from nakama -- and that number exists nowhere on
-/// disk, so no reader of this file can answer when the access token expires.)
+/// disk, so no reader of this file can answer when the access token expires.
+/// The 60s cap, kMaxDiskAccessTokenLifetimeSec, applies to the load path only;
+/// it is not the access token's lifetime.)
 inline std::string SerializeCredentialsJson(const CachedAuthToken& auth) {
     nlohmann::json j;
     j["refresh_token"] = auth.refresh_token;

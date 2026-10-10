@@ -75,7 +75,7 @@
 [90m2026-09-21T16:37:45.035Z[0m [0minfo[0m [NEVR.RESOURCE] Registered embedded override: splash_texture (type=0xbeac1969cb7b8861 name=0x1f72c5e0fc9fc8c0, 1050548 bytes)[0m
 [90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.RESOURCE] Init complete (1 overrides registered)[0m
 [90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.PATCH] Fatal error handler installed �?" server will exit on fatal errors[0m
-[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized: 3/3 hooks installed (tls=ok createdir=ok winhttp=ok)[0m
+[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized: 3/3 hooks installed (tls=ok createdir=ok msxml6=ok)[0m
 [90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] Loaded: platform_compat (API v2, static)[0m
 [90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.AUTH] Running in server mode -- token auth disabled[0m
 [90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.MODULE] token_auth initialized[0m

@@ -100,7 +100,6 @@ CHAR   g_internalIpOverride[46] = {};
 CHAR   g_externalIpOverride[46] = {};
 CHAR   g_customConfigPath[MAX_PATH] = {};
 CHAR   g_regionOverride[64]   = {};
-GUID   g_loginSessionId       = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
@@ -197,14 +196,14 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
+#include "core/hex_dump.h"
+#include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/patch/broadcaster_hook_stats.h"
-#include "runtime/patch/mode_patches.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -393,6 +392,23 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
   EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
 }
 
+// N89 (#100 regression net): a plugin whose function is built in is refused even when it is listed
+// as required, with the reason in the login's report; the plugin after it still loads.
+TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) {
+  g_testPluginLoadPlan.push_back({"filter", "Log_Filter.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED Log_Filter.dll"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[0].at("error"), "superseded by the built-in log filter");
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
 // The same DLL under another spelling of its path passes the file-name check, so
 // the loader's same-module check is what stops it.
 TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {
@@ -532,10 +548,32 @@ TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
   EXPECT_FALSE(TestLogContains("SECRETVALUE"));
 }
 
-// get_plugin_info reports each plugin's own API version and capabilities. It
-// used to cast NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo, so
+// #152: a plugin may keep what get_plugin_info returned during its init. The loader reserves
+// g_plugins before any init so the push_back that follows that init cannot move the entry the kept
+// pointer names. The keeper fixture takes plugin 0's pointer in its init; after the load it must still
+// be the pointer the host hands out for index 0.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysValid) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"keeper", "test_plugin_info_keeper.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
+// get_plugin_info reports each plugin's own API version and capabilities. Casting
+// NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
-// plugin declaring no capabilities showed as caps 5.
+// plugin declaring no capabilities would show as caps 5.
 TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilities) {
   g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
@@ -979,6 +1017,121 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
 }
 
+// #47: the one hex-dump helper behind the SAVE_SUCCESS, CURRENT_LOADOUT and bone dumps.
+TEST(HexDump, FormatsBytesAsUppercaseHexWithATrailingSpace) {
+  const uint8_t bytes[] = {0xDE, 0xAD, 0x0B, 0x00};
+  const auto lines = nevr::HexDumpLines(bytes, sizeof(bytes), 256, 32);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(lines[0], "DE AD 0B 00 ");
+}
+
+TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
+  std::vector<uint8_t> bytes(100);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(i);
+  const auto lines = nevr::HexDumpLines(bytes.data(), bytes.size(), 70, 32);
+  ASSERT_EQ(lines.size(), 3U);                 // 32 + 32 + 6 of the first 70 bytes
+  EXPECT_EQ(lines[0].size(), 32U * 3U);
+  EXPECT_EQ(lines[2], "40 41 42 43 44 45 ");
+  EXPECT_TRUE(nevr::HexDumpLines(bytes.data(), 0, 70, 32).empty());
+  EXPECT_TRUE(nevr::HexDumpLines(nullptr, 4, 70, 32).empty());
+}
+
+// #18: pnsradmatchmaking.dll is unloaded and reloaded mid-session and every load maps a fresh image,
+// so the host rewrite must apply to each image on its own.
+namespace {
+std::vector<uint8_t> FreshMatchmakerImage() {
+  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
+              sizeof(MatchmakerHostPatch::kHostExpected));
+  return image;
+}
+bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
+  std::memcpy(dst, src, len);
+  return true;
+}
+const char* HostOf(const std::vector<uint8_t>& image) {
+  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+}
+}  // namespace
+
+// The slot is the original string and its NUL: the byte after it belongs to other data
+// (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
+TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
+  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+}
+
+TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+
+  // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
+  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
+}
+
+TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            MatchmakerHostPatch::Result::WriteFailed);
+}
+
+// #201: the server's new-location text ends with the code line, which the game's screen drops.
+namespace {
+std::string FrameWithText(const std::string& text) {
+  const std::string withNul = text + std::string(1, '\0');
+  return BuildLoginFailureFrame(24 + withNul.size(), 400, withNul);
+}
+}  // namespace
+
+TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
+  const std::string text =
+      "[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+      "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<";
+  std::string out;
+  ASSERT_TRUE(TestHook_MoveCodeLineFirst(FrameWithText(text), &out));
+  EXPECT_EQ(out, FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                               "location.\nCheck your Discord DMs from @EchoVRCE."));
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+  ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
+  EXPECT_EQ(statusCode, 400U);
+  EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
+  std::string out;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Account banned."), &out));
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Select code >>> 42 <<<"), &out));  // already first
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>> xx <<<"), &out));  // not digits
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>>  <<<"), &out));  // empty code
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Go to G, type /verify\nWhen prompted, select code >>> 42 <<<"),
+                                         &out));  // guild variant: code is not a line of its own
+  // Two frames in one message are not rewritten.
+  const std::string two = FrameWithText("a\nSelect code >>> 42 <<<") + FrameWithText("b");
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(two, &out));
+  // A different message symbol is not touched.
+  std::string other = FrameWithText("a\nSelect code >>> 42 <<<");
+  other[8] ^= 1;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(other, &out));
+}
+
 TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
   ClearTestLogs();
   constexpr char kSecret[] = "login-failure-secret-sentinel";
@@ -1016,8 +1169,8 @@ std::string BuildMarkedMessage(uint64_t symbol, const std::string& payload) {
 }  // namespace
 
 // Nakama batches LoginSuccess, STcpConnectionUnrequireEvent and GameSettings into one frame. The
-// bridge used to log only the first symbol of a server->game frame, so the other two never
-// appeared in a server's log. Every message in the frame must be logged.
+// bridge logs every symbol of a server->game frame; logging only the first would leave the other
+// two out of a server's log. Every message in the frame must be logged.
 TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
   ClearTestLogs();
   const std::string frame = BuildMarkedMessage(0x1111111111111111ULL, std::string(40, 'a')) +
@@ -1433,33 +1586,6 @@ TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
   EXPECT_EQ(ResolveModuleProc("test.module_proc_registry.absent"), nullptr);
 }
 
-TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
-  char line[192] = {};
-  EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
-  EXPECT_STREQ(line,
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(zero entries means idle runs prove nothing)");
-}
-
-// The live counters are translation-unit state in mode_patches.cpp.  They are
-// zero before any hook entry, which is the only state this test needs: call the
-// REAL reporting entry point and capture the structured line through the test
-// logger.  It does not read game memory, patch code, or install a hook.
-TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
-  {
-    std::lock_guard<std::mutex> lock(g_testLogMutex);
-    g_testLogMessages.clear();
-  }
-
-  LogBroadcasterHookStats();
-
-  std::lock_guard<std::mutex> lock(g_testLogMutex);
-  ASSERT_EQ(g_testLogMessages.size(), 1U);
-  EXPECT_EQ(g_testLogMessages.front(),
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
-      "(zero entries means idle runs prove nothing)");
-}
-
 // ============================================================================
 // N66 behavioral tests — FormatSymbolId guard logic (production-linked)
 // ============================================================================
@@ -1679,7 +1805,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
     EXPECT_LE(h.memory_used_mb, h.memory_total_mb) << "used exceeds total — derivation is wrong";
 
-    // The old fabricated tuple, guarded as a set. Any single value could
+    // The fabricated tuple (4 cores, 8 threads, 16384 MB total, 8192 MB used), guarded as a set. Any single value could
     // legitimately match on some machine; all of them matching means the
     // literals came back.
     const bool all_old_literals = (h.physical_cores == 4 && h.logical_cores == 8 &&
@@ -1716,7 +1842,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
 //   block -> not caught here (that is a format string, not a value this test
 //   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
-//   itself starts returning the old tuple; the `just verify` sensor catches
+//   itself starts returning the fabricated tuple; the `just verify` sensor catches
 //   the format string.
 
 // ============================================================================

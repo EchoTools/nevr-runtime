@@ -31,7 +31,7 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       // #16 — opt-in for a dedicated server that boots with no login bridge (offline rigs). Without
       // it a server with no socket_uri is fatal (bridge_policy.h).
       {"nevr_allow_offline_server", "services.allow_offline_server"},
-      // S4b — gameserver.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
+      // S4b — gameserver_serverdb.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
       // DISTINCT from serverdb_host -> services.serverdb (S3, the redirect HOST):
       // one is the address the gameserver dials, the other is a service-endpoint
       // override the game's URL producer rewrites through. Different keys, no
@@ -58,6 +58,8 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"internal_ip", "network.internal_ip"},
       {"upnp", "network.upnp"},
       {"upnp_port", "network.upnp_port"},
+      // #58 — seconds an empty server holds its return to lobby; 0 (default) holds nothing.
+      {"nevr_empty_server_ttl_s", "network.empty_server_ttl_seconds"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
@@ -89,7 +91,14 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey) {
   const std::string path = FlatKeyToYamlPath(flatKey);
   if (path.empty()) return std::nullopt;  // not a migrated key
-  return cfg.GetString(path);
+  // A bare ${VAR} that is not set stays in the value as written (nevr_config.cpp ResolveVar). For a
+  // service key that text is not a value: it must neither beat the built-in default nor reach a
+  // caller as a credential or URI, so the key counts as unset. The test is exact (the variable was
+  // really unset), so a literal "${" written with the $${ escape is still a value.
+  bool hadUnsetBare = false;
+  std::optional<std::string> value = cfg.GetString(path, &hadUnsetBare);
+  if (hadUnsetBare) return std::nullopt;
+  return value;
 }
 
 FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
@@ -110,7 +119,7 @@ FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entri
 std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
                                                   const FlatDefaults& defaults,
                                                   const std::string& flatKey) {
-  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);
+  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);  // nullopt when unset or unresolved
   if (fromFile && !fromFile->empty()) return fromFile;
   const auto it = defaults.find(flatKey);
   if (it != defaults.end() && !it->second.empty()) return it->second;

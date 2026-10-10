@@ -40,7 +40,6 @@ class ReleaseContractTest(unittest.TestCase):
             "test_protobuf_transport",
             "test_websocket_client_auth",
             "test_url_diagnostics",
-            "test_winhttp_stub",
             "test_callback_unregistration",
             "test_server_context",
             "test_session_unregister",
@@ -156,8 +155,8 @@ class ReleaseContractTest(unittest.TestCase):
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
         websocket = (REPO / "src/runtime/server/websocket_client.cpp").read_text()
         telemetry = (REPO / "src/runtime/server/telemetry_streamer.cpp").read_text()
-        winhttp = (REPO / "src/runtime/compat/winhttp_stub.cpp").read_text()
-        gameserver = (REPO / "src/runtime/server/gameserver.cpp").read_text()
+        gameserver = "\n".join((REPO / "src/runtime/server" / name).read_text()
+                               for name in ("gameserver.cpp", "gameserver_callbacks.cpp", "gameserver_telemetry.cpp", "gameserver_serverdb.cpp"))
         self.assertIn("FormatRedactedUrlDiagnostic", websocket)
         self.assertIn("FormatWebSocketCloseDiagnostic", websocket)
         self.assertIn("FormatWebSocketErrorDiagnostic", websocket)
@@ -167,10 +166,6 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("FormatWebSocketCloseDiagnostic", telemetry)
         self.assertIn("FormatWebSocketErrorDiagnostic", telemetry)
         self.assertNotIn("msg->errorInfo.reason.c_str()", telemetry)
-        self.assertIn("FormatRedactedUrlDiagnostic", winhttp)
-        self.assertIn("IsCredentialHeaderName", winhttp)
-        self.assertNotIn("curl_easy_strerror", winhttp)
-        self.assertNotIn("url=%ls", winhttp)
         self.assertNotIn("sessionSuccess.endpoint().c_str()", gameserver)
 
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):

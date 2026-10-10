@@ -262,16 +262,16 @@ TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
 
 // N66: FormatSymbolId guard tests are now PRODUCTION-LINKED in test_behavioral.cpp.
 // That test calls the real EchoVR::FormatSymbolId from symbol_corpus.cpp (compiled
-// into the test target). The model-level tests previously here were ADJACENT
-// (replicated the guard logic instead of calling production) and have been removed.
+// into the test target). Model-level tests that replicate the guard logic instead
+// of calling production are ADJACENT, not evidence, and do not belong here.
 
-// N63: Double-SIGINT re-entry gate now calls ForceFatalExit instead of returning.
+// N63: Double-SIGINT re-entry gate calls ForceFatalExit instead of returning.
 // The gate variable s_shuttingDown uses InterlockedExchange (atomic test-and-set).
 // We test the gate logic: we can't directly test TerminateProcess, but we can
 // verify the gate variable is declared as volatile LONG (tested at compile time:
 // InterlockedExchange requires volatile LONG*).
 
-// N64: BeginGracefulShutdown now calls WsBridge_Shutdown before ForceFatalExit.
+// N64: BeginGracefulShutdown calls WsBridge_Shutdown before ForceFatalExit.
 // The call pattern is: GetModuleHandleA("ws_bridge.dll") → GetProcAddress →
 // WsBridge_Shutdown() → ForceFatalExit(0).
 // UNTESTABLE in C++ unit suite: requires ws_bridge.dll loaded at runtime.
@@ -286,7 +286,7 @@ TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
 // + system test (server registers + clean shutdown without hangs).
 
 // N61 (matchmaker callback): conn>=2 registers independent callback on shared
-// remote. Login close no longer kills matchmaker routing.
+// remote. Login close does not kill matchmaker routing.
 // UNTESTABLE in C++ unit suite: requires live game WS connection cycle
 // (conn=0 → conn=1 → conn>=2 → conn=1 close) with proto message flow.
 // Verified by: code review (callback registration visible at ws_bridge.cpp
