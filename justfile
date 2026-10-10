@@ -1166,7 +1166,7 @@ verify:
     # 571a41b stopped persisting the access token (refresh token only, on disk),
     # which made `HasValidToken()` permanently false in a fresh process — so the
     # cached-token branch became dead code and every server silently fell back to
-    # password auth. Nothing else refreshes in server mode: TokenAuth::Init
+    # password auth. Nothing else refreshes in server mode: nevr_token_auth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
     N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
@@ -1384,15 +1384,15 @@ verify:
     # Literals ("cpu":"Wine", 4 physical cores, 8 logical, 16384 MB total, 8192
     # used) would be emitted as though read from the machine, and nothing could
     # tell, because invented data and a real reading look identical once they are
-    # on the wire. Every field is read from the host (SystemInfo::Get).
+    # on the wire. Every field is read from the host (nevr_system_info::Get).
     #
     # The unit tests cover SystemInfo itself; they cannot see this format string.
     # This sensor is the half that watches the wire format.
     N115_RC=0; N115_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N115_RC=$?
     sensor_stage1 "N115 login system_info measured" "src/runtime/compat/ws_bridge.cpp" "$N115_RC"
     sensor_nonempty "N115 login system_info measured" "non-comment lines of compat/ws_bridge.cpp" "$N115_WS"
-    if ! grep -q 'SystemInfo::Get()' <<<"$N115_WS"; then
-        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (SystemInfo::Get)." >&2
+    if ! grep -q 'nevr_system_info::Get()' <<<"$N115_WS"; then
+        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (nevr_system_info::Get)." >&2
         exit 1
     fi
     # The JSON lives inside a C string literal, so every quote in the source is
@@ -2471,8 +2471,8 @@ verify:
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
-        echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
+    if ! grep -q 'nevr_build_identity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
+        echo "verify: FAIL — N112c: gameserver.cpp does not call nevr_build_identity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
         exit 1

@@ -27,7 +27,7 @@
 #define NEVR_STR_(x) #x
 #define NEVR_STR(x)  NEVR_STR_(x)
 
-namespace BuildIdentity {
+namespace nevr_build_identity {
 
 const Info& Get() {
   static const Info info = []() {
@@ -50,4 +50,4 @@ const Info& Get() {
   return info;
 }
 
-}  // namespace BuildIdentity
+}  // namespace nevr_build_identity

@@ -458,7 +458,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("BootReplay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
         self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
-        self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
+        self.assertEqual(len(re.findall(r"nevr_json_escape::AppendTo\(line, (ts|lvl)", record)), 2,
                          "ts and level come from the parsed boot file and are escaped like the message")
         # The tee stays open until initialize() closes it; the lines it writes after the main log
         # opened are replayed once more, under the file lock, just before the tee closes.

@@ -17,7 +17,7 @@ namespace {
 
 std::string Record(const char* ts, const char* run, const std::string& rawMsg) {
   char escaped[512];
-  JsonEscape::Into(rawMsg.data(), static_cast<int>(rawMsg.size()), escaped, sizeof(escaped));
+  nevr_json_escape::Into(rawMsg.data(), static_cast<int>(rawMsg.size()), escaped, sizeof(escaped));
   char line[1024];
   const int n = BootLines::Build(line, sizeof(line), ts, run, escaped);
   EXPECT_GT(n, 0);
