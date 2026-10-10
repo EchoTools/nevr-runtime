@@ -7,7 +7,7 @@
 add_library(platform_compat STATIC
     src/platform_compat.cpp
 )
-target_compile_definitions(platform_compat PRIVATE USE_MINHOOK NEVR_MODULE_EXPORTS)
+target_compile_definitions(platform_compat PRIVATE NEVR_USE_MINHOOK NEVR_MODULE_EXPORTS)
 
 target_include_directories(platform_compat PRIVATE
     ${CMAKE_SOURCE_DIR}/src

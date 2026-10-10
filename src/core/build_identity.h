@@ -6,7 +6,7 @@
 /// Build identity — compile-time constants, never measured.
 ///
 /// This exists because the login payload carried no NEVR version information.
-/// The server registration already sends GIT_DESCRIBE in its version field;
+/// The server registration already sends NEVR_GIT_DESCRIBE in its version field;
 /// the client login sent nothing. A version number a peer cannot verify is a
 /// courtesy, not an identity — if two different binaries can present the same
 /// string, the string is not an identity and must not be treated as one (N112).
