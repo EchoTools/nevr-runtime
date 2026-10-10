@@ -8,8 +8,8 @@
  * post-load patching before the game uses the DLL.
  *
  * Pattern:
- *   DllLoadHook::Install();  // early in Initialize()
- *   DllLoadHook::OnLoad("pnsdemo.dll", PatchPnsDemoUserId);
+ *   nevr_dll_load_hook::Install();  // early in Initialize()
+ *   nevr_dll_load_hook::OnLoad("pnsdemo.dll", PatchPnsDemoUserId);
  *   // ... later, game loads pnsdemo.dll ...
  *   // PatchPnsDemoUserId(name, hmod) fires automatically
  */
@@ -28,7 +28,7 @@
 #include <MinHook.h>
 #endif
 
-namespace DllLoadHook {
+namespace nevr_dll_load_hook {
 
 struct Registration {
     char dll_name[64];     // lowercase, filename only
@@ -277,4 +277,4 @@ void FireCallbacksForModule(const char* lower_name, HMODULE module) {
     FireCallbacks(lower_name, module);
 }
 
-} // namespace DllLoadHook
+} // namespace nevr_dll_load_hook

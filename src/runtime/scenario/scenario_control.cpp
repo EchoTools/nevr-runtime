@@ -308,7 +308,7 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
   // prologue is our jump: call through our detour, which runs the original. Anything else is refused.
   void* dispatchTarget = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kDispatchEventVA);
   auto* dispatch = reinterpret_cast<DispatchEventFn>(
-      HookGuard::IsOurDetour(dispatchTarget) ? dispatchTarget
+      nevr_hook_guard::IsOurDetour(dispatchTarget) ? dispatchTarget
                                               : Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
   if (dispatch == nullptr) return error;
   if (cmd.action == "early_quit_countdown_active") {

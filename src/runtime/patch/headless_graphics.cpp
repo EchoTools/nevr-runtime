@@ -650,9 +650,9 @@ static void OnD3d12Load(const char* dll_name, HMODULE module) {
 
 void InstallHeadlessGraphicsHooks() {
 #ifdef _WIN32
-    DllLoadHook::OnLoad("dxgi.dll", OnDxgiLoad);
-    DllLoadHook::OnLoad("d3d11.dll", OnD3d11Load);
-    DllLoadHook::OnLoad("d3d12.dll", OnD3d12Load);
+    nevr_dll_load_hook::OnLoad("dxgi.dll", OnDxgiLoad);
+    nevr_dll_load_hook::OnLoad("d3d11.dll", OnD3d11Load);
+    nevr_dll_load_hook::OnLoad("d3d12.dll", OnD3d12Load);
     // Intent logged in initialize.cpp before calling this function;
     // the callbacks (OnDxgiLoad etc.) fire post-WinMain when Log() is safe.
 #endif

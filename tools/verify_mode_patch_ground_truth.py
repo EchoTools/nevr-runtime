@@ -106,7 +106,7 @@ def add_aliases(text: str, constants: dict[str, int]) -> None:
 
 def resolve(expression: str, constants: dict[str, int]) -> int:
     expression = expression.strip()
-    expression = expression.removeprefix("PatchAddresses::")
+    expression = expression.removeprefix("nevr_patch_addresses::")
     if expression.startswith("0x"):
         return int(expression, 16)
     if expression in constants:
@@ -170,7 +170,7 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
         targets.add(resolve(expression, constants))
 
     spectator_write = re.search(
-        r"uintptr_t\s+addr\s*=.*?\+\s*PatchAddresses::(\w+).*?"
+        r"uintptr_t\s+addr\s*=.*?\+\s*nevr_patch_addresses::(\w+).*?"
         r"ProcessMemcpy\s*\(\s*reinterpret_cast<VOID\*>\(addr\)",
         source,
         re.DOTALL,

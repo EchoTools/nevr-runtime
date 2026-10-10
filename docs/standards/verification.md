@@ -144,7 +144,7 @@ this class.
 - `HookLiveness` reported from the same dead site until it was moved.
 
 **Rule:** drive every monitor from a site whose liveness is independently
-proven, and prove it — do not assume it. `HookLiveness::Report` exists to make
+proven, and prove it — do not assume it. `nevr_hook_liveness::Report` exists to make
 that provable.
 
 ---
