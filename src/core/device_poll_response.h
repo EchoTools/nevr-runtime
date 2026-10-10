@@ -25,7 +25,22 @@ struct DevicePollResponse {
   // caller must reach for the documented fallback rather than read a number
   // this side invented.
   std::optional<uint64_t> refresh_token_expires_in;
+  // What the poll itself looked like, for the log (#397). `server_status` is the body's "status" string
+  // as sent ("" when absent or the body was not JSON). `http_code` is 0 when no HTTP answer arrived (or
+  // the caller is not an HTTP one). `body_prefix` is PollBodyPrefix of the body: never a token or the code.
+  std::string server_status;
+  long http_code = 0;
+  std::string body_prefix;
 };
+
+/// Whether `status` is one the poll endpoint is known to send ("authorization_pending", "pending",
+/// "expired", "verified"). Anything else is treated as pending and reported.
+bool IsKnownPollStatus(std::string_view status);
+
+/// At most `max_chars` of a poll body for a log line: every occurrence of `code` replaced by "<code>",
+/// control characters shown as '.'. A body that carries tokens (a verified answer) is not echoed at all:
+/// it is described by its size.
+std::string PollBodyPrefix(std::string_view body, std::string_view code, std::size_t max_chars = 120);
 
 DevicePollResponse ParseDevicePollResponse(std::string_view response);
 

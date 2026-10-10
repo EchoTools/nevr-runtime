@@ -17,6 +17,7 @@
 #include "core/auth_token.h"
 #include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
+#include "core/signin_dialog_text.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
@@ -532,9 +533,15 @@ struct FakeDeviceAuthFlow {
   size_t poll_sequence_index = 0;
   std::vector<FlowClock::duration> sleep_durations;
   std::vector<std::pair<EchoVR::LogLevel, std::string>> logs;
+  std::vector<std::pair<std::string, std::string>> issued;  // (code, login url) the player was shown
+  std::vector<nevr::auth::FlowEnd> ends;
 
   nevr_token_auth::test_hook::DeviceAuthFlowOps Ops() {
     nevr_token_auth::test_hook::DeviceAuthFlowOps ops;
+    ops.on_code_issued = [this](const std::string& issuedCode, const std::string& url) {
+      issued.emplace_back(issuedCode, url);
+    };
+    ops.on_end = [this](nevr::auth::FlowEnd end) { ends.push_back(end); };
     ops.now = [this]() { return current; };
     ops.request_device_code = [this]() {
       ++request_calls;
@@ -626,6 +633,169 @@ TEST(DeviceAuthFlow, ServerRefusesBeforeAnyHttpBrowserUiOrPollOperation) {
   EXPECT_EQ(fake.ui_calls, 0);
   EXPECT_EQ(fake.poll_calls, 0);
   EXPECT_EQ(fake.save_calls, 0);
+}
+
+// ---- #397: what the player is shown while sign-in is pending ----------------------------------------
+
+namespace {
+bool LogHas(const FakeDeviceAuthFlow& fake, EchoVR::LogLevel level, const std::string& needle) {
+  return std::any_of(fake.logs.begin(), fake.logs.end(), [&](const auto& entry) {
+    return entry.first == level && entry.second.find(needle) != std::string::npos;
+  });
+}
+}  // namespace
+
+TEST(SignInDialogText, WaitingTextNamesThePageTheCodeAndTheBrowser) {
+  const auto c = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "ABCD-1234");
+  EXPECT_EQ(c.title, "Echo VR - sign in");
+  EXPECT_EQ(c.code, "ABCD-1234");
+  EXPECT_FALSE(c.closes_by_itself);
+  EXPECT_EQ(c.instruction,
+            "Sign in to play: on a phone or computer, open\nechovrce.com/login/device\nand enter the code below.\n"
+            "Your browser was also opened to that page. The code lasts 5 minutes.");
+  // What the player types has no scheme and no query: the code is never part of the address line.
+  EXPECT_EQ(nevr::auth::SignInDisplayUrl("http://localhost:7350/login/device"), "localhost:7350/login/device");
+  EXPECT_EQ(nevr::auth::SignInDisplayUrl("echovrce.com/login/device"), "echovrce.com/login/device");
+}
+
+TEST(SignInDialogText, EveryEndingSaysWhichOneAndDropsTheCode) {
+  using nevr::auth::FlowEnd;
+  std::vector<std::string> seen;
+  for (const FlowEnd end : {FlowEnd::Verified, FlowEnd::NoCode, FlowEnd::BrowserFailed, FlowEnd::CodeExpired,
+                            FlowEnd::TimedOut, FlowEnd::PollErrors, FlowEnd::Cancelled}) {
+    const auto c = nevr::auth::SignInEndedContent(end);
+    EXPECT_FALSE(c.instruction.empty());
+    EXPECT_TRUE(c.code.empty()) << "the code is not shown once the wait has ended";
+    seen.push_back(c.instruction);
+    // Only a success (or the game closing) vanishes on its own; a failure stays until it is read.
+    EXPECT_EQ(c.closes_by_itself, end == FlowEnd::Verified || end == FlowEnd::Cancelled);
+  }
+  std::sort(seen.begin(), seen.end());
+  // Expired and timed out read the same on purpose: both are "get a new code".
+  EXPECT_EQ(std::unique(seen.begin(), seen.end()) - seen.begin(), 6);
+  EXPECT_EQ(nevr::auth::SignInEndedContent(FlowEnd::Verified).instruction, "Signed in. Starting Echo VR.");
+  EXPECT_NE(nevr::auth::SignInEndedContent(FlowEnd::CodeExpired).instruction.find("expired"), std::string::npos);
+}
+
+TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsReportedOnce) {
+  using nevr::auth::FlowEnd;
+  struct Case {
+    const char* name;
+    std::function<void(FakeDeviceAuthFlow&)> arrange;
+    FlowEnd expected;
+  };
+  const std::vector<Case> cases = {
+      {"verified", [](FakeDeviceAuthFlow& f) { f.poll_response = VerifiedPollResponse(); }, FlowEnd::Verified},
+      {"expired",
+       [](FakeDeviceAuthFlow& f) {
+         f.poll_response = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
+       },
+       FlowEnd::CodeExpired},
+      {"deadline",
+       [](FakeDeviceAuthFlow& f) {
+         f.poll_response = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
+       },
+       FlowEnd::TimedOut},
+      {"poll errors", [](FakeDeviceAuthFlow&) {}, FlowEnd::PollErrors},
+      {"browser failed",
+       [](FakeDeviceAuthFlow& f) {
+         f.browser_result = 0;
+         f.ui_result = 0;
+       },
+       FlowEnd::BrowserFailed},
+  };
+  for (const Case& c : cases) {
+    FakeDeviceAuthFlow fake;
+    c.arrange(fake);
+    (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+    ASSERT_EQ(fake.issued.size(), 1U) << c.name;
+    EXPECT_EQ(fake.issued[0].first, fake.code) << c.name;
+    EXPECT_EQ(fake.issued[0].second, "https://echovrce.com/login/device") << c.name;
+    ASSERT_EQ(fake.ends.size(), 1U) << c.name;
+    EXPECT_EQ(fake.ends[0], c.expected) << c.name;
+  }
+}
+
+TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
+  FakeDeviceAuthFlow noCode;
+  noCode.code.clear();
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), noCode.Ops());
+  EXPECT_TRUE(noCode.issued.empty());
+  ASSERT_EQ(noCode.ends.size(), 1U);
+  EXPECT_EQ(noCode.ends[0], nevr::auth::FlowEnd::NoCode);
+
+  FakeDeviceAuthFlow server;
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(true, ExistingDeviceAuthState(), server.Ops());
+  EXPECT_TRUE(server.issued.empty());
+  EXPECT_TRUE(server.ends.empty());
+}
+
+// The wait used to be silent while the server answered "pending": a loop that polls and is told pending
+// could not be told from one that does not run (#397).
+TEST(DeviceAuthFlow, EveryPollIsOneInfoLineWithHttpCodeStatusAndAMaskedBody) {
+  FakeDeviceAuthFlow fake;
+  nevr_token_auth::DevicePollResponse pending =
+      nevr_token_auth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
+  pending.http_code = 200;
+  pending.body_prefix = nevr_token_auth::PollBodyPrefix("{\"status\":\"authorization_pending\"}", fake.code);
+  nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
+  expired.http_code = 200;
+  expired.body_prefix = "{\"status\":\"expired\",\"code\":\"" + fake.code + "\"}";
+  expired.body_prefix = nevr_token_auth::PollBodyPrefix(expired.body_prefix, fake.code);
+  fake.poll_sequence = {pending, pending, expired};
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
+                     "poll #1 http=200 status=pending server_status=\"authorization_pending\" "
+                     "body=\"{\"status\":\"authorization_pending\"}\""));
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #2 http=200 status=pending"));
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info,
+                     "poll #3 http=200 status=expired server_status=\"expired\" "
+                     "body=\"{\"status\":\"expired\",\"code\":\"<code>\"}\""));
+  for (const auto& [level, message] : fake.logs) {
+    (void)level;
+    EXPECT_EQ(message.find(fake.code), std::string::npos) << message;
+  }
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status"));
+}
+
+TEST(DeviceAuthFlow, AnUnknownStatusIsAWarningAndStillPending) {
+  FakeDeviceAuthFlow fake;
+  nevr_token_auth::DevicePollResponse odd = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"weird\"}");
+  odd.http_code = 200;
+  odd.body_prefix = "{\"status\":\"weird\"}";
+  nevr_token_auth::DevicePollResponse expired = nevr_token_auth::ParseDevicePollResponse("{\"status\":\"expired\"}");
+  fake.poll_sequence = {odd, expired};
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Warning, "poll answered an unknown status \"weird\""));
+  EXPECT_EQ(fake.poll_calls, 2) << "an unknown status is treated as pending: the loop goes on";
+  EXPECT_TRUE(nevr_token_auth::IsKnownPollStatus("authorization_pending"));
+  EXPECT_TRUE(nevr_token_auth::IsKnownPollStatus("verified"));
+  EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus(""));
+  EXPECT_FALSE(nevr_token_auth::IsKnownPollStatus("weird"));
+}
+
+TEST(DeviceAuthFlow, ATransportFailureIsLoggedAsHttpNoneNotSilence) {
+  FakeDeviceAuthFlow fake;  // default response: Error, http_code 0
+  (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "poll #1 http=none status=error"));
+  EXPECT_FALSE(LogHas(fake, EchoVR::LogLevel::Warning, "unknown status")) << "an error is not an unknown status";
+}
+
+TEST(PollBodyPrefix, MasksTheCodeCapsTheLengthAndNeverEchoesTokens) {
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"code\":\"SECRET-1\",\"status\":\"x\"}", "SECRET-1"),
+            "{\"code\":\"<code>\",\"status\":\"x\"}");
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz").size(), 120U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix(std::string(500, 'a'), "zzz", 10).size(), 10U);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("a\nb\x01", ""), "a.b.");
+  const std::string verified =
+      "{\"status\":\"verified\",\"access_token\":\"eyJhbGciOiJIUzI1NiJ9.payload.sig\",\"refresh_token\":\"r\"}";
+  const std::string described = nevr_token_auth::PollBodyPrefix(verified, "SECRET-1");
+  EXPECT_EQ(described.find("eyJ"), std::string::npos);
+  EXPECT_EQ(described.find("access_token"), std::string::npos);
+  EXPECT_NE(described.find(std::to_string(verified.size())), std::string::npos);
+  EXPECT_EQ(nevr_token_auth::PollBodyPrefix("{\"token\":\"legacy-secret\"}", "").find("legacy-secret"),
+            std::string::npos);
 }
 
 TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo) {
