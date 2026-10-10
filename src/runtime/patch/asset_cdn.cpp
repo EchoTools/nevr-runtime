@@ -1,6 +1,7 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/evrp_package.h"
 #include "core/curl_global.h"
+#include "core/reader_gate.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -8,6 +9,7 @@
 #include <wincrypt.h>
 
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -71,6 +73,9 @@ std::atomic<TintMap*> g_tintMap{nullptr};
 
 // Owns the tint map memory. Protected by g_dataMutex during writes.
 TintMap* g_tintMapOwned = nullptr;
+// Held by the hook for its whole call; every free of a tint map (publish, shutdown) waits it idle first (#352).
+nevr::ReaderGate g_tintGate;
+constexpr std::chrono::milliseconds kTintGateWait{2000};
 std::mutex g_dataMutex;
 
 // ============================================================================
@@ -297,7 +302,14 @@ static void BackgroundFetchThread() {
         TintMap* old = g_tintMapOwned;
         g_tintMapOwned = newTintMap;
         g_tintMap.store(newTintMap, std::memory_order_release);
-        delete old;
+        // A hook call that loaded `old` before the store may still be reading it.
+        if (g_tintGate.WaitIdle(kTintGateWait)) {
+            delete old;
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.CDN] previous tint map left allocated: the loadout hook did not leave within %lld ms",
+                static_cast<long long>(kTintGateWait.count()));
+        }
     }
 
     Log(failed > 0 ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
@@ -320,6 +332,9 @@ static void BackgroundFetchThread() {
 /// CRITICAL: This runs on 261+ call sites, some per-frame.
 /// No allocations. No logging. No locks. O(1) map lookup only.
 void* __fastcall Hook_LoadoutResolveDataFromId(void* context, int64_t loadout_id) {
+    // In use from here: Shutdown() and the republish wait for this scope before they free the map
+    // or let the detour's trampoline go.
+    nevr::ReaderGate::Scope inHook(g_tintGate);
     void* result = g_originalFunc(context, loadout_id);
     if (!result) return nullptr;
 
@@ -427,12 +442,19 @@ void AssetCDN::Shutdown() {
         g_originalFunc = nullptr;
     }
 
-    // Clean up tint map
+    // Clean up tint map: no new hook call can pick it up (pointer nulled, hook detached); free it
+    // only once the calls already inside the hook have left.
     {
         std::lock_guard<std::mutex> lock(g_dataMutex);
         g_tintMap.store(nullptr, std::memory_order_release);
-        delete g_tintMapOwned;
-        g_tintMapOwned = nullptr;
+        if (g_tintGate.WaitIdle(kTintGateWait)) {
+            delete g_tintMapOwned;
+            g_tintMapOwned = nullptr;
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.CDN] tint map left allocated: the loadout hook did not leave within %lld ms",
+                static_cast<long long>(kTintGateWait.count()));
+        }
     }
 
     g_manifestPackages.clear();
