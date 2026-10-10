@@ -6,7 +6,7 @@ usage: package_rc.py --n <N> --commit <sha> --out <dir> --dll <BugSplat64.dll> -
                      --quest-build-info <generated/nevr_build_info.h> [--defaults config/public-defaults.env]
 
 It does not build anything. It refuses (exit 1, nothing written) unless:
-  - the DLL and the APK's sentinel library each embed exactly the committed public defaults
+  - the DLL and the APK's sentinel library each embed exactly config/public-defaults.env
     (tools/check_embedded_defaults.py), so neither needs a config file to log in;
   - the Quest build turns login and social on by default (nevr_build_info.h kDefaultFeatures);
   - the version string `<major>.<minor>.<patch>-rc.<N>+...` and the commit sha are in the DLL and in
@@ -64,7 +64,7 @@ def check_version(label: str, version: str, n: int, commit: str) -> None:
 def gate(args, work: Path) -> dict:
     problems = []
     defaults = Path(args.defaults)
-    # The Windows build embeds exactly the committed file.
+    # The Windows build embeds exactly the defaults file.
     problems += [f"windows: {p}" for p in defaults_check.check(defaults, Path(args.pc_header), [Path(args.dll)])]
     # The Quest build embeds it too, in the sentinel library inside the APK.
     with zipfile.ZipFile(args.apk) as apk:
