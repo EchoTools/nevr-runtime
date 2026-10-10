@@ -17,6 +17,12 @@
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo",
                 "CMAKE_COLOR_DIAGNOSTICS": "ON"
             }
+        },
+        {
+            "name": "android-arm64-rc",
+            "displayName": "Android arm64-v8a for a release candidate (just package-rc): its own build tree",
+            "inherits": "android-arm64",
+            "binaryDir": "${sourceDir}/../../build/android-rc"
         }
     ],
     "buildPresets": [
@@ -24,6 +30,11 @@
             "name": "android-arm64",
             "displayName": "Build Android arm64-v8a",
             "configurePreset": "android-arm64"
+        },
+        {
+            "name": "android-arm64-rc",
+            "displayName": "Build Android arm64-v8a (release candidate)",
+            "configurePreset": "android-arm64-rc"
         }
     ]
 }

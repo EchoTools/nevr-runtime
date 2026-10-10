@@ -218,6 +218,20 @@ TEST(ServerModeDefaultsGate, ServerModeSuppliesNoGameNativeConfig) {
   EXPECT_NE(NevrCfgGameNativeConfigJson(), nullptr);
 }
 
+// The no-config gate (package-rc): a client with no config.yaml anywhere reaches the service from the
+// embedded public defaults alone. The production path runs here: the real embedded values and the real
+// config.yaml discovery, with nothing injected.
+TEST(NoConfigGate, EveryLoginKeyComesFromTheEmbeddedDefaultsWhenThereIsNoConfigYaml) {
+  ResetAccessorInputs();
+  ASSERT_EQ(g_customConfigPath[0], '\0') << "no -config-path: discovery looks only beside the module";
+  ASSERT_FALSE(g_isServer);
+  for (const char* key : {"nevr_socket_uri", "nevr_http_uri", "nevr_http_key", "nevr_server_key"}) {
+    const char* value = NevrCfgGetFlat(key);
+    ASSERT_NE(value, nullptr) << key << " is not embedded: the client would need a config file";
+    EXPECT_STRNE(value, "") << key;
+  }
+}
+
 TEST(StableStringPoolAccessors, UnchangedRedirectPreservesExactGameDefaultPointer) {
   const char defaultValue[] = "https://unrelated.example/path";
   const char* gameResult = defaultValue;

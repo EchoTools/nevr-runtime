@@ -395,8 +395,66 @@ void ObbSkipIsOnlyEverOnByAFileBoolean() {
   CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
 }
 
+// The no-config gate (package-rc): a build that turns the login features on by default logs in with no
+// nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
+constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
+
+EmbeddedDefaults FullWithFeatures(const char* features) {
+  EmbeddedDefaults d = Full();
+  d.features = features;
+  return d;
+}
+
+void NoConfigFileLogsInFromTheEmbeddedDefaultsAlone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(kLoginFeatures), nullptr);
+  CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.httpUri.source == Source::kEmbedded);
+  CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.serverKey.source == Source::kEmbedded);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kRedirect));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kBridge));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));  // diagnostics stay off
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
+}
+
+void DefaultFeaturesAreOffWhenTheBuildNamesNone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(""), nullptr);
+  CHECK(AllOff(r.config.effective));
+}
+
+void AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults() {
+  const LoadResult off = Load(FullWithFeatures(kLoginFeatures), R"({"features":{"social":false}})");
+  CHECK(nevr_quest::FeatureEnabled(off.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(off.config, Feature::kSocial));
+  const LoadResult rejected = Load(FullWithFeatures(kLoginFeatures), "{not json");
+  CHECK(rejected.fileRejected);
+  CHECK(nevr_quest::FeatureEnabled(rejected.config, Feature::kLogin));
+  CHECK(rejected.config.socketUri.source == Source::kEmbedded);
+}
+
+void ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne() {
+  EmbeddedDefaults noKey = FullWithFeatures(kLoginFeatures);
+  noKey.serverKey = "";
+  const LoadResult r = nevr_quest::ResolveConfig(noKey, nullptr);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(EventsContain(r, "forced off"));
+}
+
+void AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures("login,nonsense"), nullptr);
+  CHECK(EventsContain(r, "embedded default feature ignored reason=unknown_name"));
+  CHECK(!EventsContain(r, "nonsense"));
+}
+
 int main() {
   DefaultsWithoutFile();
+  NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
+  DefaultFeaturesAreOffWhenTheBuildNamesNone();
+  AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults();
+  ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne();
+  AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything();
   EmptyEmbeddedIsAbsent();
   InvalidEmbeddedIsRejectedWithoutValue();
   FileOverridesPerKey();

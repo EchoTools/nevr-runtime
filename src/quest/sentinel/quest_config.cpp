@@ -116,6 +116,25 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
     }
     (config.*kKeys[i].slot) = {raw, Source::kEmbedded};
   }
+  // Default-on features: a name this build does not know is reported once and ignored.
+  const std::string_view list = d.features == nullptr ? "" : d.features;
+  std::size_t start = 0;
+  while (start < list.size()) {
+    std::size_t end = list.find(',', start);
+    if (end == std::string_view::npos) end = list.size();
+    const std::string_view name = list.substr(start, end - start);
+    start = end + 1;
+    if (name.empty()) continue;
+    const FeatureSpec* spec = nullptr;
+    for (const FeatureSpec& f : kFeatures) {
+      if (name == f.name) spec = &f;
+    }
+    if (spec != nullptr) {
+      config.requested.*spec->flag = true;
+    } else if (events != nullptr) {
+      events->push_back({LogLevel::kWarn, "embedded default feature ignored reason=unknown_name"});
+    }
+  }
 }
 
 struct WarnBudget {
@@ -288,7 +307,7 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
   } else {
     ApplyFile(r, *fileText);
     if (r.fileRejected) {
-      // A rejected file contributes nothing: values are the embedded defaults, features all off.
+      // A rejected file contributes nothing: values and features are the embedded defaults.
       r.config = ResolvedConfig();
       ApplyEmbedded(r.config, defaults, nullptr);
     }
