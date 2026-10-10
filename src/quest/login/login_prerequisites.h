@@ -216,6 +216,22 @@ int OnMessageGetType(int (*original)(const void*), const void* message) noexcept
 std::uint64_t OnMessageGetRequestId(std::uint64_t (*original)(const void*), const void* message) noexcept;
 void OnFreeMessage(void (*original)(void*), void* message) noexcept;
 
+// Social org-id requests (#411). With the social facade selected, CNSOVRSocial is not driven (the game's Social()
+// is the facade), so a request for another user's org-scoped id is a request nobody asked for and no answer could
+// be right: a Meta id has no NEVR account id. It is refused locally: a local id from a space of its own, never
+// handed a handle and never reaching the SDK, so no Meta call is made and no data comes back. Counted as a fault
+// (a caller that runs is visible in the report), and logged once per call site. When the facade is not selected
+// (stock Meta social) the request is forwarded as before.
+using SocialSelectedFn = bool (*)() noexcept;
+void SetSocialSelectedProbe(SocialSelectedFn probe) noexcept;  // nullptr: never selected
+bool SocialSelected() noexcept;
+// Bit 31 of the id: set on a refused id, so it can never equal one the delivery range hands out.
+inline constexpr std::uint64_t kRefusedIdBit = 0x80000000ULL;
+// Refuses the request made from `site` (the caller's offset in libpnsovr; 0 when unknown) and returns its id.
+std::uint64_t Refuse(std::uint64_t site) noexcept;
+std::uint64_t Refused() noexcept;
+const std::atomic<std::uint64_t>& RefusedCounter() noexcept;
+
 std::uint64_t Requested() noexcept;   // local request ids handed out
 std::uint64_t Delivered() noexcept;   // synthetic messages popped
 std::uint64_t Dropped() noexcept;     // requests given an id with nothing queued because the table was full

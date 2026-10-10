@@ -84,6 +84,11 @@ std::atomic<std::uint8_t> g_slot_state[local::kSlots] = {};
 std::atomic<std::uint64_t> g_slot_id[local::kSlots] = {};
 std::atomic<std::uint64_t> g_next_id{0};
 std::atomic<bool> g_local_enabled{false};
+std::atomic<local::SocialSelectedFn> g_social_selected{nullptr};
+std::atomic<std::uint64_t> g_local_refused{0};
+std::atomic<std::uint64_t> g_refused_ids{0};
+constexpr std::size_t kRefusedSites = 16;                // distinct call sites logged; libpnsovr has nine
+std::atomic<std::uint64_t> g_refused_site[kRefusedSites] = {};  // site + 1; 0 is a free entry
 std::atomic<std::uint64_t> g_local_requested{0};
 std::atomic<std::uint64_t> g_local_delivered{0};
 std::atomic<std::uint64_t> g_local_dropped{0};
@@ -651,6 +656,36 @@ void OnFreeMessage(void (*original)(void*), void* message) noexcept {
   original(message);
 }
 
+void SetSocialSelectedProbe(SocialSelectedFn probe) noexcept {
+  g_social_selected.store(probe, std::memory_order_release);
+}
+bool SocialSelected() noexcept {
+  const SocialSelectedFn probe = g_social_selected.load(std::memory_order_acquire);
+  return probe != nullptr && probe();
+}
+
+std::uint64_t Refuse(std::uint64_t site) noexcept {
+  const std::uint64_t count = g_local_refused.fetch_add(1, std::memory_order_relaxed) + 1;
+  // One log line per call site (the first kRefusedSiteLogLimit distinct ones), so a caller that runs is named
+  // without a spinning request flooding the log. No id or user value is logged.
+  bool first = false;
+  for (std::size_t i = 0; i < kRefusedSites; ++i) {
+    std::uint64_t seen = g_refused_site[i].load(std::memory_order_relaxed);
+    if (seen == 0 && g_refused_site[i].compare_exchange_strong(seen, site + 1, std::memory_order_acq_rel)) {
+      first = true;  // this call site was not seen before
+      break;
+    }
+    if (seen == site + 1) break;  // seen (either already, or by the thread that just took the entry)
+  }
+  if (first) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_social_org_request_refused",
+                        {{"site", site}, {"refused", count}});
+  }
+  return kRequestIdBase | kRefusedIdBit | g_refused_ids.fetch_add(1, std::memory_order_relaxed);
+}
+std::uint64_t Refused() noexcept { return g_local_refused.load(std::memory_order_relaxed); }
+const std::atomic<std::uint64_t>& RefusedCounter() noexcept { return g_local_refused; }
+
 std::uint64_t Requested() noexcept { return g_local_requested.load(std::memory_order_relaxed); }
 std::uint64_t Delivered() noexcept { return g_local_delivered.load(std::memory_order_relaxed); }
 std::uint64_t Dropped() noexcept { return g_local_dropped.load(std::memory_order_relaxed); }
@@ -664,6 +699,10 @@ void ResetForTest() noexcept {
   }
   g_next_id.store(0, std::memory_order_relaxed);
   g_local_enabled.store(false, std::memory_order_relaxed);
+  g_social_selected.store(nullptr, std::memory_order_relaxed);
+  g_local_refused.store(0, std::memory_order_relaxed);
+  g_refused_ids.store(0, std::memory_order_relaxed);
+  for (std::size_t i = 0; i < kRefusedSites; ++i) g_refused_site[i].store(0, std::memory_order_relaxed);
   g_local_requested.store(0, std::memory_order_relaxed);
   g_local_delivered.store(0, std::memory_order_relaxed);
   g_local_dropped.store(0, std::memory_order_relaxed);
