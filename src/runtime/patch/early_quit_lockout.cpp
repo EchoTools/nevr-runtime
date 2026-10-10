@@ -15,7 +15,7 @@
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/patch/early_quit_lockout_rules.h"
 
-namespace EarlyQuitLockout {
+namespace nevr_early_quit_lockout {
 namespace {
 
 // CR15NetGame fields (Quest CR15NetGame::LoadEarlyQuitPenalty 0x126c958 has the setter inlined).
@@ -148,4 +148,4 @@ void Install(std::uintptr_t gameBase) {
   KeepFeatureFlagBit1();
 }
 
-}  // namespace EarlyQuitLockout
+}  // namespace nevr_early_quit_lockout

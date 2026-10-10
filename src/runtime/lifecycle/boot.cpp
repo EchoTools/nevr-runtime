@@ -428,7 +428,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Force the game to load pnsrad.dll instead of pnsovr.dll.
   // Must run before the game's module loader starts.
-  PnsradEnabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
+  nevr_pnsrad_enabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
 
   // Block Oculus Platform SDK on server/headless/windowed — client needs Oculus
   // Platform services only when running with actual VR hardware.
@@ -444,7 +444,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchDisableWwise();
     PatchLogServerProfile();
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
-    CoopAiTrace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
+    nevr_coop_ai_trace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
     // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
     // patch/binary_bug_fixes.cpp, which validates the address and saves the
@@ -461,7 +461,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
   // so gating it off on a server does not affect loadout handling.
   if (!g_isServer) {
-    AssetCDN::Initialize();
+    nevr_asset_cdn::Initialize();
   }
 
   // N92: start the WebSocket bridge in-process, as part of this DLL rather than

@@ -503,11 +503,11 @@ static uint64_t __fastcall NetGameHostCheckHook(int64_t* netgameThis, int64_t pa
  * Public API
  * ==================================================================== */
 
-void BinaryBugFixes::Init(uintptr_t base_addr) {
+void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
     if (g_initialized) {
-        // BinaryBugFixes::Init has exactly one call site (initialize.cpp:374),
+        // nevr_binary_bug_fixes::Init has exactly one call site (initialize.cpp:374),
         // itself gated by Initialize()'s own one-shot guard (initialize.cpp:212-
         // 213). Under the current call graph this branch is unreachable; if it
         // ever fires, that means the single-call invariant was violated
@@ -783,7 +783,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
 #endif
 }
 
-void BinaryBugFixes::Shutdown() {
+void nevr_binary_bug_fixes::Shutdown() {
     if (!g_initialized) return;
     // N86-class checkpoint: the DIAG hook's own payload line (NetGameHostCheckHook)
     // is confirmed to never fire in the exact hang scenario it was built to

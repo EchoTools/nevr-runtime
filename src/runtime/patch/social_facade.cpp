@@ -17,7 +17,7 @@
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/patch/party_invite_gate.h"
 
-namespace SocialFacade {
+namespace nevr_social_facade {
 namespace {
 
 constexpr std::uint64_t kAccessorVA = 0x1406169C0;
@@ -113,7 +113,7 @@ void* AccessorHook(void* provider) {
   }
   // Config is only readable once the CLI is parsed (service_config.cpp NevrCfg), which is why this
   // is installed from the first accessor call and not from boot.
-  if (enabled) std::call_once(g_inviteGateOnce, [] { PartyInviteGate::Install(g_gameBase); });
+  if (enabled) std::call_once(g_inviteGateOnce, [] { nevr_party_invite_gate::Install(g_gameBase); });
   FlushJsonTraces();
   const std::uint32_t callCount = g_accessorCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   Log(EchoVR::LogLevel::Info,
@@ -320,4 +320,4 @@ void Install(std::uintptr_t gameBase) {
   });
 }
 
-}  // namespace SocialFacade
+}  // namespace nevr_social_facade

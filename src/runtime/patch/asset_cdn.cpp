@@ -70,7 +70,7 @@ LoadoutResolveDataFromIdFunc g_originalFunc = nullptr;
 // atomically swapped so the hook sees a consistent snapshot. The hook never
 // locks — it reads through the atomic pointer. The background thread builds
 // a new map, then publishes it via atomic store.
-using TintMap = std::unordered_map<int64_t, Evrp::TintData>;
+using TintMap = std::unordered_map<int64_t, nevr_evrp::TintData>;
 std::atomic<TintMap*> g_tintMap{nullptr};
 
 // Owns the tint map memory. Protected by g_dataMutex during writes.
@@ -90,7 +90,7 @@ std::unordered_map<int64_t, PackageEntry> g_manifestPackages;
 // Fetch pipeline state
 // ============================================================================
 
-std::atomic<AssetCDN::FetchState> g_fetchState{AssetCDN::FetchState::Idle};
+std::atomic<nevr_asset_cdn::FetchState> g_fetchState{nevr_asset_cdn::FetchState::Idle};
 // Never a bare std::thread: joinable at process exit it terminates the process (#340).
 nevr::BoundedThread g_fetchThread;
 std::atomic<bool> g_shutdownRequested{false};
@@ -205,9 +205,9 @@ static void BackgroundFetchBody() {
     Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Background fetch started");
 
     // Fetch manifest
-    g_fetchState.store(AssetCDN::FetchState::FetchingManifest);
-    if (!AssetCDN::FetchManifest()) {
-        g_fetchState.store(AssetCDN::FetchState::Error);
+    g_fetchState.store(nevr_asset_cdn::FetchState::FetchingManifest);
+    if (!nevr_asset_cdn::FetchManifest()) {
+        g_fetchState.store(nevr_asset_cdn::FetchState::Error);
         Log(EchoVR::LogLevel::Error, "[NEVR.CDN] Manifest fetch failed — CDN pipeline aborted");
         return;
     }
@@ -216,20 +216,20 @@ static void BackgroundFetchBody() {
 
     if (g_manifestPackages.empty()) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Manifest has no packages — nothing to download");
-        g_fetchState.store(AssetCDN::FetchState::Complete);
+        g_fetchState.store(nevr_asset_cdn::FetchState::Complete);
         return;
     }
 
     // Download uncached packages
-    g_fetchState.store(AssetCDN::FetchState::DownloadingPackages);
+    g_fetchState.store(nevr_asset_cdn::FetchState::DownloadingPackages);
 
-    std::string cacheDir = AssetCDN::GetCacheDir();
+    std::string cacheDir = nevr_asset_cdn::GetCacheDir();
     if (cacheDir.empty()) {
         // GetCacheDir() already logged the specific cause (SHGetKnownFolderPath
         // HRESULT or create_directories ec.message()) immediately before this
         // returns — a second, generic ERROR here would only restate "failed"
         // with strictly less detail than the line that just ran.
-        g_fetchState.store(AssetCDN::FetchState::Error);
+        g_fetchState.store(nevr_asset_cdn::FetchState::Error);
         return;
     }
 
@@ -258,7 +258,7 @@ static void BackgroundFetchBody() {
         std::vector<uint8_t> file_data;
         bool have_data = false;
 
-        if (AssetCDN::IsCached(filename)) {
+        if (nevr_asset_cdn::IsCached(filename)) {
             // Read from cache
             std::ifstream ifs(dest_path, std::ios::binary);
             if (ifs.good()) {
@@ -272,7 +272,7 @@ static void BackgroundFetchBody() {
         if (!have_data) {
             // Build full URL
             std::string full_url = std::string(CDN_BASE_URL) + entry.url;
-            if (!AssetCDN::DownloadPackage(full_url, dest_path, entry.sha256)) {
+            if (!nevr_asset_cdn::DownloadPackage(full_url, dest_path, entry.sha256)) {
                 failed++;
                 continue;
             }
@@ -292,8 +292,8 @@ static void BackgroundFetchBody() {
 
         // Parse .evrp and extract tint data
         int64_t parsed_symbol_id;
-        Evrp::TintData tint;
-        if (Evrp::ParseTint(file_data, filename, parsed_symbol_id, tint)) {
+        nevr_evrp::TintData tint;
+        if (nevr_evrp::ParseTint(file_data, filename, parsed_symbol_id, tint)) {
             (*newTintMap)[parsed_symbol_id] = tint;
         }
     }
@@ -324,7 +324,7 @@ static void BackgroundFetchBody() {
         "[NEVR.CDN] fetch complete: downloaded=%d cached=%d failed=%d tints_loaded=%zu",
         downloaded, cached, failed, newTintMap->size());
 
-    g_fetchState.store(AssetCDN::FetchState::Complete);
+    g_fetchState.store(nevr_asset_cdn::FetchState::Complete);
 }
 
 // ============================================================================
@@ -394,7 +394,7 @@ void* __fastcall Hook_LoadoutResolveDataFromId(void* context, int64_t loadout_id
 // Public API
 // ============================================================================
 
-void AssetCDN::Initialize() {
+void nevr_asset_cdn::Initialize() {
     if (g_hookInstalled) return;
 
     void* target = reinterpret_cast<void*>(
@@ -452,7 +452,7 @@ static void ReleaseFetchData() {
     g_manifestPackages.clear();
 }
 
-void AssetCDN::Shutdown() {
+void nevr_asset_cdn::Shutdown() {
     // Signal background thread to stop
     g_shutdownRequested.store(true);
 
@@ -496,7 +496,7 @@ void AssetCDN::Shutdown() {
         hookWasInstalled ? "true" : "false");
 }
 
-void AssetCDN::StartBackgroundFetch() {
+void nevr_asset_cdn::StartBackgroundFetch() {
     if (g_fetchThreadAlive.load(std::memory_order_acquire)) {
         // A previous fetch was detached by a timed-out stop and is still unwinding; a second thread
         // would share the manifest map and tint map with it.
@@ -514,7 +514,7 @@ void AssetCDN::StartBackgroundFetch() {
     g_fetchThread.Start(BackgroundFetchThread);
 }
 
-bool AssetCDN::StopBackgroundFetch() {
+bool nevr_asset_cdn::StopBackgroundFetch() {
     g_shutdownRequested.store(true);
     const bool stopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
     Log(EchoVR::LogLevel::Info, "[NEVR.CDN] background fetch stop requested joined=%s",
@@ -522,11 +522,11 @@ bool AssetCDN::StopBackgroundFetch() {
     return stopped;
 }
 
-AssetCDN::FetchState AssetCDN::GetFetchState() {
+nevr_asset_cdn::FetchState nevr_asset_cdn::GetFetchState() {
     return g_fetchState.load();
 }
 
-std::string AssetCDN::GetCacheDir() {
+std::string nevr_asset_cdn::GetCacheDir() {
     wchar_t* localAppDataPath = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppDataPath);
     if (hr != S_OK) {
@@ -555,7 +555,7 @@ std::string AssetCDN::GetCacheDir() {
     return path;
 }
 
-bool AssetCDN::IsCached(const std::string& filename) {
+bool nevr_asset_cdn::IsCached(const std::string& filename) {
     std::string cacheDir = GetCacheDir();
     if (cacheDir.empty()) return false;
 
@@ -563,7 +563,7 @@ bool AssetCDN::IsCached(const std::string& filename) {
     return std::filesystem::exists(fullPath);
 }
 
-bool AssetCDN::FetchManifest() {
+bool nevr_asset_cdn::FetchManifest() {
     nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -673,7 +673,7 @@ bool AssetCDN::FetchManifest() {
     return true;
 }
 
-bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_path,
+bool nevr_asset_cdn::DownloadPackage(const std::string& url, const std::string& dest_path,
                                 const std::string& expected_sha256) {
     nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();

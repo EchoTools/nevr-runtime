@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace MatchmakerHostPatch {
+namespace nevr_matchmaker_host_patch {
 
 constexpr std::uintptr_t kHostRva = 0x1c84d8;
 constexpr char kHostExpected[] = "wss://matchmaker.readyatdawn.com/rad/rad15_live";
@@ -45,4 +45,4 @@ Result Apply(std::uint8_t* base, std::uint16_t port, Write&& write) {
   return write(site, replacement, static_cast<std::size_t>(length) + 1) ? Result::Patched : Result::WriteFailed;
 }
 
-}  // namespace MatchmakerHostPatch
+}  // namespace nevr_matchmaker_host_patch

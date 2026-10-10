@@ -23,29 +23,29 @@ using Slot = std::uintptr_t;
 const Slot* Vtable(void* object) { return *static_cast<const Slot**>(object); }
 
 TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
-  std::vector<SocialFacade::Probe> requests;
-  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, false, fakeInstall);
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, false, fakeInstall);
+  std::vector<nevr_social_facade::Probe> requests;
+  const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kBoot, false, fakeInstall);
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kFacadeSelected, false, fakeInstall);
   ASSERT_EQ(requests.size(), 1u);
-  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
-  EXPECT_EQ(SocialFacade::Select(false, nullptr), nullptr);
+  EXPECT_EQ(requests[0], nevr_social_facade::Probe::kAccessor);
+  EXPECT_EQ(nevr_social_facade::Select(false, nullptr), nullptr);
 
   int providerObject = 0;
-  EXPECT_EQ(SocialFacade::Select(false, &providerObject), &providerObject);
-  EXPECT_EQ(SocialFacade::Select(true, &providerObject), &providerObject);
+  EXPECT_EQ(nevr_social_facade::Select(false, &providerObject), &providerObject);
+  EXPECT_EQ(nevr_social_facade::Select(true, &providerObject), &providerObject);
 }
 
 TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
-  std::vector<SocialFacade::Probe> requests;
-  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, true, fakeInstall);
-  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, true, fakeInstall);
+  std::vector<nevr_social_facade::Probe> requests;
+  const auto fakeInstall = [&requests](nevr_social_facade::Probe probe) { requests.push_back(probe); };
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kBoot, true, fakeInstall);
+  nevr_social_facade::InstallHookPlan(nevr_social_facade::InstallStage::kFacadeSelected, true, fakeInstall);
   ASSERT_EQ(requests.size(), 4u);
-  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
-  EXPECT_EQ(requests[1], SocialFacade::Probe::kSocialJson);
-  EXPECT_EQ(requests[2], SocialFacade::Probe::kJsonSet);
-  EXPECT_EQ(requests[3], SocialFacade::Probe::kJsonNavigateForWrite);
+  EXPECT_EQ(requests[0], nevr_social_facade::Probe::kAccessor);
+  EXPECT_EQ(requests[1], nevr_social_facade::Probe::kSocialJson);
+  EXPECT_EQ(requests[2], nevr_social_facade::Probe::kJsonSet);
+  EXPECT_EQ(requests[3], nevr_social_facade::Probe::kJsonNavigateForWrite);
 
   for (std::size_t i = 1; i < requests.size(); ++i) {
     std::vector<std::string> calls;
@@ -78,40 +78,40 @@ TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
 }
 
 TEST(SocialFacade, JsonTraceRoundTripDrainsOnlyOnce) {
-  std::vector<SocialFacade::JsonTraceRecord> records;
-  const auto collect = [](const SocialFacade::JsonTraceRecord& record, void* context) {
-    static_cast<std::vector<SocialFacade::JsonTraceRecord>*>(context)->push_back(record);
+  std::vector<nevr_social_facade::JsonTraceRecord> records;
+  const auto collect = [](const nevr_social_facade::JsonTraceRecord& record, void* context) {
+    static_cast<std::vector<nevr_social_facade::JsonTraceRecord>*>(context)->push_back(record);
   };
-  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kSet, 19, "mm|status", 1, 2, 3, 4);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::QueueJsonTrace(nevr_social_facade::JsonTraceKind::kSet, 19, "mm|status", 1, 2, 3, 4);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   ASSERT_EQ(records.size(), 1u);
-  EXPECT_EQ(records[0].kind, SocialFacade::JsonTraceKind::kSet);
+  EXPECT_EQ(records[0].kind, nevr_social_facade::JsonTraceKind::kSet);
   EXPECT_EQ(records[0].callCount, 19u);
   EXPECT_STREQ(records[0].path, "mm|status");
   EXPECT_EQ(records[0].argument, 1u);
   EXPECT_EQ(records[0].result, 2u);
   EXPECT_EQ(records[0].root, 3u);
   EXPECT_EQ(records[0].cache, 4u);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   EXPECT_EQ(records.size(), 1u);
 
   const char* longPath = "01234567890123456789012345678901234567890123456789";
-  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kNavigateForWrite, 20, longPath, 5, 6, 7, 8);
-  SocialFacade::DrainJsonTraces(collect, &records);
+  nevr_social_facade::QueueJsonTrace(nevr_social_facade::JsonTraceKind::kNavigateForWrite, 20, longPath, 5, 6, 7, 8);
+  nevr_social_facade::DrainJsonTraces(collect, &records);
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(std::strlen(records[1].path), 47u);
   EXPECT_EQ(records[1].path[47], '\0');
 }
 
 TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {
-  static_assert(SocialFacade::kRealVtableSlotCount == 75);
-  static_assert(SocialFacade::kMaxObservedGameVtableSlot == 76);
-  static_assert(SocialFacade::kVtableSlotCount == 85);
-  void* first = SocialFacade::Object();
-  void* second = SocialFacade::Object();
+  static_assert(nevr_social_facade::kRealVtableSlotCount == 75);
+  static_assert(nevr_social_facade::kMaxObservedGameVtableSlot == 76);
+  static_assert(nevr_social_facade::kVtableSlotCount == 85);
+  void* first = nevr_social_facade::Object();
+  void* second = nevr_social_facade::Object();
   ASSERT_EQ(first, second);
   ASSERT_NE(Vtable(first), nullptr);
-  for (std::size_t i = 0; i < SocialFacade::kVtableSlotCount; ++i) {
+  for (std::size_t i = 0; i < nevr_social_facade::kVtableSlotCount; ++i) {
     EXPECT_NE(Vtable(first)[i], 0u) << "slot " << i;
   }
 }
@@ -120,21 +120,21 @@ TEST(SocialFacade, ProcessLifetimeObjectIsSafeToConstructConcurrently) {
   std::array<void*, 8> objects{};
   std::array<std::thread, 8> threads;
   for (std::size_t i = 0; i < threads.size(); ++i) {
-    threads[i] = std::thread([&objects, i] { objects[i] = SocialFacade::Object(); });
+    threads[i] = std::thread([&objects, i] { objects[i] = nevr_social_facade::Object(); });
   }
   for (auto& thread : threads) thread.join();
   for (void* object : objects) EXPECT_EQ(object, objects[0]);
 }
 
 TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   std::array<std::uint8_t, 0x1E0> callbacks{};
   for (std::size_t i = 0; i < callbacks.size(); ++i) callbacks[i] = static_cast<std::uint8_t>(i);
   using InitializeFn = std::uint64_t (*)(void*, std::uint32_t, const void*);
   const auto initialize = reinterpret_cast<InitializeFn>(Vtable(object)[9]);
   EXPECT_EQ(initialize(object, 16, callbacks.data()), 0u);
   EXPECT_EQ(std::memcmp(static_cast<std::uint8_t*>(object) + 8, callbacks.data(), callbacks.size()), 0);
-  EXPECT_EQ(SocialFacade::TestMaxUsers(), 16u);
+  EXPECT_EQ(nevr_social_facade::TestMaxUsers(), 16u);
   const auto* bytes = static_cast<const std::uint8_t*>(object);
   std::uint64_t arrayPointer = UINT64_MAX;
   std::uint64_t arrayCount = UINT64_MAX;
@@ -145,12 +145,12 @@ TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {
   EXPECT_EQ(arrayPointer, 0u);
   EXPECT_EQ(arrayCount, 0u);
   EXPECT_EQ(arrayAllocator, 0u);
-  EXPECT_EQ(SocialFacade::TestCallbacksSource(), callbacks.data());
-  EXPECT_GE(SocialFacade::TestInitializeCallCount(), 1u);
+  EXPECT_EQ(nevr_social_facade::TestCallbacksSource(), callbacks.data());
+  EXPECT_GE(nevr_social_facade::TestInitializeCallCount(), 1u);
 }
 
 TEST(SocialFacade, EmptyQueriesReturnSafeDefaults) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   using CountFn = std::uint64_t (*)(void*);
   using NameFn = const char* (*)(void*, std::uint32_t);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -162,7 +162,7 @@ TEST(SocialFacade, EmptyQueriesReturnSafeDefaults) {
 }
 
 TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   using UpdateFn = void (*)(void*, const void*);
   using SetLocalUserFn = void (*)(void*, std::uint32_t);
   using QueryFn = std::uint32_t (*)(void*);
@@ -183,7 +183,7 @@ TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
 }
 
 TEST(SocialFacade, ConstructorDefaultsAndPaddedSlotAreSafe) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const auto* bytes = static_cast<const std::uint8_t*>(object);
   std::uint64_t jsonRoot = UINT64_MAX;
   std::uint64_t jsonCache = UINT64_MAX;
@@ -203,13 +203,13 @@ TEST(SocialFacade, ConstructorDefaultsAndPaddedSlotAreSafe) {
 }
 
 TEST(SocialFacade, ShutdownKeepsObjectAndVtableAlive) {
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* before = Vtable(object);
   using ShutdownFn = void (*)(void*);
   reinterpret_cast<ShutdownFn>(before[10])(object);
-  EXPECT_EQ(SocialFacade::Object(), object);
+  EXPECT_EQ(nevr_social_facade::Object(), object);
   EXPECT_EQ(Vtable(object), before);
-  EXPECT_GE(SocialFacade::TestShutdownCallCount(), 1u);
+  EXPECT_GE(nevr_social_facade::TestShutdownCallCount(), 1u);
 }
 
 
@@ -310,7 +310,7 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   SocialRoster::Global().Notify(99, SocialRoster::kStatusOffline);
   SocialRoster::Global().Notify(42, SocialRoster::kStatusOnline);
 
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using CountFn = std::uint32_t (*)(void*);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -350,7 +350,7 @@ TEST(SocialFacade, TheRefreshAnswerReplacesTheRosterWithTheServersCurrentFriends
     feed("FriendStatusNotify", notify.data(), notify.size());
   }
 
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using CountFn = std::uint32_t (*)(void*);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
@@ -562,7 +562,7 @@ TEST(SocialFacade, FriendIdAndNameFollowTheirIndexArgument) {
   SocialRoster::Global().Notify(300, SocialRoster::kStatusOffline);
   SocialRoster::Global().Notify(100, SocialRoster::kStatusOnline);
   SocialRoster::Global().Notify(200, SocialRoster::kStatusOnline);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
   using NameFn = const char* (*)(void*, std::uint32_t);
@@ -655,7 +655,7 @@ TEST(SocialParty, ThePollNeverBeatsTheRefreshFloor) {
 
 TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   SocialParty::Global().SetSelf(77, "Me");
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   using UpdateFn = void (*)(void*, const void*);
@@ -717,7 +717,7 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
   SocialRoster::Global().Notify(400, SocialRoster::kStatusOffline);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
@@ -750,18 +750,18 @@ TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
   SocialRoster::Global().Clear();
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
-  const std::uint32_t clampedBefore = SocialFacade::TestMembersClamped();
+  const std::uint32_t clampedBefore = nevr_social_facade::TestMembersClamped();
 
   FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77}));
   for (std::uint64_t id = 301; id <= 311; ++id) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({7, id}));
   ASSERT_EQ(SocialParty::Global().Snapshot().members.size(), 12U) << "the party model itself holds all twelve";
   publish();
   EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
-  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1);
+  EXPECT_EQ(nevr_social_facade::TestMembersClamped(), clampedBefore + 1);
   std::uint64_t id = 0;
   reinterpret_cast<IdFn>(vtable[27])(object, &id, 9);
   EXPECT_EQ(id, 309U) << "index 9 is the last reported member";
@@ -769,7 +769,7 @@ TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
   EXPECT_EQ(id, 0U) << "index 10 names nobody";
 
   publish();
-  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
+  EXPECT_EQ(nevr_social_facade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
 
   // The 10/11 boundary: exactly ten members is not clamped.
   SocialParty::Global().ResetParty();
@@ -1038,7 +1038,7 @@ TEST(SocialFacade, AcceptInviteJoinsThatPartyAndIdShowsItWhileTheJoinIsInFlight)
   using UpdateFn = void (*)(void*, const void*);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyInviteNotify", U64s({51, 4242})));
@@ -1087,7 +1087,7 @@ TEST(SocialFacade, TheHostsLockBitLocksThePartyOnTheServerAndJoinableFollowsIt) 
   using UpdateFn = void (*)(void*, const void*);
   SocialParty::Global().SetSelf(77, "Me");
   SocialParty::Global().ResetParty();
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   std::uint8_t flags = 0;
   ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77})));
@@ -1136,7 +1136,7 @@ TEST(SocialFacade, AFriendsPresenceFillsTheStatusTextAndJoinablePartySlots) {
   SocialRoster::Global().SetPresence(4242, presence);  // before the friend is listed: remembered
   SocialRoster::Global().BeginList(1);
   SocialRoster::Global().Notify(4242, SocialRoster::kStatusOnline);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[52])(object, 0), "Public Arena Match");
   EXPECT_EQ(reinterpret_cast<JoinableFn>(vtable[54])(object, 0), 1u);
@@ -1290,12 +1290,12 @@ TEST(SocialParty, OnlyPartyMessagesAreHandled) {
 }  // namespace
 
 TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 0), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 1), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|other", 0), 0u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult("other", 1), 1u);
-  EXPECT_EQ(PartyInviteGate::BooleanResult(nullptr, 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed", 0), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed", 1), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|other", 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult("other", 1), 1u);
+  EXPECT_EQ(nevr_party_invite_gate::BooleanResult(nullptr, 0), 0u);
 }
 
 // Scenario control protocol (src/runtime/scenario/scenario_protocol.h). Pure, so it is covered in
@@ -1369,7 +1369,7 @@ TEST(ScenarioProtocol, FriendStatusNotifyFrameRoundTripsThroughTheRosterParser) 
 // pnsrad's UserProviderID must report the provider whose CSymbol64 code is 4, the code SNSUserID
 // gives every "OVR-ORG-" id the game builds; otherwise the friend invite handler drops the click.
 TEST(ProviderIdentity, UserProviderIdPatchReturnsTheOvrSymbolAndFitsTheSite) {
-  using namespace ProviderIdentity;
+  using namespace nevr_provider_identity;
   const auto code = ReturnConstant(kOvrProviderSymbol);
   const std::array<std::uint8_t, 11> expected = {0x48, 0xB8, 0xF8, 0xF4, 0x9F, 0xA8, 0xB1, 0xD0, 0xE8, 0xC8, 0xC3};
   EXPECT_EQ(code, expected);
@@ -1761,15 +1761,15 @@ TEST(SocialFacadeData, ReceivedDataIsInTheGamesJsonBeforeMemberJoinedAndLocalWri
   using InitializeFn = std::uint64_t (*)(void*, std::uint32_t, const void*);
   using WritableFn = std::uint64_t (*)(void*, std::int32_t);
   using ShutdownFn = void (*)(void*);
-  SocialFacade::JsonOps ops;
+  nevr_social_facade::JsonOps ops;
   ops.load = &FakeLoad;
   ops.clear = &FakeClear;
   ops.serialize = &FakeSerialize;
   ops.blockReset = &FakeBlockReset;
   ops.blockDestroy = &FakeBlockDestroy;
-  SocialFacade::SetJsonOps(ops);
+  nevr_social_facade::SetJsonOps(ops);
   SocialParty::SetSender(&CaptureSend);
-  g_object = SocialFacade::Object();
+  g_object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(g_object);
   std::array<std::uint8_t, 0x1E0> table{};
   Bind(table, 1, "Joined", reinterpret_cast<void*>(&OnVoid));
@@ -1830,20 +1830,20 @@ TEST(SocialFacadeData, ReceivedDataIsInTheGamesJsonBeforeMemberJoinedAndLocalWri
   party.DrainEvents();
   reinterpret_cast<ShutdownFn>(vtable[10])(g_object);
   SocialParty::SetSender(nullptr);
-  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+  nevr_social_facade::SetJsonOps(nevr_social_facade::JsonOps{});
 }
 
 TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared) {
   using UpdateFn = void (*)(void*, const void*);
-  SocialFacade::JsonOps ops;
+  nevr_social_facade::JsonOps ops;
   ops.load = &FakeLoad;
   ops.clear = &FakeClear;
   ops.serialize = &FakeSerialize;
   ops.blockReset = &FakeBlockReset;
   ops.blockDestroy = &FakeBlockDestroy;
-  SocialFacade::SetJsonOps(ops);
+  nevr_social_facade::SetJsonOps(ops);
   SocialParty::SetSender(&CaptureSend);
-  g_object = SocialFacade::Object();
+  g_object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(g_object);
   SocialParty::State& party = SocialParty::Global();
   party.SetSelf(100, "Me");
@@ -1874,7 +1874,7 @@ TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared
   using ResetFn = void (*)(void*);
   reinterpret_cast<ResetFn>(vtable[12])(g_object);
   SocialParty::SetSender(nullptr);
-  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+  nevr_social_facade::SetJsonOps(nevr_social_facade::JsonOps{});
 }
 
 }  // namespace partydata
@@ -1958,7 +1958,7 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
   using TextFn = const char* (*)(void*, std::int32_t);
   using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
   using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
-  void* object = SocialFacade::Object();
+  void* object = nevr_social_facade::Object();
   const Slot* vtable = Vtable(object);
   SocialParty::Global().SetSelf(100, "Me");
   SocialParty::SetSender(&Capture);

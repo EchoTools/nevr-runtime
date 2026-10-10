@@ -94,9 +94,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // dead and joining would deadlock under the loader lock.
       if (lpReserved == NULL) {
         UnloadModules();
-        AssetCDN::Shutdown();
-        BinaryBugFixes::Shutdown();
-        BroadcasterGuard::Shutdown();
+        nevr_asset_cdn::Shutdown();
+        nevr_binary_bug_fixes::Shutdown();
+        nevr_broadcaster_guard::Shutdown();
         BuiltinLogFilter::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
