@@ -122,11 +122,12 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // registration step calls the package's real registration function, in the sequence's order, before its
 // single StartReporter. Every registration must be accepted (a refused one would leave its hook out), and
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
-// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 10,
+// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 12 (#408: the
+// CSysHttp::CreateConnection thunk's calls and faults),
 // dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 16 (#338:
 // one calls counter per hook), social 23 (the facade's, the invite gate's, the rich presence trace's four), login prompt 14 (#239, login_prompt_hook.h kCounterCount), OBB-mount
 // skip 4 (#319, obb_skip_hook.h kCounterCount).
-constexpr int kSentinelCounters = 2 + 10 + 1 + 2 + 16 + 23 + 14 + 4;
+constexpr int kSentinelCounters = 2 + 12 + 1 + 2 + 16 + 23 + 14 + 4;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 

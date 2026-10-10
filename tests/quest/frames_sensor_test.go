@@ -321,10 +321,20 @@ func TestSensorPassesALinkerErratumVeneer(t *testing.T) {
 	if len(v.violations) != 0 {
 		t.Fatalf("an erratum veneer must pass, got %v", v.violations)
 	}
-	g.names[0x500] = "__CortexA53843419_helper_not_a_veneer"
-	v = walkHookFrames(g)
-	if !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
-		t.Fatalf("a look-alike name without an FDE must fail, got %v", v.violations)
+	// The exemption is the exact name form the linker gives: anything around it, or another hex alphabet, is not it.
+	for _, lookAlike := range []string{
+		"__CortexA53843419_helper_not_a_veneer",
+		"x__CortexA53843419_ABC",
+		"__CortexA53843419_ABCdef",
+		"__CortexA53843419_2BD004_x",
+		"__CortexA53843419_",
+		"_ZN3foo__CortexA53843419_2BD004Ev",
+	} {
+		g.names[0x500] = lookAlike
+		v = walkHookFrames(g)
+		if !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
+			t.Fatalf("the look-alike %q without an FDE must fail, got %v", lookAlike, v.violations)
+		}
 	}
 	g.names[0x500] = "AnotherFunction"
 	v = walkHookFrames(g)

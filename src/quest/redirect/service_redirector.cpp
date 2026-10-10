@@ -51,6 +51,10 @@ bool IsServiceHostKey(const char* key) noexcept {
   return IsFormattedKey(key, "matchmaker_", "_host") || IsFormattedKey(key, "matchingservice_", "_host");
 }
 
+bool IsApiBaseUrl(const char* url) noexcept {
+  return url != nullptr && std::strncmp(url, "https://api", 11) == 0;
+}
+
 ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, InternFn intern,
                                      BridgeProbe bridge)
     : config_(config),
@@ -113,6 +117,15 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
 
 const char* ServiceRedirector::Apply(const char* key, const char* result) noexcept {
   if (!active_ || key == nullptr || result == nullptr || !IsServiceHostKey(key)) return result;
+  return ApplyChecked(result);
+}
+
+const char* ServiceRedirector::ApplyUrl(const char* url) noexcept {
+  if (!active_ || !IsApiBaseUrl(url)) return url;
+  return ApplyChecked(url);
+}
+
+const char* ServiceRedirector::ApplyChecked(const char* result) noexcept {
   RedirectCounters& counters = GlobalCounters();
   counters.reads.fetch_add(1, std::memory_order_relaxed);
 

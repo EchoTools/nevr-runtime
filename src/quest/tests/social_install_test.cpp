@@ -239,6 +239,8 @@ void TestInviteGateThroughThunk() {
 
 // ---- rich presence trace (#393) ------------------------------------------------------------------------
 
+bool Is(const char* actual, const char* expected) { return actual != nullptr && std::strcmp(actual, expected) == 0; }
+
 constexpr std::size_t kVtableWords = 2 + kOvrRichPresenceSlotCount;
 std::uintptr_t g_fakeVtable[kVtableWords];
 std::uintptr_t g_presenceBias = 0;
@@ -252,10 +254,13 @@ int FakeDestination(const void*) { return g_destinationAnswer; }
 unsigned FakeCount(const void*) { return g_countAnswer; }
 const char* FakeName(const void*, unsigned) { return g_nameAnswer; }
 void FakeSet(void*, const void*) { ++g_setCalls; }
+const char* g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
+bool g_encodeFails = false;
 unsigned FakeEncodeJson(const void*, char* out, unsigned long long* size, unsigned, const char*) {
-  static const char kText[] = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
-  std::memcpy(out, kText, sizeof(kText) - 1);
-  *size = sizeof(kText) - 1;
+  if (g_encodeFails) return 9;
+  const std::size_t n = std::strlen(g_encodeText);
+  std::memcpy(out, g_encodeText, n);
+  *size = n;
   return 0;
 }
 
@@ -387,11 +392,11 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
   QCHECK(CountLines("\"event\":\"rich_presence_destination\"") == 2);
   QCHECK(CountLines("\"index\":0,\"count\":1") == 1);
 
-  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
-  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
+  QCHECK(Is(name(&object, 0), "Social Lobby"));
+  QCHECK(Is(name(&object, 0), "Social Lobby"));
   QCHECK(CountLines("\"event\":\"rich_presence_name\",\"index\":0,\"name\":\"Social Lobby\"") == 1);
   g_nameAnswer = "Arena";
-  QCHECK(std::strcmp(name(&object, 0), "Arena") == 0);
+  QCHECK(Is(name(&object, 0), "Arena"));
   QCHECK(CountLines("\"event\":\"rich_presence_name\"") == 2);
   g_nameAnswer = nullptr;
   QCHECK(name(&object, 1) == nullptr);  // the original's answer, even null
@@ -415,6 +420,114 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
   g_destinationAnswer = -1;
   g_countAnswer = 0;
   g_nameAnswer = "Social Lobby";
+}
+
+// An encoder that fails on every Set is one line, and a Set that reads out again is logged as usual.
+void TestPresenceEncodeFailureIsLoggedOnce() {
+  ResetPresenceForTest();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  using SetFn = void (*)(void*, const void*);
+  SetFn set;
+  const std::uintptr_t w = SlotOf(object, kRichPresenceSlotSet);
+  std::memcpy(&set, &w, sizeof(w));
+  int document = 0;
+  g_lines.clear();
+  g_encodeFails = true;
+  for (int i = 0; i < 5; ++i) set(&object, &document);
+  QCHECK(CountLines("\"result\":\"encode_failed\"") == 1);
+  g_encodeFails = false;
+  set(&object, &document);
+  QCHECK(CountLines("\"event\":\"rich_presence_set\",\"json\"") == 1);
+  g_encodeFails = true;  // failing again after a good read is a new episode
+  set(&object, &document);
+  set(&object, &document);
+  QCHECK(CountLines("\"result\":\"encode_failed\"") == 2);
+  g_encodeFails = false;
+}
+
+// #393 (a2): with the feature on and no destination found by the game, the table answers by the game type of the
+// presence just set; the game's own answer wins when it found one; off, nothing changes.
+void TestPresenceNameTable() {
+  QCHECK(Is(PresenceDisplayName("social_2.0"), "Social Lobby"));
+  QCHECK(Is(PresenceDisplayName("Social_2.0"), "Social Lobby"));  // the game's spelling
+  QCHECK(Is(PresenceDisplayName("ECHO_ARENA"), "Arena"));
+  QCHECK(Is(PresenceDisplayName("echo_combat"), "Combat"));
+  for (const char* priv : {"echo_arena_private", "echo_combat_private", "social_2.0_private"}) {
+    QCHECK(Is(PresenceDisplayName(priv), "Private Match"));
+  }
+  for (const char* unknown : {"echo_arena_tournament", "echo_arena_", "social_2.", "social_2.0x", "", "x"}) {
+    QCHECK(PresenceDisplayName(unknown) == nullptr);  // prefixes and extensions are different names
+  }
+  QCHECK(PresenceDisplayName(nullptr) == nullptr);
+}
+
+void TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone() {
+  ResetPresenceForTest();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  using DestinationFn = int (*)(const void*);
+  using NameFn = const char* (*)(const void*, unsigned);
+  using SetFn = void (*)(void*, const void*);
+  DestinationFn destination;
+  NameFn name;
+  SetFn set;
+  std::uintptr_t w = SlotOf(object, kRichPresenceSlotDestination);
+  std::memcpy(&destination, &w, sizeof(w));
+  w = SlotOf(object, kRichPresenceSlotDestinationName);
+  std::memcpy(&name, &w, sizeof(w));
+  w = SlotOf(object, kRichPresenceSlotSet);
+  std::memcpy(&set, &w, sizeof(w));
+  int document = 0;
+  g_destinationAnswer = -1;
+  g_countAnswer = 0;
+  g_nameAnswer = "from Meta";
+
+  // Off (the default): the game's -1 stands, whatever the game type.
+  g_encodeText = "{\"game_type\":\"Social_2.0\"}";
+  set(&object, &document);
+  QCHECK(destination(&object) == -1);
+
+  // On: the table answers for a known game type, and the name is ours; the original is not asked for it.
+  SetPresenceNames(true);
+  set(&object, &document);
+  const int answered = destination(&object);
+  QCHECK(answered == kPresenceNameBase);
+  QCHECK(Is(name(&object, static_cast<unsigned>(answered)), "Social Lobby"));
+  QCHECK(CountLines((std::string("\"index\":") + std::to_string(kPresenceNameBase) + ",\"count\":0,\"source\":\"table\"").c_str()) == 1);
+  g_encodeText = "{\"game_type\":\"echo_arena\",\"joinable\":false}";
+  set(&object, &document);
+  QCHECK(destination(&object) == kPresenceNameBase + 1);
+  QCHECK(Is(name(&object, kPresenceNameBase + 1), "Arena"));
+
+  // A game type the table does not know, or no game type: the game's answer, and the name is the game's.
+  g_encodeText = "{\"game_type\":\"echo_arena_tournament\"}";
+  set(&object, &document);
+  QCHECK(destination(&object) == -1);
+  g_encodeText = "{\"lobby_id\":\"x\"}";
+  set(&object, &document);
+  QCHECK(destination(&object) == -1);
+  QCHECK(Is(name(&object, 0), "from Meta"));
+
+  // The game found its own destination: never replaced, and its index reaches the name slot unchanged.
+  g_encodeText = "{\"game_type\":\"social_2.0\"}";
+  set(&object, &document);
+  g_destinationAnswer = 2;
+  g_countAnswer = 3;
+  QCHECK(destination(&object) == 2);
+  QCHECK(Is(name(&object, 2), "from Meta"));
+
+  // An index just outside the table's range is not ours.
+  QCHECK(Is(name(&object, static_cast<unsigned>(kPresenceNameBase) + 6U), "from Meta"));
+  SetPresenceNames(false);
+  g_destinationAnswer = -1;
+  g_countAnswer = 0;
+  g_nameAnswer = "Social Lobby";
+  g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
 }
 
 NEVR_HOOK_RECORD(kTestPresenceHook, PresenceThunk, &OnPresenceHandler);
@@ -514,6 +627,9 @@ int main() {
   TestPresenceWrappersPassThroughAndLogOnChange();
   TestPresenceThroughThunk();
   TestPresenceTarget();
+  TestPresenceEncodeFailureIsLoggedOnce();
+  TestPresenceNameTable();
+  TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_install_test: %d check(s) failed\n", quest_test::Failures());
