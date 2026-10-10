@@ -69,6 +69,7 @@ using sentinel::GotStatus;
 // The thunks' own types are not visible here (callback_thunk.h needs -fno-exceptions); the entry
 // points are called through the same ABI with `this` as an opaque pointer.
 constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
+constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
 
 constexpr const char* kDefaultLogin = "wss://login.readyatdawn.com/rad/rad15_live";
 constexpr const char* kDefaultConfig = "wss://config.readyatdawn.com/rad/rad15_live";
@@ -171,14 +172,30 @@ using TStringFn = const char* (*)(const void*, const char*, const char*, std::ui
 TStringFn R15Entry() { return reinterpret_cast<TStringFn>(ThunkEntry(Slot::kLibR15)); }
 TStringFn MmEntry() { return reinterpret_cast<TStringFn>(ThunkEntry(Slot::kMatchmaking)); }
 
+// CSysHttp::CreateConnection as the game defines it, reduced to what the thunk touches: it records the URL
+// it receives and the handle slot, and returns a value the test checks comes back unchanged.
+const char* g_connectUrl = nullptr;
+unsigned long* g_connectHandle = nullptr;
+int FakeCreateConnection(unsigned long* handle, const char* url) {
+  g_connectUrl = url;
+  g_connectHandle = handle;
+  return 7;
+}
+using CreateConnectionFn = int (*)(unsigned long*, const char*);
+CreateConnectionFn ConnectEntry() { return reinterpret_cast<CreateConnectionFn>(ThunkEntry(Slot::kCreateConnection)); }
+
 void PublishFakeOriginal() {
   *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(&FakeTString);
   *ThunkOriginalOut(Slot::kMatchmaking) = reinterpret_cast<void*>(&FakeTString);
+  *ThunkOriginalOut(Slot::kCreateConnection) = reinterpret_cast<void*>(&FakeCreateConnection);
+  g_connectUrl = nullptr;
+  g_connectHandle = nullptr;
 }
 
 void ResetThunks() {
   ResetThunk(Slot::kLibR15);
   ResetThunk(Slot::kMatchmaking);
+  ResetThunk(Slot::kCreateConnection);
 }
 
 // One scenario: a redirector armed behind both thunks, torn down on destruction.
@@ -518,6 +535,60 @@ void HandlerAppliesAfterTheOriginalToItsResult() {
   ResetThunks();
 }
 
+// ---- CSysHttp::CreateConnection (#408) -------------------------------------
+
+// The game's REST host goes to nevr_http_uri before the original connects; the handle slot, the result and
+// every other URL pass through untouched.
+void ApiBaseUrlIsRedirectedBeforeTheOriginalConnects() {
+  Scenario s(Config(kRedirectOn));
+  unsigned long handle = 0;
+  const int rc = ConnectEntry()(&handle, "https://api.readyatdawn.com");
+  QCHECK(rc == 7);  // the original's result, unchanged
+  QCHECK(g_connectHandle == &handle);
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
+
+  ConnectEntry()(&handle, "https://api-dev.readyatdawn.com");  // the per-environment form
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
+
+  for (const char* other : {"https://graph.oculus.com", "https://apiary.example", "wss://login.readyatdawn.com",
+                            "https://login.readyatdawn.com", "https://api"}) {
+    g_connectUrl = nullptr;
+    ConnectEntry()(&handle, other);
+    QCHECK(g_connectUrl == other);  // the very pointer the game passed
+  }
+  ConnectEntry()(&handle, nullptr);  // a null URL reaches the original as null
+  QCHECK(g_connectUrl == nullptr);
+}
+
+void ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists() {
+  EmbeddedDefaults embedded;
+  embedded.socketUri = "wss://emb.example/nevr";
+  embedded.httpUri = "https://emb.example:7350";
+  Scenario off(nevr_quest::ResolveConfig(embedded, nullptr).config);  // every feature off
+  unsigned long handle = 0;
+  const char* api = "https://api.readyatdawn.com";
+  ConnectEntry()(&handle, api);
+  QCHECK(g_connectUrl == api);
+
+  Scenario noHttp(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));
+  g_connectUrl = nullptr;
+  ConnectEntry()(&handle, api);
+  QCHECK(g_connectUrl == api);  // no nevr_http_uri: the policy declines
+}
+
+void ConnectUrlRedirectIsStableAndCountedWithoutLogging() {
+  Scenario s(Config(kRedirectOn));
+  Lines().clear();
+  unsigned long handle = 0;
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");
+  const char* const first = g_connectUrl;
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");
+  QCHECK(g_connectUrl == first);  // the same pool pointer
+  QCHECK(s.redirector->counters().redirected == 2);
+  QCHECK(s.redirector->counters().calls == 2);
+  QCHECK(Lines().empty());  // a hooked call never logs
+}
+
 // All 16 slots computed under the current bridge state: a further value is not remembered. A change
 // of bridge state makes those entries stale, and a stale slot is recycled.
 void CacheFullAndStaleBridgeBehaviour() {
@@ -574,6 +645,8 @@ void ConcurrentCallsAgree() {
 // ---- layer 2: a real GOT hook on fixture modules ----------------------------
 
 using FxRead = const char* (*)(const char*, const char*);
+using FxConnect = int (*)(const char*, unsigned long*);
+using FxLastUrl = const char* (*)();
 
 void* OpenFixture(const std::string& dir, const char* name) {
   void* handle = dlopen((dir + "/" + name).c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -583,7 +656,8 @@ void* OpenFixture(const std::string& dir, const char* name) {
 
 InstallOptions FixtureOptions(InternFn intern) {
   return {{sentinel::GotTarget("libredirfx_consumer_a.so", kTStringSymbol, sentinel::RelocKind::kJumpSlot),
-           sentinel::GotTarget("libredirfx_consumer_b.so", kTStringSymbol, sentinel::RelocKind::kJumpSlot)},
+           sentinel::GotTarget("libredirfx_consumer_b.so", kTStringSymbol, sentinel::RelocKind::kJumpSlot),
+           sentinel::GotTarget("libredirfx_consumer_a.so", kCreateConnectionSymbol, sentinel::RelocKind::kJumpSlot)},
           sentinel::FindLoadedImage, intern, nullptr};
 }
 
@@ -668,6 +742,22 @@ void RealHookEndToEnd(const std::string& dir) {
   const char* plain = "plain-pointer";
   QCHECK(readA("publisher_lock", plain) == plain);
 
+  // The REST connect slot rides with libr15's: hooked by the same install, restored by the same removal.
+  const FxConnect connectA = reinterpret_cast<FxConnect>(dlsym(a, "fx_connect"));
+  QCHECK(connectA != nullptr);
+  const FxLastUrl lastUrl = reinterpret_cast<FxLastUrl>(dlsym(a, "fx_last_connect_url"));
+  QCHECK(lastUrl != nullptr);
+  if (connectA != nullptr && lastUrl != nullptr) {
+    unsigned long handle = 0;
+    QCHECK(connectA("https://api.readyatdawn.com", &handle) == 7);  // the provider's result passes through
+    QCHECK(handle == 0x1234UL);
+    QCHECK(lastUrl() != nullptr && std::strcmp(lastUrl(), kHttpTarget) == 0);
+    const char* other = "https://graph.oculus.com";
+    QCHECK(connectA(other, &handle) == 7);
+    QCHECK(lastUrl() == other);
+  }
+  QCHECK_STATUS(on.createConnection, GotStatus::kOk);
+
   // The matchmaking module loads later; the retry installs its slot.
   void* b = OpenFixture(dir, "libredirfx_consumer_b.so");
   QCHECK(b != nullptr);
@@ -688,6 +778,14 @@ void RealHookEndToEnd(const std::string& dir) {
 
   RemoveRedirectHooks();
   QCHECK(readA("login_host", kDefaultLogin) == kDefaultLogin);
+  if (connectA != nullptr && lastUrl != nullptr) {
+    unsigned long handle = 0;
+    const char* api = "https://api.readyatdawn.com";
+    QCHECK(connectA(api, &handle) == 7);
+    QCHECK(lastUrl() == api);  // restored: the game's URL reaches the original again
+  }
+  // The slot itself was restored (a disarmed thunk would also pass the URL through): the removal says so.
+  QCHECK(AnyLineContains("\"target\":\"libr15_create_connection_remove\""));
   if (b != nullptr) {
     const FxRead readB = reinterpret_cast<FxRead>(dlsym(b, "fx_read"));
     if (readB != nullptr) QCHECK(readB("matchmaker_host", kDefaultMatchmaker) == kDefaultMatchmaker);
@@ -716,6 +814,11 @@ void PinnedTargetsMatchTheMeasuredBinaries() {
   QCHECK(std::strcmp(t.libr15.symbol, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j") == 0);
   QCHECK(t.libr15.slotVaddr.has_value() && *t.libr15.slotVaddr == 0x36ebe08ULL);
   QCHECK(t.libr15.buildId != nullptr && std::strcmp(t.libr15.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(std::strcmp(t.createConnection.module, "libr15.so") == 0);
+  QCHECK(std::strcmp(t.createConnection.symbol, "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc") == 0);
+  QCHECK(t.createConnection.slotVaddr.has_value() && *t.createConnection.slotVaddr == 0x36e8028ULL);
+  QCHECK(t.createConnection.buildId != nullptr &&
+         std::strcmp(t.createConnection.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
   QCHECK(std::strcmp(t.matchmaking.module, "libpnsradmatchmaking.so") == 0);
   QCHECK(std::strcmp(t.matchmaking.symbol, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j") == 0);
   QCHECK(t.matchmaking.slotVaddr.has_value() && *t.matchmaking.slotVaddr == 0x6b4768ULL);
@@ -769,6 +872,9 @@ int main(int argc, char** argv) {
   PrewarmMakesTheBuiltinDefaultsHits();
   ThunkPassesExceptionsFromTheOriginal();
   HandlerAppliesAfterTheOriginalToItsResult();
+  ApiBaseUrlIsRedirectedBeforeTheOriginalConnects();
+  ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
+  ConnectUrlRedirectIsStableAndCountedWithoutLogging();
   CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();
