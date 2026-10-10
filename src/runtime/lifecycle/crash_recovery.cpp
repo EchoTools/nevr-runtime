@@ -9,6 +9,7 @@
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
+#include "runtime/lifecycle/window_loss.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/initialize.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -105,6 +107,64 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return gameResult;
+}
+
+// #341: the game's window, found on the frame thread. g_hWindow (recorded by the SetWindowTextA
+// hook) when it is still a window; otherwise the first visible, unowned top-level window of the
+// calling thread, which is the thread that pumps the game's messages.
+static HWND FindMainWindow() {
+  if (g_hWindow != nullptr && IsWindow(g_hWindow)) return g_hWindow;
+  HWND found = nullptr;
+  EnumThreadWindows(
+      GetCurrentThreadId(),
+      [](HWND hwnd, LPARAM out) -> BOOL {
+        if (GetWindow(hwnd, GW_OWNER) == nullptr && IsWindowVisible(hwnd)) {
+          *reinterpret_cast<HWND*>(out) = hwnd;
+          return FALSE;
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&found));
+  return found;
+}
+
+void PollMainWindowLoss() {
+  if (g_isServer) return;
+  // Every game thread that reaches the frame hook calls this; one at a time, at most every 250 ms.
+  static volatile LONG s_polling = 0;
+  static ULONGLONG s_nextPollMs = 0;
+  static WindowLoss::Watch s_watch;
+  static bool s_trackingLogged = false;
+  if (InterlockedCompareExchange(&s_polling, 1, 0) != 0) return;
+  const ULONGLONG nowMs = GetTickCount64();
+  if (nowMs >= s_nextPollMs) {
+    s_nextPollMs = nowMs + 250;
+    HWND tracked = nullptr;
+    const WindowLoss::State state = s_watch.Poll<HWND>(
+        [&] {
+          tracked = FindMainWindow();
+          return tracked;
+        },
+        [](HWND hwnd) { return IsWindow(hwnd) != FALSE; });
+    if (state == WindowLoss::State::kAlive && tracked != nullptr && !s_trackingLogged) {
+      s_trackingLogged = true;
+      char cls[64] = {};
+      char title[128] = {};
+      GetClassNameA(tracked, cls, sizeof(cls));
+      GetWindowTextA(tracked, title, sizeof(title));
+      Log(EchoVR::LogLevel::Info, "[NEVR.WINDOW] tracking main window hwnd=%p class=\"%s\" title=\"%s\"",
+          static_cast<void*>(tracked), cls, title);
+    }
+    if (state == WindowLoss::State::kLost) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.WINDOW] main window destroyed without a close request: the client is exiting "
+          "with code 0, as a title-bar close ends it");
+      // A still-joinable CDN fetch thread at DLL_PROCESS_DETACH is too late (#340).
+      AssetCDN::StopBackgroundFetch();
+      ExitProcess(0);
+    }
+  }
+  InterlockedExchange(&s_polling, 0);
 }
 
 void InstallGameMainHook() {

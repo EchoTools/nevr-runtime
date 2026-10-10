@@ -218,6 +218,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(attach_calls), len(captured_calls),
                          "a Hooking::Attach call's result is not captured in a variable")
 
+    def test_window_loss_poll_runs_every_frame_and_exits_through_one_exitprocess(self):
+        # #341: the destroyed-window quit lives in PollMainWindowLoss, called from the per-frame hook.
+        frame = strip_comments((ROOT / "src/runtime/patch/binary_bug_fixes.cpp").read_text())
+        hook = extract_braced_function(frame, "static void __fastcall PrecisionSleepWaitHook(")
+        self.assertRegex(hook, r"\bPollMainWindowLoss\s*\(\s*\)")
+        crash = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        poll = extract_braced_function(crash, "void PollMainWindowLoss(")
+        self.assertRegex(poll, r"if\s*\(\s*g_isServer\s*\)\s*return;")
+        self.assertEqual(len(re.findall(r"\bExitProcess\s*\(\s*0\s*\)", poll)), 1)
+        self.assertRegex(poll, r"AssetCDN::StopBackgroundFetch\(\)\s*;\s*ExitProcess\(0\)")
+
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
         # RadPluginShutdown guard has to be inside that hook; a second detour on the

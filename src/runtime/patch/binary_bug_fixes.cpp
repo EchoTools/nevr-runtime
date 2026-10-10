@@ -328,6 +328,9 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
       // Unreachable — ForceFatalExit calls TerminateProcess.
     }
 
+    // #341: a window destroyed without WM_CLOSE never reaches the game's quit path.
+    PollMainWindowLoss();
+
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
     // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as

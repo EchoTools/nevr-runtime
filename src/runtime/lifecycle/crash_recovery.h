@@ -19,6 +19,12 @@ void InstallGameMainHook();
 /// calling thread (N69).
 void InstallVEH();
 
+/// Client only, called from the per-frame hook: when the game's main window has been destroyed
+/// without a close request, ends the process the way a title-bar close does (one ExitProcess(0),
+/// after stopping the CDN fetch thread). Rate-limited, safe to call every frame, a no-op on a
+/// server and until a window has been found (#341).
+void PollMainWindowLoss();
+
 /// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
 /// path. Purely diagnostic — always calls the original.
 void InstallCrashFilterInstrumentation();

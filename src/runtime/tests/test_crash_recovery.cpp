@@ -8,6 +8,7 @@
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
+#include "runtime/lifecycle/window_loss.h"
 
 TEST(CrashRecoveryN71Sites, TableIsCompleteAndWellFormed) {
   EXPECT_EQ(CrashRecovery::kKnownNullDerefSites.size(), 30U);
@@ -112,4 +113,52 @@ TEST(ConsoleCtrlPolicy, NoDeferReasonNamesTheMissingPrecondition) {
   EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(true, false),
                "GameServerLib never started, so the game teardown cannot reach Terminate");
   EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(false, true), "no game console handler behind ours");
+}
+
+// #341: a destroyed main window is a quit; a window that was never found is not.
+namespace {
+struct FakeWindows {
+  void* current = nullptr;       // what a search finds now
+  bool exists = false;           // whether the tracked handle is still a window
+  int finds = 0;
+  WindowLoss::State Poll(WindowLoss::Watch& w) {
+    return w.Poll<void*>(
+        [&] {
+          ++finds;
+          return current;
+        },
+        [&](void*) { return exists; });
+  }
+};
+}  // namespace
+
+TEST(WindowLoss, NoWindowYetIsNeverALoss) {
+  WindowLoss::Watch watch;
+  FakeWindows fake;
+  for (int i = 0; i < 3; ++i) EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kUntracked);
+  EXPECT_EQ(fake.finds, 3);
+}
+
+TEST(WindowLoss, AliveWhileTheTrackedWindowExists) {
+  int window = 0;
+  WindowLoss::Watch watch;
+  FakeWindows fake;
+  fake.current = &window;
+  fake.exists = true;
+  EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kAlive);
+  EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kAlive);
+  EXPECT_EQ(fake.finds, 1) << "a tracked window is not searched for again";
+}
+
+TEST(WindowLoss, DestroyedTrackedWindowIsLostAndStaysLost) {
+  int window = 0;
+  WindowLoss::Watch watch;
+  FakeWindows fake;
+  fake.current = &window;
+  fake.exists = true;
+  EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kAlive);
+  fake.exists = false;
+  EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kLost);
+  fake.exists = true;  // a recycled handle must not resurrect it
+  EXPECT_EQ(fake.Poll(watch), WindowLoss::State::kLost);
 }
