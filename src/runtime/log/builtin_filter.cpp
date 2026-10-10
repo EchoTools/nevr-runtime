@@ -1021,7 +1021,7 @@ static void MaybeEmitHealth() {
         const char* cause;
         if (g_hook_target == nullptr) {
             cause = "the CLog hook is not installed (see the 'hook failed name=CLog::PrintfImpl' line at boot)";
-        } else if (!HookGuard::IsOurDetour(g_hook_target)) {
+        } else if (!nevr_hook_guard::IsOurDetour(g_hook_target)) {
             cause = "another module took the hook target (see the 'hook overwritten name=CLog::PrintfImpl' error)";
         } else {
             cause = "the hook is intact, so the game is idle or blocked (waiting for a login, or on a modal dialog)";
@@ -1242,7 +1242,7 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
     // detection PatchDetour gives every other hook for free: a second module
     // taking this address is then named by the "hook overwritten" error and by
     // the zero-game-lines health warning instead of being guessed at.
-    HookGuard::Record(g_hook_target, "CLog::PrintfImpl");
+    nevr_hook_guard::Record(g_hook_target, "CLog::PrintfImpl");
 }
 
 void BuiltinLogFilter::Shutdown() {

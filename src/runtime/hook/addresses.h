@@ -16,7 +16,7 @@
 /// the Keep-current command listed in the comment. Counts without a
 /// Keep-current command are stale and should not be trusted.
 /// </summary>
-namespace PatchAddresses {
+namespace nevr_patch_addresses {
 
 // ============================================================================
 // Server Mode Patches (PatchEnableServer)
@@ -718,4 +718,4 @@ constexpr uintptr_t SPINWAIT_WAIT_FOR_VALUE = 0x1500ED8;
 /// Global spin iteration limit read by CSpinWait::WaitForValue
 constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 
-}  // namespace PatchAddresses
+}  // namespace nevr_patch_addresses

@@ -86,7 +86,7 @@ void InitializeFunctionPointers() {
   TcpBroadcasterListen = (TcpBroadcasterListenFunc*)(g_GameBaseAddress + 0xF81100);
   BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress + 0xF89AF0);
   // !! N83 — THESE TWO RVAs ARE ALSO DETOURED (mode_patches.cpp, as
-  // !! PatchAddresses::ENGINE_ENTITY_LOOKUP / ENGINE_ENTITY_PROP_DISPATCH).
+  // !! nevr_patch_addresses::ENGINE_ENTITY_LOOKUP / ENGINE_ENTITY_PROP_DISPATCH).
   //
   // MinHook writes a JMP at the function entry, so these pointers do NOT reach
   // the game's code — they reach our own hooks. On a dedicated server

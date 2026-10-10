@@ -1647,7 +1647,7 @@ TEST(N66_FormatSymbolId, ValidInput_DoesNotOverflow) {
 // ============================================================================
 
 TEST(N65_GateCount, DerivedFromProductionTable) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5)
       << "Gate count must match the 5 entries in HEADLESS_GATE_TABLE";
   // Verify table entries are distinct and have valid metadata.
@@ -1665,7 +1665,7 @@ TEST(N65_GateCount, DerivedFromProductionTable) {
 }
 
 TEST(N65_GateCount, AllGatesInCodeRange) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   for (int i = 0; i < HEADLESS_GATE_COUNT; i++) {
     EXPECT_GT(HEADLESS_GATE_TABLE[i].rva, 0x100000u)
         << "Gate " << i << " RVA below .text section";
@@ -1706,24 +1706,24 @@ struct GuardScratch {
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);  // NOPs stand in for an untouched prologue
 
-    HookGuard::Record(s.page, "N84_unchanged");
-    EXPECT_EQ(HookGuard::VerifyAll("test:unchanged"), 0)
+    nevr_hook_guard::Record(s.page, "N84_unchanged");
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);
 
-    HookGuard::Record(s.page, "N84_overwritten");
-    ASSERT_EQ(HookGuard::VerifyAll("test:baseline"), 0)
+    nevr_hook_guard::Record(s.page, "N84_overwritten");
+    ASSERT_EQ(nevr_hook_guard::VerifyAll("test:baseline"), 0)
         << "precondition: freshly recorded bytes must match";
 
     // Simulate a second MinHook instance writing its own JMP rel32 over ours.
@@ -1734,14 +1734,14 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
     p[3] = 0x33;
     p[4] = 0x44;
 
-    EXPECT_EQ(HookGuard::VerifyAll("test:overwritten"), 1)
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overwritten"), 1)
         << "guard did NOT detect a foreign detour overwriting a recorded address";
 }
 
 // IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
 // are still our own jump. Recorded and unchanged: yes. Never recorded, or overwritten since: no.
 TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch ours;
     GuardScratch other;
     ASSERT_NE(ours.page, nullptr);
@@ -1749,41 +1749,41 @@ TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
     memset(ours.page, 0x90, 32);
     memset(other.page, 0x90, 32);
 
-    HookGuard::Record(ours.page, "IsOurDetour_ours");
-    EXPECT_TRUE(HookGuard::IsOurDetour(ours.page));
-    EXPECT_FALSE(HookGuard::IsOurDetour(other.page)) << "an address the runtime never detoured";
-    EXPECT_FALSE(HookGuard::IsOurDetour(nullptr));
+    nevr_hook_guard::Record(ours.page, "IsOurDetour_ours");
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(ours.page));
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(other.page)) << "an address the runtime never detoured";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(nullptr));
 
     static_cast<unsigned char*>(ours.page)[0] = 0xE9;  // someone else's JMP over ours
-    EXPECT_FALSE(HookGuard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
 }
 
 TEST(N84_HookGuard, NullTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
-    HookGuard::Record(nullptr, "N84_null");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
+    nevr_hook_guard::Record(nullptr, "N84_null");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "null target was recorded; a bad call site would occupy a guard slot";
 }
 
 TEST(N84_HookGuard, UnreadableTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
     // Reserved-but-not-committed: readable-looking pointer, unreadable memory.
     void* reserved = VirtualAlloc(nullptr, 4096, MEM_RESERVE, PAGE_NOACCESS);
     ASSERT_NE(reserved, nullptr);
-    HookGuard::Record(reserved, "N84_unreadable");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::Record(reserved, "N84_unreadable");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "uncommitted memory was recorded; VerifyAll would fault reading it";
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// WOULD-FAIL-IF (N84): delete the memcmp in HookGuard::VerifyAll (hook_guard.cpp)
+// WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
-// WOULD-FAIL-IF (N84-record): delete the Readable() check in HookGuard::Record
+// WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
 //   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
 //      uncommitted page instead of skipping it.
-// WOULD-FAIL-IF (N84-wiring): delete HookGuard::VerifyAll(filename) from
+// WOULD-FAIL-IF (N84-wiring): delete nevr_hook_guard::VerifyAll(filename) from
 //   plugin_loader.cpp -> not caught here (call-site wiring), caught by the
 //   `just verify` grep sensor instead.
 
