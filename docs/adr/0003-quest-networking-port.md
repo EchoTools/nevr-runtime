@@ -1076,8 +1076,13 @@ are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library
 pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
 when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
 new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
-`prereq_local_delivered` and `prereq_local_dropped` (a full table of 32 slots: the request still gets a local
-id and never reaches Meta, nothing is queued behind it, and its callback does not run) are the counters.
+`prereq_local_delivered`, `prereq_local_deferred` (a pop that had an answer ready while the game still held
+all eight handles: the answer waits) and `prereq_local_id_collisions` (an SDK request id in the local range)
+are the counters. A pending answer takes no storage: local ids are sequential, so the pending set is the id
+range not yet popped and a request can neither fail nor reach Meta; a handle exists only while the pump holds
+the message. The SDK's own request ids are small per-process counts (recorded device runs: 5, 6, 7 for user,
+org id and token, 13-16 for the proof requests), which is why the high word `0x4E455652` is free; an id the
+SDK returns there is counted.
 
 `ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
 `GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
