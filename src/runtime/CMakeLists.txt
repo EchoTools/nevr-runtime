@@ -161,7 +161,7 @@ set(PATCHES_HEADERS
 add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_compile_definitions(nevr_runtime PRIVATE USE_MINHOOK PROTOBUF_STATIC_LIB)
+target_compile_definitions(nevr_runtime PRIVATE NEVR_USE_MINHOOK PROTOBUF_STATIC_LIB)
 
 target_precompile_headers(nevr_runtime PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")
 # NOTE: neither ${CMAKE_CURRENT_SOURCE_DIR} nor any subdirectory of it is on
@@ -635,7 +635,7 @@ if(BUILD_TESTING)
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
       compat/social_names.cpp)
-    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS USE_MINHOOK)
+    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK)
     set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp compat/social_names.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_social_facade PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -663,7 +663,7 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_hooking tests/test_hooking.cpp)
-    target_compile_definitions(test_hooking PRIVATE USE_MINHOOK)
+    target_compile_definitions(test_hooking PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
@@ -672,7 +672,7 @@ if(BUILD_TESTING)
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
     set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE USE_MINHOOK)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
@@ -741,10 +741,10 @@ if(BUILD_TESTING)
       hook/hook_guard.cpp
       hook/hook_liveness.cpp
     )
-    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS USE_MINHOOK
-      PROJECT_VERSION="${PROJECT_VERSION}"
-      GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
-      GIT_DESCRIBE="${GIT_DESCRIBE}"
+    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
+      NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
+      NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+      NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
