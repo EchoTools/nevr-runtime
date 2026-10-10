@@ -782,7 +782,7 @@ void GameServerLib::RegisterTcpCallbacks() {
     std::string externalIp;
     uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
 
-    NevRUPnPConfig upnpCfg = {};
+    NevrUPnPConfig upnpCfg = {};
     if (ReadUPnPConfig(upnpCfg)) {
       if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
       if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;

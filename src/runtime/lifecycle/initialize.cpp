@@ -238,7 +238,7 @@ extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
   if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
 }
 
-extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
+extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
   if (!out) return;
   out->enabled = g_upnpEnabled;
   out->port    = g_upnpPort;

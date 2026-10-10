@@ -332,7 +332,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   std::string internalIp = Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr);
   std::string externalIp;  // empty = let UPnP fill it, or falls back to internalIp
 
-  NevRUPnPConfig upnpCfg = {};
+  NevrUPnPConfig upnpCfg = {};
   if (ReadUPnPConfig(upnpCfg)) {
     if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
     if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;

@@ -33,22 +33,12 @@ FROZEN_NVR = frozenset({
 })
 # Existing non-canonical spellings, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
-    "README.md": {"nEVR"},
     "certs/code-signing.conf": {"nEVR"},
     "certs/generate-ca.sh": {"nEVR"},
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
-    "plugins/common/include/address_registry.h": {"nEVR"},
-    "plugins/example/README.md": {"nEVR"},
     "plugins/example/src/plugin.cpp": {"nEVR"},
-    "src/extension/plugin_interface.h": {"nEVR"},
-    "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
-    "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_callbacks.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_internal.h": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_serverdb.cpp": {"NevRUPnPConfig"},
 }
 
 

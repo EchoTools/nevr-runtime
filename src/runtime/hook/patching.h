@@ -64,7 +64,7 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
 }
 
 /// Layout must match the declaration in gameserver.cpp (used via GetProcAddress).
-struct NevRUPnPConfig {
+struct NevrUPnPConfig {
   BOOL   enabled;
   UINT16 port;
   CHAR   internalIp[46];
