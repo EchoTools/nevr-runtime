@@ -125,7 +125,7 @@ DWORD WINAPI DrainMain(LPVOID) {
       lastDropped = dropped;
     }
     const std::uint64_t nowNs = QpcNs();
-    if (nowNs - lastSummaryNs >= Policy::kSummarySeconds * 1000000000ULL) {
+    if (wait == WAIT_OBJECT_0 || nowNs - lastSummaryNs >= Policy::kSummarySeconds * 1000000000ULL) {
       lastSummaryNs = nowNs;
       std::uint32_t count;
       {
@@ -138,9 +138,37 @@ DWORD WINAPI DrainMain(LPVOID) {
   }
 }
 
+// True when `address` is in committed, executable memory: a function. A data export (a variable or a
+// table the game reads through the pointer) is in a non-executable page, and a thunk there would hand the
+// game a stub where it expects the value.
+bool PointsToCodeImpl(const void* address) {
+  MEMORY_BASIC_INFORMATION info;
+  if (VirtualQuery(address, &info, sizeof(info)) != sizeof(info)) return false;
+  if (info.State != MEM_COMMIT) return false;
+  const DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+  return (info.Protect & executable) != 0;
+}
+
 }  // namespace
 
 namespace ExportTracer {
+
+void ConfigureFromCommandLineText(const wchar_t* commandLine) {
+  char list[64];
+  if (!Policy::ExtractFlagValue(commandLine, L"-traceexports", list, sizeof(list))) list[0] = '\0';
+  Configure(list);
+}
+
+void ConfigureFromCommandLine() { ConfigureFromCommandLineText(GetCommandLineW()); }
+
+void Shutdown() {
+  if (g_thread == nullptr || g_stopEvent == nullptr) return;
+  SetEvent(g_stopEvent);
+  // The drain thread makes a last pass (the ring, then the summary) when the event is set and returns.
+  WaitForSingleObject(g_thread, 2000);
+  CloseHandle(g_thread);
+  g_thread = nullptr;
+}
 
 void Configure(const char* list) {
   bool expected = false;
@@ -165,6 +193,8 @@ void Configure(const char* list) {
       (mask & Policy::kPnsovr) ? "pnsovr " : "", (mask & Policy::kPnsdemo) ? "pnsdemo" : "");
 }
 
+bool PointsToCode(const void* address) { return PointsToCodeImpl(address); }
+
 bool Enabled() { return g_mask.load(std::memory_order_acquire) != 0; }
 
 void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved) {
@@ -176,6 +206,11 @@ void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved) {
   const std::uint32_t bit = Policy::ModuleOfPath(path);
   if ((bit & mask) == 0) return resolved;
   if (std::strlen(symbol) >= kNameBytes) return resolved;
+  if (!PointsToCodeImpl(resolved)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.TRACE] skip module=%s export=%s: not code (a data export is returned as it is)",
+        Policy::ModuleName(bit), symbol);
+    return resolved;
+  }
 
   void* thunk = nullptr;
   std::uint32_t id = 0;

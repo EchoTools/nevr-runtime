@@ -2,6 +2,7 @@
 // The export tracer's pure decisions (#20): which DLLs a `-traceexports` list selects, and which loaded
 // file is which. Header-only and free of windows.h, so the unit test needs neither Wine nor the game.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -69,6 +70,54 @@ inline std::uint32_t ModuleOfPath(const char* path) {
   if (EqualsNoCase(name, len, "pnsovr.dll")) return kPnsovr;
   if (EqualsNoCase(name, len, "pnsdemo.dll")) return kPnsdemo;
   return 0;
+}
+
+/// The value after `flag` in a Windows command line ("echovr.exe -windowed -traceexports pnsrad,pnsovr"):
+/// tokens split on spaces and tabs outside double quotes, the flag matched case-insensitively. Writes the
+/// value (ASCII only) into `out` and returns true; false when the flag is absent, has no value, or the
+/// value does not fit or is not ASCII. The tracer reads the process's own command line with this instead of a
+/// global the game's argument parser fills later, so no ordering between the two can latch it off.
+inline bool ExtractFlagValue(const wchar_t* commandLine, const wchar_t* flag, char* out, std::size_t capacity) {
+  if (commandLine == nullptr || flag == nullptr || out == nullptr || capacity == 0) return false;
+  out[0] = '\0';
+  const wchar_t* p = commandLine;
+  bool wantValue = false;
+  for (;;) {
+    while (*p == L' ' || *p == L'\t') ++p;
+    if (*p == L'\0') return false;
+    wchar_t token[256];
+    std::size_t n = 0;
+    bool quoted = false;
+    while (*p != L'\0' && (quoted || (*p != L' ' && *p != L'\t'))) {
+      if (*p == L'"') {
+        quoted = !quoted;
+      } else if (n + 1 < sizeof(token) / sizeof(token[0])) {
+        token[n++] = *p;
+      }
+      ++p;
+    }
+    token[n] = L'\0';
+    if (wantValue) {
+      if (n == 0 || n + 1 > capacity) return false;
+      for (std::size_t i = 0; i < n; ++i) {
+        if (token[i] > 0x7F) return false;
+        out[i] = static_cast<char>(token[i]);
+      }
+      out[n] = '\0';
+      return true;
+    }
+    std::size_t flagLen = 0;
+    while (flag[flagLen] != L'\0') ++flagLen;
+    if (n == flagLen) {
+      bool same = true;
+      for (std::size_t i = 0; i < n && same; ++i) {
+        const wchar_t a = token[i] >= L'A' && token[i] <= L'Z' ? static_cast<wchar_t>(token[i] - L'A' + L'a') : token[i];
+        const wchar_t b = flag[i] >= L'A' && flag[i] <= L'Z' ? static_cast<wchar_t>(flag[i] - L'A' + L'a') : flag[i];
+        same = a == b;
+      }
+      wantValue = same;
+    }
+  }
 }
 
 inline const char* ModuleName(std::uint32_t bit) {

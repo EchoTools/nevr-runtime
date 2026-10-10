@@ -16,11 +16,11 @@ struct TraceFrame {
   std::uint64_t ret;
   std::uint64_t t0;
   std::uint64_t t1;
-  std::uint64_t xmm0;
+  std::uint64_t xmm0[2];  // all 128 bits: a __m128 result is returned whole
 };
 static_assert(offsetof(TraceFrame, args) == 8 && offsetof(TraceFrame, ret) == 40 &&
                   offsetof(TraceFrame, t0) == 48 && offsetof(TraceFrame, t1) == 56 &&
-                  offsetof(TraceFrame, xmm0) == 64 && sizeof(TraceFrame) == 72,
+                  offsetof(TraceFrame, xmm0) == 64 && sizeof(TraceFrame) == 80,
               "NevrTraceEntry's frame offsets");
 
 // One per thunk, addressed by the stub through r11. `original` is first: the assembly calls [r11].
@@ -59,7 +59,7 @@ void NevrTraceCommit(const void* raw) {
   out.exitTicks = frame->t1;
   for (int i = 0; i < 4; ++i) out.args[i] = frame->args[i];
   out.ret = frame->ret;
-  out.retXmm0 = frame->xmm0;
+  out.retXmm0 = frame->xmm0[0];
   out.exportId = record->id;
   out.threadId = GetCurrentThreadId();
   g_ring.Push(out);
@@ -71,7 +71,7 @@ void NevrTraceCommit(const void* raw) {
 // left for the export: [rsp] return address, [rsp+8..0x28) shadow space, [rsp+0x28...) stack arguments.
 //
 // Frame (rsp after the prologue): 0..0x20 shadow space for the callee, 0x20..0x80 a copy of the caller's
-// first 12 stack arguments, 0x80..0xC8 the TraceFrame, to 0xD0 for alignment. rbx is saved and holds the
+// first 12 stack arguments, 0x80..0xD0 the TraceFrame (xmm0 whole, at 0xC0). rbx is saved and holds the
 // record across the call. Before the original is called nothing is called and no xmm register is touched, so
 // the xmm arguments reach it as they were.
 __asm__(R"(
@@ -127,7 +127,7 @@ NevrTraceEntry:
     mov r9, qword ptr [rsp+0xA0]
     call qword ptr [rbx]
     mov qword ptr [rsp+0xA8], rax
-    movq qword ptr [rsp+0xC0], xmm0
+    movups xmmword ptr [rsp+0xC0], xmm0
     rdtsc
     shl rdx, 32
     or rax, rdx
@@ -135,7 +135,7 @@ NevrTraceEntry:
     lea rcx, [rsp+0x80]
     call NevrTraceCommit
     mov rax, qword ptr [rsp+0xA8]
-    movq xmm0, qword ptr [rsp+0xC0]
+    movups xmm0, xmmword ptr [rsp+0xC0]
     add rsp, 0xD0
     pop rbx
     ret

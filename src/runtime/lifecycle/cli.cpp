@@ -7,7 +7,6 @@ BOOL g_isOffline = FALSE;
 BOOL g_isWindowed = FALSE;
 CHAR g_customConfigPath[MAX_PATH] = {0};
 CHAR g_regionOverride[64] = {0};
-CHAR g_traceExports[64] = {0};
 
 UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   // Add all original CLI argument options.
@@ -51,7 +50,8 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-traceexports",
                            "[NEVR] Trace the export calls of platform DLLs: pnsrad, pnsovr, pnsdemo or all (comma "
-                           "separated); logs [NEVR.TRACE] lines. Off by default");
+                           "separated); logs [NEVR.TRACE] lines. Off by default. Read from the command line by "
+                           "runtime/hook/export_tracer.cpp");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-notelemetry", "[NEVR] Disable telemetry streaming");

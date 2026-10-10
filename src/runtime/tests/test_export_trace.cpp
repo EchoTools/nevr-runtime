@@ -3,6 +3,7 @@
 // The thunk is assembly, so the transparency tests run it: under Wine in `just test-auth-unit`.
 
 #include <windows.h>
+#include <emmintrin.h>
 
 #include <gtest/gtest.h>
 
@@ -10,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -26,6 +28,10 @@ static std::vector<std::string>& LogLines() {
   static std::vector<std::string> lines;
   return lines;
 }
+static std::mutex& LogMutex() {
+  static std::mutex m;
+  return m;
+}
 
 VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
   char buffer[512];
@@ -33,6 +39,7 @@ VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
   va_start(args, format);
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
+  std::lock_guard<std::mutex> lock(LogMutex());
   LogLines().emplace_back(buffer);
 }
 
@@ -171,6 +178,22 @@ TEST_F(ExportTraceTest, KeepsFloatArgumentsAndAFloatResult) {
   EXPECT_EQ(records[0].args[1], 4u) << "the integer argument in rdx";
 }
 
+extern "C" __attribute__((noinline)) __m128 VectorResult(std::uint64_t k) {
+  return _mm_set_ps(4.0f, 3.0f, 2.0f, static_cast<float>(k));
+}
+
+TEST_F(ExportTraceTest, HandsBackAllOf128BitsOfAVectorResult) {
+  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&VectorResult), 3);
+  ASSERT_NE(thunk, nullptr);
+  const __m128 got = reinterpret_cast<__m128 (*)(std::uint64_t)>(thunk)(9);
+  alignas(16) float lanes[4];
+  _mm_store_ps(lanes, got);
+  EXPECT_FLOAT_EQ(lanes[0], 9.0f);
+  EXPECT_FLOAT_EQ(lanes[1], 2.0f);
+  EXPECT_FLOAT_EQ(lanes[2], 3.0f) << "the high half of xmm0";
+  EXPECT_FLOAT_EQ(lanes[3], 4.0f);
+}
+
 TEST_F(ExportTraceTest, ForwardsAVoidCall) {
   void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&VoidCall), 2);
   ASSERT_NE(thunk, nullptr);
@@ -263,22 +286,97 @@ TEST_F(ExportTraceTest, ATableThatIsFullHandsBackNull) {
   EXPECT_EQ(ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 999), nullptr);
 }
 
-// ---- off by default -----------------------------------------------------------------------------
+// ---- the command line, code or data, and the whole path against a real module ------------------
 
-TEST_F(ExportTraceTest, TheTracerIsOffUntilConfiguredAndThenLeavesOtherModulesAlone) {
+TEST(ExportTracePolicy, ReadsTheFlagValueFromACommandLine) {
+  char out[64];
+  EXPECT_TRUE(Policy::ExtractFlagValue(L"C:\\g\\echovr.exe -windowed -traceexports pnsrad,pnsovr -noconsole", L"-traceexports",
+                                       out, sizeof(out)));
+  EXPECT_STREQ(out, "pnsrad,pnsovr");
+  EXPECT_TRUE(Policy::ExtractFlagValue(L"\"C:\\Program Files\\echovr.exe\" -TraceExports \"all\"", L"-traceexports", out,
+                                       sizeof(out)));
+  EXPECT_STREQ(out, "all");
+  EXPECT_FALSE(Policy::ExtractFlagValue(L"echovr.exe -windowed", L"-traceexports", out, sizeof(out)));
+  EXPECT_FALSE(Policy::ExtractFlagValue(L"echovr.exe -traceexports", L"-traceexports", out, sizeof(out)))
+      << "a flag with no value";
+  EXPECT_FALSE(Policy::ExtractFlagValue(L"echovr.exe -traceexportsx pnsrad", L"-traceexports", out, sizeof(out)))
+      << "a longer flag is a different flag";
+  EXPECT_FALSE(Policy::ExtractFlagValue(L"echovr.exe -traceexports aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", L"-traceexports",
+                                        out, 8))
+      << "a value that does not fit";
+  EXPECT_FALSE(Policy::ExtractFlagValue(nullptr, L"-traceexports", out, sizeof(out)));
+}
+
+TEST(ExportTracer, OnlyCodeIsAThunkTarget) {
+  static int data = 5;
+  EXPECT_TRUE(ExportTracer::PointsToCode(reinterpret_cast<const void*>(&Add)));
+  EXPECT_FALSE(ExportTracer::PointsToCode(&data));
+  int onStack = 0;
+  EXPECT_FALSE(ExportTracer::PointsToCode(&onStack));
+  EXPECT_FALSE(ExportTracer::PointsToCode(nullptr));
+}
+
+bool LogHas(const char* needle) {
+  std::lock_guard<std::mutex> lock(LogMutex());
+  for (const std::string& line : LogLines()) {
+    if (line.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+bool WaitForLog(const char* needle, int ms = 3000) {
+  for (int waited = 0; waited < ms; waited += 10) {
+    if (LogHas(needle)) return true;
+    Sleep(10);
+  }
+  return LogHas(needle);
+}
+
+// The whole path against a real module named pnsrad.dll, with one code export and one data export. This is the
+// only test that configures the tracer (it is configured once per process, from the command line text).
+TEST(ExportTracer, EndToEndAgainstAModuleNamedPnsrad) {
+  char exePath[MAX_PATH];
+  ASSERT_GT(GetModuleFileNameA(nullptr, exePath, sizeof(exePath)), 0u);
+  std::string dir(exePath);
+  dir.resize(dir.find_last_of("\\/") + 1);
+  const std::string fixture = dir + "export-trace-fixture\\pnsrad.dll";
+  HMODULE const module = LoadLibraryA(fixture.c_str());
+  ASSERT_NE(module, nullptr) << "the fixture " << fixture;
+  void* const code = reinterpret_cast<void*>(GetProcAddress(module, "FixtureCode"));
+  void* const data = reinterpret_cast<void*>(GetProcAddress(module, "FixtureData"));
+  ASSERT_NE(code, nullptr);
+  ASSERT_NE(data, nullptr);
+
+  // Off until configured: the pointer is what the module exports, whatever the module.
   EXPECT_FALSE(ExportTracer::Enabled());
-  void* const original = reinterpret_cast<void*>(&Add);
-  EXPECT_EQ(ExportTracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), "AnyExport", original), original);
-  // Configured with a module that no handle here belongs to: still the original for a file that is not that
-  // module (the test process is neither pnsrad nor pnsovr).
-  ExportTracer::Configure("pnsrad");
-  EXPECT_TRUE(ExportTracer::Enabled());
-  EXPECT_EQ(ExportTracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), "AnyExport", original), original);
-  EXPECT_EQ(ExportTracer::WrapSymbol(nullptr, "AnyExport", original), original);
-  EXPECT_EQ(ExportTracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), nullptr, original), original);
-  bool enabledLogged = false;
-  for (const std::string& line : LogLines()) enabledLogged |= line.find("[NEVR.TRACE] enabled") == 0;
-  EXPECT_TRUE(enabledLogged);
+  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureCode", code), code);
+
+  // A lookup before the flag is known must not decide anything: the flag is read from the command line,
+  // which was complete from process start.
+  ExportTracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -TraceExports pnsrad -noconsole");
+  ASSERT_TRUE(ExportTracer::Enabled());
+
+  void* const wrapped = ExportTracer::WrapSymbol(module, "FixtureCode", code);
+  ASSERT_NE(wrapped, code) << "a code export of a selected module is a thunk";
+  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureCode", code), wrapped) << "one thunk per name";
+  EXPECT_EQ(reinterpret_cast<int (*)(int)>(wrapped)(41), 42);
+
+  // A data export is handed back as it is: the game reads a value through that pointer.
+  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureData", data), data);
+  EXPECT_EQ(*static_cast<int*>(data), 1234);
+
+  // A module that is not selected is left alone (the test process's own functions are not pnsrad).
+  EXPECT_EQ(ExportTracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), "Sleep", reinterpret_cast<void*>(&Sleep)),
+            reinterpret_cast<void*>(&Sleep));
+
+  EXPECT_TRUE(WaitForLog("[NEVR.TRACE] call #1 module=pnsrad export=FixtureCode"));
+  EXPECT_TRUE(LogHas("[NEVR.TRACE] resolve module=pnsrad export=FixtureCode"));
+  EXPECT_TRUE(LogHas("[NEVR.TRACE] skip module=pnsrad export=FixtureData"));
+
+  // Shutdown makes a last pass and the summary, and returns.
+  ExportTracer::Shutdown();
+  EXPECT_TRUE(LogHas("[NEVR.TRACE] summary module=pnsrad export=FixtureCode calls=1"));
+  ExportTracer::Shutdown();  // twice is harmless
 }
 
 }  // namespace

@@ -316,6 +316,14 @@ if(BUILD_TESTING)
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_export_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_export_trace PRIVATE GTest::gtest GTest::gtest_main)
+    # A stand-in module the test loads: named pnsrad.dll (the tracer identifies a platform DLL by file name),
+    # with a code export and a data export, in its own directory next to the test.
+    add_library(export_trace_fixture MODULE tests/export_trace_fixture.cpp)
+    set_target_properties(export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture"
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture")
+    set_source_files_properties(tests/export_trace_fixture.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    add_dependencies(test_export_trace export_trace_fixture)
     gtest_discover_tests(test_export_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_system_module_loader

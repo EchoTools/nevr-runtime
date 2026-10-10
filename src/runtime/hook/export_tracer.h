@@ -25,11 +25,26 @@ namespace ExportTracer {
 /// names a module. Idempotent: only the first call has an effect.
 void Configure(const char* list);
 
+/// Configure from the process's own command line (GetCommandLineW), which is complete from process start:
+/// not from a value the game's argument parser fills later. Idempotent.
+void ConfigureFromCommandLine();
+
+/// Configure from a command line text (the same as ConfigureFromCommandLine; for tests).
+void ConfigureFromCommandLineText(const wchar_t* commandLine);
+
+/// Stops the drain thread after a last drain and summary, waiting at most two seconds. Call from a normal
+/// thread (not under the loader lock). Safe when the tracer is off, and safe to call twice.
+void Shutdown();
+
+/// True when `address` is in committed, executable memory (a function), false for data.
+bool PointsToCode(const void* address);
+
 /// True when Configure selected at least one module.
 bool Enabled();
 
 /// The pointer to hand the game for `symbol` of the module `dllHandle`: `resolved` when the tracer is off,
-/// the module is not selected, or no thunk could be made; otherwise a thunk that forwards to `resolved`.
+/// the module is not selected, the export is data rather than code (a thunk there would hand the game a stub
+/// where it reads a value), or no thunk could be made; otherwise a thunk that forwards to `resolved`.
 void* WrapSymbol(void* dllHandle, const char* symbol, void* resolved);
 
 }  // namespace ExportTracer
