@@ -43,11 +43,15 @@ class VcpkgPinTest(unittest.TestCase):
         self.assertEqual(set(triggers), {"workflow_dispatch"})
         self.assertIn(".vcpkg-commit", text)
 
-    def test_the_workflows_that_link_provide_the_case_folded_crypt32(self):
-        # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only.
-        for name in ("build.yml", "defender-scan.yml"):
-            self.assertIn("ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a",
-                          (WORKFLOWS / name).read_text(), name)
+    def test_the_builder_image_provides_the_case_folded_crypt32(self):
+        # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only; every
+        # workflow that links runs in the builder image, which carries the symlink.
+        dockerfile = (REPO / ".github/builder/Dockerfile").read_text()
+        self.assertIn("ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a", dockerfile)
+        for name in ("build.yml", "vcpkg-cache.yml", "defender-scan.yml"):
+            text = (WORKFLOWS / name).read_text()
+            self.assertIn("ghcr.io/echotools/nevr-runtime-builder:", text, name)
+            self.assertNotIn("ln -s libcrypt32.a", text, f"{name} re-creates a link the image has")
 
     def test_the_local_pin_check_also_requires_the_case_folded_crypt32(self):
         justfile = (REPO / "justfile").read_text()

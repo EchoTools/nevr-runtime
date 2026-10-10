@@ -13,17 +13,16 @@ concurrency:
 jobs:
   build-zip:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # The builder image build.yml uses (.github/builder/Dockerfile).
     container:
-      image: archlinux:base-devel
+      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
-    - name: Install the toolchain (pacman)
-      run: |
-        set -euo pipefail
-        pacman -Syu --noconfirm --needed \
-          git mingw-w64-gcc ninja cmake python python-yaml go just zstd openssl \
-          curl zip unzip tar pkgconf zlib
-
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -31,18 +30,6 @@ jobs:
 
     - name: Trust the workspace for git
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-    - name: Setup pinned Buf
-      run: |
-        set -euo pipefail
-        go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
-    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
-    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
-    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
-      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
 
     - name: Setup vcpkg
       run: |
