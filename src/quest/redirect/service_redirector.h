@@ -84,7 +84,7 @@ struct BridgeState {
 };
 // Current state of the local bridge; nullptr means no bridge exists yet.
 using BridgeProbe = BridgeState (*)();
-using InternFn = nevr_runtime::lifecycle::InternResult (*)(std::string_view);
+using InternFn = nevr::lifecycle::InternResult (*)(std::string_view);
 
 enum class Outcome : std::uint8_t {
   kPassThrough,   // original pointer returned

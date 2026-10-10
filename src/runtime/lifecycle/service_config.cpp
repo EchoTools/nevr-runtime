@@ -242,17 +242,17 @@ std::optional<std::string> Flat(const std::string& flatKey) {
 }
 
 const char* InternCStr(std::string_view value, const char* accessor) {
-  nevr_runtime::lifecycle::InternResult result{};
+  nevr::lifecycle::InternResult result{};
 #ifdef NEVR_TEST_HOOKS
   if (g_failInternAccessor == accessor) {
-    result = {nevr_runtime::lifecycle::InternStatus::kAllocationFailure, nullptr, 7, 13};
+    result = {nevr::lifecycle::InternStatus::kAllocationFailure, nullptr, 7, 13};
   } else
 #endif
   {
-    result = nevr_runtime::lifecycle::InternStableCStr(value);
+    result = nevr::lifecycle::InternStableCStr(value);
   }
-  if (result.status != nevr_runtime::lifecycle::InternStatus::kSuccess || result.pointer == nullptr) {
-    FailAccessor(accessor, nevr_runtime::lifecycle::InternStatusName(result.status), result.stringCount,
+  if (result.status != nevr::lifecycle::InternStatus::kSuccess || result.pointer == nullptr) {
+    FailAccessor(accessor, nevr::lifecycle::InternStatusName(result.status), result.stringCount,
                  result.liveBytes);
   }
   return result.pointer;
@@ -273,7 +273,7 @@ const char* AccessorBoundary(const char* accessor, Body body) {
 }  // namespace
 
 #ifdef NEVR_TEST_HOOKS
-namespace nevr_runtime::lifecycle::test {
+namespace nevr::lifecycle::test {
 
 void SetAccessorInputs(const nevr::NevrConfig* config, const nevr_cfg::FlatDefaults* defaults,
                        bool serverMode) {
@@ -295,7 +295,7 @@ void ResetAccessorInputs() {
   g_throwAccessor = {};
 }
 
-}  // namespace nevr_runtime::lifecycle::test
+}  // namespace nevr::lifecycle::test
 #endif
 
 // --- C accessors -----------------------------------------------------------
