@@ -1419,12 +1419,12 @@ verify:
     sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
     sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
     # Whitespace-flattened and matched CONTIGUOUSLY: two separate greps ("some
-    # !g_isServer exists" AND "AssetCDN::Initialize exists") passed blind, because
+    # !g_isServer exists" AND "nevr_asset_cdn::Initialize exists") passed blind, because
     # boot.cpp has OTHER !g_isServer gates — removing THIS gate while leaving the
     # call unconditional still satisfied both. Require the call inside the gate.
     N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
-    if ! grep -qE 'if \( *!g_isServer *\) *\{ *AssetCDN::Initialize\(\)' <<<"$N131_FLAT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
+    if ! grep -qE 'if \( *!g_isServer *\) *\{ *nevr_asset_cdn::Initialize\(\)' <<<"$N131_FLAT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
         echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
         exit 1
     fi
@@ -1432,8 +1432,8 @@ verify:
     N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
     sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
     sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
-    if grep -q 'AssetCDN::Initialize' <<<"$N131_INIT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
+    if grep -q 'nevr_asset_cdn::Initialize' <<<"$N131_INIT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
         echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
         exit 1
     fi
@@ -1718,7 +1718,7 @@ verify:
     fi
 
     # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
-    # BinaryBugFixes::Init saves the original byte before writing 0xC3 and restores
+    # nevr_binary_bug_fixes::Init saves the original byte before writing 0xC3 and restores
     # it on Shutdown (N33). A SECOND writer defeats that silently: if it runs first,
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.

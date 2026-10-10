@@ -16,7 +16,7 @@
 #include <array>
 #include <cstdint>
 
-namespace ProviderIdentity {
+namespace nevr_provider_identity {
 
 /// pnsrad.dll rva of the exported UserProviderID.
 constexpr std::uintptr_t kPnsradUserProviderIdRva = 0x88D70;
@@ -39,4 +39,4 @@ inline std::array<std::uint8_t, 11> ReturnConstant(std::uint64_t value) {
   return code;
 }
 
-}  // namespace ProviderIdentity
+}  // namespace nevr_provider_identity

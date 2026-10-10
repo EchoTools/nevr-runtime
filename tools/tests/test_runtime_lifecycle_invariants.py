@@ -232,10 +232,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # backlog (MicAvailable polls do not), the overflow warning is for a game that read and then
         # stopped, and the ring is capped at 200 ms.
         source = strip_comments((ROOT / "src/runtime/patch/mic_provider.cpp").read_text())
-        read = extract_braced_function(source, "uint64_t MicProvider::MicRead(")
+        read = extract_braced_function(source, "uint64_t nevr_mic_provider::MicRead(")
         self.assertRegex(read, r"\bNoteGameReader\s*\(\s*\)", "MicRead must drop the backlog")
         # MicAvailable is a poll the game makes from the moment capture starts; it must not drop or latch.
-        avail = extract_braced_function(source, "uint64_t MicProvider::MicAvailable(")
+        avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
         self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
         self.assertRegex(source, r"result\.ringOverflow\s*&&\s*g_ring\.ReaderActive\(\)")
         cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)

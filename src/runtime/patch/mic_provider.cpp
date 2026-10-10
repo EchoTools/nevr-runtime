@@ -372,7 +372,7 @@ MicWorkerCreateResult CreateCaptureWorker(void*) {
   const DWORD wait = WaitForSingleObject(g_workerStartupEvent, 2000);
   if (wait == WAIT_OBJECT_0 && g_workerSetupSucceeded.load(std::memory_order_acquire)) {
     // The operator-facing "capture started" line (with caller and owner
-    // thread ids) is written by MicProvider::MicStart once the transition
+    // thread ids) is written by nevr_mic_provider::MicStart once the transition
     // has committed.
     Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture worker ready");
     return MicWorkerCreateResult::Started;
@@ -567,12 +567,12 @@ static void NoteGameReader() {
   }
 }
 
-uint64_t MicProvider::MicAvailable() {
+uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   return static_cast<uint64_t>(g_ring.Available());
 }
 
-uint64_t MicProvider::MicCreate() {
+uint64_t nevr_mic_provider::MicCreate() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Create, &request)) return 1;
   if (!request.result) {
@@ -584,7 +584,7 @@ uint64_t MicProvider::MicCreate() {
   return 0;
 }
 
-uint64_t MicProvider::MicDetected() {
+uint64_t nevr_mic_provider::MicDetected() {
   if (g_lifecycle.IsCreated()) return 1;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -609,7 +609,7 @@ uint64_t MicProvider::MicDetected() {
   return detected;
 }
 
-uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
+uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
   NoteGameReader();
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
@@ -619,7 +619,7 @@ uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
   return got;
 }
 
-void MicProvider::MicStart() {
+void nevr_mic_provider::MicStart() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Start, &request)) return;
   if (request.result) {
@@ -640,7 +640,7 @@ void MicProvider::MicStart() {
   }
 }
 
-void MicProvider::MicStop() {
+void nevr_mic_provider::MicStop() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Stop, &request)) return;
   if (!request.result) {
@@ -657,7 +657,7 @@ void MicProvider::MicStop() {
   }
 }
 
-void MicProvider::MicDestroy() {
+void nevr_mic_provider::MicDestroy() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Destroy, &request)) return;
   if (!request.result) {
@@ -673,12 +673,12 @@ void MicProvider::MicDestroy() {
 
 #else  // !_WIN32
 
-uint64_t MicProvider::MicAvailable() { return 0; }
-uint64_t MicProvider::MicCreate() { return 1; }
-uint64_t MicProvider::MicDetected() { return 0; }
-uint64_t MicProvider::MicRead(void*, uint64_t) { return 0; }
-void MicProvider::MicStart() {}
-void MicProvider::MicStop() {}
-void MicProvider::MicDestroy() {}
+uint64_t nevr_mic_provider::MicAvailable() { return 0; }
+uint64_t nevr_mic_provider::MicCreate() { return 1; }
+uint64_t nevr_mic_provider::MicDetected() { return 0; }
+uint64_t nevr_mic_provider::MicRead(void*, uint64_t) { return 0; }
+void nevr_mic_provider::MicStart() {}
+void nevr_mic_provider::MicStop() {}
+void nevr_mic_provider::MicDestroy() {}
 
 #endif  // _WIN32

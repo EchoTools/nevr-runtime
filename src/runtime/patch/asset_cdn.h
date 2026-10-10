@@ -13,13 +13,13 @@
 /// parser is runtime/patch/evrp_package.h. If you change the format, change the
 /// ADR and the test vector in tests/test_evrp_package.cpp together.
 ///
-/// Wired into startup: AssetCDN::Initialize() is called from
+/// Wired into startup: nevr_asset_cdn::Initialize() is called from
 /// lifecycle/boot.cpp:361.
 
 #include <cstdint>
 #include <string>
 
-namespace AssetCDN {
+namespace nevr_asset_cdn {
 
 /// Current state of the background fetch pipeline.
 enum class FetchState {
@@ -67,4 +67,4 @@ bool FetchManifest();
 bool DownloadPackage(const std::string& url, const std::string& dest_path,
                      const std::string& expected_sha256);
 
-}  // namespace AssetCDN
+}  // namespace nevr_asset_cdn

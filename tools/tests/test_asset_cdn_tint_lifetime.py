@@ -19,7 +19,7 @@ class TintMapLifetime(unittest.TestCase):
         self.assertLess(scope, body.index("ReaderGate::Load(g_tintMap"))
 
     def test_shutdown_detaches_nulls_waits_then_frees(self):
-        body = extract_braced_function(SOURCE, "void AssetCDN::Shutdown()")
+        body = extract_braced_function(SOURCE, "void nevr_asset_cdn::Shutdown()")
         detach = body.index("Hooking::Detach(")
         null_ptr = body.index("ReaderGate::Publish<TintMap>(g_tintMap, nullptr")
         wait = body.index("g_tintGate.WaitIdle(")
