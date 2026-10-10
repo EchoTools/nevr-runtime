@@ -53,6 +53,30 @@ std::uint64_t FakeEntitlementOriginal() {
 }
 NEVR_HOOK_RECORD(kTestEntitlementHook, nevr_quest_login::EntitlementRequestThunk, &nevr_quest_login::OnEntitlementRequest);
 
+// The org-id request: the real handler behind a recorder that keeps the caller the thunk handed it, so the test
+// can place a fabricated load bias under the one call instruction it uses.
+const void* g_orgCaller = nullptr;
+int g_orgOriginalCalls = 0;
+std::uint64_t g_orgOriginalUser = 0;
+std::uint64_t FakeOrgOriginal(std::uint64_t user) {
+  ++g_orgOriginalCalls;
+  g_orgOriginalUser = user;
+  return 0x1234;  // a request id the SDK would have returned
+}
+std::uint64_t RecordingOrgHandler(nevr_quest_login::OrgRequestThunk::Fn original, const void* caller,
+                                  std::uint64_t user) noexcept {
+  g_orgCaller = caller;
+  return nevr_quest_login::OnOrgScopedIdRequest(original, caller, user);
+}
+NEVR_HOOK_RECORD(kTestOrgHook, nevr_quest_login::OrgRequestThunk, &RecordingOrgHandler);
+
+// The "game": one fixed call instruction into the thunk entry, so its return address is the same every time.
+__attribute__((noinline)) std::uint64_t GameCallsOrgRequest(std::uint64_t (*entry)(std::uint64_t), std::uint64_t user) {
+  const std::uint64_t id = entry(user);
+  __asm__ volatile("" ::: "memory");  // keeps the call from becoming a tail call
+  return id;
+}
+
 }  // namespace
 
 int main() {
@@ -117,6 +141,54 @@ int main() {
     QCHECK(g_lines == linesBefore);           // the handler never logs
     Thunk::Disarm();
     Thunk::Reset();
+  }
+
+  // #431: ovr_User_GetOrgScopedID is called by the login (three sites) and by CNSOVRSocial (nine). Driven through
+  // the real thunk entry from one call instruction; the load bias is fabricated so that return address lands on a
+  // login site, then on a Social one. Local answers are on (as the install sets them when every hook is in).
+  {
+    using Thunk = nevr_quest_login::OrgRequestThunk;
+    namespace L = nevr_quest_login::local;
+    nevr_quest_login::ResetPrerequisitesForTest();
+    Thunk::Reset();
+    *Thunk::OriginalOut() = reinterpret_cast<void*>(&FakeOrgOriginal);
+    Thunk::Arm(kTestOrgHook);
+    using Entry = std::uint64_t (*)(std::uint64_t);
+    Entry entry = nullptr;
+    void* address = Thunk::EntryAddress();
+    __builtin_memcpy(&entry, &address, sizeof(entry));
+    L::SetEnabled(true);
+
+    nevr_quest_login::SetPnsovrBase(0);  // no base known: not a login site, so forwarded
+    QCHECK(GameCallsOrgRequest(entry, 77) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 1 && g_orgOriginalUser == 77);
+    QCHECK(g_orgCaller != nullptr);
+    const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>(g_orgCaller);
+
+    // The caller is the login's RadPluginMain site (0x2069c0): answered locally, the SDK untouched.
+    nevr_quest_login::SetPnsovrBase(caller - 0x2069c0);
+    const std::uint64_t local_id = GameCallsOrgRequest(entry, 78);
+    QCHECK(local_id >= L::kRequestIdBase);
+    QCHECK(g_orgOriginalCalls == 1);
+    QCHECK(L::Requested() == 1);
+
+    // The caller is CNSOVRSocial::GotFriendOrgIdCB's site (0x1fcb90 + ...): forwarded with the user it asked
+    // about, no slot taken.
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb90);
+    QCHECK(GameCallsOrgRequest(entry, 79) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 2 && g_orgOriginalUser == 79);
+    QCHECK(L::Requested() == 1);
+
+    // Local answers off (an incomplete install): even a login site goes to the SDK.
+    L::SetEnabled(false);
+    nevr_quest_login::SetPnsovrBase(caller - 0x1ecf84);
+    QCHECK(GameCallsOrgRequest(entry, 80) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 3 && L::Requested() == 1);
+
+    Thunk::Disarm();
+    Thunk::Reset();
+    nevr_quest_login::SetPnsovrBase(0);
+    nevr_quest_login::ResetPrerequisitesForTest();
   }
 
   sentinel::SetLogSink(nullptr);
