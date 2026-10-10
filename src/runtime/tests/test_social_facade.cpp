@@ -591,6 +591,68 @@ TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
   EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, self.data(), 16), 0);
 }
 
+TEST(SocialParty, TheFriendsTabRefreshIsRateLimited) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t window = SocialParty::State::kFriendRefreshMinSeconds;
+  const std::uint64_t t0 = 1000;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u) << "the first open asks";
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0).empty()) << "the same second asks nothing";
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0 + window - 1).empty()) << "inside the window asks nothing";
+  const auto again = state.RefreshFriendsOnTabOpen(t0 + window);
+  ASSERT_EQ(again.size(), 1u) << "at the window's end it asks again";
+  EXPECT_EQ(again[0].symbol, SocialParty::kFriendListRefreshRequest);
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0 + window + 1).empty()) << "the window restarts at each request";
+  EXPECT_EQ(state.RefreshFriends().size(), 1u) << "the server-driven re-request is not limited";
+}
+
+TEST(SocialParty, AFriendsTabHeldOpenIsRefreshedEveryPollInterval) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  const std::uint64_t poll = SocialParty::State::kFriendPollSeconds;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  // The tab reads the list every second for three poll intervals; Update polls every second.
+  std::size_t sent = 0;
+  for (std::uint64_t t = t0 + 1; t <= t0 + 3 * poll; ++t) {
+    state.NoteFriendsViewed(t);
+    const auto out = state.PollFriendsWhileOpen(t);
+    sent += out.size();
+    for (const auto& m : out) EXPECT_EQ(m.symbol, SocialParty::kFriendListRefreshRequest);
+  }
+  EXPECT_EQ(sent, 3u) << "one refresh per interval while the tab is held open";
+}
+
+TEST(SocialParty, AClosedFriendsTabIsNotPolled) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  EXPECT_TRUE(state.PollFriendsWhileOpen(t0).empty()) << "never opened";
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  // The tab is read for 4 seconds and then closed: no read for the idle window.
+  for (std::uint64_t t = t0 + 1; t <= t0 + 4; ++t) state.NoteFriendsViewed(t);
+  std::size_t sent = 0;
+  for (std::uint64_t t = t0 + 5; t <= t0 + 6 * SocialParty::State::kFriendPollSeconds; ++t) {
+    sent += state.PollFriendsWhileOpen(t).size();
+  }
+  EXPECT_EQ(sent, 0u) << "a closed tab sends nothing, however long it stays closed";
+}
+
+TEST(SocialParty, ThePollNeverBeatsTheRefreshFloor) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t t0 = 5000;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u);
+  const std::uint64_t t1 = t0 + SocialParty::State::kFriendPollSeconds;
+  state.NoteFriendsViewed(t1);
+  ASSERT_EQ(state.PollFriendsWhileOpen(t1).size(), 1u);
+  // A tab reopened a moment after the poll is inside the floor: nothing goes out.
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t1 + SocialParty::State::kFriendRefreshMinSeconds - 1).empty());
+  EXPECT_TRUE(state.PollFriendsWhileOpen(t1 + 1).empty());
+  static_assert(SocialParty::State::kFriendPollSeconds >= SocialParty::State::kFriendRefreshMinSeconds,
+                "the poll interval is never below the floor");
+}
+
 TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   SocialParty::Global().SetSelf(77, "Me");
   void* object = SocialFacade::Object();
@@ -831,6 +893,87 @@ TEST(SocialParty, ARefusedJoinIsForgottenAndJoiningTheCurrentPartyDoesNothing) {
   ASSERT_TRUE(state.BeginJoin(7));
   EXPECT_TRUE(state.Join(7).empty()) << "already in that party";
   EXPECT_TRUE(state.DrainEvents().empty());
+}
+
+TEST(SocialParty, AnAbandonedJoinGivesTheInviteBackAndFailsToTheGame) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  state.DrainEvents();
+  ASSERT_TRUE(state.BeginJoin(5));
+  const auto accept = state.Join(5);
+  ASSERT_EQ(accept.size(), 1u);
+  EXPECT_EQ(accept[0].symbol, SocialParty::kInviteResponse);
+  EXPECT_EQ(accept[0].target, 201u) << "the request records the account it is aimed at, for logs";
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+
+  EXPECT_TRUE(state.AbandonJoining()) << "the join was in flight";
+  EXPECT_FALSE(state.Snapshot().joining);
+  ASSERT_EQ(state.Snapshot().invites.size(), 1u) << "the invite the join consumed comes back";
+  EXPECT_EQ(state.Snapshot().invites[0].senderId, 201u);
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
+  EXPECT_EQ(events[0].code, 0u);
+  EXPECT_FALSE(state.AbandonJoining()) << "a second call changes nothing";
+  EXPECT_TRUE(state.DrainEvents().empty());
+
+  // A retry by party id is the invite's accept again, not a plain join.
+  ASSERT_TRUE(state.BeginJoin(5));
+  const auto retry = state.Join(5);
+  ASSERT_EQ(retry.size(), 1u);
+  EXPECT_EQ(retry[0].symbol, SocialParty::kInviteResponse);
+
+  // Once the server answers, nothing is left to restore.
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({5, 201})));
+  EXPECT_FALSE(state.AbandonJoining());
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+}
+
+TEST(SocialParty, TargetedRequestsRecordTheAccountTheyAreAimedAt) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 301})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 302})));
+  const auto pass = state.Pass(2);
+  ASSERT_EQ(pass.size(), 1u);
+  EXPECT_EQ(pass[0].target, 302u);
+  ASSERT_TRUE(FeedParty(state, "PartyPassNotify", U64s({7, 100})));
+  const auto kick = state.Kick(1);
+  ASSERT_EQ(kick.size(), 1u);
+  EXPECT_EQ(kick[0].target, 301u);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 303})));
+  const auto dismiss = state.Dismiss(0);
+  ASSERT_EQ(dismiss.size(), 1u);
+  EXPECT_EQ(dismiss[0].target, 303u);
+}
+
+TEST(SocialParty, AnInviteIsQueuedOncePerTargetBehindTheCreate) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_EQ(state.SendInvite(300).size(), 1u) << "the create";
+  EXPECT_TRUE(state.AbandonCreate());
+  EXPECT_FALSE(state.AbandonCreate());
+  ASSERT_EQ(state.SendInvite(300).size(), 1u) << "the create again";
+  std::vector<SocialParty::Message> outgoing;
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100}), &outgoing));
+  std::size_t invites = 0;
+  for (const auto& m : outgoing) invites += m.symbol == SocialParty::kInviteRequest ? 1 : 0;
+  EXPECT_EQ(invites, 1u);
+}
+
+TEST(SocialParty, AnUnansweredLockIsForgottenOnlyWhileItIsUnanswered) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_EQ(state.SetLocked(true).size(), 1u);
+  EXPECT_TRUE(state.SetLocked(true).empty()) << "asked once";
+  EXPECT_FALSE(state.ExpireLockRequest(false)) << "a different request is not the one in flight";
+  EXPECT_TRUE(state.ExpireLockRequest(true));
+  EXPECT_EQ(state.SetLocked(true).size(), 1u) << "forgotten, so it may be asked again";
+  ASSERT_TRUE(FeedParty(state, "PartyLockSuccess", U64s({7})));
+  EXPECT_FALSE(state.ExpireLockRequest(true)) << "answered";
 }
 
 TEST(SocialParty, AcceptingAnInviteKeepsTheCurrentPartyUntilTheNewOneAdmits) {

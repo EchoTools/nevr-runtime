@@ -71,6 +71,7 @@
                 "CMAKE_COLOR_DIAGNOSTICS": "ON",
                 "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
                 "VCPKG_HOST_TRIPLET": "x64-linux",
+                "VCPKG_MANIFEST_INSTALL": "OFF",
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-mingw64.cmake",
                 "VCPKG_APPLOCAL_DEPS": "OFF"
             }

@@ -1,6 +1,9 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/evrp_package.h"
+#include "core/bounded_thread.h"
 #include "core/curl_global.h"
+#include "core/reader_gate.h"
+#include "core/transfer_abort.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -8,6 +11,7 @@
 #include <wincrypt.h>
 
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -71,6 +75,9 @@ std::atomic<TintMap*> g_tintMap{nullptr};
 
 // Owns the tint map memory. Protected by g_dataMutex during writes.
 TintMap* g_tintMapOwned = nullptr;
+// Held by the hook for its whole call; every free of a tint map (publish, shutdown) waits it idle first (#352).
+nevr::ReaderGate g_tintGate;
+constexpr std::chrono::milliseconds kTintGateWait{2000};
 std::mutex g_dataMutex;
 
 // ============================================================================
@@ -84,8 +91,13 @@ std::unordered_map<int64_t, PackageEntry> g_manifestPackages;
 // ============================================================================
 
 std::atomic<AssetCDN::FetchState> g_fetchState{AssetCDN::FetchState::Idle};
-std::thread g_fetchThread;
+// Never a bare std::thread: joinable at process exit it terminates the process (#340).
+nevr::BoundedThread g_fetchThread;
 std::atomic<bool> g_shutdownRequested{false};
+constexpr std::chrono::milliseconds kFetchJoinTimeout{3000};
+// True from Start() until the fetch thread function has returned. A thread that outlived a timed-out
+// join (detached) is still alive: nothing it reads may be freed and no second one may be started.
+std::atomic<bool> g_fetchThreadAlive{false};
 
 // ============================================================================
 // Loadout data structure offsets (from Task 2 RE findings)
@@ -189,7 +201,7 @@ static std::string ComputeSHA256(const std::vector<uint8_t>& data) {
 // Background fetch pipeline
 // ============================================================================
 
-static void BackgroundFetchThread() {
+static void BackgroundFetchBody() {
     Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Background fetch started");
 
     // Fetch manifest
@@ -296,8 +308,16 @@ static void BackgroundFetchThread() {
         std::lock_guard<std::mutex> lock(g_dataMutex);
         TintMap* old = g_tintMapOwned;
         g_tintMapOwned = newTintMap;
-        g_tintMap.store(newTintMap, std::memory_order_release);
-        delete old;
+        nevr::ReaderGate::Publish(g_tintMap, newTintMap);
+        // A hook call that loaded `old` before the store may still be reading it.
+        if (g_tintGate.WaitIdle(kTintGateWait)) {
+            delete old;
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.CDN] previous tint map left allocated: the loadout hook did not leave within %lld ms "
+                "(readers_in_hook=%d)",
+                static_cast<long long>(kTintGateWait.count()), g_tintGate.Readers());
+        }
     }
 
     Log(failed > 0 ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
@@ -320,11 +340,14 @@ static void BackgroundFetchThread() {
 /// CRITICAL: This runs on 261+ call sites, some per-frame.
 /// No allocations. No logging. No locks. O(1) map lookup only.
 void* __fastcall Hook_LoadoutResolveDataFromId(void* context, int64_t loadout_id) {
+    // In use from here: Shutdown() and the republish wait for this scope before they free the map
+    // or let the detour's trampoline go.
+    nevr::ReaderGate::Scope inHook(g_tintGate);
     void* result = g_originalFunc(context, loadout_id);
     if (!result) return nullptr;
 
     // Read the tint map pointer (atomic, lock-free)
-    TintMap* tintMap = g_tintMap.load(std::memory_order_acquire);
+    TintMap* tintMap = nevr::ReaderGate::Load(g_tintMap);
     if (!tintMap || tintMap->empty()) return result;
 
     // Follow pointer chain: result + 0x370 -> resource table
@@ -408,42 +431,78 @@ void AssetCDN::Initialize() {
     StartBackgroundFetch();
 }
 
+static void BackgroundFetchThread() {
+    BackgroundFetchBody();
+    g_fetchThreadAlive.store(false, std::memory_order_release);
+}
+
+// libcurl progress hook (CURLOPT_XFERINFOFUNCTION): stops an in-flight transfer once shutdown is requested.
+static int CurlAbortOnShutdown(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return nevr::AbortTransferWhenRequested(static_cast<const std::atomic<bool>*>(clientp));
+}
+
+// Frees what the fetch thread and the hook read. Only called once the fetch thread has finished and
+// the hook is idle with g_tintMap already nulled (#352).
+static void ReleaseFetchData() {
+    {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        delete g_tintMapOwned;
+        g_tintMapOwned = nullptr;
+    }
+    g_manifestPackages.clear();
+}
+
 void AssetCDN::Shutdown() {
     // Signal background thread to stop
     g_shutdownRequested.store(true);
 
-    // Wait for background thread to finish
-    if (g_fetchThread.joinable()) {
-        g_fetchThread.join();
+    // Wait for background thread to finish (bounded: a download stuck in curl must not hang unload).
+    // A detached thread keeps the maps it is iterating (its transfers abort on g_shutdownRequested).
+    const bool fetchStopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
+    if (!fetchStopped) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] background fetch did not stop within %lld ms — thread detached, its data left allocated",
+            static_cast<long long>(kFetchJoinTimeout.count()));
     }
 
-    // Remove hook
+    // Remove hook: no new call enters it. Then null the map pointer and wait for the calls already
+    // inside the hook (they hold g_tintGate for the whole call, trampoline included) before the maps
+    // they read are freed (#352). g_originalFunc is NOT cleared: a thread can be in the detour's
+    // prologue, before it enters the gate, and would then call a null pointer. Hooking::Detach only
+    // disables the hook (MH_DisableHook); the trampoline stays allocated, so the pointer stays valid.
     const bool hookWasInstalled = g_hookInstalled;
     if (g_hookInstalled) {
         Hooking::Detach(
             reinterpret_cast<PVOID*>(&g_originalFunc),
             reinterpret_cast<PVOID>(Hook_LoadoutResolveDataFromId));
         g_hookInstalled = false;
-        g_originalFunc = nullptr;
+    }
+    nevr::ReaderGate::Publish<TintMap>(g_tintMap, nullptr);
+    const bool hookIdle = g_tintGate.WaitIdle(kTintGateWait);
+    if (hookIdle) {
+        if (fetchStopped) ReleaseFetchData();
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] tint map left allocated: the loadout hook did not leave within %lld ms "
+            "(readers_in_hook=%d; a count that never drops is a call that left the hook by longjmp)",
+            static_cast<long long>(kTintGateWait.count()), g_tintGate.Readers());
     }
 
-    // Clean up tint map
-    {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
-        g_tintMap.store(nullptr, std::memory_order_release);
-        delete g_tintMapOwned;
-        g_tintMapOwned = nullptr;
-    }
-
-    g_manifestPackages.clear();
     g_fetchState.store(FetchState::Idle);
-    g_shutdownRequested.store(false);
+    // A detached thread still reads the flag; leave it set so it exits at its next check.
+    if (fetchStopped) g_shutdownRequested.store(false);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.CDN] shutdown complete hook_removed=%s",
         hookWasInstalled ? "true" : "false");
 }
 
 void AssetCDN::StartBackgroundFetch() {
+    if (g_fetchThreadAlive.load(std::memory_order_acquire)) {
+        // A previous fetch was detached by a timed-out stop and is still unwinding; a second thread
+        // would share the manifest map and tint map with it.
+        Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] background fetch not started: the previous one is still running");
+        return;
+    }
     FetchState expected = FetchState::Idle;
     if (!g_fetchState.compare_exchange_strong(expected, FetchState::FetchingManifest)) {
         // Already running or completed
@@ -451,10 +510,16 @@ void AssetCDN::StartBackgroundFetch() {
     }
 
     g_shutdownRequested.store(false);
-    if (g_fetchThread.joinable()) {
-        g_fetchThread.join();
-    }
-    g_fetchThread = std::thread(BackgroundFetchThread);
+    g_fetchThreadAlive.store(true, std::memory_order_release);
+    g_fetchThread.Start(BackgroundFetchThread);
+}
+
+bool AssetCDN::StopBackgroundFetch() {
+    g_shutdownRequested.store(true);
+    const bool stopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
+    Log(EchoVR::LogLevel::Info, "[NEVR.CDN] background fetch stop requested joined=%s",
+        stopped ? "true" : "false");
+    return stopped;
 }
 
 AssetCDN::FetchState AssetCDN::GetFetchState() {
@@ -512,6 +577,9 @@ bool AssetCDN::FetchManifest() {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlAbortOnShutdown);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &g_shutdownRequested);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "nevr-runtime/1.0");
 
@@ -621,6 +689,9 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlAbortOnShutdown);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &g_shutdownRequested);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "nevr-runtime/1.0");
 

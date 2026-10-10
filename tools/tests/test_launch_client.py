@@ -65,6 +65,7 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'sleep "${FAKE_WINE_LOG_DELAY:-0}"\n'
         'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake-$(date +%s%N).jsonl"\n'
         'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
+        '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
@@ -116,6 +117,23 @@ class LaunchClientTest(unittest.TestCase):
 
     def deployed(self) -> bytes:
         return (self.game_root / "echovr/bin/win10/BugSplat64.dll").read_bytes()
+
+    def test_trace_exports_is_passed_to_the_game_and_absent_otherwise(self):
+        args_file = self.tmp / "wine-args.txt"
+        env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
+        result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad,pnsovr", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("-traceexports pnsrad,pnsovr", args_file.read_text())
+        self.assertIn("tracing platform DLL exports: pnsrad,pnsovr", result.stdout)
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("-traceexports", args_file.read_text())
+
+    def test_trace_exports_refuses_a_list_with_other_characters(self):
+        result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad;rm -rf")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--trace-exports takes a comma separated list", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_runs_from_a_checkout_without_echovr_and_restores_the_original(self):
         result = self.run_script("--dll", str(self.dll))
