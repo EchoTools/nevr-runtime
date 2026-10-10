@@ -1,44 +1,19 @@
 name: Android
 
 # Builds and tests the Quest (arm64-v8a) target: `just build-android` then `just test-android`
-# (the ELF ground-truth tests in tests/quest). It runs on pull requests that touch what the Quest
-# build compiles, and on pushes to main that do, which also saves the vcpkg binary cache where every
-# PR can read it. Add a path here when src/quest starts compiling another shared source.
+# (the ELF ground-truth tests in tests/quest). It runs when someone asks for it
+# (`gh workflow run android.yml --ref <branch>`); nothing triggers it on a pull request or a push.
+# Run it for a change to src/quest, tests/quest, or a shared runtime source src/quest compiles
+# (see src/quest/CMakeLists.txt).
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - src/quest/**
-      - tests/quest/**
-      # Shared sources src/quest compiles from the runtime (see src/quest/CMakeLists.txt).
-      - src/runtime/compat/**
-      - src/runtime/lifecycle/service_redirect.*
-      - src/runtime/lifecycle/stable_string_pool.*
-      - extern/breakpad
-      - .vcpkg-commit
-      - justfile
-      - .github/workflows/android.yml
-  push:
-    branches: [main]
-    paths:
-      - src/quest/**
-      - tests/quest/**
-      # Shared sources src/quest compiles from the runtime (see src/quest/CMakeLists.txt).
-      - src/runtime/compat/**
-      - src/runtime/lifecycle/service_redirect.*
-      - src/runtime/lifecycle/stable_string_pool.*
-      - extern/breakpad
-      - .vcpkg-commit
-      - justfile
-      - .github/workflows/android.yml
+  workflow_dispatch:
 
 concurrency:
-  group: android-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: android-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   android:
-    if: github.event_name == 'push' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     env:
       NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
