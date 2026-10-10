@@ -14,6 +14,8 @@ NVR = re.compile(r"(?<![A-Za-z])Nvr[A-Z][A-Za-z0-9_]*")
 # Any spelling of the name made of the letters n-e-v-r in some case, not preceded by a letter.
 ANY_CASE = re.compile(r"(?<![A-Za-z])[Nn][Ee][Vv][Rr][A-Za-z0-9_]*")
 CANONICAL = re.compile(r"(NEVR|Nevr|nevr)")
+# The brand is spelled nEVR in prose (docs/standards/naming.md); these project-name phrasings in the prose of a
+# document are the uppercase spelling.
 UPPERCASE_BRAND_IN_DOCS = re.compile(
     r"(?<![A-Za-z])NEVR(?: Runtime| project|['’]s| refuses| subsystem|-authored)\b"
 )
@@ -34,36 +36,29 @@ FROZEN_NVR = frozenset({
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
     "NvrTestPluginGetKeptInfo",
 })
-# Allowed mixed-case spellings, per file and exact token. This includes the nEVR brand in prose;
-# all other entries are existing identifiers, comments, or certificate names.
-ALLOWED_SPELLINGS = {
-    "AGENTS.md": {"nEVR"},
-    "CONTRIBUTING.md": {"nEVR"},
-    "README.md": {"nEVR"},
+# Existing non-canonical spellings outside prose, per file and exact token. The map only shrinks.
+LEGACY_SPELLINGS = {
     "certs/code-signing.conf": {"nEVR"},
     "certs/generate-ca.sh": {"nEVR"},
     "certs/intermediate-ca.conf": {"nEVR"},
     "certs/root-ca.conf": {"nEVR"},
     "cmake/codesign/sign.sh": {"nEVR"},
+    "plugins/example/src/plugin.cpp": {"nEVR"},
+}
+# Documents and comments whose prose spells the brand `nEVR`, per file and exact token.
+BRAND_PROSE_SPELLINGS = {
+    "AGENTS.md": {"nEVR"},
+    "CONTRIBUTING.md": {"nEVR"},
+    "README.md": {"nEVR"},
+    "docs/README.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
     "docs/standards/verification.md": {"nEVR"},
-    "docs/README.md": {"nEVR"},
-    "plugins/common/include/address_registry.h": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
-    "plugins/example/src/plugin.cpp": {"nEVR"},
-    "src/extension/plugin_interface.h": {"nEVR"},
-    "src/runtime/compat/ws_bridge.cpp": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
-    "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
-    "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_callbacks.cpp": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_internal.h": {"NevRUPnPConfig"},
-    "src/runtime/server/gameserver_serverdb.cpp": {"NevRUPnPConfig"},
 }
 
 
@@ -107,16 +102,28 @@ class NamingTest(unittest.TestCase):
     def test_no_new_noncanonical_spelling(self):
         offenders = {}
         for path, text in project_files():
-            extra = noncanonical(text) - ALLOWED_SPELLINGS.get(path, set())
+            extra = noncanonical(text) - LEGACY_SPELLINGS.get(path, set()) - BRAND_PROSE_SPELLINGS.get(path, set())
             if extra:
                 offenders[path] = sorted(extra)
-        self.assertEqual(offenders, {}, "use the prescribed identifier spelling (docs/standards/naming.md)")
+        self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr in a name, and nEVR in prose (docs/standards/naming.md)")
 
-    def test_every_allowed_spelling_is_still_present(self):
+    def test_one_spelling_of_the_lifecycle_namespace(self):
+        # The runtime's lifecycle code is in `nevr::lifecycle`; the two older spellings were unified (#131).
+        old = re.compile(r"nevr_runtime::lifecycle|Nevr::Lifecycle|nevr::Lifecycle")
+        found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
+        self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
+
+    def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())
-        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in ALLOWED_SPELLINGS.items()
+        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()
                 if tokens - noncanonical(files.get(p, ""))}
-        self.assertEqual(gone, {}, "remove cleaned entries from ALLOWED_SPELLINGS")
+        self.assertEqual(gone, {}, "remove cleaned entries from LEGACY_SPELLINGS")
+
+    def test_every_brand_prose_spelling_is_still_present(self):
+        files = dict(project_files())
+        gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in BRAND_PROSE_SPELLINGS.items()
+                if tokens - noncanonical(files.get(p, ""))}
+        self.assertEqual(gone, {}, "remove cleaned entries from BRAND_PROSE_SPELLINGS")
 
     def test_project_brand_spelling_in_docs(self):
         offenders = {}

@@ -25,7 +25,7 @@ cannot establish needs a separately approved qualification.
 | --- | --- | --- |
 | Config lookup and URL redirect | PCVR binds `EchoVR::JsonValueAsString` (`src/abi/echovr_functions.cpp`); the hook calls the original, then applies the shared redirect and login-override policy (`src/runtime/lifecycle/config.cpp`). | Test the shared redirect and override functions and the adapter's call-through contract. |
 | HTTP URL connection | PCVR binds `EchoVR::HttpConnect` (RVA `0x1F60C0`); `HttpConnectHook` applies service routing, then calls the original. | Test argument identity and replacement, original-call count and return forwarding. A Quest counterpart is not established. |
-| Hook lifecycle | `src/core/hooking.h` implements MinHook lifecycle and publication ordering with Windows headers; `src/runtime/tests/test_hooking.cpp` covers attach rollback. | Define one shared lifecycle contract with thin platform backends; do not force the Windows backend onto Bionic or write a second lifecycle. |
+| Hook lifecycle | `src/core/hook_lifecycle.h` (no platform headers) owns publication ordering and rollback; `src/core/hooking.h` (MinHook) and `src/quest/sentinel/got_hook.cpp` (GOT) are backends of it. `src/runtime/tests/test_hooking.cpp` covers the contract and the MinHook backend; `src/quest/tests/got_hook_test.cpp` covers the GOT backend. | Add backends, not lifecycles; do not force the Windows backend onto Bionic. |
 | Pure service mapping | `src/runtime/lifecycle/service_map.cpp` and `service_redirect.cpp`, tested by `test_service_map`. | Extend these shared-source tests; never copy URL policy into a Quest-only implementation. |
 
 PCVR identity for comparison fixtures: `echovr.exe` SHA-256
@@ -143,10 +143,17 @@ as a pass.
 
 ## Commands
 
-`just verify` covers the Windows build, unit tests and source checks; `just test-android`
-currently covers the Android build and ELF shape. Neither establishes Quest callback
-compatibility without the exact-binary fixtures and callback tests. The commands below do not
-exist yet:
+`just verify` covers the Windows build, unit tests, source checks, `just test-quest-router` (the
+session router through fake transports, the WebSocket wire codec, and the loopback game server
+with a raw TCP client) and `just test-quest-hooks`
+(the GOT backend, lifecycle and thunks against fixture shared objects and in-memory images, on
+the host). `just test-quest-hooks-pinned` resolves the pinned targets in the real `libr15.so`
+and `libpnsradmatchmaking.so` extracted from the pinned APK and fails if the APK is absent.
+`just test-quest-tls` runs the libcurl connector against real TLS servers made on the host (trusted
+chain, wrong CA, wrong host name, self-signed leaf, empty trust store, non-TLS server, `ws://`) and
+asserts no plaintext fallback. `just test-android` covers the Android build and ELF shape. None of these executes a Quest
+binary under Bionic, so none establishes callback compatibility by itself. The commands below
+do not exist yet:
 
 | Command | Assertions |
 | --- | --- |

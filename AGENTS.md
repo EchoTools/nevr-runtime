@@ -289,6 +289,19 @@ your seat name, for example `claude-main` or `codex`.
 - **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
   remove it when its PR merges.
 
+### Builds
+
+- **Every build, verify, test or client run goes in the shared user slice:**
+  `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`.
+  The slice (`~/.config/systemd/user/nevr-builds.slice`) caps every nevr build together at 14G.
+  A cap per lane is not enough: parallel lanes each under their own cap still starve the machine.
+- **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
+  Never interrupt another agent's build.
+- **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
+  Never point a build at `~/.vcpkg` directly.
+- **The merge gate is the local capped `just verify`** (plus `just test-android` for a change under
+  `src/quest`). CI runs only when started by hand.
+
 ### Git
 
 - **Branches are cut with `--no-track` and pushed by explicit refspec:**
@@ -310,7 +323,7 @@ your seat name, for example `claude-main` or `codex`.
   source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
-- **Verification before merge.** `just verify` green on the tip, and for a change to runtime code
+- **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
   the client login test as described under "System test after every commit". The run's log must
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
@@ -338,6 +351,9 @@ your seat name, for example `claude-main` or `codex`.
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
+- **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
+  current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
+  retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
 - **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
   with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
 

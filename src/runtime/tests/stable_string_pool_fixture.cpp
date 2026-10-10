@@ -12,7 +12,7 @@
 
 namespace {
 
-using nevr_runtime::lifecycle::test::FixtureObservation;
+using nevr::lifecycle::test::FixtureObservation;
 
 constexpr std::size_t kMaxTrackedBlocks = 256;
 
@@ -94,9 +94,9 @@ BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
 extern "C" __declspec(dllexport) const char* StableStringPoolFixtureIntern(const char* value) {
   if (value == nullptr) return nullptr;
   g_trackingAllocations = true;
-  const auto result = nevr_runtime::lifecycle::InternStableCStr(value);
+  const auto result = nevr::lifecycle::InternStableCStr(value);
   g_trackingAllocations = false;
-  if (result.status != nevr_runtime::lifecycle::InternStatus::kSuccess) return nullptr;
+  if (result.status != nevr::lifecycle::InternStatus::kSuccess) return nullptr;
   MarkBlockContaining(result.pointer);
   return result.pointer;
 }

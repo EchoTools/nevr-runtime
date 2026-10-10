@@ -45,7 +45,9 @@ binary. See "Testing" in `AGENTS.md`.
 2. One logical change per commit, with a conventional prefix (`feat:`, `fix:`, `docs:`, `ci:`; an optional scope is
    fine, as in `fix(bridge): ...`), and the issue number in the subject when there is one.
 3. Push the branch and open a pull request against `main`. The PR template asks for what and why, the linked issue,
-   and how it was verified.
+   and how it was verified. The merge gate is the local capped `just verify`; no workflow runs on a pull request or
+   a push. Run CI by hand with `gh workflow run <file> --ref <branch>` (`build.yml`, `android.yml`,
+   `vcpkg-cache.yml`, `defender-scan.yml`).
 4. Link the issue it resolves with `Closes #N` (or say in the body why there is none), and give the PR the same
    milestone as that issue.
 

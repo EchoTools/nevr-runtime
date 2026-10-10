@@ -11,61 +11,83 @@
 
 #include "sentinel.h"
 #include "got_hook.h"
+#include "hook_install.h"
+#include "hook_log.h"
+#include "hook_report.h"
+#include "login_prompt_hook.h"
+#include "obb_skip_hook.h"
+#include "pinned_targets.h"
+#include "quest/integration/entry_hooks.h"
 
 #include <jni.h>
-#include <android/log.h>
-#include <time.h>
 
 #include <atomic>
 #include <cstdint>
 
-#define NEVR_TAG "NEVR-Sentinel"
-
 namespace {
 
-// "The basics" GOT hook (Andrew, 2026-09-15): prove we can intercept a real
-// call libr15.so makes on live hardware, without needing libr15.so's own
-// internal functions reconstructed in ReVault first (that reconstruction is
-// separate, ongoing work — see docs/design/2026-09-15-*). clock_gettime is
-// chosen deliberately: its signature is unambiguous POSIX (no risk of a
-// wrong-arity/wrong-return-type call corrupting the engine's real args), and
-// it's called continuously by any real-time engine loop, so a live counter
-// climbing in logcat while sitting in a lobby is an immediate, unambiguous
-// "did the hook take" signal — no need to wait for a specific game event.
-using ClockGettimeFn = int (*)(clockid_t, struct timespec*);
-ClockGettimeFn        g_origClockGettime = nullptr;
+// "The basics" GOT hook: prove we can intercept a real call libr15.so makes on
+// live hardware, without needing libr15.so's own internal functions
+// reconstructed first. clock_gettime is chosen deliberately: its signature is
+// unambiguous POSIX (no risk of a wrong-arity/wrong-return-type call corrupting
+// the engine's real args), and it's called continuously by any real-time engine
+// loop. The install line in the log says the slot was patched; the reporter thread
+// (hook_report.h) logs the call counter when it first moves and, if it keeps moving, at
+// most once a minute.
+//
+// This translation unit is built with -fno-exceptions (callback_thunk.h requires
+// it): the handler is noexcept and nothing in it can unwind.
+using ClockThunk = sentinel::pinned::ClockGettimeThunk;
+sentinel::GotHook     g_clockHook;
 std::atomic<uint64_t> g_clockGettimeCalls{0};
 
-int HookedClockGettime(clockid_t clk_id, struct timespec* tp) {
-    const uint64_t n = g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    // Every 300th call: several lines/sec at a real engine's tick rate without
-    // flooding logcat. Real work would filter/aggregate; this is a proof.
-    if (n % 300 == 1) {
-        __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
-                            "hook: libr15.so clock_gettime call #%llu (GOT hook live)",
-                            static_cast<unsigned long long>(n));
-    }
-    return g_origClockGettime(clk_id, tp);
+int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespec* tp) noexcept {
+    // Runs on every clock_gettime libr15 makes, on any thread, possibly from a signal
+    // handler: one atomic increment and the original call, nothing else.
+    g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed);
+    return original(clk_id, tp);
 }
 
-void InstallBasicsHook() {
-    void* original = nullptr;
-    const bool ok = sentinel::HookImport("libr15.so", "clock_gettime",
-                                         reinterpret_cast<void*>(HookedClockGettime), &original);
-    if (ok) {
-        g_origClockGettime = reinterpret_cast<ClockGettimeFn>(original);
-        __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
-                            "hook: GOT-hooked libr15.so's clock_gettime import (basics proof)");
-    } else {
-        // Lookup miss or module not yet mapped — log and continue. A failed
-        // hook install must never be fatal to the host process.
-        __android_log_print(ANDROID_LOG_WARN, NEVR_TAG,
-                            "hook: could not GOT-hook libr15.so clock_gettime "
-                            "(lookup miss or module not yet loaded)");
-    }
-}
+// The hook: the thunk's entry and its handler, recorded for the build-time frame sensor.
+NEVR_HOOK_RECORD(kClockHook, ClockThunk, &HookedClockGettime);
 
 }  // namespace
+
+namespace nevr_quest::integration {
+
+// The counters are registered by the constructor sequence together with every other hook's, before
+// the single StartReporter (ctor_sequence.h).
+bool RegisterClockCounters() noexcept {
+    bool ok = sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
+    ok = sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter(),
+                                         sentinel::ReportKind::kFaults) && ok;
+    return ok;
+}
+
+// A failed install is logged by GotHook with its status and leaves the original
+// call intact; it is never fatal to the host process.
+bool InstallClockHook() noexcept {
+    ClockThunk::Arm(kClockHook);
+    return sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime()) ==
+           sentinel::GotStatus::kOk;
+}
+
+bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::RegisterCounters(); }
+
+bool RegisterObbSkipCounters() noexcept { return nevr_quest::obb_skip::RegisterCounters(); }
+
+// The OBB-mount skip (#319). A refused install is logged by GotHook and leaves the game's call intact.
+bool InstallObbSkipHook(bool countersRegistered) noexcept {
+    return nevr_quest::obb_skip::InstallIfCounted(countersRegistered);
+}
+
+// The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
+// token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
+bool InstallLoginPromptHook(bool countersRegistered) noexcept {
+    return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
+}
+
+}  // namespace nevr_quest::integration
 
 extern "C" {
 
@@ -79,10 +101,10 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
-    __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
-                        "constructor: arming crash reporter (pre-libr15)");
-    sentinel::Arm();
-    InstallBasicsHook();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
+    // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
+    // configuration, counters, the single reporter start, then each hook gated by its feature switch.
+    nevr_quest::integration::RunSentinelConstructor();
 }
 
 // Belt-and-suspenders: if anything System.loadLibrary's this by name, arm here

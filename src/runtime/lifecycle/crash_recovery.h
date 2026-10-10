@@ -17,7 +17,8 @@ void InstallGameMainHook();
 /// Also snapshots the module table (N70 — the handler must never enumerate,
 /// which would take the loader lock) and reserves crash-handler stack for the
 /// calling thread (N69).
-void InstallVEH();
+/// Returns true when the handler was installed, false when it was skipped (Wine client).
+bool InstallVEH();
 
 /// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
 /// path. Purely diagnostic — always calls the original.

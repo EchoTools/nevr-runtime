@@ -9,6 +9,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
@@ -20,6 +21,7 @@
 #include "runtime/patch/broadcaster_guard.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/export_tracer.h"
 #include "runtime/patch/headless_graphics.h"
 #include "core/globals.h"
 #include "core/hooking.h"
@@ -108,6 +110,13 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 }
 
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
+  // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
+  // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
+  static const bool tracerConfigured = (ExportTracer::ConfigureFromCommandLine(), true);
+  static_cast<void>(tracerConfigured);
+  const auto traced = [dll_handle, symbol_name](void* resolved) {
+    return ExportTracer::WrapSymbol(dll_handle, symbol_name, resolved);
+  };
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
     if (!logged) {
@@ -122,7 +131,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
       BootLogTee::TeeFprintf("[NEVR.MIC] pnsrad mic export(s) resolved -> WASAPI provider\n");
       logged = true;
     }
-    return micFn;
+    return traced(micFn);
   }
   // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
   // memory). They are recognised by the "Users" export they all define. The game's
@@ -157,7 +166,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
     if (strcmp(symbol_name, "XInputGetCapabilities") == 0) return reinterpret_cast<void*>(xinput_get_caps);
   }
 
-  return result;
+  return traced(result);
 }
 
 // ============================================================================
@@ -229,7 +238,7 @@ extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
   if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
 }
 
-extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
+extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
   if (!out) return;
   out->enabled = g_upnpEnabled;
   out->port    = g_upnpPort;
@@ -443,9 +452,9 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
-  InstallVEH();
+  const bool vehInstalled = InstallVEH();
   InstallCrashFilterInstrumentation();
-  BootLogTee::TeeFprintf("[NEVR.CRASH] veh installed\n");
+  BootLogTee::TeeFprintf("%s", VehPolicy::BootLine(vehInstalled));
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   BootLogTee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");

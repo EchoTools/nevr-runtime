@@ -1,42 +1,33 @@
 name: vcpkg cache
 
-# Seeds the vcpkg binary cache that Build (build.yml) restores. GitHub lets a pull request restore only
-# caches made on its own ref or on its base branch, so the cache a PR run saves helps that PR alone;
-# this workflow saves it on main, where every PR can read it. It runs when vcpkg.json or the vcpkg pin
-# (.vcpkg-commit) changes on main, every day (the key includes the mingw compiler version, which moves),
-# and by hand. The key, the compiler
-# probe and the install command are the same as in build.yml; change them together.
+# Seeds the vcpkg binary cache that Build (build.yml) restores. GitHub lets a run restore only caches
+# made on its own ref or on its base branch, so a cache saved on main is the one every branch can read.
+# Nothing triggers this workflow: run it by hand on main (`gh workflow run vcpkg-cache.yml --ref main`)
+# after vcpkg.json or the vcpkg pin (.vcpkg-commit) changes, or when the mingw compiler version (part
+# of the key) moves. The key, the compiler probe and the install command are the same as in build.yml;
+# change them together.
 on:
-  push:
-    branches: [main]
-    paths:
-      - vcpkg.json
-      - .vcpkg-commit
-      - .github/workflows/vcpkg-cache.yml
-  schedule:
-    - cron: '17 4 * * *'
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/vcpkg-cache.yml
 
 concurrency:
-  group: vcpkg-cache-${{ github.event.pull_request.number || github.ref }}
+  group: vcpkg-cache-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   seed:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # The same builder image as build.yml (.github/builder/Dockerfile): the compiler hash vcpkg puts in
+    # every archive name has to come from the same toolchain the build restores them in.
     container:
-      image: archlinux:base-devel
+      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - name: Install the toolchain (pacman)
-      run: |
-        set -euo pipefail
-        pacman -Syu --noconfirm --needed \
-          git mingw-w64-gcc ninja cmake python curl zip unzip tar pkgconf zlib
-
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Bootstrap vcpkg
       id: vcpkg
@@ -48,17 +39,17 @@ jobs:
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')-$(pacman -Q mingw-w64-gcc mingw-w64-binutils mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .vcpkg-binary-cache
+        # No restore-keys: an entry holds only the archives of this key. A fallback to an older entry
+        # carried its 19 unusable archives into the saved one (run 37914950616: "Restored 0 package(s)",
+        # 38 archives saved, 231 MB grew to 547 MB).
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
-        restore-keys: |
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
 
     - name: Install vcpkg dependencies
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
@@ -75,7 +66,7 @@ jobs:
 
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}

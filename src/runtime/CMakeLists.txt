@@ -24,6 +24,8 @@ set(PATCHES_SOURCES
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
+    "hook/export_trace_thunk.cpp"
+    "hook/export_tracer.cpp"
     "lifecycle/state_machine.cpp"
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
@@ -32,6 +34,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
+    "compat/evr_codec.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -98,6 +101,7 @@ set(PATCHES_HEADERS
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
+    "lifecycle/veh_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
@@ -112,6 +116,7 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -126,6 +131,9 @@ set(PATCHES_HEADERS
     "log/security_diagnostics.h"
     "patch/broadcaster_guard.h"
     "hook/dll_load_hook.h"
+    "hook/export_trace_policy.h"
+    "hook/export_trace_thunk.h"
+    "hook/export_tracer.h"
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
@@ -184,7 +192,9 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
+set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
@@ -296,6 +306,26 @@ if(BUILD_TESTING)
     target_include_directories(test_game_image_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
+
+    # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
+    # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
+    add_executable(test_export_trace
+      tests/test_export_trace.cpp
+      hook/export_trace_thunk.cpp
+      hook/export_tracer.cpp)
+    set_source_files_properties(tests/test_export_trace.cpp hook/export_trace_thunk.cpp hook/export_tracer.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_export_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_export_trace PRIVATE GTest::gtest GTest::gtest_main)
+    # A stand-in module the test loads: named pnsrad.dll (the tracer identifies a platform DLL by file name),
+    # with a code export and a data export, in its own directory next to the test.
+    add_library(export_trace_fixture MODULE tests/export_trace_fixture.cpp)
+    set_target_properties(export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture"
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture")
+    set_source_files_properties(tests/export_trace_fixture.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    add_dependencies(test_export_trace export_trace_fixture)
+    gtest_discover_tests(test_export_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_system_module_loader
       tests/test_system_module_loader.cpp
@@ -586,6 +616,19 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
+    # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
+    # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
+    add_executable(test_evr_codec
+      tests/test_evr_codec.cpp
+      compat/evr_codec.cpp
+      compat/login_profile.cpp)
+    set_source_files_properties(tests/test_evr_codec.cpp compat/evr_codec.cpp compat/login_profile.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_evr_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_evr_codec PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_social_facade
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
@@ -622,6 +665,15 @@ if(BUILD_TESTING)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
+
+    # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
+    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
+    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_dll_load_hook PRIVATE USE_MINHOOK)
+    target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
@@ -677,6 +729,7 @@ if(BUILD_TESTING)
       log/boot_log_tee.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
+      compat/evr_codec.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -705,6 +758,7 @@ if(BUILD_TESTING)
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
+      compat/evr_codec.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
@@ -805,8 +859,8 @@ if(BUILD_TESTING)
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)
