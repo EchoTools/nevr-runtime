@@ -2003,6 +2003,141 @@ TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
   nevr_social_party::SetSender(nullptr);
 }
 
+// #405: an incoming friend request is listed first in the recently-met list, as the facade's recent slots
+// answer it (the game has no incoming-request prompt), survives the server's list, and ends with the accept.
+TEST(SocialFacade, IncomingFriendRequestIsListedFirstInRecentlyMet) {
+  using nevr_social_roster::ApplyFriendMessage;
+  using nevr_social_roster::RequestChange;
+  nevr_social_roster::RecentList list;
+  const auto u64 = [](std::uint64_t v) {
+    std::vector<std::uint8_t> out(8);
+    for (int i = 0; i < 8; ++i) out[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(v >> (8 * i));
+    return out;
+  };
+  const auto frame = [&](std::uint64_t id) {
+    std::vector<std::uint8_t> payload(8, 0);  // the header
+    const std::vector<std::uint8_t> account = u64(id);
+    payload.insert(payload.end(), account.begin(), account.end());
+    return payload;
+  };
+  constexpr std::uint64_t kInviteNotify = 0xca09b0b36bd981b7ULL;
+  constexpr std::uint64_t kAcceptSuccess = 0x1bbda7fa06af4627ULL;
+  constexpr std::uint64_t kStatusNotify = 0x26a19dc4d2d5579dULL;
+
+  const std::vector<std::uint8_t> request = frame(695081603180789771ULL);
+  nevr_social_roster::RequestEvent event = ApplyFriendMessage(list, kInviteNotify, request.data(), request.size());
+  EXPECT_EQ(event.change, RequestChange::kAdded);
+  EXPECT_EQ(event.account, 695081603180789771ULL);
+  EXPECT_EQ(event.pending, 1U);
+  EXPECT_EQ(list.Count(), 1U);
+  EXPECT_EQ(list.Online(), 1U);
+  std::uint64_t id = 0;
+  ASSERT_TRUE(list.IdAt(0, &id));
+  EXPECT_EQ(id, 695081603180789771ULL);
+  EXPECT_STREQ(list.NameAt(0), "695081603180789771");  // the id until the profile names it
+  EXPECT_STREQ(list.TextAt(0), "Sent you a friend request");
+
+  // The same notify again is not a second request; the name sticks once known.
+  event = ApplyFriendMessage(list, kInviteNotify, request.data(), request.size());
+  EXPECT_EQ(event.change, RequestChange::kNone);
+  EXPECT_EQ(list.Count(), 1U);
+  EXPECT_TRUE(list.SetRequestName(695081603180789771ULL, "sprockee"));
+  EXPECT_FALSE(list.SetRequestName(695081603180789771ULL, "sprockee"));  // unchanged
+  EXPECT_FALSE(list.SetRequestName(1, "someone else"));                  // not pending
+  EXPECT_STREQ(list.NameAt(0), "sprockee");
+
+  // The server's list keeps the request first and lists that account once.
+  nevr_social_roster::Entry other;
+  other.id = 900000000000000101ULL;
+  other.name = "Peer";
+  nevr_social_roster::Entry same;
+  same.id = 695081603180789771ULL;
+  same.name = "sprockee (server)";
+  list.SetList({other, same});
+  EXPECT_EQ(list.Count(), 2U);
+  ASSERT_TRUE(list.IdAt(0, &id));
+  EXPECT_EQ(id, 695081603180789771ULL);
+  EXPECT_STREQ(list.NameAt(0), "sprockee");
+  EXPECT_STREQ(list.TextAt(0), "Sent you a friend request");
+  ASSERT_TRUE(list.IdAt(1, &id));
+  EXPECT_EQ(id, 900000000000000101ULL);
+
+  // A message for nobody pending, one that is not a friend message, and one too short change nothing.
+  const std::vector<std::uint8_t> stranger = frame(42);
+  EXPECT_EQ(ApplyFriendMessage(list, kAcceptSuccess, stranger.data(), stranger.size()).change, RequestChange::kNone);
+  EXPECT_EQ(ApplyFriendMessage(list, kStatusNotify, request.data(), request.size()).change, RequestChange::kNone);
+  EXPECT_EQ(ApplyFriendMessage(list, kInviteNotify, request.data(), 8).change, RequestChange::kNone);
+  EXPECT_EQ(ApplyFriendMessage(list, kInviteNotify, nullptr, 16).change, RequestChange::kNone);
+  EXPECT_EQ(list.Count(), 2U);
+
+  // The accept ends it, with the message named; the server's own entry for that account remains.
+  event = ApplyFriendMessage(list, kAcceptSuccess, request.data(), request.size());
+  EXPECT_EQ(event.change, RequestChange::kCleared);
+  EXPECT_STREQ(event.reason, "FriendAcceptSuccess");
+  EXPECT_EQ(event.pending, 0U);
+  EXPECT_EQ(list.Count(), 2U);
+  ASSERT_TRUE(list.IdAt(0, &id));
+  EXPECT_EQ(id, 900000000000000101ULL);
+  EXPECT_STREQ(list.NameAt(1), "sprockee (server)");
+}
+
+// Every message that ends a request ends exactly that one, and names itself.
+TEST(SocialFacade, EveryMessageThatEndsAFriendRequestClearsIt) {
+  using nevr_social_roster::ApplyFriendMessage;
+  using nevr_social_roster::RequestChange;
+  struct Path {
+    const char* name;
+    std::uint64_t symbol;
+    std::size_t payloadBytes;
+  };
+  const Path paths[] = {
+      {"FriendAcceptSuccess", 0x1bbda7fa06af4627ULL, 0x18}, {"FriendAcceptNotify", 0xc237c84c31d3ae05ULL, 0x18},
+      {"FriendRemoveNotify", 0xe06972f49cd72265ULL, 0x10},  {"FriendRemoveResponse", 0xc2bf83a08ea3a955ULL, 0x10},
+      {"FriendWithdrawnNotify", 0x191aa30801ec6d03ULL, 0x10}, {"FriendRejectNotify", 0xb9b86c0ce8e8d0c1ULL, 0x10},
+  };
+  const auto message = [](std::uint64_t id, std::size_t bytes) {
+    std::vector<std::uint8_t> payload(bytes, 0);
+    for (int i = 0; i < 8; ++i) payload[8 + static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(id >> (8 * i));
+    return payload;
+  };
+  constexpr std::uint64_t kInviteNotify = 0xca09b0b36bd981b7ULL;
+  for (const Path& path : paths) {
+    nevr_social_roster::RecentList list;
+    const std::vector<std::uint8_t> first = message(6006, 0x10);
+    const std::vector<std::uint8_t> second = message(7007, 0x10);
+    ASSERT_EQ(ApplyFriendMessage(list, kInviteNotify, first.data(), first.size()).change, RequestChange::kAdded);
+    ASSERT_EQ(ApplyFriendMessage(list, kInviteNotify, second.data(), second.size()).change, RequestChange::kAdded);
+    const std::vector<std::uint8_t> ending = message(6006, path.payloadBytes);
+    const nevr_social_roster::RequestEvent event = ApplyFriendMessage(list, path.symbol, ending.data(), ending.size());
+    EXPECT_EQ(event.change, RequestChange::kCleared) << path.name;
+    EXPECT_STREQ(event.reason, path.name);
+    EXPECT_EQ(event.account, 6006ULL) << path.name;
+    EXPECT_EQ(event.pending, 1U) << path.name;
+    EXPECT_FALSE(list.IsRequest(6006)) << path.name;
+    EXPECT_TRUE(list.IsRequest(7007)) << path.name << ": only that request ends";
+  }
+}
+
+// A new session starts with none pending.
+TEST(SocialFacade, ClearRequestsEmptiesThePendingSetAndKeepsTheServerList) {
+  nevr_social_roster::RecentList list;
+  nevr_social_roster::Entry peer;
+  peer.id = 900000000000000101ULL;
+  peer.name = "Peer";
+  list.SetList({peer});
+  EXPECT_EQ(list.ClearRequests(), 0U);
+  list.AddRequest(6006);
+  list.AddRequest(7007);
+  ASSERT_EQ(list.Count(), 3U);
+  EXPECT_EQ(list.ClearRequests(), 2U);
+  EXPECT_EQ(list.RequestCount(), 0U);
+  EXPECT_EQ(list.Count(), 1U);
+  std::uint64_t id = 0;
+  ASSERT_TRUE(list.IdAt(0, &id));
+  EXPECT_EQ(id, 900000000000000101ULL);
+  EXPECT_EQ(list.ClearRequests(), 0U);
+}
+
 TEST(ScenarioProtocol, RecentlyMetInjectParses) {
   nevr_scenario_protocol::Command cmd;
   std::string error;

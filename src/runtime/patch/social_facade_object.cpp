@@ -781,7 +781,16 @@ void RefreshRecentlyMet(void*) {
   Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met refresh: request %s", sent ? "sent" : "NOT sent");
 }
 
-std::uint32_t RecentlyMetCount(void*) { return nevr_social_roster::RecentlyMet().Count(); }
+std::uint32_t RecentlyMetCount(void*) {
+  const std::uint32_t count = nevr_social_roster::RecentlyMet().Count();
+  // The game polls this; a line only when what it reads changes (the list, or a friend request, came or went).
+  static std::atomic<std::uint32_t> last{0xffffffffU};
+  if (last.exchange(count, std::memory_order_relaxed) != count) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met list read count=%u online=%u requests=%zu", count,
+        nevr_social_roster::RecentlyMet().Online(), nevr_social_roster::RecentlyMet().RequestCount());
+  }
+  return count;
+}
 std::uint32_t RecentlyMetOnlineCount(void*) { return nevr_social_roster::RecentlyMet().Online(); }
 std::uint32_t RecentlyMetOfflineCount(void*) {
   return nevr_social_roster::RecentlyMet().Count() - nevr_social_roster::RecentlyMet().Online();
