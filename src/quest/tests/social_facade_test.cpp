@@ -527,7 +527,7 @@ void TestFriendInvitable() {
 
 // #318: the party tab's "Invite Members" reaches OpenNewSendInviteUI with no target. There is no friend picker,
 // so nothing is sent (inviting every online friend would send invites nobody asked for); opening the tab
-// (OpenPartyUI) never invites; a call that names the user sends exactly that invite.
+// (OpenPartyUI, with or without a user) never invites; OpenNewSendInviteUI naming the user sends exactly that invite.
 void TestPartyTabInviteUiSlots() {
   World w;
   Init(w, MakeCallbacks());
@@ -547,10 +547,10 @@ void TestPartyTabInviteUiSlots() {
   QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteRequest);
   QCHECK(g_sent[0].payload.size() >= 0x28 && std::memcmp(g_sent[0].payload.data() + 0x20, "\xd2\x07", 2) == 0);  // 2002 LE
 
+  // OpenPartyUI(target) opens the party UI for a user; nothing shows it comes from an invite action.
   g_sent.clear();
   SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteRequest);
-  QCHECK(g_sent[0].payload.size() >= 0x28 && std::memcmp(g_sent[0].payload.data() + 0x20, "\xd2\x07", 2) == 0);  // 2002 LE
+  QCHECK(g_sent.empty());
 }
 
 void TestSendingFromSlots() {

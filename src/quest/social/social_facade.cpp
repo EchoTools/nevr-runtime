@@ -721,9 +721,17 @@ void SlotInviteUINoTarget(void*, std::uint32_t) {
             {{"result", "no_target_no_invite_sent"}, {"hint", "use the Friends tab"}});
 }
 
-// OpenNewSendInviteUI(LocalUserID, UserAccountID) and OpenPartyUI(LocalUserID, UserAccountID): the game names
-// the user, so this is the same invite SlotSendInvite sends for the Friends tab.
+// OpenNewSendInviteUI(LocalUserID, UserAccountID): the game names the user to invite, so this is the same
+// invite SlotSendInvite sends for the Friends tab.
 void SlotInviteUITarget(void* self, std::uint32_t, std::uint64_t target) { SlotSendInvite(self, target); }
+
+// OpenPartyUI(LocalUserID, UserAccountID): open the party UI for a user. Nothing shows the game calls it from
+// an invite action (it may be "view this user's party"), so it sends nothing and says so. It becomes an invite
+// only once a headset logcat shows the game reaches it from one.
+void SlotPartyUITarget(void*, std::uint32_t, std::uint64_t target) {
+  LogFields(LogLevel::kInfo, "social_party_ui",
+            {{"result", "no_invite_sent"}, {"slot", 44}, {"target", static_cast<long long>(target)}});
+}
 
 std::uint64_t SlotFriendPartyId(void* self, std::uint32_t index) { return Friends(*OwnerOf(self)).PartyIdAt(index); }
 
@@ -903,7 +911,7 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kOpenNewSendInviteUITarget] = Entry<kOpenNewSendInviteUITarget, &SlotInviteUITarget>();
   t[kOpenRecvInviteUI] = Entry<kOpenRecvInviteUI, &SlotNothingU32>();
   t[kOpenPartyUI] = Entry<kOpenPartyUI, &SlotNothingU32>();
-  t[kOpenPartyUITarget] = Entry<kOpenPartyUITarget, &SlotInviteUITarget>();
+  t[kOpenPartyUITarget] = Entry<kOpenPartyUITarget, &SlotPartyUITarget>();
   t[kRefreshingFriends] = Entry<kRefreshingFriends, &SlotZero32>();
   t[kRefreshFriends] = Entry<kRefreshFriends, &SlotRefreshFriends>();
   t[kFriendCount] = Entry<kFriendCount, &SlotFriendCount>();
