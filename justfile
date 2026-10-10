@@ -850,7 +850,7 @@ test-quest-social:
     # The frames live across a call into the game carry no exception machinery.
     tools/check_quest_social_frames.sh nm readelf \
         "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_game_calls.o=SlotResetEntry" \
-        "$out/social_install.o=OnSocial" "$out/social_invite_gate.o=OnBoolean"
+        "$out/social_install.o=OnSocial" "$out/social_install.o=OnPresence" "$out/social_invite_gate.o=OnBoolean"
     if err="$(tools/check_quest_social_frames.sh nm readelf "$out/social_facade.o=Facade" 2>&1)"; then
         echo "test-quest-social: the frame checker accepted an object with landing pads (it is blind)" >&2
         exit 1

@@ -144,12 +144,12 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes kMaxReportCounters counters in all; the social package uses 19 (the thunk's calls and faults, three
-  // pass-through counters, the selection, and the facade's thirteen) and leaves the rest.
+  // The reporter takes kMaxReportCounters counters in all; the social package uses 23 (the thunk's calls and faults, three
+  // pass-through counters, the selection, the facade's thirteen, and the rich presence trace's four) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (unsigned i = 0; i < sentinel::kMaxReportCounters - 19; ++i) {
-    QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 19 + the rest = the whole table
+  for (unsigned i = 0; i < sentinel::kMaxReportCounters - 23; ++i) {
+    QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 23 + the rest = the whole table
   }
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
@@ -237,6 +237,240 @@ void TestInviteGateThroughThunk() {
   GateThunk::Reset();
 }
 
+// ---- rich presence trace (#393) ------------------------------------------------------------------------
+
+constexpr std::size_t kVtableWords = 2 + kOvrRichPresenceSlotCount;
+std::uintptr_t g_fakeVtable[kVtableWords];
+std::uintptr_t g_presenceBias = 0;
+PnsovrView PresenceLoaded() { return {true, true, g_presenceBias}; }
+
+int g_destinationAnswer = -1;
+unsigned g_countAnswer = 0;
+const char* g_nameAnswer = "Social Lobby";
+int g_setCalls = 0;
+int FakeDestination(const void*) { return g_destinationAnswer; }
+unsigned FakeCount(const void*) { return g_countAnswer; }
+const char* FakeName(const void*, unsigned) { return g_nameAnswer; }
+void FakeSet(void*, const void*) { ++g_setCalls; }
+unsigned FakeEncodeJson(const void*, char* out, unsigned long long* size, unsigned, const char*) {
+  static const char kText[] = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
+  std::memcpy(out, kText, sizeof(kText) - 1);
+  *size = sizeof(kText) - 1;
+  return 0;
+}
+
+template <typename Fn>
+std::uintptr_t Word(Fn fn) {
+  std::uintptr_t w = 0;
+  std::memcpy(&w, &fn, sizeof(w));
+  return w;
+}
+
+// A vtable of callable fake functions at the pinned slots, an object pointing at it, and the bias that makes the
+// object look like pnsovr's CNSOVRRichPresence.
+void BuildFakePresence(FakeObject* object) {
+  for (std::size_t i = 0; i < kVtableWords; ++i) g_fakeVtable[i] = 0x1000 + i;
+  g_fakeVtable[0] = 0;       // offset to top
+  g_fakeVtable[1] = 0x7777;  // typeinfo
+  g_fakeVtable[2 + kRichPresenceSlotDestinationCount] = Word(&FakeCount);
+  g_fakeVtable[2 + kRichPresenceSlotDestinationName] = Word(&FakeName);
+  g_fakeVtable[2 + kRichPresenceSlotDestination] = Word(&FakeDestination);
+  g_fakeVtable[2 + kRichPresenceSlotSet] = Word(&FakeSet);
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(&g_fakeVtable[2]);
+  g_presenceBias = address - static_cast<std::uintptr_t>(kOvrRichPresenceVptrVaddr);
+  object->vptr = address;
+}
+
+std::uintptr_t SlotOf(const FakeObject& object, std::size_t slot) {
+  const std::uintptr_t* vtable = nullptr;
+  std::memcpy(&vtable, &object.vptr, sizeof(vtable));
+  return vtable[slot];
+}
+
+void TestPresenceSelection() {
+  ResetPresenceForTest();
+  const PresenceCounters counters = PresenceCountersView();
+  g_lines.clear();
+  FakeObject object;
+  BuildFakePresence(&object);
+  const std::uintptr_t original = object.vptr;
+
+  // The pinned slots must hold the pinned functions: fakes living elsewhere are left alone.
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  QCHECK(object.vptr == original && C(counters.passThrough) == 1 && C(counters.selected) == 0);
+
+  // Everything that is not that object passes through, counted.
+  QCHECK(SelectRichPresenceObject(nullptr, &PresenceLoaded) == nullptr);
+  QCHECK(SelectRichPresenceObject(&object, nullptr) == &object);
+  QCHECK(SelectRichPresenceObject(&object, &Absent) == &object);
+  QCHECK(SelectRichPresenceObject(&object, &WrongBuild) == &object);
+  FakeObject foreign = object;
+  foreign.vptr += 8;
+  SetPresenceSeamsForTest(false, nullptr);
+  QCHECK(SelectRichPresenceObject(&foreign, &PresenceLoaded) == &foreign && foreign.vptr == original + 8);
+  QCHECK(C(counters.passThrough) == 6 && C(counters.selected) == 0);
+  QCHECK(g_lines.empty());  // the decision never logs
+
+  // The pinned object (the slot check off for the fakes): the vtable is replaced by a copy that differs in
+  // exactly the three wrapped slots and carries the same offset and typeinfo words.
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  QCHECK(C(counters.selected) == 1 && object.vptr != original);
+  for (std::size_t slot = 0; slot < kOvrRichPresenceSlotCount; ++slot) {
+    const bool wrapped = slot == kRichPresenceSlotDestinationName || slot == kRichPresenceSlotDestination ||
+                         slot == kRichPresenceSlotSet;
+    QCHECK((SlotOf(object, slot) != g_fakeVtable[2 + slot]) == wrapped);
+  }
+  const std::uintptr_t* copy = nullptr;
+  std::memcpy(&copy, &object.vptr, sizeof(copy));
+  QCHECK(copy[-2] == 0 && copy[-1] == 0x7777);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object && C(counters.selected) == 1);  // once
+
+  // A second object of the class shares the copy.
+  FakeObject second;
+  second.vptr = original;
+  QCHECK(SelectRichPresenceObject(&second, &PresenceLoaded) == &second && second.vptr == object.vptr);
+  QCHECK(C(counters.selected) == 2);
+  QCHECK(g_lines.empty());
+}
+
+void TestPresenceSlotCheckAcceptsTheRealAddresses() {
+  ResetPresenceForTest();
+  g_lines.clear();
+  FakeObject object;
+  BuildFakePresence(&object);
+  const std::uintptr_t original = object.vptr;
+  g_fakeVtable[2 + kRichPresenceSlotDestinationCount] = g_presenceBias + kOvrRichPresenceDestinationCountVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotDestinationName] = g_presenceBias + kOvrRichPresenceDestinationNameVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotDestination] = g_presenceBias + kOvrRichPresenceDestinationVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotSet] = g_presenceBias + kOvrRichPresenceSetVaddr;
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  QCHECK(object.vptr != original && C(PresenceCountersView().selected) == 1);
+  // One slot off by a word: not the pinned build's function, nothing is replaced.
+  ResetPresenceForTest();
+  FakeObject other;
+  other.vptr = original;
+  g_fakeVtable[2 + kRichPresenceSlotDestination] += 4;
+  QCHECK(SelectRichPresenceObject(&other, &PresenceLoaded) == &other && other.vptr == original);
+  QCHECK(C(PresenceCountersView().passThrough) == 1);
+}
+
+void TestPresenceWrappersPassThroughAndLogOnChange() {
+  ResetPresenceForTest();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  g_lines.clear();
+  using DestinationFn = int (*)(const void*);
+  using NameFn = const char* (*)(const void*, unsigned);
+  using SetFn = void (*)(void*, const void*);
+  DestinationFn destination;
+  NameFn name;
+  SetFn set;
+  std::uintptr_t w = SlotOf(object, kRichPresenceSlotDestination);
+  std::memcpy(&destination, &w, sizeof(w));
+  w = SlotOf(object, kRichPresenceSlotDestinationName);
+  std::memcpy(&name, &w, sizeof(w));
+  w = SlotOf(object, kRichPresenceSlotSet);
+  std::memcpy(&set, &w, sizeof(w));
+
+  // The failed GetDestinations: none found, an empty list. The answer is the original's, logged once.
+  g_destinationAnswer = -1;
+  g_countAnswer = 0;
+  QCHECK(destination(&object) == -1);
+  QCHECK(destination(&object) == -1);
+  QCHECK(CountLines("\"event\":\"rich_presence_destination\",\"index\":-1,\"count\":0") == 1);
+  // The list fills: a new line, the new answer.
+  g_destinationAnswer = 0;
+  g_countAnswer = 1;
+  QCHECK(destination(&object) == 0);
+  QCHECK(CountLines("\"event\":\"rich_presence_destination\"") == 2);
+  QCHECK(CountLines("\"index\":0,\"count\":1") == 1);
+
+  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
+  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
+  QCHECK(CountLines("\"event\":\"rich_presence_name\",\"index\":0,\"name\":\"Social Lobby\"") == 1);
+  g_nameAnswer = "Arena";
+  QCHECK(std::strcmp(name(&object, 0), "Arena") == 0);
+  QCHECK(CountLines("\"event\":\"rich_presence_name\"") == 2);
+  g_nameAnswer = nullptr;
+  QCHECK(name(&object, 1) == nullptr);  // the original's answer, even null
+  QCHECK(CountLines("\"name\":\"(null)\"") == 1);
+
+  // Set: the original always runs; the document is logged when it changes.
+  g_setCalls = 0;
+  int document = 0;
+  set(&object, &document);
+  set(&object, &document);
+  QCHECK(g_setCalls == 2);
+  QCHECK(CountLines("\"event\":\"rich_presence_set\"") == 1);
+  QCHECK(CountLines("game_type") == 1);
+  SetPresenceSeamsForTest(false, nullptr);  // the game's encoder unknown: said once, the original still runs
+  ResetPresenceForTest();
+  g_lines.clear();
+  set(&object, &document);
+  set(&object, &document);
+  QCHECK(g_setCalls == 4);
+  QCHECK(CountLines("\"result\":\"game_json_unavailable\"") == 1);
+  g_destinationAnswer = -1;
+  g_countAnswer = 0;
+  g_nameAnswer = "Social Lobby";
+}
+
+NEVR_HOOK_RECORD(kTestPresenceHook, PresenceThunk, &OnPresenceHandler);
+
+void TestPresenceThroughThunk() {
+  ResetPresenceForTest();
+  SetPresenceSeamsForTest(false, nullptr);
+  FakeObject object;
+  BuildFakePresence(&object);
+  const std::uintptr_t original = object.vptr;
+  PnsovrLookup previous = SetPnsovrLookup(&PresenceLoaded);
+  PresenceThunk::Reset();
+  *PresenceThunk::OriginalOut() = reinterpret_cast<void*>(&FakeOriginal);
+  PresenceThunk::Arm(kTestPresenceHook);
+  using Entry = void* (*)(std::uint64_t);
+  Entry entry = nullptr;
+  void* addr = PresenceThunk::EntryAddress();
+  std::memcpy(&entry, &addr, sizeof(entry));
+  g_lines.clear();
+  g_fakeResult = &object;
+  g_fakeCalls = 0;
+  QCHECK(entry(0x55) == static_cast<void*>(&object));  // the same object comes back
+  QCHECK(g_fakeCalls == 1);                            // the original ran first
+  QCHECK(object.vptr != original);                     // with the tracing vtable
+  QCHECK(PresenceThunk::Calls() == 1 && C(PresenceCountersView().selected) == 1);
+  QCHECK(g_lines.empty());                             // the handler path logged nothing
+  g_fakeResult = nullptr;
+  QCHECK(entry(0x55) == nullptr);
+  QCHECK(C(PresenceCountersView().passThrough) == 1);
+  PresenceThunk::Disarm();
+  g_fakeResult = &object;
+  QCHECK(entry(0x55) == static_cast<void*>(&object));
+  PresenceThunk::Reset();
+  SetPnsovrLookup(previous);
+
+  // libr15 is not loaded here: the install says so and leaves the thunk disarmed.
+  g_lines.clear();
+  QCHECK(InstallPresenceTrace() == sentinel::GotStatus::kModuleNotLoaded);
+  QCHECK(CountLines("\"event\":\"rich_presence_install\"") == 1 && CountLines("\"status\":\"hook_failed\"") == 1);
+  *PresenceThunk::OriginalOut() = reinterpret_cast<void*>(&FakeOriginal);
+  g_fakeResult = nullptr;
+  g_fakeCalls = 0;
+  QCHECK(entry(1) == nullptr && g_fakeCalls == 1);
+  PresenceThunk::Reset();
+}
+
+void TestPresenceTarget() {
+  const sentinel::GotTarget t = LibR15RichPresence();
+  QCHECK(std::strcmp(t.module, "libr15.so") == 0);
+  QCHECK(std::strcmp(t.symbol, "_ZN10NRadEngine11CNSProvider12RichPresenceEm") == 0);
+  QCHECK(t.kind == sentinel::RelocKind::kJumpSlot);
+  QCHECK(t.buildId != nullptr && std::strcmp(t.buildId, "b243509c08ce677aeb95fa348016949b3fc45230") == 0);
+  QCHECK(t.slotVaddr.has_value() && *t.slotVaddr == 0x36d2710ULL);
+  QCHECK(kOvrRichPresenceVptrVaddr == 0x6a13e0ULL && kOvrRichPresenceSlotCount == 17);
+}
+
 bool NoImage(const char*, sentinel::ElfImage*) { return false; }
 bool EmptyImage(const char*, sentinel::ElfImage* out) {
   *out = sentinel::ElfImage{};  // loaded, but with no program headers: no build id can be read
@@ -275,6 +509,11 @@ int main() {
   TestInstall();
   TestResolveGameJson();
   TestTarget();
+  TestPresenceSelection();
+  TestPresenceSlotCheckAcceptsTheRealAddresses();
+  TestPresenceWrappersPassThroughAndLogOnChange();
+  TestPresenceThroughThunk();
+  TestPresenceTarget();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_install_test: %d check(s) failed\n", quest_test::Failures());

@@ -70,10 +70,45 @@ void ResetCountersForTest() noexcept;
 // instruction of each). Never throws.
 GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 
+// ---- rich presence trace (#393) -----------------------------------------------------------------------------
+//
+// The game's SyncRichPresence asks pnsovr's CNSOVRRichPresence which destination its game type maps to and
+// the destination's display name, and builds the status text under the player's name from them. libr15
+// reaches that object through CNSProvider::RichPresence(unsigned long), once at startup. This hook gives
+// the game the same object with its vtable replaced by a copy whose slots Destination, DestinationName and
+// Set are wrappers that call the original and log what it answered (pass-through: nothing changes). The
+// handler counts and never logs; the wrappers run on the game's thread and log on change.
+struct PresenceTag {};
+using PresenceSig = void*(std::uint64_t handle);
+using PresenceThunk = sentinel::CallbackThunk<PresenceTag, PresenceSig>;
+void* OnPresenceHandler(PresenceThunk::Fn original, std::uint64_t handle) noexcept;
+
+sentinel::GotTarget LibR15RichPresence();
+
+// What the handler decided for the object the provider returned. Never throws, never logs; it counts.
+void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept;
+
+struct PresenceCounters {
+  const std::atomic<std::uint64_t>& selected;     // the object's vtable was replaced by the tracing copy
+  const std::atomic<std::uint64_t>& passThrough;  // null, pnsovr missing or another build, or another class
+};
+PresenceCounters PresenceCountersView() noexcept;
+void ResetPresenceForTest() noexcept;
+
+// Installs the hook. Called by InstallSocialHook after the social hook is in; its outcome is logged, and
+// returned for a test (the social facade works without it).
+sentinel::GotStatus InstallPresenceTrace();
+
+// Test seams: whether the four wrapped slots are checked against the pinned addresses (a test's fake
+// functions live elsewhere), and the game's EncodeToCompact the Set wrapper reads the document with (nullptr:
+// resolved from the loaded libr15 on first use).
+void SetPresenceSeamsForTest(bool slotCheck, CJsonEncodeToCompactFn encode) noexcept;
+
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
 // count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
 // events dropped, sends failed, joins deferred, requests timed out, four callback delivery classes, JSON failures,
-// frames ignored) and the invite gate's two (social_invite_gate.h): 19 of the reporter's 96.
+// frames ignored), the invite gate's two (social_invite_gate.h) and the rich presence trace's four: 23 of the
+// reporter's 96.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 
