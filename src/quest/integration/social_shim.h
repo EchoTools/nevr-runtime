@@ -12,6 +12,6 @@ bool RegisterSocialCounters() noexcept;
 // False when the hook was refused (the game keeps the Oculus social object). `detail` receives a fixed
 // token naming the outcome (an InstallStatus or GotStatus name). `presenceNames` is the effective
 // presence_names feature (#393): answer the rich presence's destination lookup from the built-in table.
-bool InstallSocialHook(const char** detail, bool presenceNames) noexcept;
+bool InstallSocialHook(const char** detail, bool presenceNames, bool presenceLocal) noexcept;
 
 }  // namespace nevr_quest::integration

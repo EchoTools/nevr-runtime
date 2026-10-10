@@ -136,6 +136,16 @@ std::atomic<std::uint64_t> g_presenceSelected{0};
 std::atomic<std::uint64_t> g_presencePassThrough{0};
 std::atomic<bool> g_presenceSlotCheck{true};
 std::atomic<bool> g_presenceNames{false};
+// Rich presence stops going to Meta (#396, config feature presence_local): ShareData, RefreshDestinations and
+// Clear are answered locally. Read per call, so the wrappers are always in the copy and a disabled feature runs
+// the game's own functions.
+std::atomic<bool> g_presenceLocal{false};
+std::atomic<std::uint64_t> g_localShare{0};
+std::atomic<std::uint64_t> g_localRefresh{0};
+std::atomic<std::uint64_t> g_localClear{0};
+std::uintptr_t g_presenceOrigShare = 0;
+std::uintptr_t g_presenceOrigRefresh = 0;
+std::uintptr_t g_presenceOrigClear = 0;
 std::atomic<int> g_presenceCurrent{-1};  // table position of the game_type of the last Set (-1: none, unknown)
 std::atomic<CJsonEncodeToCompactFn> g_presenceEncode{nullptr};
 std::atomic<bool> g_presenceEncodeResolved{false};
@@ -151,6 +161,7 @@ using CountFn = unsigned (*)(const void*);
 using DestinationFn = int (*)(const void*);
 using NameFn = const char* (*)(const void*, unsigned);
 using SetFn = void (*)(void*, const void*);
+using VoidFn = void (*)(void*);
 
 template <typename Fn>
 Fn AsFn(std::uintptr_t address) noexcept {
@@ -289,13 +300,69 @@ void TracedSet(void* self, const void* json) noexcept {
   }
 }
 
+std::uint32_t ReadFlags(const void* self) noexcept {
+  std::uint32_t flags = 0;
+  std::memcpy(&flags, static_cast<const char*>(self) + kRichPresenceFlagsOffset, sizeof(flags));
+  return flags;
+}
+
+void WriteFlags(void* self, std::uint32_t flags) noexcept {
+  std::memcpy(static_cast<char*>(self) + kRichPresenceFlagsOffset, &flags, sizeof(flags));
+}
+
+// One line the first time each operation is answered locally; the counters carry the rest.
+void NoteLocal(const char* op, std::atomic<std::uint64_t>& counter) noexcept {
+  if (counter.fetch_add(1, std::memory_order_relaxed) == 0) {
+    LogFields(LogLevel::kInfo, "rich_presence_local", {{"op", op}, {"result", "answered_locally"}});
+  }
+}
+
+// Slot 0: ShareData sends the document to Meta (group_presence set). Locally: what it leaves behind when it has
+// "sent" and the answer has come back, i.e. the dirty bit consumed and nothing in flight; the same gate as the
+// original ((flags & 6) == 0: not cleared, nothing in flight). The nakama server derives a friend's status
+// from the match they are in, so nothing needs publishing.
+void LocalShareData(void* self) noexcept {
+  if (!g_presenceLocal.load(std::memory_order_relaxed)) {
+    AsFn<VoidFn>(g_presenceOrigShare)(self);
+    return;
+  }
+  const std::uint32_t flags = ReadFlags(self);
+  if ((flags & (kRichPresenceFlagInFlight | kRichPresenceFlagCleared)) != 0) return;
+  WriteFlags(self, flags & ~(kRichPresenceFlagDirty | kRichPresenceFlagInFlight));
+  NoteLocal("share", g_localShare);
+}
+
+// Slot 11: RefreshDestinations asks Meta for the destination list. Locally: nothing is requested, the list
+// stays empty and RefreshingDestinations() (*(this+0xe8) != 0) stays false; the names come from the table
+// (presence_names).
+void LocalRefreshDestinations(void* self) noexcept {
+  if (!g_presenceLocal.load(std::memory_order_relaxed)) {
+    AsFn<VoidFn>(g_presenceOrigRefresh)(self);
+    return;
+  }
+  NoteLocal("refresh_destinations", g_localRefresh);
+}
+
+// Slot 16: Clear sends group_presence clear and sets the cleared bit. Locally: the bit only.
+void LocalClear(void* self) noexcept {
+  if (!g_presenceLocal.load(std::memory_order_relaxed)) {
+    AsFn<VoidFn>(g_presenceOrigClear)(self);
+    return;
+  }
+  WriteFlags(self, ReadFlags(self) | kRichPresenceFlagCleared);
+  NoteLocal("clear", g_localClear);
+}
+
 // The slots we wrap must hold the functions of the pinned build, or the wrappers would call into something else.
 bool SlotsAreThePinnedOnes(const std::uintptr_t* live, std::uintptr_t bias) noexcept {
   if (!g_presenceSlotCheck.load(std::memory_order_relaxed)) return true;
   return live[kRichPresenceSlotDestinationCount] == bias + kOvrRichPresenceDestinationCountVaddr &&
          live[kRichPresenceSlotDestinationName] == bias + kOvrRichPresenceDestinationNameVaddr &&
          live[kRichPresenceSlotDestination] == bias + kOvrRichPresenceDestinationVaddr &&
-         live[kRichPresenceSlotSet] == bias + kOvrRichPresenceSetVaddr;
+         live[kRichPresenceSlotSet] == bias + kOvrRichPresenceSetVaddr &&
+         live[kRichPresenceSlotShareData] == bias + kOvrRichPresenceShareDataVaddr &&
+         live[kRichPresenceSlotRefreshDestinations] == bias + kOvrRichPresenceRefreshDestinationsVaddr &&
+         live[kRichPresenceSlotClear] == bias + kOvrRichPresenceClearVaddr;
 }
 
 }  // namespace
@@ -339,6 +406,9 @@ void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept {
     g_presenceOrigName = live[kRichPresenceSlotDestinationName];
     g_presenceOrigDestination = live[kRichPresenceSlotDestination];
     g_presenceOrigSet = live[kRichPresenceSlotSet];
+    g_presenceOrigShare = live[kRichPresenceSlotShareData];
+    g_presenceOrigRefresh = live[kRichPresenceSlotRefreshDestinations];
+    g_presenceOrigClear = live[kRichPresenceSlotClear];
     g_presenceTable[0] = live[-2];
     g_presenceTable[1] = live[-1];
     for (std::size_t i = 0; i < kOvrRichPresenceSlotCount; ++i) g_presenceTable[2 + i] = live[i];
@@ -346,6 +416,9 @@ void* SelectRichPresenceObject(void* original, PnsovrLookup lookup) noexcept {
     g_presenceTable[2 + kRichPresenceSlotDestinationName] = word(&TracedName);
     g_presenceTable[2 + kRichPresenceSlotDestination] = word(&TracedDestination);
     g_presenceTable[2 + kRichPresenceSlotSet] = word(&TracedSet);
+    g_presenceTable[2 + kRichPresenceSlotShareData] = word(&LocalShareData);
+    g_presenceTable[2 + kRichPresenceSlotRefreshDestinations] = word(&LocalRefreshDestinations);
+    g_presenceTable[2 + kRichPresenceSlotClear] = word(&LocalClear);
     g_presenceTableBuilt.store(true, std::memory_order_release);
   }
   const std::uintptr_t table = reinterpret_cast<std::uintptr_t>(&g_presenceTable[2]);
@@ -361,13 +434,21 @@ const char* PresenceDisplayName(const char* gameType) noexcept {
 
 void SetPresenceNames(bool enabled) noexcept { g_presenceNames.store(enabled, std::memory_order_relaxed); }
 
-PresenceCounters PresenceCountersView() noexcept { return PresenceCounters{g_presenceSelected, g_presencePassThrough}; }
+void SetPresenceLocal(bool enabled) noexcept { g_presenceLocal.store(enabled, std::memory_order_relaxed); }
+
+PresenceCounters PresenceCountersView() noexcept {
+  return PresenceCounters{g_presenceSelected, g_presencePassThrough, g_localShare, g_localRefresh, g_localClear};
+}
 
 void ResetPresenceForTest() noexcept {
   g_presenceSelected.store(0, std::memory_order_relaxed);
   g_presencePassThrough.store(0, std::memory_order_relaxed);
   g_presenceSlotCheck.store(true, std::memory_order_relaxed);
   g_presenceNames.store(false, std::memory_order_relaxed);
+  g_presenceLocal.store(false, std::memory_order_relaxed);
+  g_localShare.store(0, std::memory_order_relaxed);
+  g_localRefresh.store(0, std::memory_order_relaxed);
+  g_localClear.store(0, std::memory_order_relaxed);
   g_presenceCurrent.store(-1, std::memory_order_relaxed);
   g_presenceEncode.store(nullptr, std::memory_order_relaxed);
   g_presenceEncodeResolved.store(false, std::memory_order_relaxed);
@@ -440,6 +521,9 @@ bool RegisterSocialReportCounters() {
                                        sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("presence_thunk_faults", &PresenceThunk::FaultCounter(),
                                        sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("presence_local_share", &g_localShare) && ok;
+  ok = sentinel::RegisterReportCounter("presence_local_refresh", &g_localRefresh) && ok;
+  ok = sentinel::RegisterReportCounter("presence_local_clear", &g_localClear) && ok;
   return ok;
 }
 
