@@ -1,13 +1,103 @@
 # nEVR Runtime
 
-Runtime patches for Echo VR (`echovr.exe`) that let it connect to
-[echovrce](https://github.com/echotools) community game services. Both the game
-client and the dedicated server load these DLLs to talk to the Nakama-based
-backend.
+nEVR Runtime keeps Echo VR (`echovr.exe`) playable on the community game service
+([echovrce](https://github.com/echotools), Nakama-based). Drop one file,
+`BugSplat64.dll`, into the game folder and the game signs in with your Discord
+account, reaches the social lobby and shows its friends and party. The Quest
+build does the same through a repacked APK. For contributors it is the C++17
+source of that DLL and of the Quest sentinel, plus the tooling and tests that
+keep both honest.
 
-Part of the **NEVR** project — keeping Echo VR alive.
+Part of the **NEVR** project, keeping Echo VR alive.
 
 > Working in this repo as an agent? Start at [`AGENTS.md`](AGENTS.md).
+
+## What it does
+
+PC means the Windows or Wine game client, Quest means the Android sentinel, both
+means each. Every feature below is on `main`; [`docs/testing/smoke-checklist.md`](docs/testing/smoke-checklist.md)
+says how to check each one and which log line proves it.
+
+### Get in
+- **Nothing to configure.** The service endpoints and the public client keys are built in, so a fresh install signs in with no `config.yaml` and no `nevr-quest.json`. `config.yaml` (PC) and `nevr-quest.json` (Quest) override them. (both)
+- **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
+- **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
+- **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
+- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-noconsole` default apply. (PC)
+- **A wrong `echovr.exe` is refused.** A wrong or damaged game image is refused instead of patched. (PC)
+
+### Friends, party and the social lobby
+- **Social lobby.** Log in and land in the social lobby through the community game service. (both)
+- **Friends list.** Names with online, busy and offline presence, plus status text under each friend. (PC)
+- **Friend changes without a restart.** Adds, accepts and removals made on the web site show in the game. (both)
+- **Recently met.** The recently-met list and its refresh. (both)
+- **Party.** A party exists after login; receive, accept and dismiss invites; promote a member; lock or unlock the party; join errors show the game's own popup. (both)
+- **Send a party invite** from a friend row. (PC)
+- **New accounts can invite.** The first-match gate reads as passed, so a fresh account can send a party invite. (both)
+
+### Matchmaking and play
+- **Service redirect.** The game's hard-coded service addresses (HTTP and WebSocket) go to the community game service, over modern TLS 1.2/1.3. (PC)
+- **Early-quit lockout.** The lockout countdown shows when the game service sends a penalty. (PC)
+- **Arena rules in `config.yaml`.** Round time, celebration time and mercy score can be set under `arena.*`. (PC)
+
+### Voice
+- **Microphone on Wine and Proton.** A WASAPI capture provider feeds the game's own voice path, resampled to mono 48 kHz. (PC)
+- **Native Windows keeps the game's own microphone.** The runtime installs its provider under Wine and Proton only. (PC)
+
+### Crash and exit handling
+- **Crash recovery.** The game's main loop is wrapped, the original crash reporter is blocked, and a crash writes a readable dump and a crash record. (PC)
+- **Clean exit.** Closing the window ends the process; Ctrl+C or a stop signal shuts down with a watchdog. (PC)
+- **Guards.** Null session pointers and entity lookups that used to crash the game are guarded and counted. (PC)
+- **Local minidump.** A Quest crash writes a minidump and the maps file locally. (Quest)
+
+### Diagnostics
+- **Structured logs.** One JSON line per event: `nevr-boot.jsonl` and a timestamped `nevr-<timestamp>.jsonl` under `%LOCALAPPDATA%\EchoVR\logs` on PC; logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` on Quest.
+- **The game's own log, filtered.** The built-in filter captures the game's log lines, folds repeats and reports its own health. (PC)
+- **Hook accounting.** Each hook reports whether it was ever entered; overwritten hooks are detected; counters are reported once the game runs. (both)
+- **Export tracing.** `-traceexports` records the platform DLL calls. (PC)
+- **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
+
+### Game server mode
+- **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
+- **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
+- **Operates unattended.** Re-registers after a dropped connection, exits after the session so a fleet manager can respawn it, shuts down cleanly on Ctrl+C, and holds an empty game server for a configurable time. (PC)
+- **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
+
+### Quest
+- **A sentinel loaded with the game.** Four switchable features in `nevr-quest.json`: `redirect`, `bridge`, `login`, `social`; `obb_skip` and `hwdump` are separate and off by default. (Quest)
+- **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
+
+### Known gaps
+The issue tracker is the source of truth: on Quest the main-menu FRIENDS LIST
+([#391](https://github.com/EchoTools/nevr-runtime/issues/391)), QUIT
+([#392](https://github.com/EchoTools/nevr-runtime/issues/392)), the status text under your
+name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the party tab's
+Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
+yet; on PC the microphone does not recover from a changed audio device
+([#399](https://github.com/EchoTools/nevr-runtime/issues/399)), the party roster keeps a
+member who disconnected ([#403](https://github.com/EchoTools/nevr-runtime/issues/403)),
+party data sharing is refused ([#398](https://github.com/EchoTools/nevr-runtime/issues/398)),
+a friend request shows no prompt to the receiver
+([#405](https://github.com/EchoTools/nevr-runtime/issues/405)) and the matchmaker library
+loses its patch when it reloads ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)).
+
+## Install for testers
+
+1. **Sync the device clock first** (PC: Windows time sync; Quest: automatic time on), so
+   PC and Quest logs line up afterwards.
+2. **Windows:** take `nevr-runtime-v4.0.0-rc.<N>-windows.zip` (built by `just package-rc <N>`),
+   close the game, unzip it, and run `install.ps1` from PowerShell
+   (`powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`). It checks the package
+   against `SHA256SUMS`, copies your original `BugSplat64.dll` to
+   `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
+   `dbgcore.dll.legacy-<date>` and installs the new file. It deletes nothing.
+3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
+4. **Quest:** `adb install -r nevr-runtime-v4.0.0-rc.<N>-quest.apk`. It is signed with the same
+   key as earlier test builds, so it installs over them and keeps your data.
+5. The Windows DLL is **unsigned**; Windows Defender or SmartScreen may warn about it.
+
+The community beta guide for a manual install is [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
+The Quest sign-in flow is in [`docs/quest/SIGN-IN.md`](docs/quest/SIGN-IN.md).
 
 ## What gets built
 
@@ -32,7 +122,7 @@ The `platform_compat` and `token_auth` modules are statically linked into
 
 | Module | Linked into | Purpose |
 | ------ | ----------- | ------- |
-| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
+| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernization, MSXML6 pass-through hook, Wine `_temp` fix |
 | `token-auth` | `BugSplat64.dll` | Device-code auth, token cache |
 
 The bridge is why the game never negotiates TLS for its WebSocket traffic: it
@@ -62,7 +152,7 @@ already built into the runtime.
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
 - `src/extension/` — header-only published C ABI for third-party plugins/modules
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
-  `echovr.exe -server -headless -noconsole`
+  `echovr.exe -server -headless -noconsole` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target
