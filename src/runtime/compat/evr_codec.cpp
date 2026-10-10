@@ -5,10 +5,6 @@
 
 namespace nevr_evr_codec {
 
-namespace {
-
-constexpr std::size_t kLoginFailureFixedPayloadSize = 24;
-
 uint64_t ReadLE64(const uint8_t* p) {
   uint64_t value = 0;
   for (int i = 7; i >= 0; --i) value = (value << 8) | p[i];
@@ -21,6 +17,10 @@ void AppendLE64(std::string& buffer, uint64_t value) {
     value >>= 8;
   }
 }
+
+namespace {
+
+constexpr std::size_t kLoginFailureFixedPayloadSize = 24;
 
 ReadStatus ReadMessageAt(const uint8_t* data, std::size_t remaining, Message* out) {
   *out = Message{};
