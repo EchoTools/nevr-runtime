@@ -347,19 +347,22 @@ TEST(MicCaptureLifecycleStream, ReaderCallWhileStoppedDoesNotSkipTheNextCaptures
   const MicLifecycleOperations ops = RingOps(stream);
   ASSERT_TRUE(lifecycle.Create(7, ops));
 
-  // Audio is waiting while capture is stopped (left from a previous stream) and the game asks for it.
+  // Audio is waiting while capture is stopped (left from a previous stream); the game asks for it, drains it.
   const int16_t leftover[50] = {};
   stream.ring.Push(leftover, 50);
   EXPECT_EQ(stream.ring.NoteReaderActive(), 50u);
+  stream.ring.Push(leftover, 50);
+  int16_t out[50];
+  EXPECT_EQ(stream.ring.Pop(out, 50), 50u);
   EXPECT_TRUE(stream.ring.ReaderActive());
 
   ASSERT_TRUE(lifecycle.Start(7, ops));
-  EXPECT_FALSE(stream.ring.ReaderActive()) << "a new capture starts with no listening reader";
+  EXPECT_FALSE(stream.ring.ReaderActive()) << "a new capture starts with no consumer";
 
-  // The capture worker fills the ring before the game's first read of this capture.
+  // The capture worker fills the ring before the game's first call of this capture.
   const int16_t backlog[1000] = {};
   stream.ring.Push(backlog, 1000);
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 1000u) << "the first read must drop the backlog";
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 1000u) << "the first call that finds audio must drop the backlog";
 }
 
 TEST(MicCaptureLifecycleStream, EveryRestartRearmsTheBacklogDrop) {
@@ -378,30 +381,34 @@ TEST(MicCaptureLifecycleStream, EveryRestartRearmsTheBacklogDrop) {
   EXPECT_EQ(stream.ring.NoteReaderActive(), 300u);
 }
 
-// The game's real order, from nevr-2026-10-10T12-00-22.946.jsonl: MicStart, then one MicAvailable the same
-// moment (the ring is empty), then nothing for a while during which the worker overfills the ring, then
-// calls that find audio. The early poll must not be taken for a consuming reader: the overflow before the
-// game consumes is silent (ReaderActive false is what the provider's warning waits for), and the first call
-// that finds audio drops the backlog and arms the warning.
-TEST(MicCaptureLifecycleStream, TheGamesEarlyPollOfAnEmptyRingDoesNotArmTheOverflowWarning) {
+// The game's real order, from the two client runs (nevr-2026-10-10T12-00-22.946 and T12-21-07.530): MicStart,
+// MicAvailable polls from that moment on (the ring empty, then holding audio) and the first MicRead only
+// after the ring has overflowed. The overflows before that first read are silent (ReaderActive false is what
+// the provider's warning waits for); the backlog is dropped at the first MicRead; after that read the game is
+// a consumer and a stall would warn.
+TEST(MicCaptureLifecycleStream, TheGamesSparseStartupPollsDoNotArmTheOverflowWarning) {
   RingStream stream;
   MicCaptureLifecycle lifecycle;
   const MicLifecycleOperations ops = RingOps(stream);
   ASSERT_TRUE(lifecycle.Create(7, ops));
   ASSERT_TRUE(lifecycle.Start(7, ops));
 
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 0u);  // MicAvailable right after MicStart: nothing yet
+  EXPECT_EQ(stream.ring.Available(), 0u);  // MicAvailable right after MicStart: nothing yet
   EXPECT_FALSE(stream.ring.ReaderActive());
 
   const int16_t chunk[1000] = {};
-  bool overflowed = false;
-  for (int i = 0; i < 12; ++i) overflowed = stream.ring.Push(chunk, 1000) || overflowed;  // 12000 > 9600
-  EXPECT_TRUE(overflowed);
-  EXPECT_FALSE(stream.ring.ReaderActive()) << "no consumer yet: the provider must not warn";
+  for (int i = 0; i < 12; ++i) stream.ring.Push(chunk, 1000);  // 12000 > 9600, nobody consuming
+  EXPECT_FALSE(stream.ring.ReaderActive());
 
-  EXPECT_EQ(stream.ring.NoteReaderActive(), 9600u);  // the first call that finds audio: the newest 200 ms, dropped
+  EXPECT_EQ(stream.ring.Available(), 9600u);  // later polls see the newest 200 ms; a poll drains nothing
+  EXPECT_FALSE(stream.ring.ReaderActive()) << "a poll that drained nothing is not a consumer";
+
+  // The first MicRead: the provider drops the backlog, then pops. The drain returns what arrived since.
+  EXPECT_EQ(stream.ring.NoteReaderActive(), 9600u);
+  stream.ring.Push(chunk, 1000);
+  int16_t out[1000];
+  EXPECT_EQ(stream.ring.Pop(out, 1000), 1000u);
   EXPECT_TRUE(stream.ring.ReaderActive());
-  EXPECT_EQ(stream.ring.Available(), 0u);
 }
 
 TEST(MicCaptureDrain, CancellationDuringContinuousPacketDrainReleasesEveryAcquiredPacket) {

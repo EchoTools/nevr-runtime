@@ -553,8 +553,10 @@ bool DispatchMicCall(MicCall call, MicCallRequest* request) {
 
 }  // namespace
 
-// The game's first MicAvailable/MicRead of a stream that finds audio waiting drops what was captured
-// before it was listening. A poll that finds the ring empty is not a reader (MicRingBuffer::NoteReaderActive).
+// The game's first MicRead of a stream that finds audio waiting drops what was captured before it was
+// listening, so that read gets fresh audio. MicAvailable is only a poll: the game calls it from the moment
+// capture starts and makes its first MicRead hundreds of milliseconds later, so it neither drops nor counts
+// as a consumer (MicRingBuffer::NoteReaderActive).
 static void NoteGameReader() {
   const uint32_t stale = g_ring.NoteReaderActive();
   if (stale > 0) {
@@ -566,7 +568,6 @@ static void NoteGameReader() {
 }
 
 uint64_t MicProvider::MicAvailable() {
-  NoteGameReader();
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   return static_cast<uint64_t>(g_ring.Available());
 }

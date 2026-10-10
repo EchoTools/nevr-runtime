@@ -38,6 +38,7 @@ uint32_t MicRingBuffer::Pop(int16_t* out, uint32_t maxCount) {
   const uint32_t tail = (head_ + capacity_ - count_) % capacity_;
   for (uint32_t i = 0; i < n; i++) out[i] = data_[(tail + i) % capacity_];
   count_ -= n;
+  if (n > 0) consumerSeen_ = true;
   return n;
 }
 
@@ -45,13 +46,14 @@ void MicRingBuffer::Reset() {
   std::lock_guard<std::mutex> lock(mutex_);
   head_ = 0;
   count_ = 0;
-  readerActive_ = false;
+  backlogDropped_ = false;
+  consumerSeen_ = false;
 }
 
 uint32_t MicRingBuffer::NoteReaderActive() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (readerActive_ || count_ == 0) return 0;
-  readerActive_ = true;
+  if (backlogDropped_ || count_ == 0) return 0;
+  backlogDropped_ = true;
   const uint32_t dropped = count_;
   count_ = 0;
   return dropped;
@@ -59,7 +61,7 @@ uint32_t MicRingBuffer::NoteReaderActive() {
 
 bool MicRingBuffer::ReaderActive() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return readerActive_;
+  return consumerSeen_;
 }
 
 namespace {
