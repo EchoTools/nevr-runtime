@@ -130,7 +130,7 @@ it, break it a way that still compiles — a clean deletion, not a corruption.
 ## A Monitor Must Not Depend On What It Monitors
 
 **Rule:** drive every monitor from a site whose liveness is independently
-proven, and prove it — do not assume it. `HookLiveness::Report` exists to make
+proven, and prove it — do not assume it. `nevr_hook_liveness::Report` exists to make
 that provable.
 
 ---

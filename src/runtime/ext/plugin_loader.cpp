@@ -470,7 +470,7 @@ class PluginLoadRun {
     // A plugin that re-hooked an address this runtime already owns undoes our patch there, so that
     // is fatal on a server.
     if (s.initKind != PluginInitKind::None) {
-      const int collisions = HookGuard::VerifyAll(s.item.file.c_str());
+      const int collisions = nevr_hook_guard::VerifyAll(s.item.file.c_str());
       if (collisions > 0) {
         ServerFatal("Plugin %s re-hooked %d address(es) this runtime already owns "
                     "— our patches at those addresses are no longer applied",

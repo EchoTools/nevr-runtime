@@ -163,6 +163,92 @@ TEST(MicRingBuffer, PushPopOverflowAndResetPreserveOrder) {
   EXPECT_EQ(ring.Available(), 0u);
 }
 
+// #95: audio captured before the game's first call that finds audio is stale and is dropped; the game
+// counts as a consumer only once a Pop has returned audio.
+TEST(MicRingBuffer, FirstReaderCallDropsAudioCapturedBeforeItAndReportsHowMuch) {
+  MicRingBuffer ring(8);
+  const int16_t before[] = {1, 2, 3, 4, 5};
+  ring.Push(before, 5);
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 5u);
+  EXPECT_FALSE(ring.ReaderActive()) << "a poll that drained nothing is not a consumer";
+  EXPECT_EQ(ring.Available(), 0u);
+  const int16_t fresh[] = {9, 8};
+  ring.Push(fresh, 2);
+  int16_t out[2] = {};
+  EXPECT_EQ(ring.Pop(out, 2), 2u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 2), (std::vector<int16_t>{9, 8}));
+  EXPECT_TRUE(ring.ReaderActive());
+}
+
+// The game polls MicAvailable once the moment capture starts, before any audio exists
+// (nevr-2026-10-10T12-00-22.946, MicAvailable=1 MicRead=0 at +0.234 s). That poll must not use up the drop.
+TEST(MicRingBuffer, ACallOnAnEmptyRingIsNotAReader) {
+  MicRingBuffer ring(8);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_FALSE(ring.ReaderActive());
+  const int16_t before[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  EXPECT_TRUE(ring.Push(before, 10));  // overflows while nobody consumes: the provider stays quiet
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 8u);  // the first call that finds audio drops it
+  EXPECT_FALSE(ring.ReaderActive());
+}
+
+// The second client run (nevr-2026-10-10T12-21-07.530): the game polls MicAvailable from the moment capture
+// starts and makes its first MicRead later than the ring's 200 ms, so the ring overflows before it. No
+// consumer has drained anything yet, so that overflow must stay silent; the warning is for a game that
+// drained and then stopped.
+TEST(MicRingBuffer, OverflowBeforeTheFirstDrainStaysSilentAndAfterItIsAStall) {
+  MicRingBuffer ring(4);
+  const int16_t s[] = {1, 2, 3, 4};
+  ring.Push(s, 4);
+  EXPECT_EQ(ring.NoteReaderActive(), 4u);  // the first MicRead's drop of the stale backlog
+  EXPECT_TRUE(ring.Push(s, 4) == false);
+  EXPECT_TRUE(ring.Push(s, 4));            // refilled and overfilled before the first MicRead
+  EXPECT_FALSE(ring.ReaderActive());       // the provider's warning is gated on this
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);         // the game's first real read
+  EXPECT_TRUE(ring.ReaderActive());
+  ring.Push(s, 4);
+  EXPECT_TRUE(ring.Push(s, 4));            // a stall after consuming: ReaderActive is true, the warning applies
+  EXPECT_TRUE(ring.ReaderActive());
+}
+
+TEST(MicRingBuffer, LaterReaderCallsDropNothing) {
+  MicRingBuffer ring(8);
+  const int16_t first[] = {9};
+  ring.Push(first, 1);
+  EXPECT_EQ(ring.NoteReaderActive(), 1u);
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_EQ(ring.Available(), 3u);
+}
+
+TEST(MicRingBuffer, ResetStartsANewStreamTheNextReaderCallDropsAgain) {
+  MicRingBuffer ring(8);
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  ring.NoteReaderActive();
+  int16_t out[3] = {};
+  ring.Push(s, 3);
+  ring.Pop(out, 3);
+  EXPECT_TRUE(ring.ReaderActive());
+  ring.Reset();
+  EXPECT_FALSE(ring.ReaderActive());
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 3u);
+}
+
+TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
+  MicRingBuffer ring(4);
+  const int16_t s[] = {1, 2, 3, 4, 5, 6};
+  EXPECT_TRUE(ring.Push(s, 6));
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 4), (std::vector<int16_t>{3, 4, 5, 6}));
+}
+
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
   struct RatePair { uint32_t source; uint32_t target; size_t frames; };
   const RatePair rates[] = {

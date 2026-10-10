@@ -1,0 +1,9 @@
+{
+  "DllLoadHook": "nevr_dll_load_hook",
+  "ExportTrace": "nevr_export_trace",
+  "ExportTracePolicy": "nevr_export_trace_policy",
+  "ExportTracer": "nevr_export_tracer",
+  "HookGuard": "nevr_hook_guard",
+  "HookLiveness": "nevr_hook_liveness",
+  "PatchAddresses": "nevr_patch_addresses"
+}
