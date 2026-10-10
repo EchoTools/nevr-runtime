@@ -25,6 +25,7 @@ target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 add_library(ovrplatformloader SHARED
   entry.cpp
   login_prompt_hook.cpp
+  obb_skip_hook.cpp
   sentinel.cpp
   sentinel_log.cpp
   activation.cpp)
@@ -45,7 +46,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_c
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.
