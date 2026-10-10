@@ -1076,8 +1076,21 @@ are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library
 pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
 when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
 new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
-`prereq_local_delivered` and `prereq_local_dropped` (a full table: the game would wait for an answer) are the
-counters.
+`prereq_local_delivered` and `prereq_local_dropped` (a full table of 32 slots: the request still gets a local
+id and never reaches Meta, nothing is queued behind it, and its callback does not run) are the counters.
+
+`ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
+`GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
+`GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
+`CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
+the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`); every other caller goes to the SDK. The other
+three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
+in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
+and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
+by the walk: `blr`/`br` and a PLT stub into the library's own exports.
+`UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
+its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
