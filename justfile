@@ -2497,15 +2497,10 @@ verify:
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     # Wave 10: a deleted unit test must be visible to the closed-loop gate.
-    # The floor is deliberately derived from the current, production-linked
-    # suite; raising it is part of adding tests, while a drop is always a
-    # regression that needs an explicit sensor update and review.
-    TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 183 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 183)." >&2
-        exit 1
-    fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 183)"
+    # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
+    # against this tree): adding tests raises it in the same change, a drop is a regression
+    # that needs an explicit sensor update and review.
+    python3 tools/verify_gtest_floor.py --floor 772
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
