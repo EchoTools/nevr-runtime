@@ -9,6 +9,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
@@ -443,9 +444,9 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
-  InstallVEH();
+  const bool vehInstalled = InstallVEH();
   InstallCrashFilterInstrumentation();
-  BootLogTee::TeeFprintf("[NEVR.CRASH] veh installed\n");
+  BootLogTee::TeeFprintf("%s", VehPolicy::BootLine(vehInstalled));
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   BootLogTee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");
