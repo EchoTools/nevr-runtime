@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def wrapper_body() -> str:
     source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
-    return extract_braced_function(source, "static VOID GameMainWrapperHook(")
+    return extract_braced_function(source, "static INT64 GameMainWrapperHook(")
 
 
 class ServerHoldExits(unittest.TestCase):
