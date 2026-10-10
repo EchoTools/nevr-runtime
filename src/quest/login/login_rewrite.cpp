@@ -69,14 +69,14 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   }
 
   // The serial the stock client sends: the game's own value, "N/A" with no VR, "unknown" only
-  // when the game has none or it is not a serial (HmdSerial::Select is the PCVR rule).
-  HmdSerial::Choice serial = game.hmd_serial == kNoVrSerial
-                                 ? HmdSerial::Choice{std::string(kNoVrSerial), HmdSerial::Source::NoVr}
-                                 : HmdSerial::Select(false, game.hmd_serial.c_str());
-  result.hmd_serial_source = HmdSerial::SourceName(serial.source);
+  // when the game has none or it is not a serial (nevr_hmd_serial::Select is the PCVR rule).
+  nevr_hmd_serial::Choice serial = game.hmd_serial == kNoVrSerial
+                                 ? nevr_hmd_serial::Choice{std::string(kNoVrSerial), nevr_hmd_serial::Source::NoVr}
+                                 : nevr_hmd_serial::Select(false, game.hmd_serial.c_str());
+  result.hmd_serial_source = nevr_hmd_serial::SourceName(serial.source);
   result.hmd_serial_length = serial.value.size();
 
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = identity.account_id;
   inputs.display_name = identity.display_name;
   inputs.access_token = identity.access_token;
@@ -93,7 +93,7 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
 
   // dump() throws on a display name that is not valid UTF-8; the game ABI must never see it.
   try {
-    const std::string text = LoginProfile::BuildLoginProfileJson(inputs);
+    const std::string text = nevr_login_profile::BuildLoginProfileJson(inputs);
     const nlohmann::json profile = nlohmann::json::parse(text, nullptr, false);
     if (profile.is_discarded() || !profile.is_object()) {
       result.status = ComposeStatus::ProfileBuildFailed;

@@ -273,7 +273,7 @@ void TestComposeFailsClosed() {
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
 void TestComposedProfileMatchesPcvrBuilder() {
   QuestLogin::Identity id = MakeIdentity();
-  id.social_level = SocialParty::kSocialLevel;  // a source with the social facade installed
+  id.social_level = nevr_social_party::kSocialLevel;  // a source with the social facade installed
   QuestLogin::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
@@ -285,7 +285,7 @@ void TestComposedProfileMatchesPcvrBuilder() {
   std::string failed;
   QCHECK(QuestLogin::ApplyFieldsAtomically(c.fields, json, failed));
 
-  LoginProfile::LoginProfileInputs pc;
+  nevr_login_profile::LoginProfileInputs pc;
   pc.account_id = id.account_id;
   pc.display_name = id.display_name;
   pc.access_token = id.access_token;
@@ -295,8 +295,8 @@ void TestComposedProfileMatchesPcvrBuilder() {
   pc.git_commit = "abc123";
   pc.git_describe = "v1.2.3-4-gabc123";
   pc.build_type = "Release";
-  pc.social_level = SocialParty::kSocialLevel;  // what the PCVR login declares (ws_bridge.cpp)
-  nlohmann::json expected = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(pc));
+  pc.social_level = nevr_social_party::kSocialLevel;  // what the PCVR login declares (ws_bridge.cpp)
+  nlohmann::json expected = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(pc));
   expected.erase("nevr_plugins");
   QCHECK(json.ToJson() == expected);
   QCHECK(At(expected, "accountid") == kNevrAccount);
@@ -318,7 +318,7 @@ class SocialAwareSource final : public QuestLogin::IdentitySource {
   bool facade_installed = true;
   QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override {
     out = MakeIdentity();
-    out.social_level = (feature_enabled && facade_installed) ? SocialParty::kSocialLevel : 0;
+    out.social_level = (feature_enabled && facade_installed) ? nevr_social_party::kSocialLevel : 0;
     return QuestLogin::IdentityStatus::Ok;
   }
 };
@@ -339,8 +339,8 @@ void TestSocialLevelFollowsTheIdentitySource() {
     QCHECK(At(doc, "appid") == kQuestAppId);
     return At(doc, "nevr_social");
   };
-  QCHECK(SocialParty::kSocialLevel >= 1);
-  QCHECK(declared(true, true) == SocialParty::kSocialLevel);  // feature on and facade installed
+  QCHECK(nevr_social_party::kSocialLevel >= 1);
+  QCHECK(declared(true, true) == nevr_social_party::kSocialLevel);  // feature on and facade installed
   QCHECK(declared(true, false) == 0);                          // social not installed
   QCHECK(declared(false, true) == 0);                          // feature off
   QCHECK(declared(false, false) == 0);

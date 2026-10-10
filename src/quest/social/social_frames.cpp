@@ -28,43 +28,43 @@ std::uint64_t Le64(const std::uint8_t* p) {
   return v;
 }
 
-void Send(const Ports& ports, const char* what, const std::vector<SocialParty::Message>& messages) {
+void Send(const Ports& ports, const char* what, const std::vector<nevr_social_party::Message>& messages) {
   if (messages.empty()) return;
   const bool sent = ports.send != nullptr && ports.send(messages);
   LogRequests(what, messages, sent, 0);  // one line per request, with the account or party it is aimed at
 }
 
 // Asks for the display name of `accountId` once per session, but only if the reply can be read: the profile
-// is zstd-compressed and the Quest build registers no decoder (SocialNames::SetDecoder) unless an adapter
+// is zstd-compressed and the Quest build registers no decoder (nevr_social_names::SetDecoder) unless an adapter
 // links one. Without it every reply is unreadable, so no request is sent and the roster shows account ids.
 void WantName(const Ports& ports, const char* what, std::uint64_t accountId) {
-  if (SocialNames::DecoderSlot().load(std::memory_order_acquire) == nullptr) {
+  if (nevr_social_names::DecoderSlot().load(std::memory_order_acquire) == nullptr) {
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true, std::memory_order_relaxed)) {
       LogFields(LogLevel::kWarn, "social_names", {{"result", "no_profile_decoder_requests_skipped"}});
     }
     return;
   }
-  Send(ports, what, SocialNames::GlobalResolver().Want(accountId));
+  Send(ports, what, nevr_social_names::GlobalResolver().Want(accountId));
 }
 
 const char* KnownName(std::uint64_t symbol) {
   if (symbol == kSymFriendStatusNotify) return "FriendStatusNotify";
   if (symbol == kSymFriendListResponse) return "FriendListResponse";
-  if (symbol == SocialRoster::kFriendPresenceNotify) return "FriendPresenceNotify";
-  if (symbol == SocialRoster::kRecentlyMetListResponse) return "RecentlyMetListResponse";
-  if (symbol == SocialNames::kProfileSuccess) return "OtherUserProfileSuccess";
-  if (symbol == SocialParty::kPartyDataNotify) return "PartyDataNotify";
-  if (const char* name = SocialParty::ReplyName(symbol)) return name;
-  return SocialParty::RequestName(symbol);
+  if (symbol == nevr_social_roster::kFriendPresenceNotify) return "FriendPresenceNotify";
+  if (symbol == nevr_social_roster::kRecentlyMetListResponse) return "RecentlyMetListResponse";
+  if (symbol == nevr_social_names::kProfileSuccess) return "OtherUserProfileSuccess";
+  if (symbol == nevr_social_party::kPartyDataNotify) return "PartyDataNotify";
+  if (const char* name = nevr_social_party::ReplyName(symbol)) return name;
+  return nevr_social_party::RequestName(symbol);
 }
 
 // SNSPartyDataNotify: party or member data (a JSON object) for the party model, which holds it for the facade's Update
 // to load into the game's CJson. Only a JSON object goes on. Returns whether the model took it; else `why` names the
 // reason.
 bool ApplyPartyData(const Ports& ports, const std::uint8_t* payload, std::size_t len, const char** why) {
-  SocialParty::DataNotify notify;
-  if (!SocialParty::ParseDataNotify(payload, len, &notify)) {
+  nevr_social_party::DataNotify notify;
+  if (!nevr_social_party::ParseDataNotify(payload, len, &notify)) {
     *why = "party_data_unreadable";
     return false;
   }
@@ -73,18 +73,18 @@ bool ApplyPartyData(const Ports& ports, const std::uint8_t* payload, std::size_t
     *why = "party_data_not_a_json_object";
     return false;
   }
-  const SocialParty::DataOutcome outcome = ports.party->ReceiveData(notify.partyId, notify.memberId, notify.json);
+  const nevr_social_party::DataOutcome outcome = ports.party->ReceiveData(notify.partyId, notify.memberId, notify.json);
   const auto headset = parsed.find("headsettype");
   LogFields(LogLevel::kInfo, "social_party_data_received",
             {{"party", static_cast<long long>(notify.partyId)}, {"member", static_cast<long long>(notify.memberId)},
              {"seq", static_cast<long long>(notify.seq)}, {"bytes", notify.json.size()},
              {"keys", parsed.size()}, {"headsettype", headset != parsed.end() ? headset->dump().c_str() : "-"},
-             {"outcome", SocialParty::DataOutcomeName(outcome)}});
-  if (outcome == SocialParty::DataOutcome::kOwnIgnored) {
+             {"outcome", nevr_social_party::DataOutcomeName(outcome)}});
+  if (outcome == nevr_social_party::DataOutcome::kOwnIgnored) {
     *why = "party_data_own";
     return false;
   }
-  if (outcome == SocialParty::DataOutcome::kOtherParty) {
+  if (outcome == nevr_social_party::DataOutcome::kOtherParty) {
     *why = "party_data_other_party";
     return false;
   }
@@ -96,26 +96,26 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
   bool consumed = false;
   *why = "no_change";
 
-  if (sym == SocialNames::kProfileSuccess) {
+  if (sym == nevr_social_names::kProfileSuccess) {
     std::uint64_t accountId = 0;
     std::string displayName;
-    if (SocialNames::DecodeProfile(payload, len, &accountId, &displayName)) {
+    if (nevr_social_names::DecodeProfile(payload, len, &accountId, &displayName)) {
       ports.friends->SetName(accountId, displayName);
       ports.party->SetName(accountId, displayName);
       consumed = true;
     }
-  } else if (sym == SocialRoster::kFriendPresenceNotify) {
+  } else if (sym == nevr_social_roster::kFriendPresenceNotify) {
     std::uint64_t friendId = 0;
-    SocialRoster::Presence presence;
-    if (SocialRoster::ParsePresenceNotify(payload, len, &friendId, &presence)) {
+    nevr_social_roster::Presence presence;
+    if (nevr_social_roster::ParsePresenceNotify(payload, len, &friendId, &presence)) {
       ports.friends->SetPresence(friendId, presence);
       consumed = true;
     } else {
       LogFields(LogLevel::kWarn, "social_frame", {{"name", "FriendPresenceNotify"}, {"result", "unreadable"}, {"bytes", len}});
     }
-  } else if (sym == SocialRoster::kRecentlyMetListResponse) {
-    std::vector<SocialRoster::Entry> people;
-    if (SocialRoster::ParseRecentlyMetResponse(payload, len, &people)) {
+  } else if (sym == nevr_social_roster::kRecentlyMetListResponse) {
+    std::vector<nevr_social_roster::Entry> people;
+    if (nevr_social_roster::ParseRecentlyMetResponse(payload, len, &people)) {
       ports.recent->SetList(std::move(people));
       consumed = true;
     } else {
@@ -125,30 +125,30 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
   } else if (sym == kSymFriendStatusNotify) {
     std::uint64_t friendId = 0;
     std::uint8_t status = 0;
-    if (SocialRoster::ParseStatusNotify(payload, len, &friendId, &status)) {
+    if (nevr_social_roster::ParseStatusNotify(payload, len, &friendId, &status)) {
       ports.friends->Notify(friendId, status);
       WantName(ports, "friend name lookup", friendId);
       consumed = true;
     }
   } else if (sym == kSymFriendListResponse) {
     std::uint32_t confirmed = 0;
-    if (SocialRoster::ParseListResponse(payload, len, &confirmed)) {
+    if (nevr_social_roster::ParseListResponse(payload, len, &confirmed)) {
       ports.friends->BeginList(confirmed);
       consumed = true;
     }
   }
 
-  if (sym == SocialParty::kPartyDataNotify) consumed = ApplyPartyData(ports, payload, len, why) || consumed;
+  if (sym == nevr_social_party::kPartyDataNotify) consumed = ApplyPartyData(ports, payload, len, why) || consumed;
 
   // A friend added, accepted, removed or withdrawn carries no presence: ask for the list again.
-  if (SocialRoster::IsFriendChangeSymbol(sym)) {
+  if (nevr_social_roster::IsFriendChangeSymbol(sym)) {
     Send(ports, "friend list refresh", ports.party->RefreshFriends());
     consumed = true;
   }
 
   // Party messages update the party model; requests that were waiting on the reply (invites queued
   // behind the party's creation) go out now.
-  std::vector<SocialParty::Message> outgoing;
+  std::vector<nevr_social_party::Message> outgoing;
   if (ports.party->Feed(sym, payload, len, now, &outgoing)) {
     consumed = true;
     Send(ports, "party follow-up", outgoing);

@@ -10,8 +10,8 @@
 // (src/quest/login) both take it from here. It is a header of its own so the Quest build does
 // not have to include the whole party facade for one constant.
 
-namespace SocialParty {
+namespace nevr_social_party {
 
 constexpr int kSocialLevel = 1;
 
-}  // namespace SocialParty
+}  // namespace nevr_social_party

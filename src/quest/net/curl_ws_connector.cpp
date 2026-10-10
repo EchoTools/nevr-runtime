@@ -11,7 +11,7 @@
 
 namespace quest_net {
 
-using SessionRouter::LogLevel;
+using nevr_session_router::LogLevel;
 
 ConnectStatus ClassifyCurlCode(int code, long httpStatus) {
   switch (static_cast<CURLcode>(code)) {
@@ -183,7 +183,7 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   {
     std::lock_guard<std::mutex> lock(bundleMutex_);
     if (bundle_.certificates == 0) {
-      const SessionRouter::LogSink& log = config_.log;
+      const nevr_session_router::LogSink& log = config_.log;
       bundle_ = nevr::quest_auth::LoadCaBundle(
           config_.caDirs, [log](nevr::auth::LogLevel level, const std::string& line) {
             if (!log) return;

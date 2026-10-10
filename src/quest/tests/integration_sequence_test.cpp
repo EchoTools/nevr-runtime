@@ -513,7 +513,7 @@ void TestIdentitySourceAnswers() {
 // the login rewrite (a held connection nobody will ever release, or a login let through with no token).
 void TestLoginGateFollowsTheIdentityAnswer() {
   using nevr::quest_auth::Readiness;
-  using SessionRouter::LoginGate;
+  using nevr_session_router::LoginGate;
   // A token is still to come: starting, refreshing, waiting for the player, expired (being replaced).
   for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Expired}) {
     QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Awaiting);
@@ -657,7 +657,7 @@ void TestIdentitySourceReadyDoesNotAllocate() {
 
 // ---- frame tap -------------------------------------------------------------------------------------
 
-std::string LoginSuccessFrame(std::uint64_t account) { return EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, account); }
+std::string LoginSuccessFrame(std::uint64_t account) { return nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, account); }
 
 void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
   std::vector<bool> directions;
@@ -676,13 +676,13 @@ void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
 
   // A LoginSuccess behind another message in the same transport frame is found.
   accounts.clear();
-  tap.ServerToGame(EvrCodec::BuildMessage(0x1234, "abc") + success);
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, "abc") + success);
   QCHECK(accounts.size() == 1);
 
   // A truncated one, and other symbols, are not.
   accounts.clear();
   tap.ServerToGame(success.substr(0, success.size() - 3));
-  tap.ServerToGame(EvrCodec::BuildMessage(0x1234, std::string(64, 'x')));
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, std::string(64, 'x')));
   tap.ServerToGame("garbage");
   QCHECK(accounts.empty());
 }
