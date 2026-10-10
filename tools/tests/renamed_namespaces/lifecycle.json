@@ -1,0 +1,10 @@
+{
+  "BridgePolicy": "nevr_bridge_policy",
+  "ConsoleCtrlPolicy": "nevr_console_ctrl_policy",
+  "CrashRecovery": "nevr_crash_recovery",
+  "GameImageGuard": "nevr_game_image_guard",
+  "ReturnToLobby": "nevr_return_to_lobby",
+  "ReturnToLobbyHold": "nevr_return_to_lobby_hold",
+  "StackAllocCheck": "nevr_stack_alloc_check",
+  "VehPolicy": "nevr_veh_policy"
+}

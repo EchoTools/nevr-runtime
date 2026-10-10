@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace CrashRecovery {
+namespace nevr_crash_recovery {
 
 inline bool IsReadableProtection(DWORD protection) {
   switch (protection & 0xffU) {
@@ -48,4 +48,4 @@ inline bool IsReadableMemory(const void* address, size_t length) {
   return true;
 }
 
-}  // namespace CrashRecovery
+}  // namespace nevr_crash_recovery

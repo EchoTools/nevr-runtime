@@ -223,9 +223,9 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # return value, never written as a literal that is true on only one platform.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
         self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
-        self.assertRegex(source, r"VehPolicy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehInstalled\s*\)")
         self.assertNotIn("veh installed", source,
-                         "initialize.cpp hard-codes the veh boot line; take it from VehPolicy::BootLine")
+                         "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
 
     def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
         # #95: the ring fills before the game's first read of a stream. The first MicRead drops that
@@ -393,7 +393,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         rearm = extract_braced_function(recovery, "void RearmConsoleCtrlHandler(")
         self.assertNotRegex(rearm, r"s_gameServerLibStarted")
         handler = extract_braced_function(recovery, "static BOOL WINAPI ConsoleCtrlHandler(")
-        self.assertRegex(handler, r"ConsoleCtrlPolicy::ShouldDeferToGame\s*\(")
+        self.assertRegex(handler, r"nevr_console_ctrl_policy::ShouldDeferToGame\s*\(")
         server = gameserver_text()
         initialize = extract_braced_function(server, "VOID* GameServerLib::Initialize(")
         self.assertRegex(initialize, r"\bNotifyGameServerLibStarted\s*\(\s*\)")
@@ -425,16 +425,16 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                             "a guard around the matchmaking host patch leaves a reloaded image unpatched")
 
     def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
-        # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
+        # Issue #58: the ServerDB CODE_ENDED path calls nevr_return_to_lobby::Request (not the game function
         # directly) and the game thread polls the hold once per Update.
         server = strip_comments(gameserver_text())
         call = extract_braced_function(server, "void CallScheduleReturnToLobby(")
-        self.assertIn("ReturnToLobby::Request(", call)
+        self.assertIn("nevr_return_to_lobby::Request(", call)
         self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
         update = extract_braced_function(server, "VOID GameServerLib::Update(")
-        self.assertRegex(update.lstrip("{ \n"), r"^ReturnToLobby::Poll\(\)")
+        self.assertRegex(update.lstrip("{ \n"), r"^nevr_return_to_lobby::Poll\(\)")
         boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
-        self.assertRegex(boot, r"ReturnToLobby::Configure\(")
+        self.assertRegex(boot, r"nevr_return_to_lobby::Configure\(")
         glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
         self.assertIn("0x1A89F0", glue)
         self.assertRegex(glue, r"memcmp\(target, kPrologue")

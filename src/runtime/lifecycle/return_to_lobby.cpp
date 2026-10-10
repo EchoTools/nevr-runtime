@@ -11,14 +11,14 @@
 #include "runtime/lifecycle/crash_recovery.h"  // ConsoleShutdownPending
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 
-namespace ReturnToLobby {
+namespace nevr_return_to_lobby {
 namespace {
 
 // Prologue of echovr.exe 0x1401a89f0 (NetGameScheduleReturnToLobby): push rbx; sub rsp,0x30; xor edx,edx.
 constexpr unsigned char kPrologue[8] = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x33, 0xD2};
 
 std::mutex g_mutex;
-ReturnToLobbyHold::Policy g_policy;
+nevr_return_to_lobby_hold::Policy g_policy;
 EntrantCounter g_counter = nullptr;
 PVOID g_heldGame = nullptr;
 
@@ -80,21 +80,21 @@ bool Configure(uint64_t ttlSeconds) {
 }
 
 void Request(PVOID pGame) {
-  ReturnToLobbyHold::RequestVerdict verdict;
+  nevr_return_to_lobby_hold::RequestVerdict verdict;
   uint64_t ttlMs = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     verdict = g_policy.OnReturnRequested(NowMs(), LiveEntrants(), ShutdownPending());
-    if (verdict == ReturnToLobbyHold::RequestVerdict::Hold) g_heldGame = pGame;
+    if (verdict == nevr_return_to_lobby_hold::RequestVerdict::Hold) g_heldGame = pGame;
     ttlMs = g_policy.TtlMs();
   }
-  if (verdict == ReturnToLobbyHold::RequestVerdict::Proceed) {
+  if (verdict == nevr_return_to_lobby_hold::RequestVerdict::Proceed) {
     CallGame(pGame);
     return;
   }
   // The game asks again every tick while the session stays empty; only the first request of a
   // hold is logged, the count rides on the line that ends the hold.
-  if (verdict == ReturnToLobbyHold::RequestVerdict::Hold) {
+  if (verdict == nevr_return_to_lobby_hold::RequestVerdict::Hold) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] return to lobby held: the session has no players (ttl_s=%llu); a player joining or a "
         "shutdown cancels the hold",
@@ -103,7 +103,7 @@ void Request(PVOID pGame) {
 }
 
 void Poll() {
-  ReturnToLobbyHold::PollVerdict verdict;
+  nevr_return_to_lobby_hold::PollVerdict verdict;
   PVOID game = nullptr;
   uint64_t heldMs = 0;
   uint64_t requests = 0;
@@ -111,21 +111,21 @@ void Poll() {
     std::lock_guard<std::mutex> lock(g_mutex);
     const uint64_t now = NowMs();
     heldMs = g_policy.Holding() ? now - g_policy.HeldSinceMs() : 0;
-    verdict = ReturnToLobbyHold::PollIfActive(g_policy, now, LiveEntrants, ShutdownPending);
+    verdict = nevr_return_to_lobby_hold::PollIfActive(g_policy, now, LiveEntrants, ShutdownPending);
     game = g_heldGame;
     requests = g_policy.HeldRequests();
-    if (verdict != ReturnToLobbyHold::PollVerdict::Keep) g_heldGame = nullptr;
+    if (verdict != nevr_return_to_lobby_hold::PollVerdict::Keep) g_heldGame = nullptr;
   }
   switch (verdict) {
-    case ReturnToLobbyHold::PollVerdict::Keep:
+    case nevr_return_to_lobby_hold::PollVerdict::Keep:
       return;
-    case ReturnToLobbyHold::PollVerdict::Cancel:
+    case nevr_return_to_lobby_hold::PollVerdict::Cancel:
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] return to lobby hold cancelled after %llu ms (%llu requests): a player joined or a "
           "shutdown is pending",
           static_cast<unsigned long long>(heldMs), static_cast<unsigned long long>(requests));
       return;
-    case ReturnToLobbyHold::PollVerdict::Release:
+    case nevr_return_to_lobby_hold::PollVerdict::Release:
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] return to lobby hold expired after %llu ms (%llu requests) — returning to lobby",
           static_cast<unsigned long long>(heldMs), static_cast<unsigned long long>(requests));
@@ -134,4 +134,4 @@ void Poll() {
   }
 }
 
-}  // namespace ReturnToLobby
+}  // namespace nevr_return_to_lobby

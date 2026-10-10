@@ -10,7 +10,7 @@ When the game's session has no players, the engine calls `NetGameScheduleReturnT
 (`echovr.exe 0x1401a89f0`, called from `Update 0x1401bbdb0` among others), returning to lobby unloads the
 level, and `NetGameSwitchStateHook` (`src/runtime/lifecycle/state_machine.cpp`) then exits the process.
 With a TTL above 0 the runtime detours that function (prologue-validated, boot-time config read in
-`src/runtime/lifecycle/boot.cpp`) and `ReturnToLobby::Request` (`src/runtime/lifecycle/return_to_lobby.cpp`)
+`src/runtime/lifecycle/boot.cpp`) and `nevr_return_to_lobby::Request` (`src/runtime/lifecycle/return_to_lobby.cpp`)
 holds a request made while no player session is accepted (join state 4,
 `ServerContext::CountAcceptedEntrants`). The hold ends in one of three ways, decided in
 `src/runtime/lifecycle/return_to_lobby_hold.h`:
@@ -19,7 +19,7 @@ holds a request made while no player session is accepted (join state 4,
 - a player joins: the hold is dropped and the session continues;
 - a shutdown is pending (Ctrl+C, a shutdown command): the hold is dropped and the process exits as usual.
 
-The runtime's own call on a ServerDB `CODE_ENDED` goes through the same `ReturnToLobby::Request`, so it
+The runtime's own call on a ServerDB `CODE_ENDED` goes through the same `nevr_return_to_lobby::Request`, so it
 is held too. The failed-level-load reset in `state_machine.cpp` and the `NEVR_ScheduleReturnToLobby`
 export call the game function directly and are never held. If the detour cannot be installed (prologue
 mismatch) the TTL is dropped to 0 and nothing is held.
