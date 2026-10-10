@@ -6,10 +6,12 @@
 // signatures. The std::optional-based pure core is service_map.h (test-linked);
 // the singleton, config.yaml discovery, and interning live in service_config.cpp.
 //
-// Every non-null return is a process-lifetime, interned, stable pointer — the
-// game holds these for the process lifetime, exactly as the old JsonValueAsString
-// tree pointers were stable. A null return means "not configured": the caller
-// keeps its existing default, preserving today's behaviour for an absent key.
+// Every non-null return is an interned pointer that remains valid through DLL
+// unload because the shared pool owner is intentionally process-lifetime. The
+// pool quota applies per loaded module generation, not across reloads. A null
+// return means genuine absence/unmapped/no redirect; an attempted intern failure
+// or std::exception is logged without values and terminates the process rather
+// than masquerading as absence. No C++ exception crosses these C accessors.
 
 #pragma once
 

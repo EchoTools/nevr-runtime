@@ -45,6 +45,16 @@ add_executable(service_redirect_test tests/service_redirect_test.cpp)
 target_link_libraries(service_redirect_test PRIVATE nevr_quest_service_redirect)
 target_compile_options(service_redirect_test PRIVATE -Wall -Wextra -Werror)
 
+# Compile and link the same process-stable pool source used by PCVR.
+add_library(nevr_quest_stable_string_pool STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/lifecycle/stable_string_pool.cpp")
+target_include_directories(nevr_quest_stable_string_pool PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(nevr_quest_stable_string_pool PRIVATE -Wall -Wextra -Werror)
+
+add_executable(stable_string_pool_test tests/stable_string_pool_test.cpp)
+target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_pool)
+target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
+
 # ── Crash-reporter sentinel (libovrplatformloader.so) ───────────────────
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.

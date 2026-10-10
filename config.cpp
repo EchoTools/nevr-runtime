@@ -1,5 +1,4 @@
 #include "runtime/lifecycle/config.h"
-#include "runtime/lifecycle/config_redirect_result.h"
 #include "runtime/lifecycle/login_redirect_override.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/log/url_diagnostics.h"
@@ -465,13 +464,12 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   const char* httpTarget = NevrCfgGetFlat("nevr_http_uri");
   const char* redirected =
       NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
-  const char* chosen = nevr::lifecycle::ChooseRedirectedOrOriginal(result, redirected);
-  if (chosen == result) return result;
+  if (redirected == NULL) return result;
 
   const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
-      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", chosen);
+      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", redirected);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
-  return const_cast<CHAR*>(chosen);
+  return const_cast<CHAR*>(redirected);
 }
 
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
