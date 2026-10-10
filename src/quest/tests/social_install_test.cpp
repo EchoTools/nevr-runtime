@@ -388,11 +388,11 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
   QCHECK(CountLines("\"event\":\"rich_presence_destination\"") == 2);
   QCHECK(CountLines("\"index\":0,\"count\":1") == 1);
 
-  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
-  QCHECK(std::strcmp(name(&object, 0), "Social Lobby") == 0);
+  QCHECK(Is(name(&object, 0), "Social Lobby"));
+  QCHECK(Is(name(&object, 0), "Social Lobby"));
   QCHECK(CountLines("\"event\":\"rich_presence_name\",\"index\":0,\"name\":\"Social Lobby\"") == 1);
   g_nameAnswer = "Arena";
-  QCHECK(std::strcmp(name(&object, 0), "Arena") == 0);
+  QCHECK(Is(name(&object, 0), "Arena"));
   QCHECK(CountLines("\"event\":\"rich_presence_name\"") == 2);
   g_nameAnswer = nullptr;
   QCHECK(name(&object, 1) == nullptr);  // the original's answer, even null
@@ -420,13 +420,15 @@ void TestPresenceWrappersPassThroughAndLogOnChange() {
 
 // #393 (a2): with the feature on and no destination found by the game, the table answers by the game type of the
 // presence just set; the game's own answer wins when it found one; off, nothing changes.
+bool Is(const char* actual, const char* expected) { return actual != nullptr && std::strcmp(actual, expected) == 0; }
+
 void TestPresenceNameTable() {
-  QCHECK(std::strcmp(PresenceDisplayName("social_2.0"), "Social Lobby") == 0);
-  QCHECK(std::strcmp(PresenceDisplayName("Social_2.0"), "Social Lobby") == 0);  // the game's spelling
-  QCHECK(std::strcmp(PresenceDisplayName("ECHO_ARENA"), "Arena") == 0);
-  QCHECK(std::strcmp(PresenceDisplayName("echo_combat"), "Combat") == 0);
+  QCHECK(Is(PresenceDisplayName("social_2.0"), "Social Lobby"));
+  QCHECK(Is(PresenceDisplayName("Social_2.0"), "Social Lobby"));  // the game's spelling
+  QCHECK(Is(PresenceDisplayName("ECHO_ARENA"), "Arena"));
+  QCHECK(Is(PresenceDisplayName("echo_combat"), "Combat"));
   for (const char* priv : {"echo_arena_private", "echo_combat_private", "social_2.0_private"}) {
-    QCHECK(std::strcmp(PresenceDisplayName(priv), "Private Match") == 0);
+    QCHECK(Is(PresenceDisplayName(priv), "Private Match"));
   }
   for (const char* unknown : {"echo_arena_tournament", "echo_arena_", "social_2.", "social_2.0x", "", "x"}) {
     QCHECK(PresenceDisplayName(unknown) == nullptr);  // prefixes and extensions are different names
@@ -467,12 +469,12 @@ void TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone() {
   set(&object, &document);
   const int answered = destination(&object);
   QCHECK(answered == kPresenceNameBase);
-  QCHECK(std::strcmp(name(&object, static_cast<unsigned>(answered)), "Social Lobby") == 0);
+  QCHECK(Is(name(&object, static_cast<unsigned>(answered)), "Social Lobby"));
   QCHECK(CountLines((std::string("\"index\":") + std::to_string(kPresenceNameBase) + ",\"count\":0,\"source\":\"table\"").c_str()) == 1);
   g_encodeText = "{\"game_type\":\"echo_arena\",\"joinable\":false}";
   set(&object, &document);
   QCHECK(destination(&object) == kPresenceNameBase + 1);
-  QCHECK(std::strcmp(name(&object, kPresenceNameBase + 1), "Arena") == 0);
+  QCHECK(Is(name(&object, kPresenceNameBase + 1), "Arena"));
 
   // A game type the table does not know, or no game type: the game's answer, and the name is the game's.
   g_encodeText = "{\"game_type\":\"echo_arena_tournament\"}";
@@ -481,7 +483,7 @@ void TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone() {
   g_encodeText = "{\"lobby_id\":\"x\"}";
   set(&object, &document);
   QCHECK(destination(&object) == -1);
-  QCHECK(std::strcmp(name(&object, 0), "from Meta") == 0);
+  QCHECK(Is(name(&object, 0), "from Meta"));
 
   // The game found its own destination: never replaced, and its index reaches the name slot unchanged.
   g_encodeText = "{\"game_type\":\"social_2.0\"}";
@@ -489,10 +491,10 @@ void TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone() {
   g_destinationAnswer = 2;
   g_countAnswer = 3;
   QCHECK(destination(&object) == 2);
-  QCHECK(std::strcmp(name(&object, 2), "from Meta") == 0);
+  QCHECK(Is(name(&object, 2), "from Meta"));
 
   // An index just outside the table's range is not ours.
-  QCHECK(std::strcmp(name(&object, static_cast<unsigned>(kPresenceNameBase) + 6U), "from Meta") == 0);
+  QCHECK(Is(name(&object, static_cast<unsigned>(kPresenceNameBase) + 6U), "from Meta"));
   SetPresenceNames(false);
   g_destinationAnswer = -1;
   g_countAnswer = 0;
