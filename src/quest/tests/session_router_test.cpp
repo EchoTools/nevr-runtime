@@ -1352,6 +1352,13 @@ int CountNotices(Rig& rig) {
   return n;
 }
 
+// The fixed part is 0x18 bytes. Run first in main(): with a shorter constant BuildLoginRemovedNotify throws
+// (the padding length underflows), which would end the process before any CHECK printed. Failure caught: a
+// changed fixed size is reported as a failed check, not as an abort.
+void TestLoginRemovedFixedSizeIsPinned() {
+  QCHECK(nevr_evr_codec::kLoginRemovedFixedSize == 0x18);
+}
+
 // The frame layout the game's handler reads (libr15 ListenProxy 0x1938358: size - 0x18 is the JSON; callbacks
 // 0x1933a28 / 0x125f908). Failure caught: a shifted offset, a wrong size, the id words in the wrong order.
 void TestLoginRemovedFrameLayout() {
@@ -1579,6 +1586,11 @@ void TestOneNoticePerLostSession() {
 }
 
 int main() {
+  TestLoginRemovedFixedSizeIsPinned();
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "session_router_test: the login-removed frame size is not 0x18; stopping before it is built\n");
+    return 1;
+  }
   TestConnectionIdentity();
   TestConfigRemoteEndDoesNotEndTheLoginSession();
   TestLoginIsFirstThenQueuedFramesInOrder();

@@ -97,6 +97,10 @@ class SessionBridge {
   std::uint64_t DroppedUnrequires() const { return router_->GetStats().droppedUnrequires; }
   // Unrequires inside a frame that the connection had nothing outstanding for; they reach the game anyway.
   std::uint64_t UnmatchedEmbeddedUnrequires() const { return router_->GetStats().unmatchedEmbeddedUnrequires; }
+  // The login session ended with nothing outstanding and a login-removed notice is due for the next login socket.
+  bool LoginRemovedDue() const { return router_->GetStats().loginRemovedDue; }
+  // Login-removed notices sent so far.
+  std::uint64_t LoginsRemoved() const { return router_->GetStats().loginsRemoved; }
   // Login connections currently held for the account (0 or 1 in practice).
   std::size_t HeldLogins() const { return router_->GetStats().heldRemotes; }
   // One whole EVR frame, toward the service, on the login session. False when there is no login session,

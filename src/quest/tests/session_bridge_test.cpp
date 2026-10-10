@@ -537,6 +537,9 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
   bool eof = false;
   login.Read(1u << 16, 3000, &eof);  // the router's close frame, then the end of the socket
   QCHECK(eof);
+  // Armed by the loss, before the login socket reconnects: only a bridge that handed the router the notice JSON
+  // arms it (the silence report that sends it comes 0.3 s after the reconnect, so this is not yet consumed).
+  QCHECK(WaitFor([&] { return bridge.LoginRemovedDue(); }));
   Client reconnected(port);
   QCHECK(reconnected.Upgrade(path));
   QCHECK(connector.WaitConnects(connectsBefore + 1));
@@ -547,6 +550,9 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
       "{\"message\":\"Connection lost. Select RETRY to sign in again.\"}");
   const std::string noticeWire = BuildFrame(Opcode::Binary, notice);
   QCHECK(reconnected.Read(noticeWire.size()) == noticeWire);
+  // Sent because the loopback server reported the socket silent (the router counts it, one notice).
+  QCHECK(WaitFor([&] { return bridge.LoginsRemoved() == 1; }));
+  QCHECK(!bridge.LoginRemovedDue());
 
   // No credential was replayed: the new session has been sent nothing of the game's old login.
   FakeConnection* second = nullptr;
