@@ -95,7 +95,7 @@ void PreflightRuntimeBootstrap() {
   // collision with server mode.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
-        reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
+        reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
   }
 }
@@ -420,7 +420,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (g_isWindowed || g_isServer || g_isHeadless) {
-    using namespace PatchAddresses;
+    using namespace nevr_patch_addresses;
     // Set windowed mode flag in game structure
     UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)

@@ -123,6 +123,9 @@ def macros_without_prefix(files):
         if not (path.endswith("CMakeLists.txt") or path.endswith(".cmake")):
             continue
         for m in COMPILE_DEF.finditer(text):
+            # The frozen legacy targets read the unprefixed names (src/legacy may not be edited).
+            if re.match(r"target_compile_definitions\(\s*(?:\$\{_legacy_target\}|(?:gamepatcheslegacy|gameserverlegacy)\b)", m.group()):
+                continue
             for d in re.finditer(r"\b([A-Z][A-Z0-9_]+)(?==|\s|\))", m.group()):
                 name = d.group(1)
                 if name.startswith("NEVR_") or name in {"PRIVATE", "PUBLIC", "INTERFACE"} or name.startswith("TARGET"):
