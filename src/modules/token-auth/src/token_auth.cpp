@@ -14,6 +14,8 @@
 #include "core/logging.h"
 
 #include "core/auth_token.h"
+#include "core/auth_refresh.h"
+#include "core/device_auth_flow.h"
 #include "auth_token_refresh.h"
 #include "core/bounded_retry.h"
 #include "nevr_curl.h"
@@ -60,8 +62,6 @@ struct InternalDeviceAuthFlowOps {
     std::function<bool()> cancelled;
 };
 
-static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthLifetime = std::chrono::minutes(5);
-static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthPollInterval = std::chrono::seconds(3);
 // Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up (#202).
 static constexpr unsigned kMaxConsecutivePollErrors = 5;
 static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/login/device";
@@ -99,7 +99,6 @@ private:
     void ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
                                    const InternalDeviceAuthFlowOps& ops);
     std::string HttpPostPublic(const std::string& url, const std::string& body);
-    void DisplayLinkingCode(const InternalDeviceAuthFlowOps& ops);
 
 #ifdef NEVR_TEST_HOOKS
 public:
@@ -289,11 +288,6 @@ TokenAuth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string& code
     return TokenAuth::ParseDevicePollResponse(response);
 }
 
-void DeviceAuth::DisplayLinkingCode(const InternalDeviceAuthFlowOps& ops) {
-    ops.log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorization started; browser opening requested");
-    ops.log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device code expires in 5 minutes");
-}
-
 void DeviceAuth::ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
                                           const InternalDeviceAuthFlowOps& ops) {
     const uint64_t now = static_cast<uint64_t>(time(nullptr));
@@ -377,8 +371,11 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* 
 // TokenAuth::Init runs this on a worker thread and waits for it before module
 // initialization returns, pumping the bootstrap thread's messages meanwhile
 // (#37). HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
-// beyond the five-minute deadline; the deadline rejects any late result after
-// those calls return, but does not cancel or bound the calls themselves.
+// beyond the five-minute deadline. When those calls return after it, the
+// result is rejected unless it is a poll that answers "verified": the server
+// has then deleted the code and handed over the only copy of the tokens, so
+// that answer is applied. The deadline does not cancel or bound the calls
+// themselves.
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops) {
     const auto log = [&ops](EchoVR::LogLevel level, const std::string& message) {
         if (ops.log) ops.log(level, message);
@@ -397,102 +394,33 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
         return false;
     }
 
-    std::string code = ops.requestDeviceCode();
-    if (code.empty()) {
+    // The loop itself (request, open the login page, poll until verified / expired /
+    // error / deadline / cancelled) is the platform-neutral nevr::auth core, shared
+    // with the Quest shim; this adapter maps the module's ops onto it.
+    nevr::auth::DeviceFlowOps core;
+    core.now = ops.now;
+    core.request_device_code = ops.requestDeviceCode;
+    core.open_browser = ops.openBrowser;
+    core.show_open_failure = ops.showOpenFailure;
+    core.poll = ops.poll;
+    core.sleep = ops.sleep;
+    core.cancelled = ops.cancelled;
+    core.max_consecutive_poll_errors = kMaxConsecutivePollErrors;
+    core.log = [&ops](nevr::auth::LogLevel level, const std::string& message) {
+        ops.log(nevr::auth::ToEchoLogLevel(level), message);
+    };
+    const nevr::auth::DeviceFlowResult flow = nevr::auth::RunDeviceCodeFlow(core, kDeviceLoginUrl);
+    if (!flow.verified) return false;
+
+    ApplyVerifiedPollResponse(flow.response, ops);
+    log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorization completed");
+    try {
+        (void)ops.save();
+    } catch (const std::exception&) {
         log(EchoVR::LogLevel::Warning,
-            "[NEVR.AUTH] device code request failed, cannot start device-auth flow");
-        return false;
+            "[NEVR.AUTH] credential cache save failed; in-memory authentication remains active");
     }
-
-    const InternalDeviceAuthFlowOps::Clock::time_point deadline = ops.now() + kDeviceAuthLifetime;
-    DisplayLinkingCode(ops);
-
-    const std::string loginUrl = std::string(kDeviceLoginUrl) + "?code=" + code;
-    const intptr_t browserResult = ops.openBrowser(loginUrl);
-    // The code is a credential for this session, so the log says where the browser was sent and
-    // what the open returned, with the code masked (ShellExecute reports success above 32).
-    log(EchoVR::LogLevel::Info,
-        std::string("[NEVR.AUTH] browser open requested url=") + kDeviceLoginUrl + "?code=<" +
-            std::to_string(code.size()) + " chars masked> shellexecute_result=" + std::to_string(browserResult) +
-            (browserResult <= 32 ? " (failed)" : " (accepted)"));
-    int uiResult = 1;
-    if (browserResult <= 32) {
-        uiResult = ops.showOpenFailure(code, kDeviceLoginUrl, browserResult);
-    }
-
-    const bool expiredAfterBrowserOrUi = ops.now() >= deadline;
-    if (browserResult <= 32 && uiResult == 0) {
-        log(EchoVR::LogLevel::Error,
-            "[NEVR.AUTH] device authorization stopped because the browser could not be opened");
-        return false;
-    }
-    if (expiredAfterBrowserOrUi) {
-        log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
-        return false;
-    }
-
-    unsigned int pollCount = 0;
-    unsigned int consecutiveErrors = 0;
-    while (true) {
-        const InternalDeviceAuthFlowOps::Clock::time_point beforeSleep = ops.now();
-        if (beforeSleep >= deadline) {
-            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
-            return false;
-        }
-        const InternalDeviceAuthFlowOps::Clock::duration remaining = deadline - beforeSleep;
-        const InternalDeviceAuthFlowOps::Clock::duration wait =
-            remaining < kDeviceAuthPollInterval ? remaining : kDeviceAuthPollInterval;
-        if (wait > InternalDeviceAuthFlowOps::Clock::duration::zero()) ops.sleep(wait);
-        if (ops.cancelled && ops.cancelled()) {
-            log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device auth cancelled: the game is closing");
-            return false;
-        }
-        if (ops.now() >= deadline) {
-            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
-            return false;
-        }
-
-        const TokenAuth::DevicePollResponse response = ops.poll(code);
-        if (ops.now() >= deadline) {
-            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
-            return false;
-        }
-
-        switch (response.status) {
-            case TokenAuth::DevicePollStatus::Verified:
-                ApplyVerifiedPollResponse(response, ops);
-                log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorization completed");
-                try {
-                    (void)ops.save();
-                } catch (const std::exception&) {
-                    log(EchoVR::LogLevel::Warning,
-                        "[NEVR.AUTH] credential cache save failed; in-memory authentication remains active");
-                }
-                return true;
-            case TokenAuth::DevicePollStatus::Expired:
-                log(EchoVR::LogLevel::Warning,
-                    "[NEVR.AUTH] Device code expired. Please restart to try again.");
-                return false;
-            case TokenAuth::DevicePollStatus::Pending:
-                consecutiveErrors = 0;
-                ++pollCount;
-                if (pollCount % 10U == 0U) {
-                    const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - ops.now());
-                    log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Still waiting for authorization (" +
-                                                       std::to_string(left.count()) + "s remaining)");
-                }
-                break;
-            case TokenAuth::DevicePollStatus::Error:
-                if (++consecutiveErrors >= kMaxConsecutivePollErrors) {
-                    log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] polling aborted after " +
-                                                       std::to_string(consecutiveErrors) + " consecutive errors");
-                    return false;
-                }
-                log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] poll error " + std::to_string(consecutiveErrors) + " of " +
-                                                   std::to_string(kMaxConsecutivePollErrors) + ", retrying");
-                break;
-        }
-    }
+    return true;
 }
 
 #ifdef NEVR_TEST_HOOKS
@@ -576,13 +504,13 @@ static AuthConfig LoadAuthConfig() {
 // before the token actually dies — each failed attempt logs and retries on the
 // next wake.
 //
-// CAUTION: this must stay BELOW kFallbackAccessTokenLifetimeSec (also 300,
-// core/auth_token.h), which is the lifetime assumed for a token carrying
-// neither a decodable `exp` nor a server `expires_in`. At equal values such a
-// token satisfies this guard the instant it is issued and the every-60s refresh
-// loop returns for that case. Production nakama always signs a JWT with `exp`,
-// so nothing hits it today; raising either constant without the other would.
-static constexpr uint64_t kRefreshLeadSec = 300;
+// The lead is nevr::auth::kRefreshLeadSec (core/auth_refresh.h). It equals
+// kFallbackAccessTokenLifetimeSec (300, core/auth_token_model.h), the lifetime
+// assumed for a token carrying neither a decodable `exp` nor a server
+// `expires_in`: such a token is due for refresh the moment it is issued, so the
+// every-60s loop refreshes it on each wake. Production nakama always signs a JWT
+// with `exp`, so that case is not reached; a lead ABOVE the fallback is rejected
+// at compile time by the static_assert in core/auth_refresh.h.
 
 // The refresh thread's guard, split out of RefreshThreadFunc so it can be
 // asserted in-process without the 60-second sleep.
@@ -595,7 +523,7 @@ static constexpr uint64_t kRefreshLeadSec = 300;
 // issue an HTTP refresh every 60 seconds for the entire hour a perfectly valid
 // token is alive. The disk value is for the load path only.
 static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
-    return auth.GetTokenExpiryValue() <= now + kRefreshLeadSec;
+    return nevr::auth::AccessTokenNeedsRefresh(auth.GetTokenExpiryValue(), now);
 }
 
 static void RefreshThreadFunc(std::string url, std::string httpKey) {

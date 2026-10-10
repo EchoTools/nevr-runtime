@@ -34,7 +34,12 @@ namespace {
 
 google_breakpad::ExceptionHandler* g_handler = nullptr;
 std::once_flag                     g_once;
-std::string                        g_dumpDir;
+// A namespace-scope std::string has a dynamic initializer that runs after the ELF constructor
+// that calls Arm() and would blank the resolved directory, so it is a function-local static.
+std::string& DumpDirStorage() {
+    static std::string dir;
+    return dir;
+}
 
 // Candidate app-writable directories, most-preferred first. The compile-time
 // default wins if it is writable.
@@ -107,8 +112,8 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 
 void Arm() {
     std::call_once(g_once, [] {
-        g_dumpDir = ResolveDumpDir();
-        google_breakpad::MinidumpDescriptor descriptor(g_dumpDir);
+        DumpDirStorage() = ResolveDumpDir();
+        google_breakpad::MinidumpDescriptor descriptor(DumpDirStorage());
         // install_handler=true installs breakpad's 6 handlers:
         // SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP.
         g_handler = new google_breakpad::ExceptionHandler(
@@ -120,7 +125,7 @@ void Arm() {
             /*server_fd=*/-1);
         __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
                             "armed: breakpad ExceptionHandler, dumps -> %s",
-                            g_dumpDir.c_str());
+                            DumpDirStorage().c_str());
     });
 }
 
@@ -130,7 +135,7 @@ void Disarm() {
 }
 
 const char* DumpDir() {
-    return g_dumpDir.empty() ? "" : g_dumpDir.c_str();
+    return DumpDirStorage().empty() ? "" : DumpDirStorage().c_str();
 }
 
 }  // namespace sentinel

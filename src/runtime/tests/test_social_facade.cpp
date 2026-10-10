@@ -833,6 +833,87 @@ TEST(SocialParty, ARefusedJoinIsForgottenAndJoiningTheCurrentPartyDoesNothing) {
   EXPECT_TRUE(state.DrainEvents().empty());
 }
 
+TEST(SocialParty, AnAbandonedJoinGivesTheInviteBackAndFailsToTheGame) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  state.DrainEvents();
+  ASSERT_TRUE(state.BeginJoin(5));
+  const auto accept = state.Join(5);
+  ASSERT_EQ(accept.size(), 1u);
+  EXPECT_EQ(accept[0].symbol, SocialParty::kInviteResponse);
+  EXPECT_EQ(accept[0].target, 201u) << "the request records the account it is aimed at, for logs";
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+
+  EXPECT_TRUE(state.AbandonJoining()) << "the join was in flight";
+  EXPECT_FALSE(state.Snapshot().joining);
+  ASSERT_EQ(state.Snapshot().invites.size(), 1u) << "the invite the join consumed comes back";
+  EXPECT_EQ(state.Snapshot().invites[0].senderId, 201u);
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
+  EXPECT_EQ(events[0].code, 0u);
+  EXPECT_FALSE(state.AbandonJoining()) << "a second call changes nothing";
+  EXPECT_TRUE(state.DrainEvents().empty());
+
+  // A retry by party id is the invite's accept again, not a plain join.
+  ASSERT_TRUE(state.BeginJoin(5));
+  const auto retry = state.Join(5);
+  ASSERT_EQ(retry.size(), 1u);
+  EXPECT_EQ(retry[0].symbol, SocialParty::kInviteResponse);
+
+  // Once the server answers, nothing is left to restore.
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({5, 201})));
+  EXPECT_FALSE(state.AbandonJoining());
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+}
+
+TEST(SocialParty, TargetedRequestsRecordTheAccountTheyAreAimedAt) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 301})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 302})));
+  const auto pass = state.Pass(2);
+  ASSERT_EQ(pass.size(), 1u);
+  EXPECT_EQ(pass[0].target, 302u);
+  ASSERT_TRUE(FeedParty(state, "PartyPassNotify", U64s({7, 100})));
+  const auto kick = state.Kick(1);
+  ASSERT_EQ(kick.size(), 1u);
+  EXPECT_EQ(kick[0].target, 301u);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 303})));
+  const auto dismiss = state.Dismiss(0);
+  ASSERT_EQ(dismiss.size(), 1u);
+  EXPECT_EQ(dismiss[0].target, 303u);
+}
+
+TEST(SocialParty, AnInviteIsQueuedOncePerTargetBehindTheCreate) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_EQ(state.SendInvite(300).size(), 1u) << "the create";
+  EXPECT_TRUE(state.AbandonCreate());
+  EXPECT_FALSE(state.AbandonCreate());
+  ASSERT_EQ(state.SendInvite(300).size(), 1u) << "the create again";
+  std::vector<SocialParty::Message> outgoing;
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100}), &outgoing));
+  std::size_t invites = 0;
+  for (const auto& m : outgoing) invites += m.symbol == SocialParty::kInviteRequest ? 1 : 0;
+  EXPECT_EQ(invites, 1u);
+}
+
+TEST(SocialParty, AnUnansweredLockIsForgottenOnlyWhileItIsUnanswered) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_EQ(state.SetLocked(true).size(), 1u);
+  EXPECT_TRUE(state.SetLocked(true).empty()) << "asked once";
+  EXPECT_FALSE(state.ExpireLockRequest(false)) << "a different request is not the one in flight";
+  EXPECT_TRUE(state.ExpireLockRequest(true));
+  EXPECT_EQ(state.SetLocked(true).size(), 1u) << "forgotten, so it may be asked again";
+  ASSERT_TRUE(FeedParty(state, "PartyLockSuccess", U64s({7})));
+  EXPECT_FALSE(state.ExpireLockRequest(true)) << "answered";
+}
+
 TEST(SocialParty, AcceptingAnInviteKeepsTheCurrentPartyUntilTheNewOneAdmits) {
   SocialParty::State state;
   state.SetSelf(100);
