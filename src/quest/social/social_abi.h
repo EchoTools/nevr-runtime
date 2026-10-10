@@ -67,6 +67,22 @@ struct GameJson {
   CJsonEncodeToCompactFn encode = nullptr;
 };
 
+// NRadEngine::NRadGame::CR15NetGame::SendComponentEventGlobal(NRadEngine::CSymbol64) (libr15 export
+// _ZN10NRadEngine8NRadGame11CR15NetGame24SendComponentEventGlobalENS_9CSymbol64E, 160 bytes at 0x1244758): posts the
+// symbol as a component event to the NetGame's component spaces ([netgame+0x2b10], [netgame+0x2b08], the fallback
+// space), where the scripts' event handlers run. The first argument is the CR15NetGame, which is the context of every
+// delegate the game handed Initialize (social_game_calls.cpp: MemberProxy<CR15NetGame, ...>).
+using SendComponentEventFn = void (*)(void* netGame, std::uint64_t symbol);
+inline constexpr std::uint64_t kLibR15SendComponentEventVaddr = 0x1244758ULL;
+// The arm-computer script module (lib156208a7bf6bcfec.so) lists CSymbol64("evt_debug_arm_computer_friends") in its name
+// table. Whether its handler switches the tablet to the Friends state is what the #318 probe measures.
+inline constexpr std::uint64_t kSymEvtArmComputerFriends = 0x976edb4d0c250317ULL;
+
+// The game function the facade posts script events with. nullptr: not known (libr15 absent or not the pinned build).
+struct GameEvents {
+  SendComponentEventFn send = nullptr;
+};
+
 // ---- the CNSISocial vtable ------------------------------------------------------------------
 
 // 76 slots. Quest numbering is the PCVR facade's numbering plus one from slot 12 on: the Itanium

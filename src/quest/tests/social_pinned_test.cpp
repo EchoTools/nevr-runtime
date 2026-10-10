@@ -196,6 +196,18 @@ void CheckGameFunctions(const LoadedElf& r15) {
     std::memcpy(&first, r15.At(encode->st_value), sizeof(first));
     QCHECK(first == 0xaa0403e5U);
   }
+  // CR15NetGame::SendComponentEventGlobal(CSymbol64): the export the Invite Members probe (#318) posts the arm-computer
+  // script event through. 160 bytes; the first two instructions are `str x20, [sp, #-0x20]!` and
+  // `stp x19, x30, [sp, #0x10]`.
+  const Elf64_Sym* post = FindSymbol(dyn, "_ZN10NRadEngine8NRadGame11CR15NetGame24SendComponentEventGlobalENS_9CSymbol64E");
+  QCHECK(post != nullptr);
+  if (post != nullptr) {
+    QCHECK(ELF64_ST_TYPE(post->st_info) == STT_FUNC && post->st_size == 160);
+    QCHECK(post->st_value == quest_social::kLibR15SendComponentEventVaddr);
+    std::uint32_t words[2] = {};
+    std::memcpy(words, r15.At(post->st_value), sizeof(words));
+    QCHECK(words[0] == 0xf81e0ff4U && words[1] == 0xa9017bf3U);
+  }
   // The provider constants FriendId compares (see social_abi.h): seven CSymbol64 words in libr15's rodata, and "OVR" is
   // the one that gives platform code 4.
   for (const quest_social::ProviderConstant& c : quest_social::kProviderConstants) {
@@ -217,6 +229,10 @@ void CheckGameFunctions(const LoadedElf& r15) {
   QCHECK(address(json.reset) == r15.image.base + quest_social::kLibR15CJsonResetVaddr);
   QCHECK(address(json.decode) == r15.image.base + quest_social::kLibR15CJsonDecodeFromVaddr);
   QCHECK(address(json.encode) == r15.image.base + quest_social::kLibR15CJsonEncodeToCompactVaddr);
+  g_lookupImage = &r15.image;
+  const quest_social::GameEvents events = quest_social::ResolveGameEvents(&LookupFixed);
+  g_lookupImage = nullptr;
+  QCHECK(address(events.send) == r15.image.base + quest_social::kLibR15SendComponentEventVaddr);
 
   // SUuid::kInvalid (ExitLobby and Reset copy it; the facade stores sixteen zero bytes instead): a 16-byte
   // object in the .bss part of a PT_LOAD, so zero at load.

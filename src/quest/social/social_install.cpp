@@ -90,6 +90,18 @@ GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept {
   return json;
 }
 
+GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept {
+  GameEvents events;
+  sentinel::ElfImage image;
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return events;
+  char id[64] = {};
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return events;
+  const std::uintptr_t send = image.base + static_cast<std::uintptr_t>(kLibR15SendComponentEventVaddr);
+  static_assert(sizeof(events.send) == sizeof(send), "function pointer size");
+  std::memcpy(&events.send, &send, sizeof(events.send));
+  return events;
+}
+
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
@@ -173,6 +185,7 @@ InstallResult InstallSocialHook(bool enabled) {
   PublishFacadeObject();
   const GameJson gameJson = ResolveGameJson(&sentinel::FindLoadedImage);
   SetGameJson(gameJson);
+  SetGameEvents(ResolveGameEvents(&sentinel::FindLoadedImage));
   LogFields(gameJson.reset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
             {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"}});
   SocialThunk::Arm(kSocialHook);

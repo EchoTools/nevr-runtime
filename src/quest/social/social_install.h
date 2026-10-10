@@ -70,6 +70,10 @@ void ResetCountersForTest() noexcept;
 // instruction of each). Never throws.
 GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 
+// The game function that posts a script event by symbol (SendComponentEventGlobal), found only in libr15 of the pinned
+// build: the image base plus kLibR15SendComponentEventVaddr, nullptr otherwise. Never throws.
+GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept;
+
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
 // count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
 // events dropped, sends failed, joins deferred, requests timed out, four callback delivery classes, JSON failures,

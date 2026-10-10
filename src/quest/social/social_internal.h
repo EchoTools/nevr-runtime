@@ -97,6 +97,15 @@ struct ShareJob {
 
 enum class JoinStep : std::uint8_t { kDeferred, kAskGate };
 
+// One script event post for a UI slot. `symbol` 0: nothing to post. `result` is written by the game-call side.
+enum class UiEventResult : std::uint8_t { kNotRun, kPosted, kNoFunction, kNoNetGame };
+struct UiEventJob {
+  GameEvents game;
+  std::uint64_t symbol;
+  std::uint32_t slot;
+  UiEventResult result;
+};
+
 // ---- implemented in social_facade.cpp: every one is noexcept and contains its own failures ---------
 //
 // `self` is the object the game holds. A null or foreign object is answered with the neutral value.
@@ -130,11 +139,20 @@ JoinStep JoinBegin(void* self, std::uint64_t partyId) noexcept;
 void JoinFinish(void* self, std::uint64_t partyId, bool allowed) noexcept;
 // The party of the invite the game lists at `index`, newest first (0 none).
 std::uint64_t InvitePartyAt(void* self, std::uint32_t index) noexcept;
+// A UI slot that asks the game's tablet for its Friends tab: the facade's own behaviour for the slot (its log line),
+// then the event to post (job->symbol, job->game). ... and after the game-call side ran it, the outcome is logged.
+void UiEventBegin(void* self, std::uint32_t slot, std::uint64_t target, UiEventJob* job) noexcept;
+void UiEventFinish(void* self, const UiEventJob* job) noexcept;
 
 // ---- implemented in social_game_calls.cpp (built -fno-exceptions): the slots that call the game ----
 void SlotUpdateEntry(void* self, const void* params) noexcept;
 void SlotJoinInternalEntry(void* self, std::uint64_t partyId) noexcept;
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept;
 void SlotResetEntry(void* self) noexcept;
+// The party tab's "Invite Members" slots (#318 probe): OpenNewSendInviteUI(user) (slot 40) and OpenPartyUI(user,
+// target) (slot 44). They keep their facade behaviour (no invite from the call) and post the script event that is the
+// candidate for switching the tablet to its Friends tab, through the game function in GameEvents.
+void SlotInviteUiNoTargetEntry(void* self, std::uint32_t user) noexcept;
+void SlotPartyUiTargetEntry(void* self, std::uint32_t user, std::uint64_t target) noexcept;
 
 }  // namespace quest_social::internal

@@ -64,6 +64,7 @@ std::atomic<std::uintptr_t> g_pnsovrBias{0};
 std::atomic<CJsonResetFn> g_cjsonReset{nullptr};
 std::atomic<CJsonDecodeFromFn> g_cjsonDecode{nullptr};
 std::atomic<CJsonEncodeToCompactFn> g_cjsonEncode{nullptr};
+std::atomic<SendComponentEventFn> g_sendComponentEvent{nullptr};  // SetGameEvents (#318 probe)
 // Callbacks delivered to the game, by class (the reporter thread logs them; nothing logs on the delivery).
 std::atomic<std::uint64_t> g_cbCreated{0};
 std::atomic<std::uint64_t> g_cbMemberJoined{0};
@@ -917,11 +918,11 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kExitGame] = Entry<kExitGame, &SlotNothing>();
   t[kOpenFriendRequestUI] = Entry<kOpenFriendRequestUI, &SlotOpenFriendRequestUI>();
   t[kOpenSendInviteUI] = Entry<kOpenSendInviteUI, &SlotInviteUINoTarget>();
-  t[kOpenNewSendInviteUI] = Entry<kOpenNewSendInviteUI, &SlotInviteUINoTarget>();
+  t[kOpenNewSendInviteUI] = reinterpret_cast<SlotWord>(&internal::SlotInviteUiNoTargetEntry);
   t[kOpenNewSendInviteUITarget] = Entry<kOpenNewSendInviteUITarget, &SlotInviteUITarget>();
   t[kOpenRecvInviteUI] = Entry<kOpenRecvInviteUI, &SlotNothingU32>();
   t[kOpenPartyUI] = Entry<kOpenPartyUI, &SlotNothingU32>();
-  t[kOpenPartyUITarget] = Entry<kOpenPartyUITarget, &SlotPartyUITarget>();
+  t[kOpenPartyUITarget] = reinterpret_cast<SlotWord>(&internal::SlotPartyUiTargetEntry);
   t[kRefreshingFriends] = Entry<kRefreshingFriends, &SlotZero32>();
   t[kRefreshFriends] = Entry<kRefreshFriends, &SlotRefreshFriends>();
   t[kFriendCount] = Entry<kFriendCount, &SlotFriendCount>();
@@ -1369,6 +1370,51 @@ std::uint64_t InvitePartyAt(void* self, std::uint32_t index) noexcept {
   return 0;
 }
 
+// The slots behind the party tab's "Invite Members" (#318): the facade's own answer is unchanged (no invite goes out
+// from the call, SlotInviteUINoTarget / SlotPartyUITarget log it), and the tablet is asked for its Friends tab, where
+// the "+" sends an invite the way the game does. Slot 44 is posted only for the local user's own id (what the button
+// passes, smoke #5); a user named by the game is left to SlotPartyUITarget alone.
+void UiEventBegin(void* self, std::uint32_t slot, std::uint64_t target, UiEventJob* job) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr || job == nullptr) return;
+  try {
+    bool post = false;
+    if (slot == kOpenNewSendInviteUI) {
+      SlotInviteUINoTarget(self, 0);
+      post = true;
+    } else if (slot == kOpenPartyUITarget) {
+      SlotPartyUITarget(self, 0, target);
+      const std::uint64_t selfId = CurrentView(*impl)->selfId;
+      post = selfId != 0 && target == selfId;
+    }
+    job->game.send = g_sendComponentEvent.load(std::memory_order_acquire);
+    job->slot = slot;
+    job->symbol = post ? kSymEvtArmComputerFriends : 0;
+  } catch (const std::exception&) {
+    ReportFailure(impl, slot);
+  }
+}
+
+void UiEventFinish(void* self, const UiEventJob* job) noexcept {
+  if (job == nullptr || job->symbol == 0) return;
+  const char* result = "not_run";
+  switch (job->result) {
+    case UiEventResult::kPosted: result = "posted"; break;
+    case UiEventResult::kNoFunction: result = "no_function"; break;
+    case UiEventResult::kNoNetGame: result = "no_netgame"; break;
+    case UiEventResult::kNotRun: break;
+  }
+  try {
+    LogFields(LogLevel::kInfo, "social_ui_event",
+              {{"slot", static_cast<long long>(job->slot)},
+               {"name", "evt_debug_arm_computer_friends"},
+               {"hash", "0x976edb4d0c250317"},
+               {"result", result}});
+  } catch (const std::exception&) {
+    ReportFailure(OwnerOf(self), job->slot);
+  }
+}
+
 }  // namespace internal
 
 // ---- public ---------------------------------------------------------------------------------
@@ -1417,6 +1463,10 @@ void SetGameJson(const GameJson& json) noexcept {
   g_cjsonReset.store(json.reset, std::memory_order_release);
   g_cjsonDecode.store(json.decode, std::memory_order_release);
   g_cjsonEncode.store(json.encode, std::memory_order_release);
+}
+
+void SetGameEvents(const GameEvents& events) noexcept {
+  g_sendComponentEvent.store(events.send, std::memory_order_release);
 }
 
 void NoteFrameIgnored() noexcept { Count(g_framesIgnored); }
