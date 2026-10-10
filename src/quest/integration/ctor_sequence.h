@@ -8,7 +8,8 @@
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
 //   2  ResolveConfig                 InitActivation: embedded defaults + nevr-quest.json, every state logged
-//   3  RegisterCounters              every counter of every hook that will be installed, BEFORE ...
+//   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
+//                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
@@ -27,6 +28,7 @@
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
+//   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
@@ -58,6 +60,7 @@ enum class StepId : std::uint8_t {
   kRegisterClockCounters,
   kRegisterRedirectCounters,
   kRegisterDlopenCounters,
+  kRegisterLoginCounters,
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
   kStartReporter,
@@ -97,6 +100,7 @@ class Steps {
   virtual bool RegisterClockCounters() = 0;
   virtual bool RegisterRedirectCounters() = 0;
   virtual bool RegisterDlopenCounters() = 0;
+  virtual bool RegisterLoginCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
   virtual bool RegisterLoginPromptCounters() = 0;
   virtual bool StartReporter() = 0;
