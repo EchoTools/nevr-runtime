@@ -509,7 +509,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    or released, for as long as it is the login connection; `LoopbackGameServer` then exempts it from
    `idleFirstFrameMs` (pings are still answered). Config, matchmaker and unclassified connections
    keep the idle close. `ReevaluateHeldLogins`
-   (via `IntegratedBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
+   (via `SessionBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
    Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
    never held: with no token their remote cannot start and they close with 1011 at once. A
    connection opened while the login session has no live login connection is the login connection of
@@ -548,7 +548,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      `CURLOPT_` literal, each critical option set exactly once) is a tripwire, not the guarantee:
      `just test-quest-tls` runs the connector against real servers and is what proves the
      behavior.
-   - `session_bridge` composes them.
+   - `session_bridge` composes them, with the frame tap (`frame_tap`) and the side-channel send the social
+     facade needs (`Config::tap`, `SendToLogin`).
 
    The Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
 
@@ -1621,11 +1622,11 @@ action. The handler restores `errno`. `AfterDlopen` runs after the game's call h
 no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
 
 **Social.** `FeatureEnabled(kSocial)` gates the facade (it requires login). The login declares
-`nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `integrated_bridge.cpp`: the same composition as
-`SessionBridge` with decorators (`tapped_transports.cpp`) that show every relayed frame to
-`frame_tap.cpp`, which feeds `quest_social::ObserveFrames` and, on the service's `LoginSuccess`
-(account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's requests go out
-through `SocialParty::SetSender` on a side channel that refuses until the login is accepted (#236).
+`nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `quest_net::SessionBridge` (`net/session_bridge.cpp`); its
+`Config::tap` (`net/frame_tap.cpp`) sees every relayed frame, which feeds `quest_social::ObserveFrames` and, on the
+service's `LoginSuccess` (account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's
+requests go out through `SocialParty::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
+until the login is accepted.
 
 **Sensor annotation.** `NEVR_OUTSIDE_GAME_CALL` (`sentinel/outside_game_call.h`) places a function in the
 output section `nevr_outside_game_call`. `TestHookFramesCarryNoPersonality` reads that section from the

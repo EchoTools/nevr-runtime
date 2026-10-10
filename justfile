@@ -480,6 +480,21 @@ test-quest-shared:
         src/quest/tests/quest_config_test.cpp \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
+    # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
+    # game threads while the dump thread reads it).
+    hwdump_core=(src/quest/diag/hwdump_field.cpp src/quest/diag/hwdump_fs.cpp src/quest/diag/hwdump_os.cpp \
+        src/quest/diag/hwdump_records.cpp src/quest/diag/hwdump_report.cpp src/quest/tests/hwdump_core_test.cpp)
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${hwdump_core[@]}" -pthread -o "$out/hwdump_core_test"
+    timeout -k 5 120 "$out/hwdump_core_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -fsanitize=thread -g -O1 "${hwdump_core[@]}" \
+        -pthread -o "$out/hwdump_core_test_tsan"
+    timeout -k 5 300 "$out/hwdump_core_test_tsan"
+    # The libr15 hook handlers, built like the sentinel's copy (-fno-exceptions): arguments pass through bit
+    # for bit, results come back unchanged, nothing is read past the game's buffers.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc src/quest/diag/hwdump_records.cpp \
+        src/quest/diag/hwdump_handlers.cpp src/quest/tests/hwdump_handlers_test.cpp -o "$out/hwdump_handlers_test"
+    timeout -k 5 120 "$out/hwdump_handlers_test"
     # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
@@ -497,7 +512,7 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
@@ -507,7 +522,7 @@ test-quest-shared:
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
@@ -886,7 +901,7 @@ test-quest-integration:
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
         src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
-        src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
     # 2. the hook translation units and the counter budget
@@ -921,14 +936,15 @@ test-quest-integration:
         "$out/login_prompt_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
-    # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
+    # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
+    # builds when none is injected)
     "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
-        src/quest/tests/integrated_bridge_test.cpp src/quest/integration/integrated_bridge.cpp \
-        src/quest/integration/tapped_transports.cpp src/quest/integration/frame_tap.cpp \
+        src/quest/tests/session_bridge_test.cpp src/quest/net/session_bridge.cpp src/quest/net/frame_tap.cpp \
+        src/quest/net/curl_ws_connector.cpp src/quest/auth/ca_bundle.cpp \
         src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/runtime/server/serverdb_uri.cpp \
-        -o "$out/integrated_bridge_test" $(pkg-config --libs libcurl)
-    timeout 300 "$out/integrated_bridge_test"
+        -o "$out/session_bridge_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the

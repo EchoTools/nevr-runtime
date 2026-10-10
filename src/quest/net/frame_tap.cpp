@@ -1,11 +1,11 @@
-#include "quest/integration/frame_tap.h"
+#include "quest/net/frame_tap.h"
 
 #include <exception>
 #include <string>
 
 #include "runtime/compat/evr_codec.h"
 
-namespace nevr_quest::integration {
+namespace quest_net {
 
 namespace {
 constexpr std::size_t kLoginSuccessAccountOffset = 24;  // after the 16-byte session id and the 8-byte platform
@@ -57,4 +57,4 @@ void FrameTap::Handle(bool serverToGame, std::string_view frame) noexcept {
 void FrameTap::ServerToGame(std::string_view frame) noexcept { Handle(true, frame); }
 void FrameTap::GameToServer(std::string_view frame) noexcept { Handle(false, frame); }
 
-}  // namespace nevr_quest::integration
+}  // namespace quest_net

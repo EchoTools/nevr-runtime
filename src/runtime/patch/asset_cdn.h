@@ -39,6 +39,11 @@ void Initialize();
 /// Safe to call if Initialize() was never called or failed.
 void Shutdown();
 
+/// Ask the background fetch to stop and wait for it, bounded. Leaves the hook and the tint map
+/// alone, so a client can call it on its way out of the process. Returns true when the thread
+/// finished; false when it was detached still running. Safe when no fetch was started.
+bool StopBackgroundFetch();
+
 /// Start the background fetch pipeline (manifest → download → cache → parse).
 /// Non-blocking. Logs progress. Safe to call multiple times (no-ops if already running).
 void StartBackgroundFetch();
