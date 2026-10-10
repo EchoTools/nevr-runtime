@@ -299,6 +299,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
         ++i;
       }
+    } else if (lstrcmpW(arg, L"-traceexports") == 0) {
+      // Consumed here so it is not mistaken for anything else; the tracer reads its own value from the
+      // command line (runtime/hook/export_tracer.cpp), so no ordering with this parse can matter.
+      if (i + 1 < argc) ++i;
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
       // Deprecated — silently consume value arg if present
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
