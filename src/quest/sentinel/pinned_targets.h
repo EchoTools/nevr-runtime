@@ -32,6 +32,7 @@ inline constexpr const char* kMatchmakingBuildId = "8c4fddc079eae65909530132a56c
 
 inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
+inline constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
 inline constexpr const char* kConfigRequestSendSymbol =
     "_ZN10NRadEngine18SNSConfigRequestv24SendERNS_15CTcpBroadcasterEPKcS4_";
 inline constexpr const char* kSetDelimitedErrorMessageSymbol =
@@ -60,6 +61,17 @@ struct LibR15TStringTag {};
 struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
+
+// NRadEngine::CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 at 0xf96c08 and
+// called through libr15's own PLT (JUMP_SLOT 0x36e8028): `handle` (x0, the `unsigned long&`) receives the
+// connection handle and `url` (x1) is the base URL, e.g. the literal "https://api.readyatdawn.com"
+// (0x2baa029) that CR15NetStoreTransactions::InitializeHttp (0x126c1bc) passes at 0x126c274, or the
+// "https://api-%s.readyatdawn.com" it builds at 0x126c25c (the other literal site is 0x128958c). The
+// connection is made synchronously from `url`; the return value (w0, 0 on success: InitializeHttp's
+// `cbnz w0` at 0x126c260/0x126c278) is passed through untouched. The URL is borrowed for the call.
+using CreateConnectionSig = int(unsigned long* handle, const char* url);
+struct LibR15CreateConnectionTag {};
+using LibR15CreateConnectionThunk = CallbackThunk<LibR15CreateConnectionTag, CreateConnectionSig>;
 
 // NRadEngine::NRadGame::CR15NetGame::SetDelimitedErrorMessage(char const*), defined in libr15 at
 // 0x125f768 (member: `this` in x0, the message in x1, no return value). It splits the message on
@@ -223,6 +235,12 @@ inline GotTarget LibR15ClockGettime() {
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
   return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ebe08ULL};
+}
+
+// libr15.so's slot for CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 itself
+// (JUMP_SLOT 0x36e8028, readelf -rW on the pinned image).
+inline GotTarget LibR15CreateConnection() {
+  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e8028ULL};
 }
 
 // libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself

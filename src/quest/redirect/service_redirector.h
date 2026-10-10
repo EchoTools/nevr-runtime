@@ -66,6 +66,11 @@ inline constexpr std::size_t kMaxValueBytes = 512;
 // passes to TString for each match type). Exact, case-sensitive, allocation-free.
 bool IsServiceHostKey(const char* key) noexcept;
 
+// The game's REST API base URLs: "https://api.readyatdawn.com" and the per-environment
+// "https://api-<env>.readyatdawn.com" it passes to CSysHttp::CreateConnection (libr15 0x126c274,
+// 0x126c25c, 0x128958c). Those are not read through CJson::TString, so IsServiceHostKey does not see them.
+bool IsApiBaseUrl(const char* url) noexcept;
+
 // The built-in defaults the game passes as fallback for those keys. Used to prewarm the cache.
 struct BuiltinDefault {
   const char* key;    // the primary key read with this fallback
@@ -126,6 +131,11 @@ class ServiceRedirector {
   // pool pointer. Safe to call from any thread.
   const char* Apply(const char* key, const char* result) noexcept;
 
+  // Decides for one CSysHttp::CreateConnection URL (IsApiBaseUrl only): the same shared policy, cache and
+  // pool as Apply, so an https://api...readyatdawn.com base goes to the configured HTTP service
+  // (nevr_http_uri; never the bridge). Same failure behaviour: any doubt returns `url` itself.
+  const char* ApplyUrl(const char* url) noexcept;
+
   // Runs the policy for the built-in defaults so the first game reads are cache hits.
   void Prewarm() noexcept;
 
@@ -142,6 +152,7 @@ class ServiceRedirector {
   };
 
   const char* Resolve(const char* result, std::size_t length, BridgeState bridge, Outcome* outcome);
+  const char* ApplyChecked(const char* result) noexcept;  // the part of Apply after the key rule
 
   const nevr_quest::ResolvedConfig config_;
   const InternFn intern_;
