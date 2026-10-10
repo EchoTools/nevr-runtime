@@ -49,8 +49,17 @@ bool DecodeProfilePayload(const std::uint8_t* payload, std::size_t len, std::uin
   return !displayName->empty();
 }
 
-// Registers the decoder when the runtime loads (the tests that do not link this file keep none).
-const bool g_decoderRegistered = (SetDecoder(&DecodeProfilePayload), true);
-
 }  // namespace
+
+void RegisterDefaultDecoder() { SetDecoder(&DecodeProfilePayload); }
+
+#ifndef NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION
+namespace {
+// Registers the decoder when the runtime loads (the tests that do not link this file keep none). The Quest
+// build defines NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION: its sentinel may carry no dynamic initializer
+// (tools/check_quest_static_init.sh), so the installer calls RegisterDefaultDecoder() instead.
+const bool g_decoderRegistered = (RegisterDefaultDecoder(), true);
+}  // namespace
+#endif
+
 }  // namespace SocialNames

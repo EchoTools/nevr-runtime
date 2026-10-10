@@ -20,6 +20,14 @@ Design documents, architecture decisions, and porting analysis.
 | `adr/0004-quest-verification-regime.md` | Quest networking is verified against the exact binaries, offline | Quest porting developers |
 | `adr/0005-cosmetics-cdn-format.md` | Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN (normative format) | CDN tooling and game-hook developers |
 
+## Players
+
+What a player does, for builds that include the feature.
+
+| File | Description | Audience |
+| ---- | ----------- | -------- |
+| `quest/SIGN-IN.md` | Signing in to EchoVRCE on Quest with a device code: what the headset shows, what to do, and what to do if the game closes first | Quest players and testers |
+
 ## Process
 
 Operational procedures and testing protocols.

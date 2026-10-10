@@ -9,6 +9,9 @@
 // OtherUserProfileSuccess reply (EvrId(16) + u32 + a zstd-compressed profile JSON). This header holds
 // the pure pieces; the zstd decode lives in social_names.cpp and is registered at startup, so a
 // binary that does not link zstd (the tests that compile the bridge) simply resolves no names.
+// The PC build registers it from a namespace-scope initializer; a build that forbids dynamic
+// initializers (the Quest sentinel) compiles social_names.cpp with
+// NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION and calls RegisterDefaultDecoder() itself.
 
 #include <atomic>
 #include <cstddef>
@@ -79,5 +82,8 @@ inline Resolver& GlobalResolver() {
   static Resolver resolver;
   return resolver;
 }
+
+/// Registers the zstd profile decoder (social_names.cpp). Safe to call more than once.
+void RegisterDefaultDecoder();
 
 }  // namespace SocialNames

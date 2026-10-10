@@ -2,7 +2,9 @@
 
 import pathlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -47,8 +49,108 @@ class ReleaseContractTest(unittest.TestCase):
         for target in targets:
             self.assertIn(f"--target {target}", recipe)
             self.assertIn(target, recipe.split("for test_name in ", 1)[1].split("; do", 1)[0])
-        self.assertIn('wine "$bin"', recipe)
+        # Every binary runs through run_test, which bounds it with timeout so a hang fails the gate: no
+        # `wine` command may appear outside run_test's body, at any indentation.
+        match = re.search(r"^ *run_test\(\) \{\n.*?^ *\}\n", recipe, re.S | re.M)
+        self.assertIsNotNone(match, "run_test is not defined in test-auth-unit")
+        outside = (recipe[:match.start()] + recipe[match.end():])
+        code = "\n".join(line for line in outside.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIsNone(re.search(r"(^|[;&|(]|\s)wine\s", code),
+                          "a wine command runs outside run_test, so it has no time limit")
+        self.assertGreaterEqual(code.count('run_test "$bin"'), 15)
+        self.assertIn('timeout -k 10 900 wine "$1"', match.group(0))
+        # run_test is pinned to the memory cap, with a stated fallback when a user scope cannot start.
+        body = match.group(0)
+        self.assertIn("command -v systemd-run", body)
+        self.assertIn("-p MemoryMax=4G -p MemorySwapMax=0 -- true", body)
+        self.assertIn("systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine", body)
+        self.assertIn("memory cap exceeded (MemoryMax=4G)", body)
+        self.assertIn("cannot start a user scope", body)
+        self.assertIn("timed out after 900s", body)
         self.assertIn('if [[ ! -f "$bin" ]]; then', recipe)
+        self._run_test_scenarios(body)
+
+    def _run_test_scenarios(self, body):
+        """Run the real run_test body against stub wine, timeout and systemd-run programs."""
+        bash = shutil.which("bash")
+        true_bin = shutil.which("true")
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as tmp:
+            tmpdir = pathlib.Path(tmp)
+
+            def program(name, text):
+                path = tmpdir / name
+                path.write_text(text)
+                path.chmod(0o755)
+
+            # wine leaves a marker, then exits with the requested status.
+            def stub_wine(status):
+                program("wine", f"#!/bin/sh\necho ran >> {tmpdir}/wine_ran.txt\nexit {status}\n")
+
+            # timeout records its arguments, drops `-k N DURATION`, and runs the command.
+            program("timeout", f'#!/bin/sh\necho "$@" >> {tmpdir}/timeout_args.txt\nshift 3\nexec "$@"\n')
+            (tmpdir / "true").symlink_to(true_bin)
+
+            def stub_systemd_run(mode):
+                path = tmpdir / "systemd-run"
+                path.unlink(missing_ok=True)
+                if mode == "absent":
+                    return
+                if mode == "works":
+                    # Records its options, then runs the command after `--`, as systemd-run would.
+                    program("systemd-run",
+                            f'#!/bin/sh\necho "$@" >> {tmpdir}/systemd_run_args.txt\n'
+                            'while [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+                else:
+                    # Cannot start a user scope (no user manager or session bus): never runs the command.
+                    program("systemd-run",
+                            f'#!/bin/sh\necho "$@" >> {tmpdir}/systemd_run_args.txt\n'
+                            'echo "Failed to connect to user scope bus via local transport: '
+                            '$DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined" >&2\nexit 1\n')
+
+            def run(wine_status, mode):
+                for name in ("wine_ran.txt", "timeout_args.txt", "systemd_run_args.txt"):
+                    (tmpdir / name).write_text("")
+                stub_wine(wine_status)
+                stub_systemd_run(mode)
+                env = dict(os.environ, PATH=str(tmpdir))
+                result = subprocess.run([bash, "-c", body + '\nrun_test x.exe; echo reached'],
+                                        env=env, capture_output=True, text=True)
+                read = lambda name: (tmpdir / name).read_text()
+                return result, read("wine_ran.txt"), read("timeout_args.txt"), read("systemd_run_args.txt")
+
+            # A working systemd-run: capped, bounded by timeout, and the wine status is the result.
+            failing, ran, targs, sargs = run(7, "works")
+            self.assertEqual(failing.returncode, 7, failing.stderr)
+            self.assertNotIn("reached", failing.stdout)
+            self.assertIn("ran", ran)
+            self.assertIn("MemoryMax=4G", sargs)
+            self.assertIn("MemorySwapMax=0", sargs)
+            self.assertIn("-k 10 900 wine x.exe", targs)
+            passing, ran, _, _ = run(0, "works")
+            self.assertEqual(passing.returncode, 0, passing.stderr)
+            self.assertIn("reached", passing.stdout)
+            self.assertIn("ran", ran)
+            killed, _, _, _ = run(137, "works")
+            self.assertEqual(killed.returncode, 137, killed.stderr)
+            self.assertIn("memory cap exceeded (MemoryMax=4G)", killed.stderr)
+            timed_out, _, _, _ = run(124, "works")
+            self.assertEqual(timed_out.returncode, 124, timed_out.stderr)
+            self.assertIn("timed out after 900s", timed_out.stderr)
+
+            # systemd-run missing, or present but unable to start a user scope: the test still runs, bounded by
+            # timeout, the fallback says so, and the result is the wine status, not the scope failure.
+            for mode in ("absent", "broken"):
+                for status, message in ((7, None), (0, None), (124, "timed out after 900s")):
+                    result, ran, targs, _ = run(status, mode)
+                    self.assertEqual(result.returncode, status, f"{mode}/{status}: {result.stderr}")
+                    self.assertIn("ran", ran, f"{mode}/{status}: wine never ran")
+                    self.assertIn("-k 10 900 wine x.exe", targs, f"{mode}/{status}: no time limit")
+                    self.assertIn("cannot start a user scope", result.stderr)
+                    self.assertIn("no memory cap", result.stderr)
+                    if status == 0:
+                        self.assertIn("reached", result.stdout)
+                    if message:
+                        self.assertIn(message, result.stderr)
 
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
         websocket = (REPO / "src/runtime/server/websocket_client.cpp").read_text()
