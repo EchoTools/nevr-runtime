@@ -28,6 +28,7 @@
 
 #include "core/logging.h"
 #include "core/mic_dsp.h"
+#include "core/mic_endpoint_loss.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_lifecycle.h"
 #include "core/mic_owner_thread.h"
@@ -175,13 +176,20 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
   }
 }
 
-// Records an invalidated device (once per loss) from a capture call that failed with `hr`.
+static_assert(static_cast<int32_t>(AUDCLNT_E_DEVICE_INVALIDATED) == kMicDeviceInvalidated,
+              "mic_endpoint_loss.h must name the audioclient.h value");
+static_assert(static_cast<int32_t>(AUDCLNT_E_RESOURCES_INVALIDATED) == kMicResourcesInvalidated,
+              "mic_endpoint_loss.h must name the audioclient.h value");
+
+// Records a lost endpoint (once per loss) from a capture call that failed with `hr`: the device was
+// invalidated, or the stream's resources were (suspended or disconnected stream).
 void NoteIfDeviceLost(HRESULT hr) {
-  if (hr != AUDCLNT_E_DEVICE_INVALIDATED) return;
+  if (!MicHresultMeansEndpointLost(static_cast<int32_t>(hr))) return;
   if (!g_deviceLost.exchange(true, std::memory_order_acq_rel)) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] capture device invalidated (0x%lx): the default capture endpoint will be re-acquired",
-        static_cast<unsigned long>(hr));
+        "[NEVR.MIC] capture endpoint lost (0x%lx, %s): the default capture endpoint will be re-acquired",
+        static_cast<unsigned long>(hr),
+        hr == AUDCLNT_E_RESOURCES_INVALIDATED ? "resources invalidated" : "device invalidated");
   }
 }
 

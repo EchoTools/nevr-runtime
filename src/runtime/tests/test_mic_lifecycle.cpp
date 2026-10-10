@@ -1,6 +1,7 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_dsp.h"
+#include "core/mic_endpoint_loss.h"
 #include "runtime/patch/mic_policy.h"
 
 #include <gtest/gtest.h>
@@ -393,6 +394,21 @@ TEST_F(MicCaptureLifecycleTest, RecoverWhileRunningJoinsTheWorkerReacquiresAndSt
   EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
 }
 
+// Recover re-acquires the endpoint itself: with a client whose Start would succeed, Start's own fallback
+// never runs, so only Recover can account for the recoverAudio call.
+TEST_F(MicCaptureLifecycleTest, RecoverReacquiresTheEndpointItselfBeforeStarting) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  ASSERT_EQ(fake_.recoverCalls, 0u);
+  fake_.clientInvalidated = false;  // startAudio succeeds on any call
+  const uint32_t startsBefore = fake_.startCalls;
+  EXPECT_TRUE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));
+  EXPECT_EQ(fake_.recoverCalls, 1u);
+  EXPECT_EQ(fake_.startCalls, startsBefore + 1);  // started once, after the re-acquisition
+  EXPECT_EQ(fake_.workerCreateCalls, 2u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+}
+
 TEST_F(MicCaptureLifecycleTest, FailedRecoverLeavesTheProviderReadyForTheGamesNextStart) {
   ASSERT_TRUE(Create());
   ASSERT_TRUE(Start());
@@ -546,4 +562,21 @@ TEST(MicProviderPolicy, InstalledUnderWineAndNotOnNativeWindows) {
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
   EXPECT_STREQ(nevr_mic_policy::BootLine(true), "[NEVR.MIC] provider installed: Wine\n");
   EXPECT_STREQ(nevr_mic_policy::BootLine(false), "[NEVR.MIC] provider not installed: native Windows\n");
+}
+
+// The results that mean the capture endpoint is lost (#399): the device was invalidated, or the stream's
+// resources were (a suspended or disconnected stream). Anything else is an ordinary capture error.
+TEST(MicEndpointLoss, DeviceInvalidatedAndResourcesInvalidatedAreLostEndpoints) {
+  EXPECT_TRUE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890004u)));  // AUDCLNT_E_DEVICE_INVALIDATED
+  EXPECT_TRUE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890026u)));  // AUDCLNT_E_RESOURCES_INVALIDATED
+  EXPECT_EQ(kMicDeviceInvalidated, static_cast<int32_t>(0x88890004u));
+  EXPECT_EQ(kMicResourcesInvalidated, static_cast<int32_t>(0x88890026u));
+}
+
+TEST(MicEndpointLoss, OtherResultsAreOrdinaryCaptureErrors) {
+  EXPECT_FALSE(MicHresultMeansEndpointLost(0));                                  // S_OK
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x80004005u)));  // E_FAIL
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890001u)));  // AUDCLNT_E_NOT_INITIALIZED
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890003u)));  // AUDCLNT_E_WRONG_ENDPOINT_TYPE
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890008u)));  // AUDCLNT_E_UNSUPPORTED_FORMAT
 }
