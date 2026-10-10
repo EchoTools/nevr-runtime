@@ -170,7 +170,8 @@ jobs:
         just proto
 
     - name: Configure CMake
-      # Never signs here: release binaries are signed by the `sign` job with Microsoft Artifact Signing.
+      # Never signs here, and nothing in this workflow signs yet: the `sign` job is a stub that passes the files
+      # through unsigned (the policy signer is not built).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
       run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_RC_LABEL=${{ steps.rc.outputs.label }}
 

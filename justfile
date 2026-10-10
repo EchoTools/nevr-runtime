@@ -194,7 +194,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "Install with: just quest-install"
 
 # Release candidate: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-rc/rc.<n>/.
-# Both builds embed the committed config/public-defaults.env and need no config file to log in; the gate
+# Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the .example) and need no config file to log in; the gate
 # (tools/package_rc.py) refuses the package otherwise, and refuses a binary without -rc.<n> and the commit.
 # `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are

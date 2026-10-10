@@ -32,6 +32,11 @@ class SigningWorkflowTest(unittest.TestCase):
         self.assertEqual(rc_number["default"], "")
         self.assertNotIn("sign_test", triggers["workflow_dispatch"]["inputs"])
 
+    def test_no_comment_or_step_claims_the_files_are_signed(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        for claim in ("Artifact Signing", "signed by the"):
+            self.assertNotIn(claim, text)
+
     def test_nothing_runs_on_windows_logs_into_a_cloud_or_uses_an_environment(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         data, _ = load()
