@@ -126,7 +126,7 @@ void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, c
     m_serverKey = serverKey;
     m_configured = true;
     const std::string diagnostic =
-        LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
+        nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
     Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 }
 
@@ -248,7 +248,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
             "[NEVR.AUTH] POST ", url, " failed");
         Log(EchoVR::LogLevel::Warning, "%s curl_code=%d", diagnostic.c_str(), static_cast<int>(res));
         return "";

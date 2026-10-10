@@ -116,14 +116,14 @@ static std::string AuthenticateServer(std::string& reason) {
 
     if (res != CURLE_OK) {
         const std::string diagnostic =
-            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
+            nevr_log_diagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
         reason = nevr_failure_detail::PasswordAuthRequestFailed(httpUri, curl_easy_strerror(res), static_cast<int>(res));
         return "";
     }
 
     if (http_code != 200) {
-        LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
+        nevr_log_diagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
                                                "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
         reason = nevr_failure_detail::PasswordAuthHttpStatus(httpUri, http_code);
         return "";
@@ -263,7 +263,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
       constructedUri = std::move(*built);
       serverDbUri = constructedUri.c_str();
-      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
           "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     } else {
@@ -292,7 +292,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
             discordId, (password && password[0] != '\0') ? "present (redacted)" : "absent");
       } else {
         serverDbUri = "ws://localhost:777/serverdb";
-        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
             "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI: ", serverDbUri);
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
       }
@@ -312,7 +312,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   if (!m_wsClient->Connect(serverDbUri, wsToken)) {
     // serverDbUri may be the password-bearing legacy-auth URI at this point
     // (see the constructedUri branch above) — redact before logging.
-    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
         "[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", serverDbUri ? serverDbUri : "");
     Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     return;

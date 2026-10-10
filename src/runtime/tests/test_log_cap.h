@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace TestLogCap {
+namespace nevr_test_log_cap {
 
 inline constexpr std::size_t kMaxLines = 10000;
 inline constexpr int kOverflowExitCode = 98;
@@ -44,4 +44,4 @@ inline void Append(std::vector<std::string>& sink, const char* line) {
   sink.emplace_back(line);
 }
 
-}  // namespace TestLogCap
+}  // namespace nevr_test_log_cap

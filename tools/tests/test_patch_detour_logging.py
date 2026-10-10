@@ -18,12 +18,12 @@ class BootPhaseLogging(unittest.TestCase):
         source = (ROOT / "src/runtime/hook/patching.h").read_text()
         body = extract_braced_function(source, "inline BOOL PatchDetour(")
         match = re.search(
-            r"if\s*\(\s*BootLogTee::InBootPhase\(\)\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<other>.*?)\}",
+            r"if\s*\(\s*nevr_boot_log_tee::InBootPhase\(\)\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<other>.*?)\}",
             body,
             re.S,
         )
-        self.assertIsNotNone(match, "PatchDetour must branch on BootLogTee::InBootPhase()")
-        self.assertIn("BootLogTee::TeeFprintf(", match.group("then"))
+        self.assertIsNotNone(match, "PatchDetour must branch on nevr_boot_log_tee::InBootPhase()")
+        self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("then"))
         self.assertNotRegex(match.group("then").replace("TeeFprintf(", ""), r"\bLog\(")
         self.assertIn("Log(EchoVR::LogLevel::Warning", match.group("other"))
         outside = body.replace(match.group(0), "")
@@ -39,21 +39,21 @@ class BootPhaseLogging(unittest.TestCase):
         # InstallGameMainHook runs in the boot phase (initialize.cpp), under the loader lock.
         source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         body = extract_braced_function(source, "void InstallGameMainHook(")
-        self.assertRegex(body, r"BootLogTee::InBootPhase\(\)")
+        self.assertRegex(body, r"nevr_boot_log_tee::InBootPhase\(\)")
         before_else = body.split("} else", 1)[0]
         self.assertNotRegex(before_else, r"\bLog\(", "InstallGameMainHook logs before the InBootPhase branch ends")
-        self.assertIn("BootLogTee::TeeFprintf(", before_else)
+        self.assertIn("nevr_boot_log_tee::TeeFprintf(", before_else)
 
     def test_every_boot_return_ends_the_boot_phase(self):
-        # An early return that skips BootLogTee::Close() leaves InBootPhase() true for the whole run.
+        # An early return that skips nevr_boot_log_tee::Close() leaves InBootPhase() true for the whole run.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
         body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
         failure = re.search(r"if\s*\(\s*!Hooking::Initialize\(\)\s*\)\s*\{(?P<b>.*?)\n  \}", body, re.S)
         self.assertIsNotNone(failure)
-        self.assertRegex(failure.group("b"), r"BootLogTee::Close\(\)\s*;[^}]*return\s*;")
+        self.assertRegex(failure.group("b"), r"nevr_boot_log_tee::Close\(\)\s*;[^}]*return\s*;")
 
     def test_late_unload_records_go_through_log(self):
-        # CSysDLL_GetSymbol runs at unload, long after BootLogTee::Close(): TeeFprintf there is stderr only.
+        # CSysDLL_GetSymbol runs at unload, long after nevr_boot_log_tee::Close(): TeeFprintf there is stderr only.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
         line = re.search(r"[^\n]*RadPluginShutdown of a platform DLL skipped[^\n]*", source).group(0)
         self.assertIn("Log(", line)
@@ -61,11 +61,11 @@ class BootPhaseLogging(unittest.TestCase):
 
     def test_boot_phase_flag_does_not_depend_on_the_file_opening(self):
         source = (ROOT / "src/runtime/log/boot_log_tee.cpp").read_text()
-        init = extract_braced_function(source, "void BootLogTee::Init(")
+        init = extract_braced_function(source, "void nevr_boot_log_tee::Init(")
         self.assertRegex(init.lstrip("{ \n"), r"^g_boot_phase\.store\(true")
-        close = extract_braced_function(source, "void BootLogTee::Close(")
+        close = extract_braced_function(source, "void nevr_boot_log_tee::Close(")
         self.assertIn("g_boot_phase.store(false", close)
-        self.assertIn("bool BootLogTee::InBootPhase()", strip_comments(source))
+        self.assertIn("bool nevr_boot_log_tee::InBootPhase()", strip_comments(source))
 
 
 if __name__ == "__main__":
