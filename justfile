@@ -1478,17 +1478,15 @@ verify:
         echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
         exit 1
     fi
-    if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
-        echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+    # #361: the block is a DllLoadHook filter. A second detour on LoadLibraryW/ExW fails with
+    # MH_ERROR_ALREADY_CREATED (DllLoadHook owns those targets), which is how N127 went unnoticed.
+    if grep -qE 'PatchDetour\(&Original_LoadLibrary' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK installs its own LoadLibrary detour again." >&2
+        echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
-        exit 1
-    fi
-    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
+    if ! grep -qE 'DllLoadHook::AddLoadFilter\(' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
 
