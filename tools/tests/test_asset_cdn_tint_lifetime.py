@@ -16,23 +16,23 @@ class TintMapLifetime(unittest.TestCase):
         scope = body.index("nevr::ReaderGate::Scope")
         self.assertLess(scope, body.index("g_originalFunc("),
                         "the gate scope must cover the trampoline call, not just the map read")
-        self.assertLess(scope, body.index("g_tintMap.load("))
+        self.assertLess(scope, body.index("ReaderGate::Load(g_tintMap"))
 
     def test_shutdown_detaches_nulls_waits_then_frees(self):
         body = extract_braced_function(SOURCE, "void AssetCDN::Shutdown()")
         detach = body.index("Hooking::Detach(")
-        null_ptr = body.index("g_tintMap.store(nullptr")
+        null_ptr = body.index("ReaderGate::Publish<TintMap>(g_tintMap, nullptr")
         wait = body.index("g_tintGate.WaitIdle(")
         release = body.index("ReleaseFetchData();")
-        clear_orig = body.index("g_originalFunc = nullptr;")
         self.assertLess(detach, null_ptr)
         self.assertLess(null_ptr, wait)
         self.assertLess(wait, release)
-        self.assertLess(wait, clear_orig)
+        self.assertNotIn("g_originalFunc = nullptr", body,
+                         "the trampoline pointer must stay valid for a call in the detour prologue")
 
     def test_republish_waits_for_the_gate_before_deleting_the_old_map(self):
         body = extract_braced_function(SOURCE, "static void BackgroundFetchBody()")
-        store = body.index("g_tintMap.store(newTintMap")
+        store = body.index("ReaderGate::Publish(g_tintMap, newTintMap")
         wait = body.index("g_tintGate.WaitIdle(", store)
         delete = body.index("delete old;", store)
         self.assertLess(store, wait)

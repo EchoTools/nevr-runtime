@@ -308,14 +308,15 @@ static void BackgroundFetchBody() {
         std::lock_guard<std::mutex> lock(g_dataMutex);
         TintMap* old = g_tintMapOwned;
         g_tintMapOwned = newTintMap;
-        g_tintMap.store(newTintMap, std::memory_order_release);
+        nevr::ReaderGate::Publish(g_tintMap, newTintMap);
         // A hook call that loaded `old` before the store may still be reading it.
         if (g_tintGate.WaitIdle(kTintGateWait)) {
             delete old;
         } else {
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.CDN] previous tint map left allocated: the loadout hook did not leave within %lld ms",
-                static_cast<long long>(kTintGateWait.count()));
+                "[NEVR.CDN] previous tint map left allocated: the loadout hook did not leave within %lld ms "
+                "(readers_in_hook=%d)",
+                static_cast<long long>(kTintGateWait.count()), g_tintGate.Readers());
         }
     }
 
@@ -346,7 +347,7 @@ void* __fastcall Hook_LoadoutResolveDataFromId(void* context, int64_t loadout_id
     if (!result) return nullptr;
 
     // Read the tint map pointer (atomic, lock-free)
-    TintMap* tintMap = g_tintMap.load(std::memory_order_acquire);
+    TintMap* tintMap = nevr::ReaderGate::Load(g_tintMap);
     if (!tintMap || tintMap->empty()) return result;
 
     // Follow pointer chain: result + 0x370 -> resource table
@@ -465,8 +466,10 @@ void AssetCDN::Shutdown() {
     }
 
     // Remove hook: no new call enters it. Then null the map pointer and wait for the calls already
-    // inside the hook (they hold g_tintGate for the whole call, trampoline included) before anything
-    // they read is freed or g_originalFunc is cleared (#352).
+    // inside the hook (they hold g_tintGate for the whole call, trampoline included) before the maps
+    // they read are freed (#352). g_originalFunc is NOT cleared: a thread can be in the detour's
+    // prologue, before it enters the gate, and would then call a null pointer. Hooking::Detach only
+    // disables the hook (MH_DisableHook); the trampoline stays allocated, so the pointer stays valid.
     const bool hookWasInstalled = g_hookInstalled;
     if (g_hookInstalled) {
         Hooking::Detach(
@@ -474,15 +477,15 @@ void AssetCDN::Shutdown() {
             reinterpret_cast<PVOID>(Hook_LoadoutResolveDataFromId));
         g_hookInstalled = false;
     }
-    g_tintMap.store(nullptr, std::memory_order_release);
+    nevr::ReaderGate::Publish<TintMap>(g_tintMap, nullptr);
     const bool hookIdle = g_tintGate.WaitIdle(kTintGateWait);
     if (hookIdle) {
-        g_originalFunc = nullptr;
         if (fetchStopped) ReleaseFetchData();
     } else {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] tint map left allocated: the loadout hook did not leave within %lld ms",
-            static_cast<long long>(kTintGateWait.count()));
+            "[NEVR.CDN] tint map left allocated: the loadout hook did not leave within %lld ms "
+            "(readers_in_hook=%d; a count that never drops is a call that left the hook by longjmp)",
+            static_cast<long long>(kTintGateWait.count()), g_tintGate.Readers());
     }
 
     g_fetchState.store(FetchState::Idle);
