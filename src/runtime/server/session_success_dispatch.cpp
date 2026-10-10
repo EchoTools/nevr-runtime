@@ -2,7 +2,7 @@
 
 #include "gameservice/v1/gameservice.pb.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 bool ApplyLobbySessionSuccess(const gameservice::v1::SNSLobbySessionSuccessV5Message& message,
                               std::string& lobbySessionId,
@@ -17,4 +17,4 @@ bool ApplyLobbySessionSuccess(const gameservice::v1::SNSLobbySessionSuccessV5Mes
   return true;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

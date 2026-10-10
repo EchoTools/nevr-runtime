@@ -43,7 +43,7 @@
 
 #include "core/logging.h"
 
-using namespace GameServer;
+using namespace nevr_game_server;
 
 // --- TCP Broadcaster Callbacks ---
 
@@ -62,7 +62,7 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // is a Warning and execution continues.
   // #35/#243: the rejection payload is one BroadcasterRegistrationFailureCode
   // byte, decoded by failure_detail.h.
-  const std::string rejection = FailureDetail::DescribeRegistrationRejection(msg, msgSize);
+  const std::string rejection = nevr_failure_detail::DescribeRegistrationRejection(msg, msgSize);
   ServerFatal("GameServer registration rejected by ServerDB: %s", rejection.c_str());
 }
 
@@ -172,7 +172,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         }
       };
       const auto commitState = [self, &state]() { self->GetContext().UpdateSessionState(state); };
-      if (!GameServer::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch)) {
+      if (!nevr_game_server::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch)) {
         Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
       }
       break;
@@ -660,7 +660,7 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
   auto& cb = m_context->GetCallbackRegistry();
   // Issue #117: without the owner, UnregisterAllCallbacks never reaches
   // EchoVR::BroadcasterUnlisten (merge 033b303 dropped this from ba6b5f0).
-  EchoVR::Broadcaster* owner = GameServer::RecordBroadcasterOwner(*m_context);
+  EchoVR::Broadcaster* owner = nevr_game_server::RecordBroadcasterOwner(*m_context);
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Broadcaster callback owner=%p", static_cast<void*>(owner));
 
   cb.sessionStart =
@@ -791,7 +791,7 @@ void GameServerLib::RegisterTcpCallbacks() {
     if (externalIp.empty()) externalIp = internalIp;
 
     const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
-    GameServer::RegistrationParams params;
+    nevr_game_server::RegistrationParams params;
     params.loginSessionId = GuidToUuidString(LoginSession::Get());
     params.serverId = static_cast<uint64_t>(state.serverId);
     params.externalIp = externalIp;
@@ -799,8 +799,8 @@ void GameServerLib::RegisterTcpCallbacks() {
     params.regionId = state.regionId;
     params.versionLock = state.versionLock;
     params.timeStepUsecs = state.defaultTimeStepUsecs;
-    params.version = GameServer::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
-    const gameservice::v1::Envelope envelope = GameServer::BuildRegistrationEnvelope(params);
+    params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+    const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
 
     if (!SendProtobufEnvelope(this, envelope)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for re-registration");
@@ -823,9 +823,9 @@ void GameServerLib::UnregisterAllCallbacks() {
   auto* lobby = m_context->GetLobby();
   auto& cb = m_context->GetCallbackRegistry();
   EchoVR::Broadcaster* liveOwner = lobby != nullptr ? lobby->broadcaster : nullptr;
-  const GameServer::BroadcasterUnlisten unlisten = EchoVR::BroadcasterUnlisten == nullptr
-      ? GameServer::BroadcasterUnlisten{}
-      : GameServer::BroadcasterUnlisten([](EchoVR::Broadcaster* owner, uint16_t handle) {
+  const nevr_game_server::BroadcasterUnlisten unlisten = EchoVR::BroadcasterUnlisten == nullptr
+      ? nevr_game_server::BroadcasterUnlisten{}
+      : nevr_game_server::BroadcasterUnlisten([](EchoVR::Broadcaster* owner, uint16_t handle) {
           EchoVR::BroadcasterUnlisten(owner, handle);
         });
   // Issue #122: this is the line that would have caught #117 in production.
@@ -834,7 +834,7 @@ void GameServerLib::UnregisterAllCallbacks() {
   // with no actual error. It was Debug, which isn't on by default, so that
   // week-long silent no-op went unseen.
   const EchoVR::Broadcaster* recordedOwner = cb.broadcasterOwner;
-  const size_t removed = GameServer::UnregisterBroadcasterCallbacks(liveOwner, cb, unlisten);
+  const size_t removed = nevr_game_server::UnregisterBroadcasterCallbacks(liveOwner, cb, unlisten);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.GAMESERVER] Unregistered %zu broadcaster callbacks (owner=%p, liveOwner=%p)",
       removed, static_cast<const void*>(recordedOwner), static_cast<void*>(liveOwner));

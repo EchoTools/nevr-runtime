@@ -5,7 +5,7 @@
 #include "gameservice/v1/gameservice.pb.h"
 #include "runtime/server/websocket_client.h"
 
-namespace GameServer {
+namespace nevr_game_server {
 
 ProtobufSendResult SendProtobufEnvelope(WebSocketClient& client,
                                        const gameservice::v1::Envelope& envelope) {
@@ -24,4 +24,4 @@ ProtobufSendResult SendProtobufEnvelope(WebSocketClient& client,
   return ProtobufSendResult::TransportRejected;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

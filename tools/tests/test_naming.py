@@ -3,6 +3,7 @@ grow, and a non-canonical spelling of the project name does not appear in any fi
 not already carry it. Both sets are written out below on purpose: changing one is a visible edit here."""
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
@@ -31,6 +32,13 @@ FROZEN_NVR = frozenset({
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
     "NvrTestPluginGetKeptInfo",
 })
+# Namespaces that were renamed to nevr_<area> (#131), one JSON file per area under
+# tools/tests/renamed_namespaces/ so area PRs do not edit the same lines. The old name is not used as a
+# namespace again; a PascalCase namespace in no file is still on the rename list
+# (`python3 tools/naming_inventory.py --category pascal-namespaces`).
+RENAMED_NAMESPACES = {}
+for _area_file in sorted((REPO / "tools/tests/renamed_namespaces").glob("*.json")):
+    RENAMED_NAMESPACES.update(json.loads(_area_file.read_text(encoding="utf-8")))
 # Existing non-canonical spellings, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
     "certs/code-signing.conf": {"nEVR"},
@@ -92,6 +100,28 @@ class NamingTest(unittest.TestCase):
         old = re.compile(r"nevr_runtime::lifecycle|Nevr::Lifecycle|nevr::Lifecycle")
         found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
         self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
+
+    def test_renamed_namespaces_do_not_come_back(self):
+        def in_string(line, pos):
+            quotes, i = 0, 0
+            while i < pos:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                quotes += line[i] == '"'
+                i += 1
+            return quotes % 2 == 1
+
+        stray = {}
+        for path, text in project_files():
+            if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")):
+                continue
+            for n, line in enumerate(text.split("\n"), start=1):
+                for old in RENAMED_NAMESPACES:
+                    for m in re.finditer(r"(?<![A-Za-z0-9_:])" + old + r"::|\bnamespace\s+" + old + r"\b", line):
+                        if not in_string(line, m.start()):
+                            stray.setdefault(path, []).append("%d:%s" % (n, old))
+        self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
     def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())
