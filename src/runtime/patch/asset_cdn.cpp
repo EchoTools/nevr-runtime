@@ -1,5 +1,6 @@
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/evrp_package.h"
+#include "core/bounded_thread.h"
 #include "core/curl_global.h"
 
 #include <curl/curl.h>
@@ -8,6 +9,7 @@
 #include <wincrypt.h>
 
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -84,8 +86,10 @@ std::unordered_map<int64_t, PackageEntry> g_manifestPackages;
 // ============================================================================
 
 std::atomic<AssetCDN::FetchState> g_fetchState{AssetCDN::FetchState::Idle};
-std::thread g_fetchThread;
+// Never a bare std::thread: joinable at process exit it terminates the process (#340).
+nevr::BoundedThread g_fetchThread;
 std::atomic<bool> g_shutdownRequested{false};
+constexpr std::chrono::milliseconds kFetchJoinTimeout{3000};
 
 // ============================================================================
 // Loadout data structure offsets (from Task 2 RE findings)
@@ -412,9 +416,12 @@ void AssetCDN::Shutdown() {
     // Signal background thread to stop
     g_shutdownRequested.store(true);
 
-    // Wait for background thread to finish
-    if (g_fetchThread.joinable()) {
-        g_fetchThread.join();
+    // Wait for background thread to finish (bounded: a download stuck in curl must not hang unload)
+    const bool fetchStopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
+    if (!fetchStopped) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] background fetch did not stop within %lld ms — thread detached",
+            static_cast<long long>(kFetchJoinTimeout.count()));
     }
 
     // Remove hook
@@ -437,7 +444,8 @@ void AssetCDN::Shutdown() {
 
     g_manifestPackages.clear();
     g_fetchState.store(FetchState::Idle);
-    g_shutdownRequested.store(false);
+    // A detached thread still reads the flag; leave it set so it exits at its next check.
+    if (fetchStopped) g_shutdownRequested.store(false);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.CDN] shutdown complete hook_removed=%s",
         hookWasInstalled ? "true" : "false");
@@ -451,10 +459,15 @@ void AssetCDN::StartBackgroundFetch() {
     }
 
     g_shutdownRequested.store(false);
-    if (g_fetchThread.joinable()) {
-        g_fetchThread.join();
-    }
-    g_fetchThread = std::thread(BackgroundFetchThread);
+    g_fetchThread.Start(BackgroundFetchThread);
+}
+
+bool AssetCDN::StopBackgroundFetch() {
+    g_shutdownRequested.store(true);
+    const bool stopped = g_fetchThread.JoinFor(kFetchJoinTimeout);
+    Log(EchoVR::LogLevel::Info, "[NEVR.CDN] background fetch stop requested joined=%s",
+        stopped ? "true" : "false");
+    return stopped;
 }
 
 AssetCDN::FetchState AssetCDN::GetFetchState() {

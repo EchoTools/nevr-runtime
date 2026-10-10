@@ -27,6 +27,7 @@
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
@@ -86,6 +87,8 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   if (!g_isServer) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
+    // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
+    AssetCDN::StopBackgroundFetch();
     return;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
