@@ -124,25 +124,31 @@ std::string Strip(const char* mangled) {
   return s;
 }
 
-std::vector<std::string> VtableMethods(const LoadedElf& pnsovr, std::size_t* sizeOut, std::uint64_t* symValue) {
+std::vector<std::string> VtableMethods(const LoadedElf& pnsovr, std::size_t* sizeOut, std::uint64_t* symValue,
+                                       const char* vtableSymbol = "_ZTVN10NRadEngine12CNSOVRSocialE",
+                                       std::vector<std::uint64_t>* targets = nullptr) {
   std::vector<std::string> methods;
   Dynamic dyn;
   if (!ReadDynamic(pnsovr, &dyn)) return methods;
   const Elf64_Sym* vt = nullptr;
   for (std::size_t i = 0; i < dyn.symCount; ++i) {
-    if (std::strcmp(dyn.strtab + dyn.symtab[i].st_name, "_ZTVN10NRadEngine12CNSOVRSocialE") == 0) vt = &dyn.symtab[i];
+    if (std::strcmp(dyn.strtab + dyn.symtab[i].st_name, vtableSymbol) == 0) vt = &dyn.symtab[i];
   }
   if (vt == nullptr) return methods;
   *sizeOut = vt->st_size;
   *symValue = vt->st_value;
   const std::size_t slots = (vt->st_size - 16) / 8;
   methods.assign(slots, std::string());
+  if (targets != nullptr) targets->assign(slots, 0);
   for (std::size_t i = 0; i < dyn.relaCount; ++i) {
     const Elf64_Rela& r = dyn.rela[i];
     if (ELF64_R_TYPE(r.r_info) != R_AARCH64_ABS64) continue;
     if (r.r_offset < vt->st_value + 16 || r.r_offset >= vt->st_value + vt->st_size) continue;
     const std::size_t slot = (r.r_offset - vt->st_value - 16) / 8;
     methods[slot] = Strip(dyn.strtab + dyn.symtab[ELF64_R_SYM(r.r_info)].st_name);
+    if (targets != nullptr) {
+      (*targets)[slot] = dyn.symtab[ELF64_R_SYM(r.r_info)].st_value + static_cast<std::uint64_t>(r.r_addend);
+    }
   }
   return methods;
 }
@@ -278,6 +284,40 @@ void CheckBuildId(const LoadedElf& elf, const char* expected) {
   QCHECK(std::strcmp(actual, expected) == 0);
 }
 
+// #393: the rich presence trace's pins. libr15's slot for CNSProvider::RichPresence, the CNSOVRRichPresence vtable
+// (address point and size), and the four slots the wrappers stand in for, by name and by address.
+void CheckRichPresence(const LoadedElf& r15, const LoadedElf& ovr) {
+  const GotTarget target = quest_social::LibR15RichPresence();
+  const SlotResolution pinnedSlot = ResolveSlot(r15.image, target, kAarch64Relocs);
+  QCHECK_STATUS(pinnedSlot.status, GotStatus::kOk);
+  QCHECK(pinnedSlot.slotVaddr == quest_social::kRichPresenceSlotVaddr);
+  GotTarget unpinned = target;
+  unpinned.slotVaddr = std::nullopt;
+  const SlotResolution alone = ResolveSlot(r15.image, unpinned, kAarch64Relocs);
+  QCHECK_STATUS(alone.status, GotStatus::kOk);
+  QCHECK(alone.slotVaddr == pinnedSlot.slotVaddr);
+  GotTarget shifted = target;
+  shifted.slotVaddr = quest_social::kRichPresenceSlotVaddr + 8;
+  QCHECK_STATUS(ResolveSlot(r15.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+
+  std::size_t size = 0;
+  std::uint64_t value = 0;
+  std::vector<std::uint64_t> addresses;
+  const std::vector<std::string> methods =
+      VtableMethods(ovr, &size, &value, "_ZTVN10NRadEngine18CNSOVRRichPresenceE", &addresses);
+  QCHECK(value + 16 == quest_social::kOvrRichPresenceVptrVaddr);
+  QCHECK(methods.size() == quest_social::kOvrRichPresenceSlotCount);
+  if (methods.size() != quest_social::kOvrRichPresenceSlotCount) return;
+  QCHECK(methods[quest_social::kRichPresenceSlotDestinationCount] == "CNSOVRRichPresence16DestinationCountEv");
+  QCHECK(methods[quest_social::kRichPresenceSlotDestinationName] == "CNSOVRRichPresence15DestinationNameEj");
+  QCHECK(methods[quest_social::kRichPresenceSlotDestination] == "CNSOVRRichPresence11DestinationEv");
+  QCHECK(methods[quest_social::kRichPresenceSlotSet] == "CNSOVRRichPresence3SetERKNS_5CJsonE");
+  QCHECK(addresses[quest_social::kRichPresenceSlotDestinationCount] == quest_social::kOvrRichPresenceDestinationCountVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotDestinationName] == quest_social::kOvrRichPresenceDestinationNameVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotDestination] == quest_social::kOvrRichPresenceDestinationVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotSet] == quest_social::kOvrRichPresenceSetVaddr);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -352,10 +392,12 @@ int main(int argc, char** argv) {
     QCHECK(methods[i] == quest_social::kSlotNames[i]);
   }
 
+  CheckRichPresence(r15, ovr);
+
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_pinned_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
-  std::printf("social_pinned_test: the Social slot, CJson::Reset, kInvalid and the CNSOVRSocial vtable match the real ELFs\n");
+  std::printf("social_pinned_test: the Social and RichPresence slots, CJson::Reset, kInvalid and the CNSOVRSocial and CNSOVRRichPresence vtables match the real ELFs\n");
   return 0;
 }

@@ -35,6 +35,14 @@ import (
 // exception that never returns, so it is never a frame a game exception passes through.
 var libcxxThrowTail = regexp.MustCompile(`^(__cxa_|_ZSt9terminatev|_ZSt11__terminatePFvvE|_ZNSt6__ndk120__throw_|_ZNSt11logic_error|_ZN10__cxxabiv1)`)
 
+// A linker veneer for the Cortex-A53 erratum 843419 (aarch64 ld.lld replaces an adrp that sits at the end of a 4 KiB
+// page by a branch to one of these): the one relocated instruction and a `b` back into the middle of the function it
+// was taken from, e.g. `ldr x8, [x8, #816]; b <caller>+0x14`. It is a piece of its caller, not a frame: it does not
+// touch the stack and has no unwind entry of its own, and its caller's FDE (checked, since the caller is reached) is
+// what an exception passing through sees. Where the linker places one depends on code layout, so any change can
+// make the walk reach one. Matched by the exact name form the linker gives it.
+var linkerErratumVeneer = regexp.MustCompile(`^__CortexA53843419_[0-9A-F]+$`)
+
 const outsideSection = "nevr_outside_game_call"
 
 // frameGraph is everything the verdict needs, so the verdict is a pure function that the controls can
@@ -72,7 +80,7 @@ func walkHookFrames(g frameGraph) frameVerdict {
 			annotatedSeen[name] = true
 			continue // runs outside any game call: not checked, not entered
 		}
-		if libcxxThrowTail.MatchString(name) {
+		if libcxxThrowTail.MatchString(name) || linkerErratumVeneer.MatchString(name) {
 			continue
 		}
 		aug, hasFDE := g.aug[a]
@@ -300,6 +308,28 @@ func TestSensorFailsAFunctionWithoutAnFDE(t *testing.T) {
 	v := walkHookFrames(g)
 	if !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
 		t.Fatalf("a function without an FDE must fail, got %v", v.violations)
+	}
+}
+
+// A linker erratum veneer (one relocated instruction and a branch back, no FDE) reached from a handler is a piece
+// of its caller and passes; a function without an FDE under any other name still fails.
+func TestSensorPassesALinkerErratumVeneer(t *testing.T) {
+	g := synthetic(true)
+	g.names[0x500] = "__CortexA53843419_2BD004"
+	g.edges[0x100] = append(g.edges[0x100], 0x500)
+	v := walkHookFrames(g)
+	if len(v.violations) != 0 {
+		t.Fatalf("an erratum veneer must pass, got %v", v.violations)
+	}
+	g.names[0x500] = "__CortexA53843419_helper_not_a_veneer"
+	v = walkHookFrames(g)
+	if !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
+		t.Fatalf("a look-alike name without an FDE must fail, got %v", v.violations)
+	}
+	g.names[0x500] = "AnotherFunction"
+	v = walkHookFrames(g)
+	if !strings.Contains(strings.Join(v.violations, "\n"), "no FDE") {
+		t.Fatalf("any other function without an FDE must fail, got %v", v.violations)
 	}
 }
 
