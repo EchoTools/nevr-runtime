@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/auth_token.h"
+#include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
@@ -440,9 +441,9 @@ TEST(DevicePollResponse, NegativeExpiresInIsAbsentNotBackwards) {
   EXPECT_GT(ResolveRefreshTokenExpirySec(kNow, response.refresh_token_expires_in), kNow);
 }
 
-// ReadExpiresInSeconds is reached from RefreshAuthToken, whose catch covers only
-// json::parse_error — a type_error thrown here would escape the refresh entirely.
-// Asserting the non-object cases rather than trusting that contains() is total.
+// ReadExpiresInSeconds is reached while a refresh response is interpreted
+// (nevr::auth::ApplyRefreshResponse), whose catch covers every json::exception; a
+// non-object body must still yield absence here rather than a throw.
 TEST(ReadExpiresInSeconds, NonObjectAndWrongTypedFieldsYieldAbsenceNotAThrow) {
   EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json::array({1, 2}), "expires_in").has_value());
   EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json("a string"), "expires_in").has_value());
@@ -469,14 +470,11 @@ TEST(RefreshTokenExpiry, ServerValueWinsAndFallbackOnlyFillsSilence) {
             ResolveRefreshTokenExpirySec(kNow, std::nullopt));
 }
 
-// The refresh path builds its request body inline in RefreshAuthToken, so the
-// body shape is asserted here as the contract it has to satisfy: both names, one
-// value. A refresh_token-only body is rejected by a pre-f945f631d nakama with
-// "invalid payload: token required".
+// The refresh request body is built by nevr::auth::BuildRefreshBody (core/auth_refresh.h);
+// both field names carry one value. A refresh_token-only body is rejected by a
+// pre-f945f631d nakama with "invalid payload: token required".
 TEST(RefreshRequestBody, CarriesBothFieldNamesWithTheSameValue) {
-  nlohmann::json body;
-  body["refresh_token"] = "rt";
-  body["token"] = "rt";
+  const nlohmann::json body = nlohmann::json::parse(nevr::auth::BuildRefreshBody("rt"));
 
   EXPECT_EQ(body.value("refresh_token", ""), "rt");
   EXPECT_EQ(body.value("token", ""), "rt");
@@ -696,7 +694,27 @@ TEST(DeviceAuthFlow, BrowserThatReturnsAfterDeadlineDoesNotStartPolling) {
   ExpectSameDeviceAuthState(result.state, original);
 }
 
-TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineDoesNotMutateOrSaveAnyAuthField) {
+TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineThatIsNotVerifiedDoesNotMutateOrSaveAnyAuthField) {
+  for (const char* body : {R"({"status":"pending"})", R"({"status":"expired"})"}) {
+    for (const auto elapsedSeconds : {300, 301}) {
+      FakeDeviceAuthFlow fake;
+      fake.poll_response = TokenAuth::ParseDevicePollResponse(body);
+      fake.poll_elapsed = std::chrono::seconds(elapsedSeconds - 3);
+      const auto original = ExistingDeviceAuthState();
+      const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+
+      EXPECT_FALSE(flow.success) << body << " " << elapsedSeconds;
+      EXPECT_EQ(fake.poll_calls, 1);
+      EXPECT_EQ(fake.save_calls, 0);
+      ExpectSameDeviceAuthState(flow.state, original);
+    }
+  }
+}
+
+// The server deletes a device code when the poll that reports it verified returns the tokens
+// (nakama evr_device_auth.go, verified branch of the poll RPC), so a verified answer whose poll
+// returns at or after the deadline is the player's only copy of the login: it is applied and saved.
+TEST(DeviceAuthFlow, VerifiedPollResultReturningAtOrAfterDeadlineIsApplied) {
   for (const auto elapsedSeconds : {300, 301}) {
     FakeDeviceAuthFlow fake;
     fake.poll_response = VerifiedPollResponse();
@@ -704,10 +722,11 @@ TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineDoesNotMutateOrSaveAnyAuthField)
     const auto original = ExistingDeviceAuthState();
     const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
 
-    EXPECT_FALSE(flow.success) << elapsedSeconds;
+    EXPECT_TRUE(flow.success) << elapsedSeconds;
     EXPECT_EQ(fake.poll_calls, 1);
-    EXPECT_EQ(fake.save_calls, 0);
-    ExpectSameDeviceAuthState(flow.state, original);
+    EXPECT_EQ(fake.save_calls, 1);
+    EXPECT_EQ(flow.state.refresh_token, "new-refresh");
+    EXPECT_EQ(flow.state.user_id, "new-user");
   }
 }
 

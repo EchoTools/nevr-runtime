@@ -6,10 +6,11 @@
 # Depends on nevr_abi (PUBLIC): EchoVR::LogLevel is the game's enum, so logging
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
-set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp")
+set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp"
+  "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp")
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
-  "hooking.h" "auth_token.h" "pch.h" "nevr_config.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h" "mic_owner_thread.h"
+  "hooking.h" "auth_token.h" "auth_token_model.h" "auth_types.h" "auth_refresh.h" "device_auth_flow.h" "device_poll_response.h" "pch.h" "nevr_config.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h" "mic_owner_thread.h"
   # Header-only published C ABI for third-party DLLs. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own.
   "${CMAKE_SOURCE_DIR}/src/extension/plugin_interface.h"
@@ -40,6 +41,10 @@ set_source_files_properties(nevr_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS O
 # target can compile it directly without the Windows PCH — see
 # tests/test_mic_dsp.cpp.
 set_source_files_properties(mic_dsp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# The platform-neutral auth core (shared with the Quest shim) includes no Windows
+# header, so it builds without the Windows PCH.
+set_source_files_properties(device_poll_response.cpp auth_refresh.cpp device_auth_flow.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_lifecycle.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_capture_drain.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(mic_owner_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

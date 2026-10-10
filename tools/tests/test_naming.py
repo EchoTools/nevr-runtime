@@ -43,7 +43,6 @@ LEGACY_SPELLINGS = {
     "plugins/example/README.md": {"nEVR"},
     "plugins/example/src/plugin.cpp": {"nEVR"},
     "src/extension/plugin_interface.h": {"nEVR"},
-    "src/runtime/compat/ws_bridge.cpp": {"nEVR"},
     "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
     "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
     "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
