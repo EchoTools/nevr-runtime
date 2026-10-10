@@ -2,17 +2,13 @@ name: Defender scan
 
 # Measures what Microsoft Defender says about the release zip on a real Windows runner. It is a
 # measurement, not a gate: it is not part of the release, signs nothing and embeds no keys (no
-# secrets are read, so the build is the same one a pull request gets). Run it by hand
-# (workflow_dispatch) or by editing this file in a pull request.
+# secrets are read). Run it by hand: `gh workflow run defender-scan.yml --ref <branch>`.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/defender-scan.yml
 
 concurrency:
-  group: defender-scan-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: defender-scan-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   build-zip:

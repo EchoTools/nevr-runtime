@@ -11,8 +11,7 @@ add_library(token_auth STATIC
     src/token_auth.h
     src/auth_snapshot.cpp
     src/auth_snapshot.h
-    src/device_poll_response.cpp
-    src/device_poll_response.h
+    src/device_poll_response.h  # forwarder to core/device_poll_response.h
     src/off_thread_wait.cpp
     src/off_thread_wait.h
 )
@@ -34,7 +33,6 @@ if(BUILD_TESTING)
     add_library(token_auth_test_hooks STATIC
         src/token_auth.cpp
         src/auth_snapshot.cpp
-        src/device_poll_response.cpp
         src/off_thread_wait.cpp
         "${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
     )
