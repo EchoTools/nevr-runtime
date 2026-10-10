@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
+nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
 ## Branch lifecycle (every agent-created branch)
 
@@ -72,12 +72,12 @@ just test-winvm               # Built runtime on a native Windows VM (needs WINV
 
 Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
 
-## Startup Timing (N76)
+## Startup timing
 
-The game has a ~15-20 second splash-screen delay at startup before any NEVR code runs. The first NEVR log lines appear well after `echovr.exe` process creation. When judging server liveness:
+The game has a ~15-20 second splash-screen delay at startup before any nEVR code runs. The first nEVR log lines appear well after `echovr.exe` process creation. When judging server liveness:
 
 - **Minimum patience window: 45 seconds from process start** before concluding the server is hung.
-- The splash screen runs BEFORE `DllMain` / `WinMain` — NEVR has no control over this phase.
+- The splash screen runs BEFORE `DllMain` / `WinMain` — nEVR has no control over this phase.
 - Startup timeout checks must account for this delay. A server that hasn't logged anything at t=10s is normal; a server with no output at t=60s is dead.
 - The `-noconsole` flag suppresses the splash UI but NOT the delay — the game still runs its startup sequence.
 
@@ -127,7 +127,7 @@ public and it is a broadcaster injection tool. `anim-debugger` lives there for t
 same reason: it is RE instrumentation that hooks three engine
 animation entry points and publishes a map of animation internals, and it does
 nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
-filter and the loader refuses to load it (N89). Other plugins (audio-intercom,
+filter and the loader refuses to load it. Other plugins (audio-intercom,
 game-rules-override, session-unlocker, combat-mod, combat-2d) live in
 `nevr-runtime-plugins`.
 
@@ -151,7 +151,7 @@ Split by **what the knowledge is**, not by who uses it. A single directory named
   (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
   symbol IDs (`symbols.h`), CSymbol64 hashing (`symbol_hash.h`). Membership test:
   *the binary told us this*. If a fact here is wrong, the reconstruction is wrong.
-- **`src/core/`** → `libnevr_core.a` — NEVR's own primitives: logging, CLI-flag
+- **`src/core/`** → `libnevr_core.a` — nEVR's own primitives: logging, CLI-flag
   globals, base64, the hooking abstraction, the auth-token model, `pch.h`.
   Membership test: *we wrote this*. Links `nevr_abi` PUBLIC.
 - **`src/extension/`** — header-only published C ABI for third-party DLLs
@@ -351,6 +351,9 @@ your seat name, for example `claude-main` or `codex`.
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
+- **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
+  current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
+  retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
 - **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
   with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
 
@@ -382,7 +385,7 @@ This applies regardless of context — even if the task seems to require it, eve
 
 - **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
 - **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
-- **Hand/mouse input does not reach menu buttons under Xephyr.** Measured 2026-09-30 with one build: Find Arena, Find Combat and Private were inert under `Xephyr :101` (no request reached Nakama), and worked on the main display (`Requesting search for a public session of gametype echo_arena`, `finding -> lobby join queued`). Boot, login and lobby joins need no input and run fine nested. A check that needs input needs the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
+- **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
 - **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
 
@@ -418,22 +421,12 @@ When something fails, the first act is reading the failing program's **own** log
 
 - **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
 - **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss` (per `.gitmodules`).
-  `extern/protobuf` is a plain directory, not a submodule. The `evr-test-harness`
-  symlink is excised — see below.
+  `extern/protobuf` is a plain directory, not a submodule.
 - **Toolchain** — CMake 4.0+, Ninja, MinGW (Linux) or MSVC (Windows)
 
-## Onboarding conventions
+## Commit and verification conventions
 
-This repo is onboarded to the project governance canon (authorized by
-RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
-the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), which subsumes the former `DRIVER-CHARTER.md` (five slots + fleet protocol inlined into the skill)
-(`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
-
-- **Resolved defects are in git history.** The N-ledger (N-prefix IDs) recorded
-  every defect found and fixed during development. All entries are now resolved or
-  acknowledged. New defects go to GitHub issues. The N-ID namespace is closed —
-  no new N-entries should be created. (Basis: owner decision 2026-08-02 to retire
-  the file-based ledger in favor of GitHub issues.)
+- **Defects.** Track defects in GitHub issues.
 - **Commit identity.** Author `Andrew Bates <a@sprock.io>`
   (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
   single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
@@ -441,26 +434,16 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   Teth, Spritz or Glow Sprock is authored by that sister, with
   `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **shall** verify after each
   commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
-  (Owner ruling 2026-10-01, verbatim: "if not Teth/Spritz/Glow Sprock: Andrew
-  Bates as author, agents@sprock.io as the co-author; else: Teth/Spritz/Glow
-  Sprock as author, andrew bates as co-author". This supersedes RULINGS.md
-  2026-07-20 "Commit identity (nevr)", which had the agent as author and
-  forbade committing as the owner. Commits before 2026-10-01 carry the old
-  shape and are left as they are.)
-  (Updated 2026-07-26 by owner instruction: the `Metis Sprock <m@sprock.io>`
-  trailer was dropped — she was not involved in this work. Commits before
-  `624f795` carry it and are left as they are.)
-- **Mandatory pre-read gate.** Before any C++/build work, read the project's
-  CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
+- **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
+  its hard stops bind every build and configuration change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
-  own output and always exits 0), then `test-auth-unit` under Wine, then ~35
-  source-invariant sensors, then `tools/verify_hook_invariants.py`. Fail-close. The Go integration suites
-  are excised (RULINGS.md 2026-07-20 "Test harness excised") and are not part of
-  `just verify`.
+  own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
+  the Python test suite and source-invariant checks. The Go system suites are
+  separate recipes and are not part of `just verify`.
 
 ---
 
