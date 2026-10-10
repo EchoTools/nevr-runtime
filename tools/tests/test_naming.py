@@ -93,6 +93,22 @@ class NamingTest(unittest.TestCase):
         found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
         self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
 
+    def test_cmake_targets_carry_the_prefix(self):
+        # A library or executable target is nevr_<name> (#131); the output file name is OUTPUT_NAME and does
+        # not move. These four are a file name users touch or a third party's name.
+        exceptions = {"echovr_server", "LibOVRPlatform64_1", "ovrplatformloader", "breakpad_client"}
+        add = re.compile(r"^\s*add_(?:library|executable)\(\s*([A-Za-z0-9_]+)", re.M)
+        stray = {}
+        for path, text in project_files():
+            if not (path.endswith("CMakeLists.txt") or path.endswith(".cmake")):
+                continue
+            names = {n for n in add.findall(text)
+                     if not n.startswith(("nevr", "test_")) and not n.endswith(("_test", "_probe", "_probe_", "_test_hooks"))}
+            names -= exceptions
+            if names:
+                stray[path] = sorted(names)
+        self.assertEqual(stray, {}, "CMake targets are nevr_<name> (docs/standards/naming.md)")
+
     def test_project_macros_carry_the_prefix(self):
         # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
         # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and
