@@ -56,3 +56,17 @@ TEST(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
   EXPECT_FALSE(DllLoadHook::IsLoadBlocked(L"kernel32.dll", &by));
   DllLoadHook::Shutdown();
 }
+
+// #363 review: the Oculus predicate matches the file name, not any folder on the path.
+TEST(OculusPlatformPath, RefusesTheSdkLibraryByFileName) {
+  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"libovrplatform64_1.dll"));
+  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"c:\\game\\bin\\libovrplatform64_1.dll"));
+  EXPECT_TRUE(DllLoadHook::IsOculusPlatformPath(L"c:/game/bin/libovrplatform64_1.dll"));
+}
+
+TEST(OculusPlatformPath, AllowsAFileWhoseFolderIsNamedLikeTheSdk) {
+  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"c:\\mods\\ovrplatform\\helper.dll"));
+  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"c:/libovrplatform64_1/readme.dll"));
+  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(L"kernel32.dll"));
+  EXPECT_FALSE(DllLoadHook::IsOculusPlatformPath(nullptr));
+}
