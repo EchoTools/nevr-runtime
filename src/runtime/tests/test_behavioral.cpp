@@ -24,6 +24,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
+#include <string>
 #include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
@@ -1075,6 +1076,94 @@ TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   EXPECT_STREQ(HostOf(second), nevr_matchmaker_host_patch::kHostExpected);
   ASSERT_EQ(nevr_matchmaker_host_patch::Apply(second.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+// The loader-notification path end to end, over fake images: load, unload, reload, with the module name as
+// the loader reports it (UTF-16, any case, no NUL). A write counter proves what does and does not write.
+namespace {
+std::u16string Utf16(const char* ascii) {
+  return std::u16string(ascii, ascii + std::strlen(ascii));
+}
+}  // namespace
+
+TEST(MatchmakerHostPatch, LoadUnloadReloadPatchesEveryLoadAndUnloadWritesNothing) {
+  namespace mm = nevr_matchmaker_host_patch;
+  int writes = 0;
+  auto counted = [&writes](uint8_t* dst, const char* src, size_t len) {
+    ++writes;
+    std::memcpy(dst, src, len);
+    return true;
+  };
+  const std::u16string name = Utf16("pnsradmatchmaking.dll");
+
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  auto r1 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), first.data(), 51234, counted);
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(*r1, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 1);
+
+  // The unload notification: nothing is written and nothing is held; the image is gone with its patch.
+  auto r2 = mm::OnModuleNotification(mm::kNotificationUnloaded, name.data(), name.size(), first.data(), 51234, counted);
+  EXPECT_FALSE(r2.has_value());
+  EXPECT_EQ(writes, 1);
+
+  // The reload maps a fresh, unpatched image (a different base) and is patched like the first.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  ASSERT_NE(first.data(), second.data());
+  EXPECT_STREQ(HostOf(second), mm::kHostExpected);
+  auto r3 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), second.data(), 51234, counted);
+  ASSERT_TRUE(r3.has_value());
+  EXPECT_EQ(*r3, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 2);
+
+  // A repeated load notification for the same image is idempotent: reported, nothing rewritten.
+  auto r4 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), second.data(), 51234, counted);
+  ASSERT_TRUE(r4.has_value());
+  EXPECT_EQ(*r4, mm::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 2);
+
+  // And a third load after another unload is patched again: no once-only guard anywhere.
+  mm::OnModuleNotification(mm::kNotificationUnloaded, name.data(), name.size(), second.data(), 51234, counted);
+  std::vector<uint8_t> third = FreshMatchmakerImage();
+  auto r5 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), third.data(), 51234, counted);
+  ASSERT_TRUE(r5.has_value());
+  EXPECT_EQ(*r5, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(third), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 3);
+}
+
+TEST(MatchmakerHostPatch, OnlyTheMatchmakingModuleByWholeNameAnyCaseIsPatched) {
+  namespace mm = nevr_matchmaker_host_patch;
+  int writes = 0;
+  auto counted = [&writes](uint8_t* dst, const char* src, size_t len) {
+    ++writes;
+    std::memcpy(dst, src, len);
+    return true;
+  };
+  for (const char* other : {"pnsrad.dll", "pnsradmatchmaking.dll.bak", "xpnsradmatchmaking.dll", "pnsradmatchmaking.d",
+                            "pnsradgameserver.dll", ""}) {
+    std::vector<uint8_t> image = FreshMatchmakerImage();
+    const std::u16string name = Utf16(other);
+    EXPECT_FALSE(mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), image.data(), 51234, counted)
+                     .has_value())
+        << other;
+    EXPECT_STREQ(HostOf(image), mm::kHostExpected) << other;
+  }
+  EXPECT_EQ(writes, 0);
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  const std::u16string upper = Utf16("PnsRadMatchmaking.DLL");
+  auto r = mm::OnModuleNotification(mm::kNotificationLoaded, upper.data(), upper.size(), image.data(), 4000, counted);
+  ASSERT_TRUE(r.has_value());
+  EXPECT_EQ(*r, mm::Result::Patched);
+  // The loader reports the name as WCHAR; the same function takes it.
+  std::vector<uint8_t> wide = FreshMatchmakerImage();
+  const std::wstring wname = L"pnsradmatchmaking.dll";
+  EXPECT_TRUE(mm::OnModuleNotification(mm::kNotificationLoaded, wname.data(), wname.size(), wide.data(), 4000, counted)
+                  .has_value());
+  EXPECT_EQ(writes, 2);
 }
 
 TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {

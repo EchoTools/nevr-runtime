@@ -213,7 +213,8 @@ if(TARGET nevr_quest_got_hook)
   # archive so the install, its thunks and the backend are present.
   add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
-  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
+  # -fno-exceptions: the test arms the entitlement hook's thunk (callback_thunk.h refuses other units).
+  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 
   add_executable(login_standin_test tests/login_standin_test.cpp login/login_standin.cpp)
   target_link_libraries(login_standin_test PRIVATE nevr_quest_login)

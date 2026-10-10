@@ -61,6 +61,7 @@ std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
   NoteRequest(Prerequisite::UserProof, request);
   return request;
 }
+NEVR_HOOK_RECORD(kEntitlementRequestHook, EntitlementRequestThunk, &OnEntitlementRequest);
 NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &HandleOrgRequest);
 NEVR_HOOK_RECORD(kUserRequestHook, UserRequestThunk, &HandleUserRequest);
 NEVR_HOOK_RECORD(kTokenRequestHook, TokenRequestThunk, &HandleTokenRequest);
@@ -73,6 +74,7 @@ struct Hooks {
   sentinel::GotHook callbacks[4];
   sentinel::GotHook accessors[8];
   sentinel::GotHook requests[4];
+  sentinel::GotHook entitlement;
 };
 Hooks& H() {
   static Hooks* const hooks = new Hooks();
@@ -105,6 +107,13 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 }
 
 }  // namespace
+
+// RadPluginMain discards the id and nothing waits for an answer; the only reader is the message pump, which
+// has no message to read, so no entitlement request reaches Meta and no hard exit can follow from its answer.
+std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcept {
+  static_cast<void>(original);
+  return 0;
+}
 
 PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept {
   const std::lock_guard<std::mutex> lock(InstallMutex());
@@ -145,13 +154,17 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.requests += Install(hooks.requests[2], kTokenRequestHook, T::kGetAccessToken, base) ? 1 : 0;
   result.requests += Install(hooks.requests[3], kProofRequestHook, T::kGetUserProof, base) ? 1 : 0;
 
-  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4;
+  // Answered locally: no entitlement request reaches Meta (#411). Independent of substitution: it needs no identity.
+  result.entitlement += Install(hooks.entitlement, kEntitlementRequestHook, T::kEntitlementRequest, base) ? 1 : 0;
+
+  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4 && result.entitlement == 1;
   sentinel::LogFields(complete ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
                       "quest_login_prerequisites_install",
                       {{"status", complete ? "installed" : "partial"},
                        {"callbacks", result.callbacks},
                        {"accessors", result.accessors},
                        {"requests", result.requests},
+                       {"entitlement_local", result.entitlement},
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});

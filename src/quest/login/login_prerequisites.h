@@ -186,6 +186,7 @@ struct PrerequisiteInstall {
   int callbacks = 0;  // of 4
   int accessors = 0;  // of 8
   int requests = 0;   // of 4
+  int entitlement = 0;  // of 1: the entitlement request answered locally (#411)
   bool substitute = false;
 };
 PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept;

@@ -352,7 +352,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -476,7 +476,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -891,7 +891,7 @@ test-quest-social:
     # The frames live across a call into the game carry no exception machinery.
     tools/check_quest_social_frames.sh nm readelf \
         "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_game_calls.o=SlotResetEntry" \
-        "$out/social_install.o=OnSocial" "$out/social_invite_gate.o=OnBoolean"
+        "$out/social_install.o=OnSocial" "$out/social_install.o=OnPresence" "$out/social_invite_gate.o=OnBoolean"
     if err="$(tools/check_quest_social_frames.sh nm readelf "$out/social_facade.o=Facade" 2>&1)"; then
         echo "test-quest-social: the frame checker accepted an object with landing pads (it is blind)" >&2
         exit 1
@@ -2540,15 +2540,10 @@ verify:
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     # Wave 10: a deleted unit test must be visible to the closed-loop gate.
-    # The floor is deliberately derived from the current, production-linked
-    # suite; raising it is part of adding tests, while a drop is always a
-    # regression that needs an explicit sensor update and review.
-    TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 183 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 183)." >&2
-        exit 1
-    fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 183)"
+    # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
+    # against this tree): adding tests raises it in the same change, a drop is a regression
+    # that needs an explicit sensor update and review.
+    python3 tools/verify_gtest_floor.py --floor 813
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

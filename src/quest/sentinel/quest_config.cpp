@@ -40,13 +40,15 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 6> kFeatures = {{
+constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
     {"social", Feature::kSocial, &Features::social},
     {"hwdump", Feature::kHwDump, &Features::hwdump},
     {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
+    {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
+    {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -282,6 +284,15 @@ void Derive(LoadResult& r) {
   if (c.effective.social && !c.effective.login) {
     c.effective.social = false;
     force_off("social", "login_not_enabled");
+  }
+  // After social: the names ride in the facade's member data.
+  if (c.effective.presenceNames && !c.effective.social) {
+    c.effective.presenceNames = false;
+    force_off("presence_names", "social_not_enabled");
+  }
+  if (c.effective.presenceLocal && !c.effective.social) {
+    c.effective.presenceLocal = false;
+    force_off("presence_local", "social_not_enabled");
   }
 }
 

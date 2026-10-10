@@ -332,6 +332,94 @@ TEST(DecideServiceRedirect, ABridgeRewritesTheSocketToLoopbackAndTheHttpTargetNe
   EXPECT_STREQ(http, "https://service.example:7350");
 }
 
+TEST(DecideUnconfiguredApiRedirect, TheGamesDefaultApiHostGoesToTheConfiguredHttpService) {
+  SetConfigInputs();
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); };
+  const char api[] = "https://api.readyatdawn.com";
+  const char* chosen = nevr::lifecycle::DecideUnconfiguredApiRedirect(true, api, http, redirect);
+  ASSERT_NE(chosen, api);
+  EXPECT_STREQ(chosen, "https://service.example:7350");
+  // The per-environment form of the same host.
+  const char env[] = "https://api-dev.readyatdawn.com";
+  const char* chosenEnv = nevr::lifecycle::DecideUnconfiguredApiRedirect(true, env, http, redirect);
+  EXPECT_STREQ(chosenEnv, "https://service.example:7350");
+}
+
+TEST(DecideUnconfiguredApiRedirect, OnlyTheTwoRealApiPrefixesMatch) {
+  EXPECT_TRUE(nevr::lifecycle::IsGameApiBaseUrl("https://api.readyatdawn.com"));
+  EXPECT_TRUE(nevr::lifecycle::IsGameApiBaseUrl("https://api-dev.readyatdawn.com"));
+  EXPECT_FALSE(nevr::lifecycle::IsGameApiBaseUrl("https://apiary.example"));
+  EXPECT_FALSE(nevr::lifecycle::IsGameApiBaseUrl("https://api"));
+  EXPECT_FALSE(nevr::lifecycle::IsGameApiBaseUrl("http://api.readyatdawn.com"));
+  EXPECT_FALSE(nevr::lifecycle::IsGameApiBaseUrl("https://login.readyatdawn.com"));
+  EXPECT_FALSE(nevr::lifecycle::IsGameApiBaseUrl(nullptr));
+}
+
+// HttpConnectHook's decision: a configured host (apiservice_host, loginservice_host, api_host) wins and
+// the nevr_http_uri fallback is not even looked up; only an untouched game pointer reaches the fallback.
+TEST(DecideHttpConnectUri, AConfiguredHostWinsAndTheFallbackIsNotConsulted) {
+  SetConfigInputs();
+  int httpLookups = 0;
+  int redirects = 0;
+  const auto http = [&] { ++httpLookups; return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [&](const char* r, const char* t) { ++redirects; return NevrCfgRedirect(r, t, 0, 0); };
+  const char game[] = "https://api.readyatdawn.com";
+  const char configured[] = "https://api.configured.example";
+  EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(true, game, configured, http, redirect), configured);
+  EXPECT_EQ(httpLookups, 0);
+  EXPECT_EQ(redirects, 0);
+  // The chain left the game's pointer: the unconfigured fallback applies.
+  const char* fallback = nevr::lifecycle::DecideHttpConnectUri(true, game, game, http, redirect);
+  EXPECT_STREQ(fallback, "https://service.example:7350");
+  EXPECT_EQ(httpLookups, 1);
+  // A host that is neither the game's API base nor its queue's graph host is left alone either way.
+  const char other[] = "https://login.readyatdawn.com";
+  EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(true, other, other, http, redirect), other);
+}
+
+// #414: the matchmaker queue connects to https://graph.oculus.com; with nothing configured it goes to nevr_http_uri.
+TEST(DecideHttpConnectUri, TheMatchmakerQueuesGraphHostGoesToTheHttpServiceUnlessConfigured) {
+  SetConfigInputs();
+  int redirects = 0;
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [&](const char* r, const char* t) { ++redirects; return NevrCfgRedirect(r, t, 0, 0); };
+  const char graph[] = "https://graph.oculus.com";
+  EXPECT_STREQ(nevr::lifecycle::DecideHttpConnectUri(true, graph, graph, http, redirect), "https://service.example:7350");
+  EXPECT_EQ(redirects, 0) << "the readyatdawn.com policy is not involved";
+  // A configured graph_host / graphservice_host wins and the fallback is not consulted.
+  const char configured[] = "https://graph.configured.example";
+  EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(true, graph, configured, http, redirect), configured);
+  // Not armed: the game's pointer.
+  EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(false, graph, graph, http, redirect), graph);
+  // With a path the host is still the graph host; look-alikes and other Meta hosts are not.
+  const char withPath[] = "https://graph.oculus.com/v1";
+  EXPECT_STREQ(nevr::lifecycle::DecideHttpConnectUri(true, withPath, withPath, http, redirect),
+               "https://service.example:7350");
+  for (const char* other : {"https://graph.oculus.com.evil.example", "https://graph.oculus.comx", "http://graph.oculus.com",
+                            "https://graph.facebook.com", "https://oculus.com"}) {
+    EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(true, other, other, http, redirect), other) << other;
+  }
+  // No http target configured: nothing to redirect to.
+  SetEmptyInputs();
+  EXPECT_EQ(nevr::lifecycle::DecideHttpConnectUri(true, graph, graph, http, redirect), graph);
+}
+
+TEST(DecideUnconfiguredApiRedirect, OtherHostsNotArmedAndNoTargetKeepTheGamesPointer) {
+  SetConfigInputs();
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const auto redirect = [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); };
+  const char login[] = "https://login.readyatdawn.com";
+  const char graph[] = "https://graph.oculus.com";
+  const char api[] = "https://api.readyatdawn.com";
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, login, http, redirect), login);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, graph, http, redirect), graph);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(false, api, http, redirect), api);
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, nullptr, http, redirect), nullptr);
+  SetEmptyInputs();  // no http_uri configured: nothing to redirect to
+  EXPECT_EQ(nevr::lifecycle::DecideUnconfiguredApiRedirect(true, api, http, redirect), api);
+}
+
 TEST(StableStringPoolAccessors, SelectedRedirectReplacesTheGameResultWithTheStablePointer) {
   SetConfigInputs();
   const char defaultValue[] = "wss://login.readyatdawn.com/rad15";
