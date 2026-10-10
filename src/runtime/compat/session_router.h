@@ -21,11 +21,21 @@
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
 //   * login replay (Options::replayLoginOnReconnect, Quest): the game sends its own login and, when the
-//     login session ends under it (a remote failure), its login socket reconnects WITHOUT a new login (an
-//     established socket closed with nothing outstanding raises no Lost event, so the game stays "logged in").
-//     The router keeps the last LoginRequest the game sent on its login connection and, on the next login
-//     session, sends it as the first frame before anything the game queued, once per lost session, unless the
-//     game's own first frame on that connection is already a LoginRequest. The frame never reaches a log.
+//     login session ends under it (a remote failure) with nothing outstanding on the login connection, its
+//     login socket reconnects WITHOUT a new login (an established count-0 socket raises no Lost event, so the
+//     game stays "logged in"). A login connection that ended with requests outstanding is the game's Lost path
+//     (-95, the player presses RETRY and the game logs in itself): no replay is armed for it. The router keeps
+//     the last LoginRequest the game sent on its login connection and, on the next login session, sends it
+//     before anything the game queued, once per lost session, on the connection that is known to be the login
+//     socket: one that has sent a frame of the login role, or that has stayed silent for
+//     Config.silentNotifyMs (the transport reports it with OnGameSilent). A connection whose role is still
+//     provisional is never sent the token: a config or matchmaker socket reconnects with a request of its own
+//     within milliseconds. A game that sends its own LoginRequest first gets no replay.
+//     The cached frame is a credential: memory only, never logged. It is wiped (volatile overwrite, then
+//     released) when it is replaced, when the game sends LogOut on any connection (seen even in a frame that
+//     is dropped, or after another message in the frame), when the service rejects a login, at Shutdown and in
+//     the destructor. Copies in flight (the outbox frame, the transport's buffers) and the game's own memory
+//     are outside the router and are not wiped.
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
 //   * remote end (close or error): every game socket on that session is closed and the session is
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
@@ -175,6 +185,8 @@ struct Stats {
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
   uint64_t loginsReplayed = 0;     // the game's last LoginRequest sent on a new login session (replayLoginOnReconnect)
+  bool loginFrameCached = false;   // a LoginRequest is held for replay (never its content)
+  bool loginReplayDue = false;     // the next login session is to be sent it
   uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
@@ -193,6 +205,10 @@ class Router {
   void OnGameFrame(GameId game, std::string frame, bool binary);
   void OnGameClose(GameId game);
   void OnGameWritable(GameId game);
+  // The connection has been upgraded for the wiring's silent period and has sent no data frame. The login
+  // socket of a game that reconnected without a new login is such a connection; a config or matchmaker
+  // socket sends its request at once. Idempotent; ignored for a connection that has spoken.
+  void OnGameSilent(GameId game);
 
   // ---- events from the remote side ---------------------------------------------------------------
   void OnRemoteOpen(RemoteId remote);
@@ -230,6 +246,7 @@ class Router {
     RemoteId remote = kNoRemote;  // kNoRemote once its session ended
     bool closing = false;         // a close was issued; waiting for the transport's OnGameClose
     bool classified = false;      // the first data frame has named the role
+    bool silent = false;          // the transport reported it upgraded and silent (OnGameSilent), no frame yet
     uint32_t required = 0;        // requests sent on the shared login session that await their Unrequire
     Outbox out;
   };
@@ -256,6 +273,12 @@ class Router {
   bool GateAwaitingLocked() const;
   Role ProvisionalRoleLocked() const;
   void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
+  // The replay is due on `remote` (Options, a lost session, the login remote, not yet sent).
+  bool ReplayDueLocked(RemoteId remote, const Remote& r) const;
+  // The connection that owns the login remote, kNoGame when none.
+  GameId LoginConnectionLocked(RemoteId remote) const;
+  // Sends the cached login on an open remote and records it.
+  void SendReplayLocked(RemoteId remote, Remote& r, Effects& fx);
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();
   bool OnLoginSessionLocked(GameId id) const;

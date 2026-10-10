@@ -501,7 +501,9 @@ void TestSideChannelRefusesWhenNothingIsConnected() {
 void TestLoginSocketReconnectAfterRemoteFailureIsAuthenticatedAgain() {
   FakeConnector connector;
   Observed seen;
-  SessionBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
+  SessionBridge::Config cfg = MakeConfig(&connector, &seen, "JWT-A");
+  cfg.loopback.silentNotifyMs = 300;  // the silent login socket is recognised after 0.3 s here (1.5 s in production)
+  SessionBridge bridge(std::move(cfg));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
   const std::string path = PathOf(bridge.LocalUri());
@@ -523,7 +525,9 @@ void TestLoginSocketReconnectAfterRemoteFailureIsAuthenticatedAgain() {
   }));
   if (first == nullptr) return;
   QCHECK(first->Sent()[0] == gameLogin);
-  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 5150);
+  // The service's reply carries its Unrequire in the same frame, so the login connection has nothing outstanding.
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 5150) +
+                              nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "u");
   first->Push(success);
   const std::string successWire = BuildFrame(Opcode::Binary, success);
   QCHECK(login.Read(successWire.size()) == successWire);
@@ -545,7 +549,8 @@ void TestLoginSocketReconnectAfterRemoteFailureIsAuthenticatedAgain() {
     return !second->Sent().empty();
   }));
   if (second == nullptr) return;
-  QCHECK(second->Sent()[0] == gameLogin);  // authenticated again with no frame from the game
+  QCHECK(second->Sent()[0] == gameLogin);  // authenticated again with no frame from the game, once the
+                                           // silent socket was recognised as the login socket
   QCHECK(WaitFor([&] {
     return HasFrame(seen, /*s2g=*/false, gameLogin);
   }));
