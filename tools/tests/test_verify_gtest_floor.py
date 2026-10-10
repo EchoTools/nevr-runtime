@@ -13,6 +13,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "verify_gtest_floor.py"
 JUSTFILE = REPO / "justfile"
+# How far the justfile floor may lag the real count before the change that passes it must raise it.
+SLACK = 25
 
 
 def run(*args: str) -> subprocess.CompletedProcess:
@@ -68,14 +70,22 @@ class GTestFloorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"declarations={expected} ", result.stdout)
 
-    def test_the_floor_in_the_justfile_is_the_real_count(self):
-        """The floor equals what the gate measures on this tree, so one lost test fails it."""
+    def test_the_floor_in_the_justfile_tracks_the_real_count(self):
+        """The floor is within SLACK of what the gate measures on this tree, never above it.
+
+        Above the count the gate itself fails. More than SLACK below it, a stale floor would let
+        that many tests disappear unnoticed (it sat at 183 with more than 700 tests), so the change
+        that carries the count past floor + SLACK raises the floor. The slack is what keeps every
+        pull request that adds a test from having to touch the same justfile line.
+        """
         text = JUSTFILE.read_text(encoding="utf-8")
         marker = "tools/verify_gtest_floor.py --floor "
         self.assertIn(marker, text)
         floor = int(text.split(marker, 1)[1].split()[0])
-        self.assertEqual(floor, declared_by_grep(REPO / "src" / "runtime" / "tests"),
-                         "raise the floor in the justfile with the tests you add (a drop is a regression)")
+        count = declared_by_grep(REPO / "src" / "runtime" / "tests")
+        self.assertLessEqual(floor, count, "the floor is above the count: the gate fails")
+        self.assertLessEqual(count - floor, SLACK,
+                             f"raise the floor in the justfile to {count} (it may lag by at most {SLACK} tests)")
 
 
 if __name__ == "__main__":
