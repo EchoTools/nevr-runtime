@@ -272,8 +272,10 @@ void TestInitializeChecksTheProviderIdentity() {
 }
 
 // Failure caught (smoke 4): a sampled INFO line every 600 calls from the per-frame slots put several
-// social_slot lines a second into logcat. A slot logs its first call once and counts the rest.
-void TestPerFrameSlotsLogOnlyTheirFirstCall() {
+// social_slot lines a second into logcat. #391 needs a button's later calls too ("slot=46 call=7"). A
+// slot's first calls are logged with their number; after that one line per slot per gap; every call is
+// counted.
+void TestSlotTraceIsNumberedAndBounded() {
   World w;
   w.party.SetSelf(kSelf, "alice");
   void* obj = w.Obj();
@@ -282,9 +284,38 @@ void TestPerFrameSlotsLogOnlyTheirFirstCall() {
     SlotFn<U32_0>(obj, kFriendCount)(obj);
     SlotFn<U32_0>(obj, kOnlineFriendCount)(obj);
   }
-  QCHECK(CountLines("\"event\":\"social_slot\"") == 2);  // one first-call line per slot, nothing sampled
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 16);  // eight each, then nothing within the gap
+  QCHECK(CountLines("\"call\":7}") == 2 && CountLines("\"call\":9}") == 0);
   QCHECK(w.facade->SlotCalls(kFriendCount) == 2500 && w.facade->SlotCalls(kOnlineFriendCount) == 2500);
   QCHECK(w.facade->SlotCalls(kSlotCount) == 0);
+  g_now += 9;
+  SlotFn<U32_0>(obj, kFriendCount)(obj);
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 16);
+  g_now += 1;  // the gap has passed: the next call is logged at once, with its running number
+  SlotFn<U32_0>(obj, kFriendCount)(obj);
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 17 && CountLines("\"call\":2502}") == 1);
+
+  // Ten minutes of both polled at 60 Hz: one line a gap each, not 72000.
+  g_lines.clear();
+  for (int second = 0; second < 600; ++second) {
+    for (int frame = 0; frame < 60; ++frame) {
+      SlotFn<U32_0>(obj, kFriendCount)(obj);
+      SlotFn<U32_0>(obj, kOnlineFriendCount)(obj);
+    }
+    g_now += 1;
+  }
+  const int polled = CountLines("\"event\":\"social_slot\"");
+  QCHECK(polled >= 2 * 59 && polled <= 2 * 61);
+
+  // A slot nothing polls shows each press: the tenth press of a button is "call":10 only after the gap, but
+  // presses 2..8 are all there.
+  g_lines.clear();
+  using OpenUiTarget = void (*)(void*, std::uint32_t, std::uint64_t);
+  for (int press = 0; press < 12; ++press) SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
+  QCHECK(CountLines("\"event\":\"social_slot\",\"slot\":44") == 8 && CountLines("\"call\":7}") == 1);
+  g_now += 10;
+  SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
+  QCHECK(CountLines("\"event\":\"social_slot\",\"slot\":44") == 9 && CountLines("\"call\":13}") == 1);
 }
 
 void TestInitializeAndShutdown() {
@@ -1573,7 +1604,7 @@ int main() {
   std::atexit(&CheckInstanceSurvivesExit);
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLog);
   TestObjectShape();
-  TestPerFrameSlotsLogOnlyTheirFirstCall();
+  TestSlotTraceIsNumberedAndBounded();
   TestInitializeChecksTheProviderIdentity();
   TestInitializeAndShutdown();
   TestFriendRoster();

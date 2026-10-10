@@ -25,10 +25,13 @@ using sentinel::LogFields;
 using sentinel::LogLevel;
 
 constexpr std::size_t kViewRing = 128;  // a name pointer the game reads stays valid this many Updates
-// A slot's first call is logged once (the slot is live); every call is counted in Impl::slotCalls
-// (Facade::SlotCalls). The per-frame slots (counts and getters the UI polls) are called many times a second,
-// so nothing is sampled into the log.
-constexpr std::uint32_t kTraceFirstCalls = 1;
+// Every call is counted in Impl::slotCalls (Facade::SlotCalls). A slot's first kTraceFirstCalls calls are
+// logged with their number, so a button's slot shows each press ("slot=46 call=7"); after that a slot logs
+// at most one line per kTraceGapSeconds, carrying the running number. The per-frame slots (counts and
+// getters the UI polls) are called many times a second, so they settle at one line per gap each; a slot
+// that was quiet for a gap logs its next call at once.
+constexpr std::uint32_t kTraceFirstCalls = 8;
+constexpr std::uint64_t kTraceGapSeconds = 10;
 // CNSOVRSocial::Update retries a failed create no sooner than 5 s after the last one: it compares whole
 // seconds (CSysTime::GetTick / GetTicksPerSecond) against the time stored at +0x340 with `cmp w8, #5; b.lo`
 // (libpnsovr 0x2045dc..0x2045f8). The lock retry uses the same interval.
@@ -97,6 +100,7 @@ struct Facade::Impl {
   std::size_t retiredNext = 0;
 
   std::array<std::atomic<std::uint32_t>, kSlotCount> slotCalls{};
+  std::array<std::atomic<std::uint64_t>, kSlotCount> slotTraceAt{};  // Now() of each slot's last logged call
   std::atomic<std::uint32_t> initializeCalls{0};
   std::atomic<std::uint32_t> shutdownCalls{0};
   std::atomic<std::uint32_t> slotFailures{0};
@@ -830,9 +834,15 @@ void ReportFailure(Impl* impl, std::size_t index) {
 void TraceCall(Impl* impl, std::size_t index) {
   if (impl == nullptr) return;
   const std::uint32_t n = impl->slotCalls[index].fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n <= kTraceFirstCalls) {
-    LogFields(LogLevel::kInfo, "social_slot", {{"slot", static_cast<long long>(index)}, {"name", kSlotNames[index]}, {"call", n}});
+  const std::uint64_t now = Now(*impl);
+  if (n > kTraceFirstCalls) {
+    std::uint64_t last = impl->slotTraceAt[index].load(std::memory_order_relaxed);
+    if (now >= last && now - last < kTraceGapSeconds) return;
+    if (!impl->slotTraceAt[index].compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+  } else {
+    impl->slotTraceAt[index].store(now, std::memory_order_relaxed);
   }
+  LogFields(LogLevel::kInfo, "social_slot", {{"slot", static_cast<long long>(index)}, {"name", kSlotNames[index]}, {"call", n}});
 }
 
 // Wraps one slot function: no exception leaves it, a null or foreign object is answered with the
