@@ -1,4 +1,4 @@
-// Host test for the integrated bridge (src/quest/integration/integrated_bridge.*): the real loopback
+// Host test for the session bridge (src/quest/net/session_bridge.*): the real loopback
 // server, the real session router and the real remote transport, with a fake WebSocket connector in
 // place of libcurl and a raw TCP "game". Covers: the auth route, that the router injects NO login (the
 // game's own rewritten login is the first frame on the session), the tap in both directions, the
@@ -22,12 +22,11 @@
 #include <thread>
 #include <vector>
 
-#include "quest/integration/integrated_bridge.h"
+#include "quest/net/session_bridge.h"
 #include "quest/net/ws_wire.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 
-using namespace nevr_quest::integration;
 using namespace quest_net;
 
 namespace {
@@ -174,9 +173,9 @@ struct Observed {
   std::vector<std::uint64_t> logins;
 };
 
-IntegratedBridge::Config MakeConfig(FakeConnector* connector, Observed* seen, const std::string& jwt,
+SessionBridge::Config MakeConfig(FakeConnector* connector, Observed* seen, const std::string& jwt,
                                     const std::string& uri = "wss://service.example/nevr") {
-  IntegratedBridge::Config c;
+  SessionBridge::Config c;
   c.remoteUri = uri;
   c.connector = connector;
   c.identity = [jwt] {
@@ -215,15 +214,15 @@ bool WaitFor(const std::function<bool()>& pred, int ms = 3000) {
 void TestLoginRelayTapAndSideChannel() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge::Config withFriends = MakeConfig(&connector, &seen, "JWT-A");
+  SessionBridge::Config withFriends = MakeConfig(&connector, &seen, "JWT-A");
   withFriends.subscribeFriendList = true;
-  IntegratedBridge bridge(std::move(withFriends));
+  SessionBridge bridge(std::move(withFriends));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
 
   Client config(port), login(port);
   QCHECK(config.fd >= 0 && login.fd >= 0);
-  const std::string path = PathOf(bridge.LoopbackUri());
+  const std::string path = PathOf(bridge.LocalUri());
   QCHECK(!path.empty() && path.size() > 3);
   QCHECK(config.Upgrade(path));
   QCHECK(connector.WaitConnects(1));
@@ -293,10 +292,10 @@ void TestLoginRelayTapAndSideChannel() {
 void TestUpgradeWithoutTheTokenIsRefused() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
+  SessionBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
-  QCHECK(bridge.LoopbackUri().rfind("ws://127.0.0.2:", 0) == 0);
+  QCHECK(bridge.LocalUri().rfind("ws://127.0.0.2:", 0) == 0);
   Client intruder(port);
   QCHECK(intruder.fd >= 0);
   QCHECK(!intruder.Upgrade("/"));
@@ -309,11 +308,11 @@ void TestUpgradeWithoutTheTokenIsRefused() {
 void TestNoJwtMeansNoSessionAndTheGameSocketCloses() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge bridge(MakeConfig(&connector, &seen, ""));
+  SessionBridge bridge(MakeConfig(&connector, &seen, ""));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
   Client game(port);
-  QCHECK(game.Upgrade(PathOf(bridge.LoopbackUri())));
+  QCHECK(game.Upgrade(PathOf(bridge.LocalUri())));
   bool eof = false;
   game.Read(1u << 20, 3000, &eof);
   QCHECK(connector.Calls() == 0);  // no unauthenticated session, ever
@@ -338,8 +337,8 @@ struct Account {
   }
 };
 
-IntegratedBridge::Config MakeHeldConfig(FakeConnector* connector, Observed* seen, Account* account) {
-  IntegratedBridge::Config c = MakeConfig(connector, seen, "");
+SessionBridge::Config MakeHeldConfig(FakeConnector* connector, Observed* seen, Account* account) {
+  SessionBridge::Config c = MakeConfig(connector, seen, "");
   c.identity = [account] {
     Identity id;
     id.jwt = account->Jwt();
@@ -359,10 +358,10 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   FakeConnector connector;
   Observed seen;
   Account account;
-  IntegratedBridge bridge(MakeHeldConfig(&connector, &seen, &account));
+  SessionBridge bridge(MakeHeldConfig(&connector, &seen, &account));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
-  const std::string path = PathOf(bridge.LoopbackUri());
+  const std::string path = PathOf(bridge.LocalUri());
 
   Client bootConfig(port);
   std::string bootBytes = bootConfig.UpgradeBytes(path);
@@ -454,10 +453,10 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   FakeConnector connector;
   Observed seen;
   Account account;
-  IntegratedBridge bridge(MakeHeldConfig(&connector, &seen, &account));
+  SessionBridge bridge(MakeHeldConfig(&connector, &seen, &account));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
-  const std::string path = PathOf(bridge.LoopbackUri());
+  const std::string path = PathOf(bridge.LocalUri());
   Client config(port), login(port);
   QCHECK(config.Upgrade(path));
   QCHECK(login.Upgrade(path));
@@ -473,7 +472,7 @@ void TestHeldLoginIsClosedWhenSignInFails() {
 void TestPlaintextRemoteUriDoesNotStart() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT", "ws://service.example/nevr"));
+  SessionBridge bridge(MakeConfig(&connector, &seen, "JWT", "ws://service.example/nevr"));
   QCHECK(bridge.Start() == 0);
   QCHECK(connector.Calls() == 0);
 }
@@ -481,7 +480,7 @@ void TestPlaintextRemoteUriDoesNotStart() {
 void TestSideChannelRefusesWhenNothingIsConnected() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT"));
+  SessionBridge bridge(MakeConfig(&connector, &seen, "JWT"));
   QCHECK(bridge.Start() != 0);
   QCHECK(!bridge.SendToLogin(EvrCodec::BuildMessage(1, "x")));
   bridge.Stop();
@@ -498,9 +497,9 @@ int main() {
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
   if (quest_test::Failures() != 0) {
-    std::fprintf(stderr, "integrated_bridge_test: %d check(s) failed\n", quest_test::Failures());
+    std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
-  std::printf("integrated_bridge_test: all checks passed\n");
+  std::printf("session_bridge_test: all checks passed\n");
   return 0;
 }
