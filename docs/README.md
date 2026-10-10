@@ -6,19 +6,19 @@ Design documents, architecture decisions, and porting analysis.
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
-| `2026-06-29-serverdb-token-auth.md` | ADR: game-server ServerDB auth migration from URL-param credentials to JWT tokens | Runtime and ops developers |
 | `2026-07-13-quest-crash-reporter-injection.md` | Quest arm64 crash-reporter injection design via libovrplatformloader.so hijack | Quest porting developers |
 | `2026-10-01-social-scenario-harness.md` | One-client scenario tests for friends and parties: why one client is enough, the owner's constraints, where a scenario may enter the game, and what to build once | Runtime developers and agents testing social features |
 | `2026-10-01-social-features-test-plan.md` | Every social feature the game exposes (from the facade slots, session events, SNS messages and UserProviderID callers), prioritized, with status and the scenario that tests each | Runtime developers and agents testing social features |
 
-## Reference
-
-Format specifications, symbol maps, and procedural runbooks.
+## Architecture decisions
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
-| `cosmetics-cdn-format.md` | Normative `.evrp` binary format and CDN manifest schema for cosmetic assets | CDN tooling and game-hook developers |
-| `provider-prefix-slots.md` | Platform provider prefix code points and their slot assignments | Runtime developers |
+| `adr/0001-serverdb-token-auth.md` | Game-server ServerDB registration authenticates with a JWT on its own `/nevr` route | Runtime and ops developers |
+| `adr/0002-crash-report-ingest.md` | Crash reports reach the game service through a spool and a deferred uploader (not yet implemented) | Runtime and Quest developers |
+| `adr/0003-quest-networking-port.md` | Quest networking shares the PCVR protocol core and differs only in adapters (tracked in #158) | Quest porting developers |
+| `adr/0004-quest-verification-regime.md` | Quest networking is verified against the exact binaries, offline | Quest porting developers |
+| `adr/0005-cosmetics-cdn-format.md` | Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN (normative format) | CDN tooling and game-hook developers |
 
 ## Process
 
@@ -36,6 +36,7 @@ Coding and verification standards that bind all work in this repo.
 | ---- | ----------- | -------- |
 | `logging.md` | Structured logging format, noise suppression rules, and identity-on-login requirements | All developers |
 | `verification.md` | Evidence ladder (rank 1–5), falsification discipline, and gate contract | All developers and agents |
+| `planning.md` | Release milestones by outcome, Fibonacci points, sprints by work, story states, and the hygiene rules for issues, PRs, branches and milestones | All developers and agents |
 
 ## Audits
 

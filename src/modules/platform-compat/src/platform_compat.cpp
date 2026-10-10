@@ -1,6 +1,6 @@
 /*
  * platform_compat module — Schannel TLS modernization, CreateDirectory fixes,
- * and WinHTTP-to-libcurl CoCreateInstance hook.
+ * and MSXML6 CoCreateInstance pass-through hook.
  *
  * Each module DLL has its own MinHook statics — calls Hooking::Initialize()
  * before any hook installation.
@@ -8,7 +8,7 @@
  * Hooks:
  *   - AcquireCredentialsHandleW (Schannel): enables TLS 1.2/1.3 with modern cipher suites
  *   - CreateDirectoryW / CreateDirectoryA: fixes _temp directory creation failures under Wine
- *   - CoCreateInstance (ole32): redirects WinHTTP COM creation to libcurl stub
+ *   - CoCreateInstance (ole32): logs the MSXML6 XMLHTTP CLSID and passes it through to the system object
  */
 
 #include <windows.h>
@@ -89,8 +89,8 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       GetCurrentDirectoryW(MAX_PATH, currentDir);
       _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
       pathToUse = fixedPath;
-      // This bug has no counterpart on native Windows (see the CoCreateInstance
-      // hook comment below) — SystemInfo::Get().IsWine() makes that explicit
+      // This bug has no counterpart on native Windows —
+      // SystemInfo::Get().IsWine() makes that explicit
       // instead of leaving the branch looking like an unexplained ad hoc fix,
       // and flags the anomaly loudly if it's ever hit off Wine.
       static const bool s_isWine = SystemInfo::Get().IsWine();
@@ -163,10 +163,10 @@ BOOL WINAPI CreateDirectoryAHook(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecu
 }
 
 // ---------------------------------------------------------------------------
-// WinHTTP CoCreateInstance hook
+// MSXML6 XMLHTTP CoCreateInstance hook (observation only; the request is never redirected)
 // ---------------------------------------------------------------------------
 
-static const CLSID CLSID_WinHttpRequest = {
+static const CLSID CLSID_FreeThreadedXMLHTTP60 = {
     0x88d96a09, 0xf192, 0x11d4, {0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5}};
 
 typedef HRESULT(WINAPI* CoCreateInstanceFunc)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
@@ -174,28 +174,17 @@ static CoCreateInstanceFunc OriginalCoCreateInstance = nullptr;
 
 HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext,
                                     REFIID riid, LPVOID* ppv) {
-  if (IsEqualCLSID(rclsid, CLSID_WinHttpRequest)) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP COM → libcurl bridge");
-
-    static bool s_protectionFixed = false;
-    if (!s_protectionFixed) {
-      DWORD oldProtect;
-      PVOID rdataStart = (PVOID)(EchoVR::g_GameBaseAddress + 0x16E8000);
-      if (VirtualProtect(rdataStart, 0x2000, PAGE_READWRITE, &oldProtect)) {
-        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Made COM rdata page writable (was 0x%lX)", oldProtect);
-      }
-      s_protectionFixed = true;
-    }
-
-    extern HRESULT CreateWinHttpRequestStub(REFIID riid, void** ppvObject);
-    HRESULT hr = CreateWinHttpRequestStub(riid, ppv);
-    if (FAILED(hr)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] WinHTTP stub creation failed: 0x%08lX", hr);
-    }
-    return hr;
+  HRESULT hr = OriginalCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+  if (IsEqualCLSID(rclsid, CLSID_FreeThreadedXMLHTTP60)) {
+    // The game drives this object through IXMLHTTPRequest2/3 (slot 3 Open, slot 4 Send); the
+    // IWinHttpRequest-shaped stub wrote through arguments the game never passed (#133). The
+    // system's object has the right layout, so the request goes to it.
+    // A failed creation is not a pass-through that worked: Warning, not Info.
+    Log(SUCCEEDED(hr) ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] MSXML6 XMLHTTP CLSID passed through to the system object hr=0x%08lX",
+        static_cast<unsigned long>(hr));
   }
-
-  return OriginalCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+  return hr;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +249,7 @@ static bool InstallCreateDirectoryHooks() {
   return ok;
 }
 
-static bool InstallWinHTTPHook() {
+static bool InstallMsxml6PassThroughHook() {
   HMODULE hOle32 = GetModuleHandleA("ole32.dll");
   if (hOle32 == NULL) {
     hOle32 = LoadLibraryA("ole32.dll");
@@ -270,19 +259,19 @@ static bool InstallWinHTTPHook() {
     if (OriginalCoCreateInstance != NULL) {
       if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCoCreateInstance),
                            reinterpret_cast<PVOID>(CoCreateInstanceHook))) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.PATCH] failed to install CoCreateInstance hook: %s — WinHTTP bridge inactive, game will use its "
-            "own (unpatched) HTTP stack",
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] failed to install CoCreateInstance hook: %s — the MSXML6 pass-through line will not be "
+            "logged; the game still uses the system's XMLHTTP object",
             Hooking::LastAttachError());
         return false;
       }
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] MSXML6 pass-through hook installed (CoCreateInstance)");
       return true;
     }
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to find CoCreateInstance export in ole32.dll (error=%lu)",
         GetLastError());
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to load ole32.dll for WinHTTP hook (error=%lu)",
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to load ole32.dll for the MSXML6 hook (error=%lu)",
         GetLastError());
   }
   return false;
@@ -306,9 +295,6 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
   // Re-running InitializeFunctionPointers here replaces every MinHook trampoline
   // with its patched target; a hook calling its "original" then re-enters itself.
 
-  // Hoisted from below the hook-outcome logging (was computed only for the
-  // N120 fatal-gate check) so the WinHTTP-missing line right below can also
-  // condition its wording on it — see that line's comment.
   const bool isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
 
   Hooking::Initialize();
@@ -316,58 +302,52 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
   /* All three return bool and the returns were DISCARDED, while success logged
    * nothing and only failure logged. So this function printed "initialized"
    * identically whether three hooks installed or zero did — which is precisely
-   * how a silently-failing WinHTTP hook looks like a working one, and why
-   * "the WinHTTP errors are back" had no corresponding log change.
+   * how a silently-failing hook looks like a working one.
    *
    * Report each outcome by name, plus an aggregate, in the shape N17 defined for
    * hook installs. */
   const bool tlsOk = InstallTLSHook();
   const bool dirOk = InstallCreateDirectoryHooks();
-  const bool httpOk = InstallWinHTTPHook();
+  const bool httpOk = InstallMsxml6PassThroughHook();
   const int okCount = (tlsOk ? 1 : 0) + (dirOk ? 1 : 0) + (httpOk ? 1 : 0);
 
   Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MODULE] platform_compat initialized: %d/3 hooks installed "
-      "(tls=%s createdir=%s winhttp=%s)",
+      "(tls=%s createdir=%s msxml6=%s)",
       okCount, tlsOk ? "ok" : "FAILED", dirOk ? "ok" : "FAILED",
       httpOk ? "ok" : "FAILED");
 
-  /* The WinHTTP bridge is the one whose absence is silent-but-fatal: without it
-   * the game falls back to its own HTTP stack and reports NoNetwork (N11).
-   * On a server this line used to fire AND understate what happens next: the
-   * isServer-gated block below (N120) logs its own Error and returns 1, which
-   * module_loader treats as fatal — the process exits. Say nothing here on a
-   * server so that Error is the sole, correct one; the client case is
-   * unaffected and still gets the NoNetwork warning. */
-  if (!httpOk && !isServer) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.MODULE] WinHTTP bridge NOT installed — the game will use its own "
-        "HTTP stack and may report NoNetwork");
+  /* The CoCreateInstance hook only logs the MSXML6 XMLHTTP CLSID and passes it to the system
+   * object (#133); the game's HTTP works with or without it, so its absence costs one log line
+   * and never NoNetwork. A missing TLS hook is the one that degrades the network stack. */
+  if (!httpOk) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MODULE] MSXML6 pass-through hook NOT installed — requests still reach the system "
+        "XMLHTTP object, but the pass-through line will not be logged");
   }
 
   /* N120. This returned 0 — success — no matter how many hooks failed, including
-   * the one the comment above calls silent-but-fatal. So a server whose TLS or
-   * HTTP bridge never installed reported "module loaded" and ran on to fail later
-   * somewhere unrelated, which is the worst of both: broken, and misattributed.
+   * the TLS hook. So a server whose TLS hook never installed reported "module loaded" and ran
+   * on to fail later somewhere unrelated, which is the worst of both: broken, and misattributed.
    *
    * On a dedicated server there is nobody watching a console, so report the
    * failure and let module_loader's existing FatalError kill the process at the
    * point of the actual defect.
    *
-   * Mandatory = tls + winhttp. NOT createdir: that hook fixes a malformed NT path
+   * Mandatory = tls. NOT createdir: that hook fixes a malformed NT path
    * Wine produces (the `_temp` bug) and has no counterpart on native Windows, so
    * requiring it would refuse to boot on the platform where it is meaningless.
+   * NOT the CoCreateInstance hook: it only logs (see above).
    *
    * Server-gated deliberately. module_loader treats a non-zero init as fatal in
    * BOTH modes, so returning non-zero unconditionally would newly hard-fail a
-   * client that previously limped along with degraded HTTP — the opposite of the
+   * client that otherwise limps along with a degraded network stack — the opposite of the
    * rule, which is that a server dies and a client warns. */
-  if (isServer && (!tlsOk || !httpOk)) {
+  if (isServer && !tlsOk) {
     Log(EchoVR::LogLevel::Error,
-        "[NEVR.MODULE] platform_compat FAILED on a server (tls=%s winhttp=%s) — "
+        "[NEVR.MODULE] platform_compat FAILED on a server (tls=FAILED) — "
         "reporting init failure; a server must not run with a degraded network "
-        "stack",
-        tlsOk ? "ok" : "FAILED", httpOk ? "ok" : "FAILED");
+        "stack");
     return 1;
   }
   return 0;

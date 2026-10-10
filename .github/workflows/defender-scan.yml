@@ -1,51 +1,59 @@
 name: Defender scan
 
-# What Microsoft Defender says about the release zip on real Windows, before testers install it (#75).
-# Manual and off main: it runs on a push to this branch (GitHub only dispatches workflow_dispatch
-# workflows that are on the default branch). Not part of the release; nothing is signed. The zip is
-# built as build.yml builds it with no secrets, so it embeds no keys.
-
+# Measures what Microsoft Defender says about the release zip on a real Windows runner. It is a
+# measurement, not a gate: it is not part of the release, signs nothing and embeds no keys (no
+# secrets are read, so the build is the same one a pull request gets). Run it by hand
+# (workflow_dispatch) or by editing this file in a pull request.
 on:
   workflow_dispatch:
-  push:
-    branches: [ci/defender-scan]
+  pull_request:
+    paths:
+      - .github/workflows/defender-scan.yml
+
+concurrency:
+  group: defender-scan-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  build-zip:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
     steps:
+    # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
+    - name: Install the toolchain (pacman)
+      run: |
+        set -euo pipefail
+        pacman -Syu --noconfirm --needed \
+          git mingw-w64-gcc ninja cmake python python-yaml go just zstd openssl \
+          curl zip unzip tar pkgconf zlib
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
         fetch-depth: 0
 
-    - name: Setup pinned just
-      uses: extractions/setup-just@v4
-      with:
-        just-version: '1.46.0'
-
-    - name: Setup pinned CMake
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - run: python -m pip install cmake==4.0.0
-
-    - name: Install MinGW toolchain
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build zstd
+    - name: Trust the workspace for git
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - name: Setup pinned Buf
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23.6'
-    - run: |
+      run: |
+        set -euo pipefail
         go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        echo "$HOME/go/bin" >> "$GITHUB_PATH"
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
+    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
+    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
+    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
+      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
 
     - name: Setup vcpkg
       run: |
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        # The vcpkg revision is the one in .vcpkg-commit, the same one `just vcpkg-pin-check` holds a
+        # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
+        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
@@ -54,62 +62,67 @@ jobs:
     - name: Generate pinned protobuf sources
       run: |
         set -euo pipefail
-        test -x "$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        protoc="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        test -x "$protoc"
         just proto
 
-    - name: Configure CMake (unsigned, no embedded defaults)
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=OFF
-
-    - name: Build the dist zip
+    - name: Configure and build
       run: |
         set -euo pipefail
-        cmake --build --preset mingw-release --target dist
-        ls -la dist
-        sha256sum dist/*.zip build/mingw-release/bin/BugSplat64.dll
+        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=OFF
+        cmake --build --preset mingw-release
+
+    - name: Create the distribution zip (unsigned)
+      run: |
+        set -euo pipefail
+        cmake --build --preset mingw-release --target dist dist-lite
+        ls -l dist/*.zip
 
     - uses: actions/upload-artifact@v4
       with:
-        name: release-zip
+        name: release-zips
         path: dist/*.zip
         if-no-files-found: error
         retention-days: 7
 
   scan:
-    needs: build
+    needs: build-zip
     runs-on: windows-latest
     steps:
     - uses: actions/download-artifact@v4
       with:
-        name: release-zip
-        path: zip
+        name: release-zips
+        path: zips
 
-    - name: Unzip
+    - name: Defender status
       shell: pwsh
       run: |
-        $zip = Get-ChildItem zip -Filter *.zip | Select-Object -First 1
-        Expand-Archive -Path $zip.FullName -DestinationPath unzipped -Force
-        Get-ChildItem -Recurse unzipped | ForEach-Object { "{0}  {1}  {2}" -f (Get-FileHash $_.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash, $_.Length, $_.FullName }
+        $s = Get-MpComputerStatus
+        $s | Format-List AMProductVersion, AMEngineVersion, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, AntivirusEnabled, RealTimeProtectionEnabled
+        "## Defender`n" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+        "engine $($s.AMEngineVersion), signatures $($s.AntivirusSignatureVersion) ($($s.AntivirusSignatureLastUpdated)), antivirus enabled: $($s.AntivirusEnabled)`n" | Out-File -Append $env:GITHUB_STEP_SUMMARY
 
-    - name: 1. Is Defender active on this runner?
+    - name: Scan each unzipped package
       shell: pwsh
       run: |
-        Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, BehaviorMonitorEnabled, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, AMEngineVersion, AMProductVersion | Format-List
-
-    - name: 2. Scan the unzipped release
-      id: mpscan
-      shell: pwsh
-      run: |
-        $dir = (Resolve-Path unzipped).Path
-        & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File $dir -DisableRemediation
-        $code = $LASTEXITCODE
-        "MpCmdRun exit code: $code (0 = no threats, 2 = threats found)"
-        "exit_code=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-        exit 0
-
-    - name: 3. Detections
-      shell: pwsh
-      run: |
-        "MpCmdRun exit code was ${{ steps.mpscan.outputs.exit_code }}"
-        $d = Get-MpThreatDetection
-        if ($d) { $d | Format-List * } else { "Get-MpThreatDetection: none" }
-        if ("${{ steps.mpscan.outputs.exit_code }}" -ne "0") { exit 1 }
+        $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+        if (-not (Test-Path $mp)) { throw "MpCmdRun.exe not found at $mp" }
+        $zips = Get-ChildItem zips -Filter *.zip
+        if ($zips.Count -lt 1) { throw 'no release zip was downloaded' }
+        $failed = $false
+        foreach ($z in $zips) {
+          $dir = Join-Path $PWD ("unzipped\" + $z.BaseName)
+          Expand-Archive -Path $z.FullName -DestinationPath $dir
+          "sha256 of every file in $($z.Name):"
+          Get-ChildItem $dir -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-Table Hash, @{n='File';e={Resolve-Path -Relative $_.Path}} -AutoSize | Out-String -Width 250
+          # 0 = nothing found, 2 = threats found; anything else means the scan did not run.
+          & $mp -Scan -ScanType 3 -File $dir -DisableRemediation
+          $code = $LASTEXITCODE
+          $verdict = switch ($code) { 0 { 'clean' } 2 { 'THREATS FOUND' } default { "scan error (exit $code)" } }
+          "$($z.Name): MpCmdRun exit $code = $verdict"
+          "- $($z.Name): MpCmdRun exit $code = **$verdict**" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          if ($code -notin 0, 2) { $failed = $true }
+        }
+        "Threat detections recorded by Defender:"
+        Get-MpThreatDetection | Format-List ThreatID, ProcessName, Resources, InitialDetectionTime
+        if ($failed) { throw 'a scan did not run; the verdict above is not a measurement' }

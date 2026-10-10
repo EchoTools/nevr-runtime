@@ -12,7 +12,6 @@
 #include "runtime/hook/patching.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
-// The gamepatches copy was deleted 2026-07-26: never compiled, zero call sites.
 #include "runtime/patch/resource_override.h"
 #include "runtime/lifecycle/state_machine.h"
 #include "runtime/compat/ws_bridge.h"
@@ -56,19 +55,6 @@ static BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString) {
 }
 
 // ============================================================================
-// GetProcAddress hook — prevents server crash during platform DLL shutdown
-// ============================================================================
-
-static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
-  // Platform DLLs (pnsdemo/pnsovr) crash during RadPluginShutdown due to freed memory.
-  // Detect platform DLLs by checking for the "Users" export they all define.
-  if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
-    if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
-  }
-  return EchoVR::GetProcAddress(hModule, lpProcName);
-}
-
-// ============================================================================
 // GameServerLib factory — provides IServerLib to the game via CSysDLL_GetSymbol
 // ============================================================================
 
@@ -77,7 +63,7 @@ static EchoVR::IServerLib* g_ServerLib = nullptr;
 static EchoVR::IServerLib* ServerLibFactory() {
     if (!g_ServerLib) {
         g_ServerLib = new GameServerLib();
-        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", (void*)g_ServerLib);
+        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", static_cast<void*>(g_ServerLib));
     }
     return g_ServerLib;
 }
@@ -97,7 +83,7 @@ static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 // one address, and MicDestroy/MicStart/MicStop onto a second — a MinHook
 // detour on either address cannot distinguish which export name the game
 // meant to resolve. This is the SAME address-collision trap already
-// documented below for RadPluginShutdown (N128): 0x1400eaef0 is the game's
+// handled below for RadPluginShutdown (N128): 0x1400eaef0 is the game's
 // one symbol-resolution function, and it's what NRadEngine::CPlatformService::
 // MicRead (echovr.exe 0x14060cad0) calls to resolve "MicRead" etc. on a
 // provider handle. So the mic exports are intercepted HERE, by name, against
@@ -137,6 +123,22 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
       logged = true;
     }
     return micFn;
+  }
+  // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
+  // memory). They are recognised by the "Users" export they all define. The game's
+  // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
+  // answering null skips the call and teardown carries on. (A second detour on
+  // this same address would not install under MinHook, #93/#94; ending the
+  // process with exit(0) instead is suppressed by ExitProcessHook in server
+  // mode.)
+  if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
+      g_original_GetSymbol(dll_handle, "Users") != nullptr) {
+    static bool logged = false;
+    if (!logged) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)");
+      logged = true;
+    }
+    return nullptr;
   }
   void* result = g_original_GetSymbol(dll_handle, symbol_name);
 
@@ -236,6 +238,41 @@ extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
 }
 
 // ============================================================================
+// Boot hook results
+// ============================================================================
+
+// Whether the process can do its job without a given boot hook. A required hook
+// that does not install sets g_bootHookFailed, and boot.cpp refuses to start a
+// server with that flag set rather than run it degraded; a client only reports
+// ok=false in the final boot line. An optional hook that does not install is
+// recorded and boot continues.
+enum class BootHookRequirement { kRequired, kOptional };
+
+// Issue #42: every boot hook's install result goes through here, so no call site
+// can drop it. PatchDetour has already logged the MinHook reason on failure; this
+// adds what the failure means for the boot. TeeFprintf, not Log(): this runs
+// under the DllMain loader lock (see the N36 note in `just verify`).
+static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequirement requirement) {
+  if (installed) return;
+  if (requirement == BootHookRequirement::kRequired) {
+    g_bootHookFailed = true;
+    BootLogTee::TeeFprintf(
+        "[NEVR.PATCH] required boot hook not installed name=%s; a server will refuse to start, a client "
+        "continues without it\n",
+        name);
+  } else {
+    BootLogTee::TeeFprintf("[NEVR.PATCH] optional boot hook not installed name=%s; boot continues\n", name);
+  }
+}
+
+// The boot sequence's only way to detour a game function: the result cannot be
+// discarded, and each call site has to state whether the hook is required.
+template <typename T>
+static void InstallBootDetour(T* ppPointer, PVOID pDetour, const char* name, BootHookRequirement requirement) {
+  NoteBootHookResult(PatchDetour(ppPointer, pDetour, name), name, requirement);
+}
+
+// ============================================================================
 // Main initialization
 // ============================================================================
 
@@ -257,6 +294,7 @@ static VOID InitializeAfterGameImageGuard() {
   if (!Hooking::Initialize()) {
     BootLogTee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
+    BootLogTee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
@@ -287,8 +325,9 @@ static VOID InitializeAfterGameImageGuard() {
   // N59: re-wire PatchDscProvider — the call site was lost when N43's
   // Initialize() rewrite merged over N41's include+call (a6bb57d).
   // Without this, the 5-site PSN→DSC + ???→DSC string-table rewrite
-  // never executes — game sends PSN-/???- instead of DSC- in provider
-  // strings (RULINGS.md 2026-07-20 login-prefix).
+  // never executes, and the game paths that do not go through the
+  // GetProviderPrefix detour below (GetUserIDString) format PSN-/???-
+  // instead of DSC- (RULINGS.md 2026-07-20 login-prefix).
   BootLogTee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
   PatchDscProvider();
   BootLogTee::TeeFprintf("[NEVR.BOOT] detouring GetProviderPrefix → OVR-ORG...\n");
@@ -298,9 +337,15 @@ static VOID InitializeAfterGameImageGuard() {
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
-      if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-              reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-          MH_EnableHook(sym_target) == MH_OK) {
+      // Prologue of CSysDLL_GetSymbol (echovr.exe 0x1400eaef0: sub rsp,0xA8; test rdx,rdx).
+      static const unsigned char kGetSymbolPrologue[8] = {0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00, 0x48};
+      if (memcmp(sym_target, kGetSymbolPrologue, sizeof(kGetSymbolPrologue)) != 0) {
+        BootLogTee::TeeFprintf(
+            "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
+        g_bootHookFailed = true;
+      } else if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+                     reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
+                 MH_EnableHook(sym_target) == MH_OK) {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
       } else {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol\n");
@@ -344,40 +389,49 @@ static VOID InitializeAfterGameImageGuard() {
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "OK" : "FAILED");
-  if (!r1) g_bootHookFailed = true;
+  NoteBootHookResult(r1, "BuildCmdLineSyntaxDefinitions", BootHookRequirement::kRequired);
   BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=PreprocessCommandLine result=%s\n", r2 ? "OK" : "FAILED");
-  if (!r2) g_bootHookFailed = true;
-  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook), "EchoVR::NetGameSwitchState");
-  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig");
-  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat");
-  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect");
-  // N128: this detour FAILS with MH_ERROR_ALREADY_CREATED on every boot, and the
-  // reason is now KNOWN (N127 left it undetermined; the MH_STATUS capture added in
-  // N128 resolved it). EchoVR::GetProcAddress is 0x1400eaef0 — the SAME address
-  // already hooked above as CSysDLL_GetSymbol (line ~258, the pnsradgameserver ->
-  // in-process ServerLib redirect). CModule::GetProcAddress, CSysDLL_GetSymbol and
-  // EchoVR::GetProcAddress are one function; MinHook allows one detour per target,
-  // and CSysDLL_GetSymbol wins because it installs first. So this RadPluginShutdown
-  // crash-avoidance never installs. Empirically harmless — shutdowns are clean
-  // across every captured run without it. Proper fix (flagged, not done): fold the
-  // RadPluginShutdown check into CSysDLL_GetSymbolHook, since it already intercepts
-  // symbol lookups on this exact function.
-  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress");
-  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_");
-  PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook), "EchoVR::JsonValueAsString");
+  NoteBootHookResult(r2, "PreprocessCommandLine", BootHookRequirement::kRequired);
+  // Required: on a server it turns NoNetwork/LoadFailed back into a usable
+  // state, ends the process when a session ends, and is the shutdown-request
+  // check when the frame pacer is not running (state_machine.cpp).
+  InstallBootDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook),
+                    "EchoVR::NetGameSwitchState", BootHookRequirement::kRequired);
+  // Required: sets g_localConfig, which HttpConnectHook needs before it
+  // redirects anything, and supplies the built-in game config when no
+  // config.json exists (config.cpp LoadLocalConfigHook).
+  InstallBootDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig",
+                    BootHookRequirement::kRequired);
+  // Required: without it the configured arena rule overrides (round time,
+  // celebration time, mercy score) are silently not applied.
+  InstallBootDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat",
+                    BootHookRequirement::kRequired);
+  // Required: redirects the game's HTTP(S) service endpoints.
+  InstallBootDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect",
+                    BootHookRequirement::kRequired);
+  // Optional: the hook only records the window handle in g_hWindow, and nothing
+  // in the runtime reads g_hWindow.
+  InstallBootDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_",
+                    BootHookRequirement::kOptional);
+  // Required: rewrites the game's service URLs (readyatdawn.com and ws/wss
+  // hosts) to the configured services and supplies early-config overrides
+  // (config.cpp JsonValueAsStringHook).
+  InstallBootDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook),
+                    "EchoVR::JsonValueAsString", BootHookRequirement::kRequired);
   BootLogTee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
-  // WinHTTP hook (InstallWinHTTPHook) handles TLS for HTTP/REST calls via curl.
+  // The game's HTTP/REST calls go through the system MSXML6 XMLHTTP object over Schannel;
+  // platform_compat only logs its creation (InstallMsxml6PassThroughHook).
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
   BootLogTee::TeeFprintf("[NEVR.PATCH] tls deferred=ws_bridge stage=boot\n");
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
   InstallCrashRecoveryHooks();
   BootLogTee::TeeFprintf("[NEVR.CRASH] crash recovery hooks installed\n");
-  // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
+  // CreateDirectory + MSXML6 pass-through hooks live in the platform_compat module (loaded in boot.cpp)
   BootLogTee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
@@ -413,8 +467,8 @@ static VOID InitializeAfterGameImageGuard() {
   // --- CDN asset loading ---
   // N131: moved to boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
   // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
-  // could not distinguish server from client. The call now lives where g_isServer
-  // is known so a headless server never opens the CDN connection.
+  // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
+  // is known, so a headless server never opens the CDN connection.
 
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
@@ -422,6 +476,7 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf(
       "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
   BootLogTee::Close();
+  BuiltinLogFilter::ReplayBootTail();  // after Close nothing appends: the lines written since the main log opened (#5)
 
   Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
       "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");

@@ -1,8 +1,13 @@
 # Mic provider: fixing one-way voice under NEVR (GH #15)
 
 2026-09-21, Claude + Andrew. Design and investigation record, written so an
-interruption only costs a `git log`/ReVault read, not a re-derivation. No
-code has been written yet — this is the state to build from.
+interruption only costs a `git log`/ReVault read, not a re-derivation.
+
+Status: built. `src/runtime/patch/mic_provider.{h,cpp}` is installed through the
+`CSysDLL_GetSymbol` hook in `src/runtime/lifecycle/initialize.cpp`, with unit tests in
+`src/runtime/tests/test_mic_*.cpp`. Still open: the capture ring buffer overflows soon after
+capture starts (#95), and no `tools/winvm/systest.py` mic check exists. The rest of this
+document is the investigation record.
 
 ## The bug (GH #15)
 
@@ -35,9 +40,7 @@ Two independent consumers call `Mic*`, both via dynamic dispatch through
 `NRadEngine::CPlatformService::MicRead` @ `0x14060cad0` (`GetMethodProc
 (provider_handle, "MicRead")`, same pattern for the other five exports).
 
-**`CaptureAndEncodeLocalVoice` @ `0x140d7bd90`** (renamed from a stale,
-wrong `ProcessTeamBalancing` — the old name described nothing in the
-function body), per-frame, per player slot with local voice active:
+**`CaptureAndEncodeLocalVoice` @ `0x140d7bd90`**, per-frame, per player slot with local voice active:
 
 1. `MicAvailable()` — how many samples are ready.
 2. `MicRead(buf, count)` — pulls them, **prepended** with any leftover
@@ -137,20 +140,14 @@ WASAPI capture:
    four distinct export names resolve to the same address, so a body-hook
    cannot tell which name the game meant to call.
 
-   There is already a precedent for exactly this trap in the codebase,
-   documented and currently silently broken: `EchoVR::GetProcAddress`
-   (`src/runtime/lifecycle/initialize.cpp:331`) and `CSysDLL_GetSymbolHook`
-   (`initialize.cpp:83`) are two separate `PatchDetour`/`Hooking::Attach`
-   installs targeting the *same* address (`0x1400eaef0`, per the file's own
-   N128 comment) — the game's one symbol-resolution function, used both for
-   module DLL loading and for provider dispatch (the same function
-   `NRadEngine::CPlatformService::MicRead` calls to resolve `"MicRead"` on
-   a provider handle, per the ReVault trace above). MinHook allows one
-   detour per target; whichever installs first wins — `CSysDLL_GetSymbolHook`
-   does, so `GetProcAddressHook`'s RadPluginShutdown crash-avoidance has
-   never once run, on any boot. The N128 comment already names the correct
-   fix ("fold the RadPluginShutdown check into CSysDLL_GetSymbolHook") —
-   the mic provider needs the same shape of fix for the same reason.
+   The same trap applies to `0x1400eaef0`, the game's one symbol-resolution
+   function, used both for module DLL loading and for provider dispatch (the
+   function `NRadEngine::CPlatformService::MicRead` calls to resolve
+   `"MicRead"` on a provider handle, per the ReVault trace above). MinHook
+   allows one detour per target, so `CSysDLL_GetSymbolHook`
+   (`src/runtime/lifecycle/initialize.cpp`) is the only detour on it and also
+   carries the server-only RadPluginShutdown guard. The mic provider needs the
+   same shape of fix for the same reason.
 
    **Correct design:** extend `CSysDLL_GetSymbolHook` itself (it already
    wins the one-detour slot on `0x1400eaef0`). When `dll_handle` is
@@ -170,8 +167,7 @@ WASAPI capture:
 
 ### Testing
 
-- **Automatable now, via `tools/winvm/systest.py`** (the same rig that
-  proved local-nakama login end-to-end, `docs/reference/local-nakama.md`):
+- **Automatable now, via `tools/winvm/systest.py`:**
   boot the runtime, confirm `MicAvailable`/`MicRead` get called and return
   nonzero against a fake/silent WASAPI input, and confirm `VoipEncode`
   actually produces output bytes. That is a scriptable pass/fail — it

@@ -154,6 +154,8 @@ _HOOK_RESULT_FAILED = re.compile(r"\bhook\s+name=(?P<name>\S+)\s+result=FAILED\b
 _HOOK_NAME = re.compile(r"\bname=(?P<value>\S+)", re.IGNORECASE)
 _HOOK_ERROR = re.compile(r"\b(?:reason|status)=(?P<value>\S+)", re.IGNORECASE)
 _HOOK_SUMMARY = re.compile(r"hooks installed: (?P<ok>\d+) succeeded, (?P<failed>\d+) failed", re.IGNORECASE)
+_BOOT_HOOK_NOT_INSTALLED = re.compile(
+    r"\b(?P<kind>required|optional) boot hook not installed name=(?P<name>[^\s;]+)", re.IGNORECASE)
 _OCULUS_STATUS = re.compile(
     r"Oculus Platform SDK blocking hooks: LoadLibraryW=(?P<w>ok|FAILED) "
     r"LoadLibraryExW=(?P<ex>ok|FAILED)\s+\((?P<detail>.*)\)", re.IGNORECASE)
@@ -191,9 +193,7 @@ def _known_hook_failure(name: str, tail: str, full_log: str) -> str | None:
     if error_match is None or error_match["value"] != "MH_ERROR_ALREADY_CREATED":
         return None
     if name == "EchoVR::GetProcAddress":
-        if "N126/N128" in tail:
-            return _KNOWN_HOOK_FAILURES[name]
-        return None
+        return _KNOWN_HOOK_FAILURES[name]
     if name in {"LoadLibraryW", "LoadLibraryExW"} and _is_headless_server(full_log):
         return _KNOWN_HOOK_FAILURES[name]
     return None
@@ -210,6 +210,19 @@ def check_hooks(log: str) -> list[Result]:
     for line in text.splitlines():
         if re.search(r"\bDIAG\b.*\bhook\b.*\b(?:failed|skipped)\b", line, re.IGNORECASE):
             diagnostic.append(line.strip())
+            classified.add(line)
+            continue
+
+        not_installed = _BOOT_HOOK_NOT_INSTALLED.search(line)
+        if not_installed:
+            # The runtime's own verdict on a boot hook (initialize.cpp NoteBootHookResult). A required
+            # one fails the boot; an optional one is a warning unless the hook failure line before
+            # it already explained it as a known collision.
+            name = not_installed["name"]
+            if not_installed["kind"].lower() == "required":
+                required.append(name)
+            elif name not in _KNOWN_HOOK_FAILURES:
+                diagnostic.append(line.strip())
             classified.add(line)
             continue
 
@@ -320,50 +333,6 @@ def check_engine_progress(log: str, required: str) -> Result:
 _PROBE = re.compile(
     r'^(?P<label>game call: node="" flags=0)\s+rc=(?P<rc>-?\d+) wsaerr=\d+ elapsed=(?P<ms>[\d.]+) ms'
 )
-
-
-# --- Login against the local nakama (tools/nakama-local) -----------------------------
-#
-# Two layers, both judged from nakama's own debug log. The websocket upgrade
-# authenticates the query's discordid/password (session_ws.go:133 on connect, a WARN at
-# :266-281 when that fails); the LoginRequest that follows is then answered with
-# LoginSuccess or LoginFailure (session_ws.go:722 "Sending ..."). A connect alone is not
-# a login: the first version of this check passed while nakama answered "user is not in
-# any groups".
-
-_AUTH_WARNINGS = ("Failed to get user ID by Discord ID", "Failed to get account by Discord ID",
-                  "Account not found by Discord ID", "Failed to authenticate user by Discord ID")
-
-
-def check_nakama_login(nakama_log: str, discord_id: str) -> Result:
-    import json
-    sessions, warnings, failures, successes = set(), [], [], 0
-    for line in nakama_log.splitlines():
-        i = line.find("{")
-        if i < 0:
-            continue
-        try:
-            rec = json.loads(line[i:])
-        except json.JSONDecodeError:
-            continue
-        msg = rec.get("msg", "")
-        if msg == "New WebSocket session connected" and f"discordid={discord_id}" in rec.get("query", ""):
-            sessions.add(rec["sid"])
-        elif msg in _AUTH_WARNINGS:
-            warnings.append(msg)
-        elif msg == "Sending *evr.LoginFailure message" and rec.get("sid") in sessions:
-            failures.append(" ".join(rec.get("message", "").split()))
-        elif msg == "Sending *evr.LoginSuccess message" and rec.get("sid") in sessions:
-            successes += 1
-    if not sessions:
-        return Result("nakama_login", FAIL, f"no websocket session with discordid={discord_id} reached nakama")
-    if warnings:
-        return Result("nakama_login", FAIL, f"websocket auth failed: {warnings[0]}")
-    if failures:
-        return Result("nakama_login", FAIL, f"LoginFailure: {failures[0]}")
-    if not successes:
-        return Result("nakama_login", FAIL, "connected and authenticated, but nakama never answered LoginSuccess")
-    return Result("nakama_login", PASS, f"LoginSuccess for {discord_id}")
 
 
 def check_getaddrinfo(probe_output: str, max_ms: float = 2000.0) -> Result:

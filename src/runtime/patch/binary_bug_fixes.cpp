@@ -72,7 +72,7 @@ static constexpr uint64_t VA_PRECISION_SLEEP_WAIT    = 0x1401CE0B0;
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
 static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
-static constexpr uint64_t VA_NETGAME_HOST_CHECK      = 0x140157FB0;  // DIAG, see docs/reference/server-mode-multiplayer-hang.md
+static constexpr uint64_t VA_NETGAME_HOST_CHECK      = 0x140157FB0;  // DIAG, see issue #45
 
 // N33: save original byte at BusyWait before RET patch, restore on Shutdown.
 static uint8_t  s_busywait_original_byte = 0;
@@ -86,6 +86,12 @@ static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x
 /* Expected prologue at VA_NETGAME_HOST_CHECK (0x140157FB0): MOV [RSP+0x10],RDX
  * ReVault-verified via revault_disassemble: 0x140157fb0: 48 89 54 24 10. */
 static constexpr uint8_t NETGAME_HOST_CHECK_PROLOGUE[5] = {0x48, 0x89, 0x54, 0x24, 0x10};
+
+/* Expected prologues of the two hooks that had none (read from echovr.exe at the VA):
+ *   VA_PRECISION_SLEEP_WAIT (0x1401CE0B0): push rdi; sub rsp,0x60; mov rdi,rcx
+ *   VA_SPINWAIT_WAIT_FOR_VALUE (0x141500ED8): mov [rsp+8],rbx; mov [rsp+0x10],rsi */
+static constexpr uint8_t PRECISION_SLEEP_WAIT_PROLOGUE[8] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x8B};
+static constexpr uint8_t SPINWAIT_WAIT_FOR_VALUE_PROLOGUE[8] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74};
 
 /* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
  * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
@@ -121,7 +127,7 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 
 /* Address resolution comes from nevr_common.h — nevr::ResolveVA_Checked for
    init-time setup, nevr::ResolveVA_Unchecked for the one Shutdown site that
-   needs it (N96). This file used to carry its own file-static pair. */
+   needs it (N96). This file carries no file-static copy of either. */
 
 #ifdef _WIN32
 
@@ -147,9 +153,9 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 using GetTimeMicroseconds_t = uint64_t(__fastcall*)();
 static GetTimeMicroseconds_t s_origGetTimeMicroseconds = nullptr;
 
-// The per-frame dispatcher moved to runtime/frame/tick.cpp on 2026-07-29.
-// It lived here only because the hook that drives it lives here; it shared no
-// state with any of the bug fixes in this file. Both call sites below hand it a
+// The per-frame dispatcher lives in runtime/frame/tick.cpp: it shares no state
+// with any of the bug fixes in this file, and only the hook that drives it lives
+// here. Both call sites below hand it a
 // microsecond timestamp — see that file for why GetTimeMicroseconds drives it
 // rather than the engine's own frame pacer (N86).
 
@@ -289,11 +295,9 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * Timer precision improves from ~15.6ms to ~0.5ms on Windows 10 1803+.
  * Falls back to standard timer on older Windows.
  *
- * N26 flagged the comment that used to sit here as "doubly false": it claimed
- * server_timing hooks this function later with WSAPoll-based event-driven recv
- * and chains on top. server_timing's Init had zero call sites, so no hook was
- * ever installed, and the file was deleted entirely on 2026-07-27. This hook is
- * the only owner of CPrecisionSleep::Wait.
+ * No other hook chains on this function (N26): server_timing's Init has no
+ * call sites, so no WSAPoll-based event-driven recv hook is installed on top.
+ * This hook is the only owner of CPrecisionSleep::Wait.
  *
  * Note it does NOT run in server mode at all (N86, measured: zero entries over a
  * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
@@ -313,9 +317,8 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
 
-    // (A dead frame counter lived here: declared static, incremented, and read
-    // by nothing in the repo. Removed 2026-07-29 — HookLiveness::Mark above is
-    // the entry evidence this hook actually needs.)
+    // (HookLiveness::Mark above is the entry evidence this hook needs; no frame
+    // counter is kept here.)
 
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
     // This fires every game tick, so CTRL+C responsiveness is bounded by the
@@ -327,16 +330,11 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
-    // This block used to be a second, divergent copy of the dispatch, and it
-    // hard-coded `gctx.flags = NEVR_HOST_IS_SERVER` with the comment "always
-    // server at this point". That was exactly inverted: hook_liveness.cpp:18
-    // records this hook as "CLIENT ONLY — never runs on a server". So the
-    // one path that runs ONLY on a client told every plugin and module that it
-    // was running on a server. N86 measured the truth and added the dispatcher
-    // below, but left this copy asserting the opposite.
-    //
-    // Calling the shared dispatcher fixes the flags and gives the client path
-    // the rate limit and re-entrancy guard the server path already had.
+    // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as
+    // "CLIENT ONLY — never runs on a server"), so a hard-coded
+    // `gctx.flags = NEVR_HOST_IS_SERVER` would tell every plugin and module it
+    // was running on a server. The shared dispatcher derives the flags and gives
+    // the client path the rate limit and re-entrancy guard the server path has.
     Frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
@@ -456,21 +454,23 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
 }
 
 /* --------------------------------------------------------------------
- * Diagnostic (2026-09-14, Andrew + Claude): does -server ever get the
- * "host authority" flag bit1 set? See
- * docs/reference/server-mode-multiplayer-hang.md for the full trail.
+ * Diagnostic (issue #45): does -server ever get the "host authority" flag
+ * bit1 set?
  *
  * fcn.140157fb0 (this hook's target) is the function that, among other
- * things, gates loading pnsradgameserver on
- * `**(uintptr_t*)(netgame_this+0x2da0) & 0x46` (bits 1/2/6) — confirmed via
- * direct revault_disassemble at 0x1401599b6-0x1401599e5, and the identical
- * predicate is confirmed (also via disassembly, three separate sites) in
- * CR15NetGame::Update. launch-server.sh hangs forever after login without
- * ever reaching that load (or BeginMultiplayer, or GameServerLib::Init) —
- * this logs the flags byte at entry to settle, live, whether bit1 is
- * actually 0 or 1 for a real -server run, since static analysis could not
- * find the setter (indirect dispatch + revault_search_code's documented
- * reconstruction-node noise problem both dead-ended).
+ * things, gates loading pnsradgameserver.  The gate is at 0x1401599b6-0x1401599e5;
+ * the read of "server_plugin" (default "pnsradgameserver") follows at
+ * 0x1401599e7, and the plugin loads iff
+ *   (bit1 == 1 || (bit2 == 0 && bit6 == 1)) && FUN_140614b00() == 0
+ * where the bits are in the flags qword at **(uintptr_t*)(netgame_this+0x2da0)
+ * (MOV RAX,[RSI+0x2da0]; MOV RDX,[RAX]; then SHR/TEST on bits 1, 2 and 6).
+ * The same host-authority predicate appears at three sites in
+ * CR15NetGame::Update (0x1401bf9ad, 0x1401bfb7d, 0x1401bfd09).  This hook logs
+ * the flags byte at entry, so a live -server run shows whether bit1 is set;
+ * static analysis could not find the setter (indirect dispatch, and
+ * revault_search_code returns reconstruction-node noise for generic offset
+ * patterns).  In a hung -server run the hook installs and is never invoked,
+ * so the block is upstream of this function.
  *
  * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
  * through unmodified. Server mode only (client mode calls this constantly
@@ -563,7 +563,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         void* detour;
         void** original;
         const char* name;
-        const uint8_t* prologue;  // nullptr = skip prologue validation
+        const uint8_t* prologue;  // required: the tool (verify_hook_invariants.py) rejects a nullptr row
         uint8_t prologue_len;     // byte count for prologue comparison (0 if no prologue)
         const char* why;          // what the hook changes and why; logged when it installs
     };
@@ -583,11 +583,11 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
           "a null pointer at arg1+0x2DA0 is dereferenced when multiplayer ends; checked before use" },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
           (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait",
-          nullptr, 0,
+          PRECISION_SLEEP_WAIT_PROLOGUE, sizeof(PRECISION_SLEEP_WAIT_PROLOGUE),
           "it creates and destroys a kernel timer every frame (about 180 kernel transitions a second at 90 fps); uses one persistent high-resolution timer" },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
           (void**)&s_origWaitForValue, "CSpinWait::WaitForValue",
-          nullptr, 0,
+          SPINWAIT_WAIT_FOR_VALUE_PROLOGUE, sizeof(SPINWAIT_WAIT_FOR_VALUE_PROLOGUE),
           "its backoff decreased (10 to 0 ms) under contention; it now increases (0 to 10 ms) and yields the hyper-thread" },
     };
 
@@ -652,8 +652,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
     // Eliminates the tight QPC + Sleep(0) spin loop that starves the HT sibling.
     // NOT SwitchToThread — ReVault measured the call at 0x1401CE510 as Sleep, and
     // SwitchToThread's IAT slot (0x1416C37F0) has only two xrefs in the whole
-    // binary, both CRT/ConcRT, none in this function. This file claimed
-    // SwitchToThread until 2026-07-29.
+    // binary, both CRT/ConcRT, none in this function.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;
     // only the final ~250us of busy-wait precision is lost.
     void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
@@ -726,24 +725,16 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         }
     }
 
-    // DIAG — see docs/reference/server-mode-multiplayer-hang.md
+    // DIAG — see issue #45.
     //
-    // 2026-09-14: originally gated this install on `if (g_isServer)`, same
-    // as this file's other hooks appear to assume is safe. It is NOT: this
-    // Init() runs during early DLL load, BEFORE PreprocessCommandLineHook
-    // (boot.cpp) has ever run PreflightRuntimeBootstrap — the ONLY place
-    // g_isServer is set, from argv. Confirmed live: "binary bug fix hooks
-    // installed" logs before "runtime bootstrap trigger=Preprocess
-    // first-call server bootstrap" every time. Gating the INSTALL on
-    // g_isServer here means it is always false, hook never installs, no
-    // diagnostic ever fires — a second instance of the exact ordering bug
-    // this whole investigation is about. Fix: always install; the hook BODY
-    // (NetGameHostCheckHook) already correctly re-checks g_isServer at
-    // CALL time, by which point PreprocessCommandLineHook has long since run.
-    // DIAG block's own status, folded into the aggregate summary below — it
-    // was previously invisible there (Category G): the loop's installed/failed
-    // counters never touched this block, so a DIAG-hook failure was only
-    // visible by separately scanning for its own Warning above.
+    // Installed unconditionally.  This Init() runs during early DLL load,
+    // before PreprocessCommandLineHook (boot.cpp) runs
+    // PreflightRuntimeBootstrap, the only place g_isServer is set (from argv),
+    // so gating the install on g_isServer would never install it.  The hook
+    // body (NetGameHostCheckHook) re-checks g_isServer at call time, when it is
+    // set.  This block's status is folded into the aggregate summary below: the
+    // loop's installed/failed counters do not cover it, so a DIAG-hook failure
+    // would otherwise be visible only by separately scanning for its own Warning.
     const char* diagNetGameHostCheckStatus = "not_attempted";
     {
         void* target = nevr::ResolveVA_Checked(g_base, VA_NETGAME_HOST_CHECK);
@@ -796,7 +787,7 @@ void BinaryBugFixes::Shutdown() {
     if (!g_initialized) return;
     // N86-class checkpoint: the DIAG hook's own payload line (NetGameHostCheckHook)
     // is confirmed to never fire in the exact hang scenario it was built to
-    // diagnose (docs/reference/server-mode-multiplayer-hang.md) — without this,
+    // diagnose (issue #45) — without this,
     // "installed but silent" and "installed and genuinely nothing to report"
     // look identical (total silence) in the log.
     if (s_origNetGameHostCheck != nullptr && !s_netGameHostCheckLogged.load()) {

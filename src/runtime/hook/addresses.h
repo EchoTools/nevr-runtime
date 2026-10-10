@@ -117,9 +117,8 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// HEADLESS_DELTATIME (0xCF46D) removed 2026-07-27. Two independent reasons, and
-/// the SECOND is the decisive one — an earlier version of this note gave only the
-/// first, which understates how wrong restoring it would be.
+/// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
+/// reasons, and the SECOND is the decisive one.
 ///
 /// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
 ///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
@@ -305,8 +304,8 @@ constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 /// Address: Game main wrapper (0x1400cd510, 62 bytes)
 /// Called from WinMain. An MSVC SEH frame around the game's main function.
 ///
-/// This comment used to say it "calls the BugSplat crash handler if it returns",
-/// which is wrong twice over. The bytes (ReVault, 2026-07-29):
+/// It does not "call the BugSplat crash handler if it returns", and no return
+/// value is tested. The bytes (ReVault):
 ///
 ///   SUB  RSP,0x38
 ///   MOV  qword [RSP+0x20],0
@@ -362,11 +361,10 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// (0x140f80f17 -> reads [RAX+0x3ff8] @0x140f80f1e), and a garbage pointer of
 /// 0x10 lands exactly on the documented 0x4008. Someone hit a genuine crash.
 /// Whether it still occurs is the open question in
-/// N83 (self-collision — primer folded into this entry 2026-08-01) — answerable only by a
-/// live run, not by reading.
+/// N83 (self-collision) — answerable only by a live run, not by reading.
 ///
 /// Both RVAs are ALSO assigned as live function pointers in
-/// src/abi/echovr_functions.cpp:87-88, so detouring them makes our own calls
+/// src/abi/echovr_functions.cpp (BroadcasterReceiveLocalEvent and BroadcasterListen), so detouring them makes our own calls
 /// re-enter our own hooks. tools/verify_hook_invariants.py fails the build if a
 /// NEW address joins that intersection.
 constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;          // = CBroadcaster::Listen
@@ -382,6 +380,15 @@ constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;   // = CBroadcaster:
 /// Prologue: 48 89 5C 24 08 (MOV [RSP+8],RBX) — MinHook-safe.
 constexpr uintptr_t CRASH_EXCEPTION_FILTER = 0x1CEF00;
 constexpr unsigned char CRASH_EXCEPTION_FILTER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
+
+/// Address: the game's console-ctrl-handler installer (fcn.1400dcbb0, 15 instructions) — ReVault-verified.
+/// Sole caller: CR15Game::InitRenderWindowFromEngineFlags (0x1404f5870). Stores RCX to a global, then
+/// calls SetConsoleCtrlHandler(0x1400db960, TRUE). It runs AFTER our boot-time re-arm, so without a
+/// second re-arm the game's handler sits in front of ours and a CTRL+C never reaches us (#102).
+/// Prologue: 48 83 EC 28 48 85 C9 74 27 (SUB RSP,0x28; TEST RCX,RCX; JZ +0x27) — MinHook-safe.
+constexpr uintptr_t GAME_CONSOLE_HANDLER_INSTALL = 0xDCBB0;
+constexpr unsigned char GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE[9] = {0x48, 0x83, 0xEC, 0x28, 0x48,
+                                                                    0x85, 0xC9, 0x74, 0x27};
 
 /// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
 /// Fatal error handler called from 5 sites in the game. Builds an error report,
@@ -458,7 +465,7 @@ constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
 constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
 
 // ============================================================================
-// Frame Pacing / Timing (PatchServerFramePacing)
+// Frame Pacing / Timing (CPrecisionSleep::BusyWait)
 // ============================================================================
 
 /// Address: CPrecisionSleep::BusyWait (0x1401ce4c0, 112 bytes)
@@ -466,8 +473,7 @@ constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
 ///
 /// NOT SwitchToThread: ReVault measured the call at 0x1401CE510 as Sleep, and
 /// SwitchToThread's IAT slot (0x1416C37F0) has exactly two xrefs in the binary,
-/// both CRT/ConcRT and neither in this function. This comment said
-/// SwitchToThread until 2026-07-29 — an unverified name reasoned from for months.
+/// both CRT/ConcRT and neither in this function.
 ///
 /// The measured effect stands regardless of the primitive: RET-patching this
 /// function is what lets a server run under Wine without pinning a core. The
@@ -535,14 +541,47 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 // XPID Provider String Patches (PSN- → DSC-)
 // ============================================================================
 
-/// Platform prefix string table entries for PSN (provider_id 1 in Nakama enum).
-/// Patched to "DSC" / "DSC-" so the game formats/parses Discord-based XPIDs.
+/// Platform prefix string table entries for PSN (provider 2 in both the game and Nakama numbering).
+/// Patched to "DSC" / "DSC-" so the game paths that read these strings directly (not through the
+/// GetProviderPrefix detour, which returns OVR-ORG) format/parse Discord-based XPIDs.
 /// All three are in .rdata — ProcessMemcpy handles VirtualProtect.
 ///
 /// Source: ReVault search_strings + read_memory on echovr.exe
 /// Region 0x1416D0ED0: "OlPrEfIx" struct array — short platform names
 /// Region 0x1416D0F5C: Dash-suffixed prefix table (SNSUserID StartsWith targets)
 /// Region 0x1416D7130: Compact name table feeding "%s-%llu" format string
+///
+/// Slot capacity.  A replacement prefix must fit the smallest slot among every
+/// site it rewrites (slot = distance to the next string; capacity = slot - 1 for
+/// the NUL).  Measured from the shipped echovr.exe (35,397,120 bytes; RVA = file
+/// offset + 0x1A00):
+///   dash block    0x16D0F5C-0x16D0FA4  STM- 7, PSN- 7, XBX- 11, OVR-ORG- 11,
+///                                      OVR- 7, DMO- 7, BOT- 7, ???- 11
+///   compact block 0x16D7130-0x16D7158  BOT 3, STM 3, PSN 3, XBX 3, OVR-ORG 7,
+///                                      OVR 3, DMO 3, ??? 7
+///   the five patch sites below: SHORT_NAME 7, DASH_PREFIX 7, COMPACT_NAME 3,
+///   FALLBACK_PREFIX 11, COMPACT_FALLBACK_NAME 7
+/// PSN's ceiling is 3 characters, bound by the compact name at 0x16D7138; OVR-ORG's
+/// is 7.  "DSC-NOVR" (8) fits neither slot, "DSC-NVR" (7) fits OVR-ORG's.  The
+/// *_SIZE constants below are the byte counts validated and written at each site
+/// (each replacement is static_asserted against them in xpid_patch.cpp), not slot
+/// capacity.  The dash sites write "PSN-"-style strings with no NUL, so extending
+/// a dash prefix means updating the constant, the bytes and the terminator.
+/// The slack between strings is zero fill.  Writing into it is safe only if
+/// nothing references an interior address; that is inferred from the layout, not
+/// proven by exhaustive xref analysis.  The strings are referenced by direct
+/// address, not through a pointer table, so patching in place reaches every call
+/// site and relocating a string to gain room is not a small change.
+/// The identity format string is "%s-%llu" at 0x1416D7158: the id half has to stay
+/// a uint64, which rules out UUIDs without patching the formatter.  A native
+/// "BOT-" provider already exists (RVA 0x16D0F94 dash, 0x16D7130 compact) and the
+/// game carries "generating bot account id" at RVA 0x16D7160, so a bot or
+/// spectator identity namespace need not be invented; it matches the
+/// BOT-<snowflake> device-id convention on the Nakama side and bears on the
+/// player-plus-own-spectator identity collision.  The `???` fallback (not "UNK")
+/// is what the game renders for an unmapped provider.
+/// Binary identity: echovr.exe goldmaster 631547, sha256
+/// b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043.
 
 /// VA 0x1416D0EE0: "PSN\0" (4 bytes) — short platform name in OlPrEfIx struct
 constexpr uintptr_t XPID_PLATFORM_SHORT_NAME = 0x16D0EE0;
@@ -568,18 +607,32 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 /// platform-name lookup hits this fallback and formats "[NSUSER] Creating user ???-1".
 /// Patched to "DSC-" so the early-init fallback matches the EULA-cache directory prefix
 
-/// CNSUser::GetProviderPrefix (fcn.14060d640) — the single choke-point for every
-/// xpid string the game constructs.  Reads user+0x90 & 0xf, returns a pointer
-/// to the corresponding string-table entry via a switch.  14 callers, including
-/// CNSIUsers::CreateUser, SaveLocalData, and three Send() paths.  Detour this to
-/// return the OVR-ORG entry unconditionally, and every xpid the game produces
-/// (CreateUser log, profile save, LobbyFindSession, LobbyPlayerSessions) uses
-/// the same prefix without any string-table patching.
+/// CNSUser::GetProviderPrefix (fcn.14060d640) — one of two xpid choke-points.
+/// Reads user+0x90 & 0xf, returns a pointer to the corresponding string-table
+/// entry via a switch.  ReVault lists 17 distinct callers (31 call edges),
+/// including CNSIUsers::CreateUser, SaveLocalData, the three Send() functions
+/// (0x14060e380, 0x140613900, 0x140618480) and Inspect<CBindingsOffsetOfInspector
+/// <float>>.  Detour this to return the OVR-ORG entry unconditionally, and the
+/// xpids built through it (CreateUser log, profile save, LobbyFindSession,
+/// LobbyPlayerSessions) use the same prefix without any string-table patching.
 constexpr uintptr_t GET_PROVIDER_PREFIX = 0x60D640;
+
+/// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (ReVault name
+/// GetUserIDString).  22 distinct callers (40 call edges), entirely separate from
+/// GetProviderPrefix's: AddBotUser, AddPlayerUser, AddRemoteUser,
+/// SendProfileUpdate, RoundOverCB, LogSocialAnalytic, ProcessPostMatchBattlePassXp,
+/// FindSocial and more.  It runs its own switch(*param & 0xf) over the same
+/// static string addresses and formats "%s-%llu" itself, so it never calls
+/// GetProviderPrefix and the detour above does not reach it.  The argument
+/// AddPlayerUser formats through it ("Adding player user to slot %llu") is a
+/// local player slot index, not an account id.
+constexpr uintptr_t GET_USER_ID_STRING = 0x1BA630;
 
 /// RVA of the OVR-ORG compact-name string-table entry (case 4 in the game's
 /// internal provider switch).  "OVR-ORG" at VA 0x1416D7140.  Game numbering:
-/// 1=STM 2=PSN 3=XBX 4=OVR-ORG 5=OVR 6=BOT 7=DMO — differs from Nakama wire.
+/// 1=STM 2=PSN 3=XBX 4=OVR-ORG 5=OVR 6=BOT 7=DMO.  Nakama's PlatformCode enum
+/// uses the same values (its const block starts with XPlatformIdSize, which
+/// consumes iota 0, so STM is 1 there too).
 constexpr uintptr_t PROVIDER_STRING_OVR_ORG = 0x16D7140;
 /// (N14: EULA acceptance cached per-platform-prefix, so a ???- prefix breaks cache lookup).
 constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;

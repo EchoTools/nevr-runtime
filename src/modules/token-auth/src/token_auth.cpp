@@ -15,6 +15,7 @@
 
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
+#include "core/bounded_retry.h"
 #include "nevr_curl.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
@@ -61,6 +62,8 @@ struct InternalDeviceAuthFlowOps {
 
 static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthLifetime = std::chrono::minutes(5);
 static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthPollInterval = std::chrono::seconds(3);
+// Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up (#202).
+static constexpr unsigned kMaxConsecutivePollErrors = 5;
 static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/login/device";
 
 // ---------------------------------------------------------------------------
@@ -156,7 +159,16 @@ bool DeviceAuth::TryLoadCachedToken() {
 
     if (auth.HasValidRefreshToken() && m_configured) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Access token expired, attempting refresh...");
-        if (RefreshAuthToken(auth, m_url, m_httpKey)) {
+        // One slow or dropped request must not throw away a good cached login: three tries, 2 s apart
+        // (each try is bounded by the request's own 10 s timeout). #202
+        const nevr::RetryResult refreshed = nevr::RetryBounded(3, 2000, [&] {
+            return RefreshAuthToken(auth, m_url, m_httpKey);
+        });
+        if (refreshed.attempts > 1) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] token refresh during cache load: %s after %d attempts",
+                refreshed.ok ? "succeeded" : "failed", refreshed.attempts);
+        }
+        if (refreshed.ok) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
             m_refreshToken = auth.refresh_token;
@@ -420,6 +432,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
     }
 
     unsigned int pollCount = 0;
+    unsigned int consecutiveErrors = 0;
     while (true) {
         const InternalDeviceAuthFlowOps::Clock::time_point beforeSleep = ops.now();
         if (beforeSleep >= deadline) {
@@ -461,6 +474,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
                     "[NEVR.AUTH] Device code expired. Please restart to try again.");
                 return false;
             case TokenAuth::DevicePollStatus::Pending:
+                consecutiveErrors = 0;
                 ++pollCount;
                 if (pollCount % 10U == 0U) {
                     const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - ops.now());
@@ -469,9 +483,14 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
                 }
                 break;
             case TokenAuth::DevicePollStatus::Error:
-                log(EchoVR::LogLevel::Warning,
-                    "[NEVR.AUTH] polling aborted after single error (no retry)");
-                return false;
+                if (++consecutiveErrors >= kMaxConsecutivePollErrors) {
+                    log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] polling aborted after " +
+                                                       std::to_string(consecutiveErrors) + " consecutive errors");
+                    return false;
+                }
+                log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] poll error " + std::to_string(consecutiveErrors) + " of " +
+                                                   std::to_string(kMaxConsecutivePollErrors) + ", retrying");
+                break;
         }
     }
 }
@@ -536,9 +555,8 @@ static AuthConfig LoadAuthConfig() {
     AuthConfig cfg;
 
     if (s_configGet) {
-        // config_get returns NULL for an absent/unmapped key — same "missing"
-        // signal the old JsonValueAsString(..., NULL, false) form returned, so
-        // an absent key keeps token_auth's existing behaviour (warn + disable).
+        // config_get returns NULL for an absent/unmapped key; token_auth treats that
+        // as a missing key (warn + disable).
         const char* url  = s_configGet("nevr_http_uri");
         const char* key  = s_configGet("nevr_http_key");
         const char* skey = s_configGet("nevr_server_key");
@@ -569,13 +587,13 @@ static constexpr uint64_t kRefreshLeadSec = 300;
 // The refresh thread's guard, split out of RefreshThreadFunc so it can be
 // asserted in-process without the 60-second sleep.
 //
-// Reads the LIVE expiry off the running DeviceAuth. It previously read
-// token_expiry out of LoadCachedAuthToken(), and that field is structurally
-// always 0: SaveAuthToken (core/auth_token.h) writes only the refresh token and
-// identity — the access token is deliberately never persisted. So the guard
-// compared 0 against now+300, never held, and the thread issued an HTTP refresh
-// every 60 seconds for the entire hour a perfectly valid token was alive. The
-// disk behaviour is correct; consulting disk for a memory-only value was not.
+// Reads the LIVE expiry off the running DeviceAuth, not token_expiry out of
+// LoadCachedAuthToken(): that field is structurally always 0, because
+// SaveAuthToken (core/auth_token.h) writes only the refresh token and
+// identity — the access token is deliberately never persisted. A guard on the
+// disk value would compare 0 against now+300, never hold, and the thread would
+// issue an HTTP refresh every 60 seconds for the entire hour a perfectly valid
+// token is alive. The disk value is for the load path only.
 static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
     return auth.GetTokenExpiryValue() <= now + kRefreshLeadSec;
 }
@@ -999,7 +1017,7 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     TokenAuth::Init(ctx->base_addr, is_server);
 
     // Carry the real outcome, matching the richer sibling pattern in
-    // platform_compat_Init (tls=%s createdir=%s winhttp=%s). Servers skip
+    // platform_compat_Init (tls=%s createdir=%s msxml6=%s). Servers skip
     // token auth entirely (early return in TokenAuth::Init), hence "n/a".
     const bool authOk = !TokenAuth::GetToken().empty();
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",

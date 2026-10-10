@@ -27,8 +27,7 @@
 # the field separator silently truncated every regex that contained one — rows
 # scored ABSENT because the tool was broken, not the feature.
 #
-# A row must test the thing its label names. S19 was labelled "XPID carries DSC
-# platform prefix" but matches `login injected xpid=DSC-`, which ws_bridge builds
+# A row must test the thing its label names. S19 matches `login injected xpid=OVR-ORG-`, which ws_bridge builds
 # from its OWN PlatformPrefix() — it stays green even if the game's string-table
 # patch never ran. S42 tests the patch itself. A row that passes for the wrong
 # reason is worse than a missing row, because it reads as coverage.
@@ -91,7 +90,7 @@ B14@@boot@@Module cache built (crash attribution)@@module cache refreshed count=
 M01@@module@@Module loaded: platform_compat@@\[NEVR\.MODULE\] Loaded: platform_compat@@Failed to load platform_compat
 M02@@module@@platform_compat: all 3 hooks installed@@platform_compat initialized: 3/3 hooks installed@@platform_compat initialized: [012]/3 hooks installed
 M03@@module@@Schannel TLS 1.2/1.3 modernisation@@SSL/TLS moderni[sz]@@Failed to [a-z]+ AcquireCredentialsHandleW
-M04@@module@@WinHTTP COM to libcurl bridge@@winhttp=ok@@WinHTTP bridge NOT installed
+M04@@module@@MSXML6 CoCreateInstance pass-through hook@@msxml6=ok@@MSXML6 pass-through hook NOT installed
 M05@@module@@Wine _temp directory fix@@createdir=ok@@Failed to install CreateDirectory[AW] hook
 M06@@module@@Module loaded: token_auth@@token_auth initialized@@Failed to load token_auth
 P01@@plugin@@Plugin directory scanned or list read@@\[NEVR\.PLUGIN\] (Scanning for plugins in:|[0-9]+ plugin\(s\) configured; loading in list order)@@
@@ -119,7 +118,7 @@ S15@@server@@Service endpoints redirected from config@@\[NEVR\.PATCH\] service r
 S16@@server@@WebSocket bridge listening@@\[NEVR\.WS\] Proxy listening on@@no nevr_socket_uri in early config
 S17@@server@@Game connected through the bridge@@\[NEVR\.WS\] Proxy: game connected@@
 S18@@server@@Login request injected@@\[NEVR\.WS\] login injected xpid=@@
-S19@@server@@Our login prefix is DSC (NOT the game patch)@@login injected xpid=DSC@@login injected xpid=(PSN|UNK)
+S19@@server@@Our login prefix is OVR-ORG (NOT the game patch)@@login injected xpid=OVR-ORG-@@login injected xpid=(PSN|UNK)
 S42@@server@@Game provider strings rewritten to DSC (XPID)@@\[NEVR\.XPID\] DSC provider patch applied at 5 sites@@\[NEVR\.XPID\] validation FAILED
 S20@@server@@Service accepted the login@@\[NEVR\.WS\] LOGIN SUCCESS@@\[NEVR\.WS\] login failed status=
 S21@@server@@GameServer initialised@@\[NEVR\.GAMESERVER\] Initialized game server@@
@@ -134,7 +133,7 @@ S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
 S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@(reason|status)=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
-S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG
+S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG|POSIX signal handlers NOT fully installed
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@
 S34@@server@@CTRL+C reached the runtime@@shutdown signal received@@
@@ -155,7 +154,6 @@ C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cac
 C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
-C11@@client@@HTTP served through the curl bridge@@\[NEVR\.HTTP\] Response: 2[0-9][0-9]@@\[NEVR\.HTTP\] curl failed:
 C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No game base address
 C13@@client@@Current loadout read back@@\[CURRENT_LOADOUT\] Player:@@\[CURRENT_LOADOUT\] Empty response|\[CURRENT_LOADOUT\] Invalid
 EOF

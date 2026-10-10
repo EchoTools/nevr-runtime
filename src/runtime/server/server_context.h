@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
-#include <vector>
 
 #include "abi/echovr.h"
 #include "core/pch.h"
@@ -100,10 +99,23 @@ class ServerContext {
   EchoVR::Broadcaster* GetBroadcaster() const;
   EchoVR::TcpBroadcasterData* GetTcpBroadcaster() const;
 
-  // Safe entrant access with bounds checking (shared lock)
-  // Returns nullptr if index out of bounds or not initialized
+  // Entrant access, read live from the lobby's entrant array on every call
+  // (issue #38). Returns nullptr if index is out of bounds or not initialized.
+  // The pointer is into game memory: use it within the current game-thread
+  // callback and never store it — the game may free or rewrite the array on
+  // its next tick.
   EchoVR::Lobby::EntrantData* GetEntrant(uint32_t index) const;
   uint64_t GetEntrantCount() const;
+
+  // Resolves an entrant's session GUID to its entrant slot the way the game does for accepts
+  // (echovr.exe 0x140603e20): the index of the lobby's player-session slot (lobby+0xC8, stride 0x28)
+  // whose GUID matches and whose join state is 4 (accepted), within the entrant array's length. Returns
+  // false when not initialized, the array is absent, or nothing matches.
+  bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
+
+  // Number of player sessions whose join state is 4 (accepted): the players actually in the session.
+  // GetEntrantCount() is the array capacity, not this. 0 when not initialized.
+  uint64_t CountAcceptedEntrants() const;
 
   // ServerDB peer (exclusive lock for write)
   void SetServerDbPeer(const EchoVR::TcpPeer& peer);
@@ -116,7 +128,9 @@ class ServerContext {
   // Callback registry — NOT internally synchronized.
   // Safe to call without locking when all access is from the game's main thread
   // (RegisterBroadcasterCallbacks, UnregisterAllCallbacks, Initialize, Terminate).
-  // Must not be called from ixwebsocket or other background threads.
+  // Must not be called from ixwebsocket or other background threads. A background
+  // thread that needs registry work hands it to the game thread instead
+  // (GameServerLib::m_gameThreadHandoff, serviced in Update(); GH #44).
   CallbackRegistry& GetCallbackRegistry();
   const CallbackRegistry& GetCallbackRegistry() const;
 
@@ -129,9 +143,6 @@ class ServerContext {
   // Game object pointers (not owned, provided by game engine)
   EchoVR::Lobby* m_lobby = nullptr;
   EchoVR::Broadcaster* m_broadcaster = nullptr;
-
-  // Cached entrant data (owns the data, not pointers from game)
-  std::vector<EchoVR::Lobby::EntrantData> m_cachedEntrants;
 
   // ServerDB connection
   EchoVR::TcpPeer m_serverDbPeer = EchoVR::TcpPeer_InvalidPeer;

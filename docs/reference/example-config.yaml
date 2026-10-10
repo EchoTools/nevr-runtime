@@ -11,6 +11,14 @@
 # Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable
 # substitution in production. The literal form is for local dev only and MUST
 # NEVER be committed to version control.
+#
+# Every value is interpolated: ${VAR} (an unset one is logged
+# once at load; its text is kept in plugin args and other values, and a service key that
+# uses it counts as unset), ${VAR:?msg} (required: the load fails when it is
+# unset), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
+# variable, e.g. in a plugin's args; nothing after it is looked up. $${ is the
+# only escape: $$ not followed by { stays $$. A literal $ immediately followed by
+# a variable's value is written ${NO_SUCH_VAR:-$}${VAR}.
 # ---------------------------------------------------------------------------
 
 # Schema version. Bump when adding new required sections or restructuring
@@ -47,6 +55,12 @@ social:
 # ---------------------------------------------------------------------------
 
 services:
+  # Dedicated server only: boot without services.socket_uri (no login bridge). Without this a server
+  # that has no socket_uri exits at start-up, because it could never log in. Set it only for offline
+  # boots (test rigs); such a server never logs in or registers.
+  # Default (absent): false
+  # allow_offline_server: true
+
   # Login / authentication service. Also serves as the shared fallback for
   # every other service key that is not explicitly set.
   # Default (absent): https://login.readyatdawn.com
@@ -99,10 +113,13 @@ services:
 # Controls how the game server advertises itself to ServerDB and which
 # IP addresses it uses for peer-to-peer connections. All keys are optional.
 #
-# Reader: gamepatches config.cpp (LoadLocalConfigHook), gameserver.cpp
+# Reader: config.cpp (external_ip, upnp, upnp_port), and ReadUPnPConfig callers in
+#         gameserver_serverdb.cpp (RequestRegistration) and gameserver_callbacks.cpp (re-registration)
 # ---------------------------------------------------------------------------
 
 network:
+  # empty_server_ttl_seconds: 0   # 0 (default) = off. Seconds an empty server holds its return to
+  #                               # lobby before the process exits; docs/reference/empty-server-ttl.md
   # Internal IP address to advertise for LAN / same-host connections.
   # Use when the auto-detected IP is wrong (multi-homed hosts, Docker, VPNs).
   # Absent: auto-detected from the first non-loopback interface.
@@ -136,7 +153,7 @@ network:
 # These identify the server instance to the community infrastructure.
 # All keys are optional but a server without them will fail to register.
 #
-# Reader: gameserver.cpp (RequestRegistration), ws_bridge.cpp
+# Reader: gameserver_serverdb.cpp (RequestRegistration), ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
 identity:
@@ -159,7 +176,7 @@ identity:
 # outbound WebSocket connection to the community relay.
 #
 # Reader: gamepatches config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
-#         gamepatches token_auth.cpp, gameserver.cpp (AuthenticateServer),
+#         gamepatches token_auth.cpp, gameserver_serverdb.cpp (AuthenticateServer),
 #         ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
@@ -184,13 +201,13 @@ auth:
   # HTTP API key. Sent as Bearer auth on REST calls when the game's internal
   # token cache is empty. Read by token_auth.cpp during device-auth flow.
   # SECRET — use env-var substitution in production.
-  # http_key: "${NEVR_HTTP_KEY:?http_key is required}"
+  # http_key: "${NEVR_API_KEY:?http_key is required}"
 
   # Server authentication key. Used as the Basic-auth username when
   # authenticating a server with Nakama (POST /v2/account/authenticate/device).
   # Required for dedicated server operation.
   # SECRET — use env-var substitution in production.
-  # server_key: "${NEVR_SERVER_KEY:?server_key is required for servers}"
+  # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
@@ -200,7 +217,7 @@ auth:
 # in the ServerDB WebSocket URI.
 # Absent: no guild filter (server registers with all guilds).
 # Not a secret.
-# Reader: gameserver.cpp (RequestRegistration)
+# Reader: gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # guilds: "guild-abc123,guild-def456"
 
@@ -212,7 +229,7 @@ auth:
 # parameter in the ServerDB WebSocket URI.
 # Absent: no region filter.
 # Not a secret.
-# Reader: gameserver.cpp (RequestRegistration)
+# Reader: gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # regions: "us-west"
 
@@ -223,7 +240,7 @@ auth:
 # servers), the server streams match telemetry over a dedicated WebSocket
 # to a telemetry ingest server. Disable with "-notelemetry".
 #
-# Reader: gameserver.cpp (RequestRegistration, telemetry_streamer)
+# Reader: gameserver_serverdb.cpp (RequestRegistration), gameserver_telemetry.cpp (telemetry streamer)
 # ---------------------------------------------------------------------------
 
 telemetry:
@@ -304,35 +321,45 @@ arena:
 #   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
 #   NvrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, API v2+): plugins that export
-# NvrPluginInitEx receive an opaque config pointer parsed from this section.
-# The runtime passes the plugin's entry as a nlohmann::json object; the
-# plugin is responsible for extracting the keys it understands and ignoring
-# the rest. A plugin MUST NOT fail if its config entry is absent — it should
-# use sensible defaults.
+# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# is called with (ctx, args_json), where args_json is the entry's `args` as a
+# flat JSON object string ("{}" when the entry has none, never null). The
+# plugin extracts the keys it understands, ignores the rest, and uses sensible
+# defaults for any key that is missing.
 #
+# This list is the only source: a DLL in plugins/ that is not listed here is not loaded.
 # Each plugin entry has these keys:
-#   name      — DLL basename (without .dll), matched against plugins/*.dll
-#   enabled   — if false, the plugin DLL is skipped even if present on disk
-#   required  — if true, runtime calls FatalError when the plugin fails to load
-#   args      — plugin-specific arguments, passed as config JSON to InitEx
-#   target    — (optional) "server" | "client" | "both" (default: both);
-#               the loader skips server-only plugins on clients and vice-versa
+#   name      — the plugin's name (required); also the default file name
+#   file      — DLL file name inside plugins/ (default: name + ".dll")
+#   enabled   — if false, the plugin is not loaded (it is still reported at login)
+#   required  — if true and the plugin fails to load or initialise, a dedicated
+#               server stops with a fatal error; a client logs a warning and
+#               continues
+#   args      — plugin-specific arguments, flattened to dotted keys with string
+#               values and passed as a flat JSON object to InitEx
+#   target    — (optional) "server" | "client" | "both"; recorded with the entry
+#               but not acted on: the loader loads the plugin on both
 #
 # All keys except "name" are optional. Absent enabled defaults to true.
 # Absent required defaults to false.
 # Absent args means the plugin gets an empty JSON object.
-# Absent target means the plugin loads on both servers and clients.
 #
-# Reader: gamepatches plugin_loader.cpp
+# Reported at login (#60): the client login JSON carries a top-level
+# "nevr_plugins" array with one object per entry of this list, in list order:
+#   name, file, enabled, required, loaded   always
+#   error                                   enabled but not loaded (the reason the
+#                                           loader logged; never the args)
+#   ver ("M.m.p"), api, caps                loaded
+# Args are never sent. Built by src/runtime/ext/plugin_manifest.cpp.
+#
+# Reader: src/runtime/ext/plugin_loader.cpp (entries parsed in src/core/nevr_config.cpp)
 # ---------------------------------------------------------------------------
 
 plugins:
-  # Example 1: A server-only plugin that is required for server operation.
+  # Example 1: A plugin a dedicated server must not run without (required).
   # - name: combat_mod
   #   enabled: true
   #   required: true
-  #   target: server
   #   args:
   #     damage_multiplier: 1.5
   #     friendly_fire: false
@@ -340,4 +367,3 @@ plugins:
   # Example 2: An optional plugin with no special config.
   # - name: audio_intercom
   #   enabled: true
-  #   target: both

@@ -331,6 +331,57 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   SocialRoster::Global().Clear();
 }
 
+// Issue #57: the tab-open refresh (slot 45) is answered with a fresh FriendListResponse plus one
+// FriendStatusNotify per friend, and that answer replaces the roster. The refresh here lists a
+// different set than the login did (friend 22 gone, friend 77 new), so upserting notifies alone
+// would give {11, 22, 77}; only a roster rebuilt from the refresh list gives {77, 11}. The bytes
+// go through SocialRoster::Feed, the call the ws bridge makes for every server->game message, and
+// are read back through the facade slots the tab reads.
+TEST(SocialFacade, TheRefreshAnswerReplacesTheRosterWithTheServersCurrentFriends) {
+  SocialRoster::Global().Clear();
+  const auto feed = [](const char* name, const std::uint8_t* data, std::size_t len) {
+    ASSERT_TRUE(SocialRoster::Feed(SocialRoster::Global(), name, data, len)) << name;
+  };
+  // Login: friends 11 and 22, both offline.
+  const auto loginList = ListResponsePayload(2, 0, 0);
+  feed("FriendListResponse", loginList.data(), loginList.size());
+  for (const std::uint64_t id : {11ULL, 22ULL}) {
+    const auto notify = StatusNotifyPayload(id, SocialRoster::kStatusOffline);
+    feed("FriendStatusNotify", notify.data(), notify.size());
+  }
+
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  const auto idAt = [&](std::uint32_t index) {
+    std::uint64_t id = 0;
+    reinterpret_cast<IdFn>(vtable[49])(object, &id, index);
+    return id;
+  };
+  ASSERT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u);
+  ASSERT_EQ(idAt(0), 11u);
+  ASSERT_EQ(idAt(1), 22u);
+
+  // The refresh's list announces two friends: 11 offline and 77 online. Until the first entry
+  // arrives the previous roster stays visible, unchanged.
+  const auto refreshList = ListResponsePayload(1, 0, 1);
+  feed("FriendListResponse", refreshList.data(), refreshList.size());
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u) << "the old roster stays until the refresh's entries arrive";
+  EXPECT_EQ(idAt(0), 11u);
+  EXPECT_EQ(idAt(1), 22u);
+
+  const auto added = StatusNotifyPayload(77, SocialRoster::kStatusOnline);
+  feed("FriendStatusNotify", added.data(), added.size());
+  const auto kept = StatusNotifyPayload(11, SocialRoster::kStatusOffline);
+  feed("FriendStatusNotify", kept.data(), kept.size());
+
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u) << "friend 22 is not in the refresh, so it is gone";
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[47])(object), 1u);
+  EXPECT_EQ(idAt(0), 77u) << "online friends lead the list";
+  EXPECT_EQ(idAt(1), 11u);
+  SocialRoster::Global().Clear();
+}
 
 std::string Hex(const std::uint8_t* data, std::size_t len) {
   static const char digits[] = "0123456789abcdef";
@@ -625,6 +676,47 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
 
   SocialParty::Global().ResetParty();
   SocialRoster::Global().Clear();
+  publish();
+}
+
+// Server-controlled: every PartyJoinNotify appends a member, but the game indexes a 10-entry member
+// JSON array by the reported count (CR15NetGame::PartyMemberData), so the count is capped at the array.
+TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  SocialRoster::Global().Clear();
+  SocialParty::Global().SetSelf(77, "Me");
+  SocialParty::Global().ResetParty();
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+  const std::uint32_t clampedBefore = SocialFacade::TestMembersClamped();
+
+  FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77}));
+  for (std::uint64_t id = 301; id <= 311; ++id) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({7, id}));
+  ASSERT_EQ(SocialParty::Global().Snapshot().members.size(), 12U) << "the party model itself holds all twelve";
+  publish();
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
+  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1);
+  std::uint64_t id = 0;
+  reinterpret_cast<IdFn>(vtable[27])(object, &id, 9);
+  EXPECT_EQ(id, 309U) << "index 9 is the last reported member";
+  reinterpret_cast<IdFn>(vtable[27])(object, &id, 10);
+  EXPECT_EQ(id, 0U) << "index 10 names nobody";
+
+  publish();
+  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
+
+  // The 10/11 boundary: exactly ten members is not clamped.
+  SocialParty::Global().ResetParty();
+  FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({8, 77}));
+  for (std::uint64_t member = 301; member <= 309; ++member) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({8, member}));
+  publish();
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
+
+  SocialParty::Global().ResetParty();
   publish();
 }
 

@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 
+#include "runtime/server/bearer_reconnect_auth.h"
 #include "runtime/server/event_ring_buffer.h"
 #include "runtime/server/telemetry_snapshot.h"
 #include "runtime/server/telemetry_snapshot_store.h"
@@ -53,6 +54,11 @@ class TelemetryStreamer {
   // Connect to the telemetry ingest server. Non-blocking.
   // Optional token is sent as Bearer auth on the WebSocket upgrade request.
   bool Connect(const std::string& uri, const std::string& token = "");
+
+  // #114: set before Connect when the token is minted (the ServerDB token fallback) rather than
+  // configured. On an HTTP 401 at a reconnect upgrade the refresher supplies the token the next
+  // attempt presents. Leave unset for a configured telemetry_token.
+  void SetBearerTokenRefresher(BearerReconnectAuth::Refresher refresher);
 
   // Start streaming for a session. Launches the telemetry thread.
   void Start(const std::string& sessionId, uint32_t rateHz = 30, bool isPrivateMatch = false);
@@ -134,6 +140,8 @@ class TelemetryStreamer {
 
   // Auth
   std::string m_token;
+  BearerReconnectAuth m_bearerAuth{"[NEVR.TELEMETRY]"};
+  BearerReconnectAuth::Refresher m_bearerRefresher;
 
   // Match metadata
   bool m_isPrivateMatch{false};

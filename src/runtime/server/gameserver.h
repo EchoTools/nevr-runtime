@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "runtime/server/constants.h"
 #include "abi/echovr.h"
 #include "core/pch.h"
+#include "runtime/server/main_thread_handoff.h"
 #include "runtime/server/server_context.h"
 #include "runtime/server/telemetry_streamer.h"
 #include "runtime/server/websocket_client.h"
@@ -45,7 +47,8 @@ class GameServerLib : public EchoVR::IServerLib {
   TelemetryStreamer& GetTelemetry() { return *m_telemetry; }
 
   /// Initiate graceful shutdown: disable reconnection, wait for round end (if active),
-  /// send EndSession, call Unregister, then ExitProcess(0).
+  /// have the game thread run EndSession + Unregister (GH #44), then exit via
+  /// ForceFatalExit(0).
   /// @param registrationFailed  true if we're shutting down because registration was rejected.
   void BeginGracefulShutdown(bool registrationFailed);
 
@@ -58,6 +61,16 @@ class GameServerLib : public EchoVR::IServerLib {
   // Destructor waits on this before tearing down members.
   std::atomic<bool> m_shutdownComplete{false};
 
+  // GH #44: the shutdown thread hands EndSession + Unregister to the game thread
+  // through this; Update() services it. Declared before m_shutdownThread so it
+  // outlives the thread that waits on it.
+  GameServer::MainThreadHandoff m_gameThreadHandoff;
+
+  // Thread that registered the broadcaster callbacks (the game thread). The
+  // callback registry is only safe on that thread; UnregisterAllCallbacks logs
+  // a warning when it is reached from any other.
+  std::atomic<DWORD> m_registryThreadId{0};
+
   // Joinable handle for the shutdown thread — replaces detached thread.
   // Joined in ~GameServerLib to prevent use-after-free on member destruction.
   std::thread m_shutdownThread;
@@ -66,6 +79,18 @@ class GameServerLib : public EchoVR::IServerLib {
   void RegisterBroadcasterCallbacks();
   void RegisterTcpCallbacks();
   void UnregisterAllCallbacks();
+
+  // Connects the telemetry streamer when telemetry is enabled and configured (gameserver_telemetry.cpp);
+  // `wsToken` is the ServerDB token, used when no telemetry_token is configured.
+  void ConnectTelemetry(const std::string& wsToken);
+
+  // Unregister() body. touchCallbackRegistry=false skips UnregisterAllCallbacks
+  // and is the only form allowed off the game thread.
+  void UnregisterFromServerDb(bool touchCallbackRegistry);
+
+  // Shutdown-thread work, split by the thread it may run on (GH #44).
+  void ShutdownUnregisterOnGameThread();   // EndSession + full Unregister
+  void ShutdownUnregisterOffGameThread();  // EndSession + ServerDB unregister, registry untouched
 };
 
 // Logging helper (uses game's logging system)

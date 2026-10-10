@@ -99,7 +99,7 @@ subsystems that NEVR annotates.
 | `[NEVR.GAMESERVER]`   | GameServerLib (lobby registration, sessions)  |
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
-| `[NEVR.MODULE]`       | Module loader (LoadModule, drop-in modules)   |
+| `[NEVR.MODULE]`       | Module registry and static modules            |
 | `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle)          |
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
@@ -107,7 +107,6 @@ subsystems that NEVR annotates.
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
 | `[NEVR.CDN]`          | Asset CDN download and override              |
-| `[NEVR.HTTP]`         | WinHTTP/curl bridge                          |
 | `[NEVR.UPNP]`         | UPnP port mapping                            |
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
@@ -196,9 +195,6 @@ in the log.
 
 ```cpp
 // BEFORE (N15 — numeric account ID only, no platform prefix, no full XPID)
-// was: src/modules/ws-bridge/src/ws_bridge.cpp:281-283 — directory deleted in
-// 2e5b4ec; retrieve with
-// git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp
 Log(EchoVR::LogLevel::Info,
     "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
     (unsigned long long)discordId, loginMsg.size());
@@ -206,21 +202,19 @@ Log(EchoVR::LogLevel::Info,
 // AFTER — full XPID string, connection index, byte count
 std::string xpid = platformPrefix + "-" + std::to_string(accountId);
 Log(EchoVR::LogLevel::Info,
-    "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-    xpid.c_str(), platformCode, connIdx, loginMsg.size());
+    "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+    xpid.c_str(), platformCode, connIdx, ConnLabel(connIdx), loginMsg.size());
 ```
 
 The platform prefix SHALL be derived from the actual platform code in the
-login payload, not hardcoded. If the platform is DSC (Discord, code 2),
-the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See N14 (platform
-prefix hardcoded as OVR_ORG in module ws_bridge).
+login payload, not hardcoded. Platform codes are the game's own
+1-indexed numbering (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7);
+code 2 is "PSN" in the game's string table and reads "DSC" after the runtime rewrites it.
+The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
+login as DSC (code 2) would produce `DSC-<id>`.
 
-**Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
-`2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content
-is still retrievable:
-`git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp`
-(conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
-is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as N15.
+**Where:** the injection site is `InstallWebSocketBridge` in
+`src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line). Tracked as N15.
 
 ### Rule 3: Silence is not success
 
@@ -286,7 +280,8 @@ What constitutes noise:
 
 **Filter audit checklist (N18 fix direction):**
 1. Verify the built-in log filter is capturing game lines (its health line
-   reports `game_lines=`; zero means another module has taken the hook — N89)
+   reports `game_lines=`; a zero-game-lines warning names its cause: hook not
+   installed, hook target taken by another module, or the game idle or blocked)
    configuration.
 2. Capture a representative server log from a live session.
 3. Count lines per subsystem tag; any tag with >50% of total lines is a
@@ -359,33 +354,22 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-### `Log()` does not emit JSON, and that was a decision — not an omission
+### `Log()` does not emit JSON, and that is a decision — not an omission
 
 `FormatJsonLogEntry` exists in `src/core/logging.cpp:70` and is called from
-nowhere in production (the only other reference is a test stub). It is not
-"not yet wired": it WAS wired, and was deliberately unwired.
-
-  a658d42  2026-02-09  added it, and called it from Log()
-  6c0369f  2026-03-24  removed that call; Log() now routes to the game's own
-                       EchoVR::WriteLog, falling back to vfprintf(stderr) only
-                       before the game logger exists
+nowhere in production (the only other reference is a test stub). `Log()` routes
+to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
+before the game logger exists.
 
 So NEVR lines go through the game's logger and appear in its stream, rather than
-being emitted as a second, parallel JSON format. Do not "finish" the JSON path on
-the assumption it was left half-done — it was superseded four months ago, and
-re-wiring it would double every log line.
+being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
+into `Log()` on the assumption it was left half-done: it would double every log
+line.
 
 **Structured JSONL does ship, from a different place**: the built-in filter writes
 a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT
 the one `FormatJsonLogEntry` produces — it carries a `run` field and has no
 `caller` field.
-
-`docs/reference/logging-format.md` documented the `FormatJsonLogEntry` shape as
-though it were the live output. It was removed 2026-07-29 rather than corrected,
-since it described a format that has not shipped since March and contradicted this
-section. Retrieve it with:
-
-    git show 9bf274450e2ddbcbba5f61dc67f23f14f5c3e064:docs/reference/logging-format.md
 
 ### Rule 8: State transitions log FROM -> TO
 
@@ -528,9 +512,9 @@ form.
 
 | Context | BEFORE | AFTER |
 | ------- | ------ | ----- |
-| Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu"` |
-| WebSocket connected | `"[WEBSOCKET] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
-| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[WEBSOCKET] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
+| Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu"` |
+| WebSocket connected | `"[NEVR.SERVERDB] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
+| WebSocket disconnected | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
 | Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
@@ -780,7 +764,6 @@ Log(EchoVR::LogLevel::Warning,
   as GitHub issues, not N-entries). Basis for the "Message Content Quality"
   section.
 - **N17** — Startup hook errors not systematically tracked.
-- **N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.
 - **CPP-MINGW-ADDENDUM-GENERIC.md** — "Logging (Structured, Always)" section, "No printf" rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.

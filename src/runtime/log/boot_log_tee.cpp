@@ -2,66 +2,32 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
+#include "core/json_escape.h"
 #include "core/logging.h"  // GetRunId (N80)
+#include "runtime/log/boot_lines.h"
 
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
 static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
+static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for the replay (#5)
 
-// ---------------------------------------------------------------------------
-// JSON escape — writes directly into a caller-provided buffer
-// ---------------------------------------------------------------------------
-static int JsonEscape(const char* src, int src_len, char* dst, int dst_size) {
-    int d = 0;
-    for (int i = 0; i < src_len && d < dst_size - 2; ++i) {
-        char c = src[i];
-        switch (c) {
-            case '"':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = '"';
-                break;
-            case '\\':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = '\\';
-                break;
-            case '\n':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 'n';
-                break;
-            case '\r':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 'r';
-                break;
-            case '\t':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 't';
-                break;
-            default:
-                dst[d++] = c;
-                break;
-        }
-    }
-done:
-    dst[d] = '\0';
-    return d;
-}
+// True from Init() to Close(), whether or not the file opened: the boot phase is
+// defined by the loader lock being held, not by the file being writable.
+static std::atomic<bool> g_boot_phase{false};
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 void BootLogTee::Init() {
+    g_boot_phase.store(true, std::memory_order_release);
     // Get the EXE directory
     char exe_path[MAX_PATH];
     DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
@@ -94,6 +60,8 @@ void BootLogTee::Init() {
     if (n < 0 || n >= static_cast<int>(sizeof(log_path))) {
         return;
     }
+
+    std::snprintf(g_boot_path, sizeof(g_boot_path), "%s", log_path);
 
     // Open for append — OPEN_ALWAYS creates if missing, does not truncate
     g_boot_handle = CreateFileA(
@@ -153,17 +121,20 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
 
     // JSON-escape the message
     char escaped[4096];
-    int esc_len = JsonEscape(msg_buf, msg_len, escaped, sizeof(escaped));
+    JsonEscape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
 
-    // Build the JSONL line: {"run":"<id>","level":"info","msg":"<escaped>"}\n
-    // N80: the run ID is what lets these lines be joined to the runtime log (which
-    // lives in a different directory) and, because this file is opened in append
-    // mode across runs, what lets one run's boot lines be separated from the last.
-    char line_buf[4224];  // 4096 escaped + overhead
-    int line_len = snprintf(line_buf, sizeof(line_buf),
-                            "{\"run\":\"%s\",\"level\":\"info\",\"msg\":\"%s\"}\n",
-                            GetRunId(), escaped);
-    if (line_len <= 0 || line_len >= static_cast<int>(sizeof(line_buf))) {
+    // Build the JSONL line (boot_lines.h). N80: the run ID is what lets these lines be joined to
+    // the runtime log and, because this file is opened in append mode across runs, what lets one
+    // run's boot lines be separated from the last. #5: the ts (GetSystemTime, kernel32 only, the
+    // main log's format) places the line in the main log when it replays this run's boot lines.
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char ts[32];
+    snprintf(ts, sizeof(ts), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", st.wYear, st.wMonth, st.wDay, st.wHour,
+             st.wMinute, st.wSecond, st.wMilliseconds);
+    char line_buf[4288];  // 4096 escaped + overhead
+    const int line_len = BootLines::Build(line_buf, sizeof(line_buf), ts, GetRunId(), escaped);
+    if (line_len < 0) {
         return;
     }
 
@@ -172,7 +143,12 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     // Failure is silent — nothing to do with a failed write at boot time
 }
 
+const char* BootLogTee::Path() { return g_boot_path; }
+
+bool BootLogTee::InBootPhase() { return g_boot_phase.load(std::memory_order_acquire); }
+
 void BootLogTee::Close() {
+    g_boot_phase.store(false, std::memory_order_release);
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);
         g_boot_handle = INVALID_HANDLE_VALUE;

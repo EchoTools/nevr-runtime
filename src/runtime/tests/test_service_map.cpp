@@ -2,15 +2,17 @@
 // (N133 S3). Locks the two things the migration had to preserve exactly:
 //
 //   1. the legacy-flat-key -> config.yaml dotted-path map (FlatKeyToYamlPath), and
-//   2. the service-endpoint resolution the config.cpp hooks used to run against
+//   2. the service-endpoint resolution the config.cpp hooks run against
 //      the game JSON — host fallback (ResolveServiceHost) and scheme redirect
 //      (ResolveRedirect) — including the "absent key -> unchanged default" case
 //      for each of the ~10 service keys, which is HARD RISK #2 (no default drift).
 //
-// Pure: links service_map.cpp + nevr_core + yaml-cpp, no game stubs. Built under
-// -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
+// Pure: links service_map.cpp + service_redirect.cpp + nevr_core + yaml-cpp, no
+// game stubs. Built under -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
 
 #include <cstdlib>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -20,6 +22,7 @@
 
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "quest/tests/service_redirect_vectors.h"
 
 namespace {
 
@@ -36,9 +39,8 @@ using nevr_cfg::ResolveServiceHost;
 void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
 void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 
-// Every migrated NEVR key present, at the value config.json used to carry (the
-// two ws hosts) plus representative values for the rest. Mirrors the on-disk
-// echovr/_local/config.yaml sample where they overlap.
+// Every migrated NEVR key present: the two ws hosts plus representative values for the rest. Mirrors the
+// on-disk echovr/_local/config.yaml sample where they overlap.
 const char* kFullYaml = R"YAML(
 version: "1"
 services:
@@ -81,6 +83,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("graph_host"), "services.graph");
   EXPECT_EQ(FlatKeyToYamlPath("graphservice_host"), "services.graph_service");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_socket_uri"), "services.socket_uri");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_allow_offline_server"), "services.allow_offline_server");  // #16
   // identity / auth (S4a — ws_bridge login injection; S4b — gameserver auth POST)
   EXPECT_EQ(FlatKeyToYamlPath("nevr_discord_id"), "identity.discord_id");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_password"), "auth.password");
@@ -293,8 +296,26 @@ TEST(ServiceMap, ResolveRedirect_NoTargetLeavesUnchanged) {
                    .has_value());
 }
 
+TEST(ServiceMap, ResolveRedirect_SharedQuestVectors) {
+  for (const auto& vector : nevr_quest_test::kRedirectVectors) {
+    const auto actual = ResolveRedirect(
+        vector.input,
+        vector.socketTarget == nullptr ? std::nullopt
+                                       : std::optional<std::string>(vector.socketTarget),
+        vector.httpTarget == nullptr ? std::nullopt
+                                     : std::optional<std::string>(vector.httpTarget),
+        vector.bridgeActive, vector.bridgePort);
+    if (vector.expected == nullptr) {
+      EXPECT_FALSE(actual.has_value()) << vector.input;
+    } else {
+      ASSERT_TRUE(actual.has_value()) << vector.input;
+      EXPECT_EQ(*actual, vector.expected) << vector.input;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
-// S4b — gameserver.cpp reads. The scalar auth/services/telemetry keys resolve
+// S4b — gameserver_serverdb.cpp and gameserver_telemetry.cpp reads. The scalar auth/services/telemetry keys resolve
 // through the same flat->path map that config.cpp/ws_bridge use.
 // ---------------------------------------------------------------------------
 TEST(ServiceMap, LookupFlat_S4bGameserverScalarKeysResolve) {
@@ -366,7 +387,7 @@ TEST(ServiceMap, S4b_HttpKeyRequiredRefUnsetFailsLoud) {
   try {
     nevr::NevrConfig::LoadFromString(
         "auth:\n  http_key: \"${NEVR_S4B_HTTP_KEY:?NEVR_S4B_HTTP_KEY must be set for server auth}\"\n");
-    FAIL() << "expected NevrConfigError for an unset ${NEVR_HTTP_KEY:?} secret";
+    FAIL() << "expected NevrConfigError for an unset ${NEVR_S4B_HTTP_KEY:?} reference";
   } catch (const nevr::NevrConfigError& e) {
     EXPECT_NE(std::string(e.what()).find("NEVR_S4B_HTTP_KEY must be set for server auth"),
               std::string::npos);
@@ -390,7 +411,7 @@ TEST(ServiceMap, S4b_TelemetryTokenOptionalNeverFailsLoud) {
   EXPECT_FALSE(LookupFlat(cfg, "telemetry_uri").has_value());
 }
 
-// Issue #21: _local/config.json is optional, so the stock-engine key it used to
+// Issue #21: _local/config.json is optional, so the stock-engine key it would
 // supply comes from NEVR. Owner-chosen value; only publisher_lock is supplied —
 // every other key is left to the engine's own default.
 TEST(ServiceMap, I21_GameNativeDefaultSuppliesPublisherLockOnly) {
@@ -435,6 +456,50 @@ TEST(ServiceMapDefaults, NoFileYieldsTheEmbeddedDefaults) {
             "wss://default.example:443/ws");
   EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "default-http-key");
   EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_server_key").value_or(""), "default-server-key");
+}
+
+// #244: an unset bare ${VAR} keeps its text in the config value. For a service key that text is not a
+// value: a client falls back to the embedded default, a server (no defaults) gets nothing.
+TEST(ServiceMapDefaults, UnsetBareVarFallsBackToTheEmbeddedDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_UNSET_KEY_244}\"\n");
+  EXPECT_EQ(cfg.GetString("auth.http_key").value_or(""), "${NEVR_TEST_UNSET_KEY_244}");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, EmbeddedDefaults(), "nevr_http_key").value_or(""),
+            "default-http-key");
+}
+
+TEST(ServiceMapDefaults, UnsetBareVarYieldsNothingWhenThereIsNoDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_UNSET_KEY_244}\"\n");
+  const nevr_cfg::FlatDefaults none;
+  EXPECT_FALSE(nevr_cfg::LookupFlatWithDefaults(cfg, none, "nevr_http_key").has_value());
+}
+
+// #286: only a variable that really was unset makes a service key "unset". A literal `${` written
+// with the documented `$${` escape is a value.
+TEST(ServiceMapDefaults, EscapedDollarBraceIsAValueNotAnUnsetReference) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"pa$${ss\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, EmbeddedDefaults(), "nevr_http_key").value_or(""), "pa${ss");
+  EXPECT_EQ(nevr_cfg::LookupFlat(cfg, "nevr_http_key").value_or(""), "pa${ss");
+}
+
+TEST(ServiceMapDefaults, ASetVariableWhoseValueContainsDollarBraceIsAValue) {
+  SetEnv("NEVR_TEST_SET_286", "x${y");
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_SET_286}\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlat(cfg, "nevr_http_key").value_or(""), "x${y");
+  UnsetEnv("NEVR_TEST_SET_286");
+}
+
+// The service-host lookup (config.cpp's redirects) must not hand an unresolved reference out as a host.
+TEST(ServiceMap, ResolveServiceHost_UnsetReferenceIsNotAHost) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  matchmaking: \"${NEVR_TEST_UNSET_HOST_286}\"\n  login: \"wss://login.example/nevr\"\n");
+  const auto r = ResolveServiceHost(cfg, "matchingservice_host");
+  EXPECT_EQ(r.source, HostSource::kLoginFallback);
+  EXPECT_EQ(r.value.value_or(""), "wss://login.example/nevr");
+
+  const auto only = nevr::NevrConfig::LoadFromString("services:\n  login: \"${NEVR_TEST_UNSET_HOST_286}\"\n");
+  const auto none = ResolveServiceHost(only, "serverdb_host");
+  EXPECT_EQ(none.source, HostSource::kNone);
+  EXPECT_FALSE(none.value.has_value());
 }
 
 TEST(ServiceMapDefaults, ConfigYamlValueOverridesTheDefault) {
@@ -556,4 +621,115 @@ TEST(GameNativeConfig, EscapesValuesRatherThanConcatenatingThem) {
   const auto json = nevr_cfg::BuildGameNativeConfigJson("https://h.example:7350", key);
   ASSERT_TRUE(json.has_value());
   EXPECT_EQ(nlohmann::json::parse(*json).at("social_plugin").at("server_key").get<std::string>(), key);
+}
+
+// ---------------------------------------------------------------------------
+// #76 — runtime environment overrides. NEVR_API_KEY / NEVR_SOCKET_KEY sit above config.yaml and
+// the built-in public defaults: set -> the environment value wins; unset or empty -> config.yaml,
+// else the built-in.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::function<std::optional<std::string>(const char*)> FakeEnv(std::map<std::string, std::string> vars) {
+  return [vars](const char* name) -> std::optional<std::string> {
+    const auto it = vars.find(name);
+    if (it == vars.end()) return std::nullopt;
+    return it->second;
+  };
+}
+
+}  // namespace
+
+TEST(ServiceMapEnvOverrides, EachVariableMapsToItsKey) {
+  const auto o = nevr_cfg::ReadFlatEnvOverrides(
+      // The retired build-time name, spelled in two parts so the repo-wide grep for it stays empty (#76).
+      FakeEnv({{"NEVR_API_KEY", "env-api"}, {"NEVR_SOCKET_KEY", "env-socket"}, {std::string("NEVR_HTTP") + "_KEY", "retired"}}));
+  ASSERT_EQ(o.size(), 2U) << "only the two runtime names; the retired build names are not read";
+  EXPECT_EQ(o.at("nevr_http_key"), "env-api");
+  EXPECT_EQ(o.at("nevr_server_key"), "env-socket");
+  EXPECT_TRUE(nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", ""}})).empty()) << "empty is unset";
+  EXPECT_TRUE(nevr_cfg::ReadFlatEnvOverrides(nullptr).empty());
+}
+
+TEST(ServiceMapEnvOverrides, EnvSetWinsOverConfigYamlAndTheBuiltIn) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"file-api\"\n  server_key: \"file-socket\"\n");
+  const auto env = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", "env-api"}, {"NEVR_SOCKET_KEY", "env-socket"}}));
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(cfg, env, d, "nevr_http_key").value_or(""), "env-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(cfg, env, d, "nevr_server_key").value_or(""), "env-socket");
+  const auto none = nevr::NevrConfig::LoadFromString("");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, env, d, "nevr_http_key").value_or(""), "env-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, env, d, "nevr_server_key").value_or(""), "env-socket");
+}
+
+TEST(ServiceMapEnvOverrides, EnvUnsetFallsBackToConfigYamlThenTheBuiltIn) {
+  const nevr_cfg::FlatEnvOverrides unset = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({}));
+  const auto d = EmbeddedDefaults();
+  const auto none = nevr::NevrConfig::LoadFromString("");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, unset, d, "nevr_http_key").value_or(""), "default-http-key");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, unset, d, "nevr_server_key").value_or(""), "default-server-key");
+  const auto file = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"file-api\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, unset, d, "nevr_http_key").value_or(""), "file-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, unset, d, "nevr_server_key").value_or(""), "default-server-key");
+  // Only one variable set: the other key keeps its own layers.
+  const auto onlyApi = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", "env-api"}}));
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, onlyApi, d, "nevr_server_key").value_or(""), "default-server-key");
+  // Keys with no environment variable are untouched by the layer.
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, onlyApi, d, "nevr_socket_uri").value_or(""), "wss://default.example:443/ws");
+}
+
+// SelectBuiltinDefaults: the client-only gate for the build-time embedded defaults.
+namespace {
+
+const nevr_cfg::EmbeddedDefault kEmbeddedFixture[] = {
+    {"nevr_socket_uri", "wss://embedded.example/ws"},
+    {"nevr_http_uri", "https://embedded.example"},
+    {"nevr_http_key", ""},
+    {"nevr_server_key", "embedded-key"},
+};
+constexpr std::size_t kEmbeddedFixtureCount = sizeof(kEmbeddedFixture) / sizeof(kEmbeddedFixture[0]);
+
+}  // namespace
+
+TEST(SelectBuiltinDefaults, ClientModeKeepsEveryNonEmptyEntry) {
+  std::string embedded, missing;
+  const nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+      false, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  ASSERT_EQ(d.size(), 3U);
+  EXPECT_EQ(d.at("nevr_socket_uri"), "wss://embedded.example/ws");
+  EXPECT_EQ(d.at("nevr_http_uri"), "https://embedded.example");
+  EXPECT_EQ(d.at("nevr_server_key"), "embedded-key");
+  EXPECT_EQ(d.count("nevr_http_key"), 0U);  // an unembedded key is absent, not ""
+}
+
+TEST(SelectBuiltinDefaults, ClientModeReportsKeyNamesNotValues) {
+  std::string embedded, missing;
+  nevr_cfg::SelectBuiltinDefaults(false, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  EXPECT_EQ(embedded, "nevr_socket_uri, nevr_http_uri, nevr_server_key");
+  EXPECT_EQ(missing, "nevr_http_key");
+  EXPECT_EQ(embedded.find("embedded.example"), std::string::npos);
+  EXPECT_EQ(embedded.find("embedded-key"), std::string::npos);
+}
+
+TEST(SelectBuiltinDefaults, ServerModeIsEmptyEvenWhenEveryValueIsEmbedded) {
+  std::string embedded, missing;
+  const nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+      true, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  EXPECT_TRUE(d.empty());
+  EXPECT_TRUE(embedded.empty());
+  EXPECT_TRUE(missing.empty());
+}
+
+TEST(SelectBuiltinDefaults, NullNameListsAreAccepted) {
+  EXPECT_EQ(nevr_cfg::SelectBuiltinDefaults(false, kEmbeddedFixture, kEmbeddedFixtureCount, nullptr, nullptr)
+                .size(),
+            3U);
+  EXPECT_TRUE(nevr_cfg::SelectBuiltinDefaults(false, nullptr, 0, nullptr, nullptr).empty());
+}
+
+TEST(SelectBuiltinDefaults, ANullValueCountsAsNotEmbedded) {
+  const nevr_cfg::EmbeddedDefault entries[] = {{"nevr_socket_uri", nullptr}};
+  std::string embedded, missing;
+  EXPECT_TRUE(nevr_cfg::SelectBuiltinDefaults(false, entries, 1, &embedded, &missing).empty());
+  EXPECT_EQ(missing, "nevr_socket_uri");
 }

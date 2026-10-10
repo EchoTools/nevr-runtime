@@ -28,7 +28,10 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"graph_host", "services.graph"},
       {"graphservice_host", "services.graph_service"},
       {"nevr_socket_uri", "services.socket_uri"},
-      // S4b — gameserver.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
+      // #16 — opt-in for a dedicated server that boots with no login bridge (offline rigs). Without
+      // it a server with no socket_uri is fatal (bridge_policy.h).
+      {"nevr_allow_offline_server", "services.allow_offline_server"},
+      // S4b — gameserver_serverdb.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
       // DISTINCT from serverdb_host -> services.serverdb (S3, the redirect HOST):
       // one is the address the gameserver dials, the other is a service-endpoint
       // override the game's URL producer rewrites through. Different keys, no
@@ -55,6 +58,8 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"internal_ip", "network.internal_ip"},
       {"upnp", "network.upnp"},
       {"upnp_port", "network.upnp_port"},
+      // #58 — seconds an empty server holds its return to lobby; 0 (default) holds nothing.
+      {"nevr_empty_server_ttl_s", "network.empty_server_ttl_seconds"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
@@ -86,17 +91,56 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey) {
   const std::string path = FlatKeyToYamlPath(flatKey);
   if (path.empty()) return std::nullopt;  // not a migrated key
-  return cfg.GetString(path);
+  // A bare ${VAR} that is not set stays in the value as written (nevr_config.cpp ResolveVar). For a
+  // service key that text is not a value: it must neither beat the built-in default nor reach a
+  // caller as a credential or URI, so the key counts as unset. The test is exact (the variable was
+  // really unset), so a literal "${" written with the $${ escape is still a value.
+  bool hadUnsetBare = false;
+  std::optional<std::string> value = cfg.GetString(path, &hadUnsetBare);
+  if (hadUnsetBare) return std::nullopt;
+  return value;
+}
+
+FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+                                   std::string* embeddedNames, std::string* missingNames) {
+  FlatDefaults defaults;
+  if (serverMode) return defaults;
+  for (std::size_t i = 0; i < count; ++i) {
+    const bool embedded = entries[i].value != nullptr && entries[i].value[0] != '\0';
+    std::string* list = embedded ? embeddedNames : missingNames;
+    if (embedded) defaults[entries[i].flatKey] = entries[i].value;
+    if (list == nullptr) continue;
+    if (!list->empty()) *list += ", ";
+    *list += entries[i].flatKey;
+  }
+  return defaults;
 }
 
 std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
                                                   const FlatDefaults& defaults,
                                                   const std::string& flatKey) {
-  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);
+  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);  // nullopt when unset or unresolved
   if (fromFile && !fromFile->empty()) return fromFile;
   const auto it = defaults.find(flatKey);
   if (it != defaults.end() && !it->second.empty()) return it->second;
   return fromFile;
+}
+
+FlatEnvOverrides ReadFlatEnvOverrides(const std::function<std::optional<std::string>(const char*)>& getEnv) {
+  FlatEnvOverrides overrides;
+  if (!getEnv) return overrides;
+  for (const FlatEnvVar& var : kFlatEnvVars) {
+    const std::optional<std::string> value = getEnv(var.envName);
+    if (value && !value->empty()) overrides[var.flatKey] = *value;
+  }
+  return overrides;
+}
+
+std::optional<std::string> LookupFlatLayered(const nevr::NevrConfig& cfg, const FlatEnvOverrides& env,
+                                             const FlatDefaults& defaults, const std::string& flatKey) {
+  const auto it = env.find(flatKey);
+  if (it != env.end() && !it->second.empty()) return it->second;
+  return LookupFlatWithDefaults(cfg, defaults, flatKey);
 }
 
 std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey) {
@@ -128,32 +172,6 @@ ServiceHostResult ResolveServiceHost(const nevr::NevrConfig& cfg, const std::str
   }
   // Neither present -> caller uses its hardcoded default (unchanged behaviour).
   return {std::nullopt, HostSource::kNone};
-}
-
-namespace {
-bool StartsWith(const std::string& s, const char* prefix) { return s.rfind(prefix, 0) == 0; }
-}  // namespace
-
-std::optional<std::string> ResolveRedirect(const std::string& result,
-                                           const std::optional<std::string>& socketTarget,
-                                           const std::optional<std::string>& httpTarget,
-                                           bool bridgeActive, unsigned bridgePort) {
-  const bool isWebSocket = StartsWith(result, "wss://") || StartsWith(result, "ws://");
-  const bool isReadyAtDawn = result.find("readyatdawn.com") != std::string::npos;
-
-  // Only ws/wss URLs (any host) or https readyatdawn.com URLs are redirected;
-  // everything else passes through unchanged.
-  if (!isWebSocket && !isReadyAtDawn) return std::nullopt;
-
-  const std::optional<std::string>& target = isWebSocket ? socketTarget : httpTarget;
-  if (!target || target->empty()) return std::nullopt;
-
-  // ws/wss with the bridge up: route through the in-process relay. https never
-  // hits the bridge (the game's native TLS can reach the raw http target).
-  if (bridgeActive && isWebSocket) {
-    return std::string("ws://127.0.0.1:") + std::to_string(bridgePort);
-  }
-  return *target;
 }
 
 std::optional<std::string> GameNativeDefault(const std::string& key) {

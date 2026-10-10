@@ -1,8 +1,11 @@
 #include "runtime/lifecycle/boot.h"
+#include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
@@ -15,10 +18,9 @@
 #include "runtime/ext/plugin_loader.h"
 #include "extension/module_interface.h"
 
-// Statically-linked module entry points (2026-08-02: folded from separate
-// DLLs into BugSplat64.dll). Each module's symbols are prefixed to avoid
-// collisions — both used to export NvrModuleInit/NvrModuleApiVersion/etc.
-// as separate DLLs with their own symbol tables.
+// Statically-linked module entry points (the modules are linked into
+// BugSplat64.dll). Each module's symbols are prefixed to avoid
+// collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
 extern "C" {
 // platform_compat
 int platform_compat_Init(const NvrModuleContext* ctx);
@@ -78,51 +80,19 @@ void PreflightRuntimeBootstrap() {
   LocalFree(argv);
 
   // -windowed implies no VR (never spectator-stream).  The legacy code
-  // (src/legacy/gamepatches/patches.cpp:470-476) sets the windowed-mode
+  // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
   // flag directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
   // 0x2000000), which is what PatchSpectatorStreamAlways does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
-  // reaches the main menu normally, and -mp joins a social lobby.
+  // reaches the main menu normally.
   //
-  // 2026-09-14 (Andrew + Claude, live debugging launch-server.sh hanging
-  // forever after login): g_isServer was added to this condition by
-  // a692a30 (2026-08-05, "bootstrap server on first preprocess call"),
-  // with the stated intent of also giving -server this same windowed/no-VR
-  // bit. That commit's own diff simultaneously relaxed
-  // tests/system/server_test.go to stop requiring
-  // "[NEVR.GAMESERVER] Initialized game server" as a readiness marker — the
-  // comment there says IServerLib init is "not a readiness prerequisite",
-  // which reads as the test being loosened to match behavior that had
-  // already stopped happening, not as a confirmed-still-working assertion.
-  //
-  // Live repro today: launch-server.sh logs in, joins the social lobby
-  // group, and then sits there — literally forever, GetTimeMicroseconds
-  // still ticking — never reaching "Beginning multiplayer" or
-  // GameServerLib::Initialize. Comparing against a last-known-good capture
-  // (echovr-server-32-2026-07-26T11-16-07.550.jsonl, predates a692a30 by
-  // ~10 days) that same "reaches the main menu normally, and -mp joins a
-  // social lobby" comment above describes CLIENT -windowed behavior — a
-  // dedicated server joining a social lobby via -mp at all looks like the
-  // wrong code path for a server, not a benign side effect.
-  //
-  // Testing the direct hypothesis: drop g_isServer from this condition
-  // (back to -windowed only, matching the code before a692a30) and see
-  // whether the server now reaches BeginMultiplayer. The rest of a692a30
-  // (moving RunDeferredRuntimeBootstrap from the second PreprocessCommandLine
-  // call to the first, see PreprocessCommandLineHook below) is NOT touched
-  // here — that part addresses a separately-real problem ("this build...
-  // does not make the formerly-assumed second server preprocessing call")
-  // and reverting it blind could just trade this hang for that one.
-  //
-  // Andrew's own caveat, stated plainly rather than buried: this fixes the
-  // one collision found by git-bisecting commit history against known-good
-  // logs, but the search was not exhaustive — there could be another
-  // client-only patch in this same family (windowed/no-VR/spectator-stream
-  // flag handling) still colliding with server mode even after this change.
-  // If the server still hangs after this, look at that family next before
-  // assuming the whole diagnosis was wrong.
+  // The bit is keyed on -windowed, not on -server: it is a client flag.  A
+  // -server run does not reach BeginMultiplayer (issue #45), and leaving the bit
+  // off does not change that.  Other client-only handling in the same family
+  // (windowed, no-VR, spectator-stream flags) has not been ruled out as a
+  // collision with server mode.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
@@ -168,7 +138,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   // config.json is optional (issue #21); redirects are armed here whether or not
-  // one was found — this is where g_earlyConfigPtr used to open that gate.
+  // one was found — g_earlyConfigPtr does not gate them.
   LoadEarlyConfig();
   ArmServiceRedirects();
   InstallResourceOverride();
@@ -232,7 +202,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     moduleCtx.config_get = &NevrCfgGetFlat;
     SetModuleContext(&moduleCtx);
 
-    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
+    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, MSXML6 pass-through hook.
     // Must load before any network-using code. Statically linked (2026-08-02).
     {
       uint32_t apiVer = platform_compat_ApiVersion();
@@ -277,15 +247,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
     }
 
-    // N92: ws_bridge is no longer a module. It is compiled into this DLL and
-    // started below, after the CLI is parsed. The LoadModule call and the
-    // RegisterModuleProc registrations are gone with it — config.cpp now calls
+    // N92: ws_bridge is not a module. It is compiled into this DLL and started
+    // below, after the CLI is parsed; config.cpp calls
     // IsWebSocketBridgeActive()/GetWebSocketBridgePort() directly.
-    //
-    // Removing the LoadModule call is REQUIRED, not cosmetic: ws_bridge was on
-    // the required-module list, so with the DLL gone the loader correctly
-    // fail-fasts with "[FATAL] ws_bridge: Required module missing" and exit 1.
-    // Measured, 2026-07-27.
   }
 
   // Parse command line arguments.
@@ -343,10 +307,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
           "no CLI override exists)",
           arg);
     } else if (lstrcmpW(arg, L"-headless") == 0) {
-      // N99: this branch used to call -headless "redundant" and tell the
-      // operator to remove it. That was false and it cost a real regression —
-      // a unit believed the message, removed the flag, and a window opened on
-      // the owner's screen. -headless is a NATIVE echovr.exe token; the game's
+      // N99: -headless is never "redundant", and the log must not tell the
+      // operator to remove it: removing the flag opens a window.
+      // -headless is a NATIVE echovr.exe token; the game's
       // own arg handler applies pGame+0x1D4 &= 0xFFFEFEFE only when it is
       // present. NEVR now applies that same mask for -server
       // (PatchEnableHeadless), and AND-masking is idempotent, so the token is
@@ -362,8 +325,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // kept this open in N99 for a week. Closed not-a-defect in N113.
       //
       // g_noOvr is not "only a global": it drives NEVR_MODULE_HOST_IS_NOOVR
-      // (:75) and the login platform code 5-vs-2 (compat/ws_bridge.cpp:485,544),
-      // which is the behaviour -noovr exists to produce. The game's own
+      // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
+      // behaviour -noovr exists to produce (the login platform code does not depend on it:
+      // SelectPlatformCode always returns OVR_ORG, 4). The game's own
       // -noovr-requires--spectatorstream assert is bypassed by
       // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
       g_noOvr = TRUE;
@@ -478,11 +442,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
     CoopAiTrace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
-    // (PatchServerFramePacing removed 2026-07-29 — N113. It blind-wrote 0xC3 to
-    // CPrecisionSleep::BusyWait with no address validation and no original-byte
-    // save, duplicating the canonical patch in patch/binary_bug_fixes.cpp which
-    // does both. Two writers to an address whose ORIGINAL byte a shutdown
-    // restore depends on; safe only because Init happened to run first.)
+    // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
+    // patch/binary_bug_fixes.cpp, which validates the address and saves the
+    // original byte. A second writer here would race the shutdown restore that
+    // depends on that saved byte.
   }
 
   // N131: cosmetics are client-only — a headless server has nothing to render and
@@ -491,37 +454,73 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // is parsed, so g_isServer was still FALSE there and a server fetched tints it
   // never draws. Moved here, post-CLI-parse where g_isServer is known, gated on
   // client — the same deferral InstallResourceOverride uses (boot.cpp:29). The
-  // loadout SAVE/CURRENT protocol in gameserver.cpp is independent of this hook,
+  // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
   // so gating it off on a server does not affect loadout handling.
   if (!g_isServer) {
     AssetCDN::Initialize();
   }
 
-  // N92: start the WebSocket bridge in-process. It used to be
-  // modules/ws_bridge.dll, started from that module's NvrModuleInit. Folding it
-  // into this DLL removes the second, divergent copy that had drifted apart from
-  // the shipping one — session sharing lived in the copy that never ran, and the
-  // fake-LoginSuccess path lived only in the one that did.
+  // N92: start the WebSocket bridge in-process, as part of this DLL rather than
+  // a separate module DLL, so there is one copy of the bridge and no second,
+  // divergent one (session sharing and the fake-LoginSuccess path live in the
+  // same code).
   //
   // Started here, before plugins, because config.cpp's service redirect needs the
   // bridge port and the game asks for redirects during PreprocessCommandLine.
   // N133 S4a: the bridge target (nevr_socket_uri) now comes from config.yaml
   // services.socket_uri via nevr_config, not the game JSON. No g_earlyConfigPtr
-  // guard here — the value no longer lives in the early game config; the bridge
+  // guard here — the value does not live in the early game config; the bridge
   // starts iff socket_uri is configured (absent -> no bridge, unchanged). First
   // NevrCfg() access happens here, after the CLI loop (so -config-path is
   // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
   // an unset required secret fails loud at this point in server mode.
   {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
-    if (socketUri && socketUri[0] != '\0') {
-      SetWebSocketBridgeTarget(socketUri);
-      InstallWebSocketBridge();
-    } else {
+    const bool hasSocketUri = socketUri && socketUri[0] != '\0';
+    const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
+    if (g_isServer && BridgePolicy::IsUnrecognized(allowOffline)) {  // a server-only key
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
-          "— bridge NOT started; the game will talk to services directly and login injection "
-          "cannot fire");
+          "[NEVR.WS] services.allow_offline_server is not a boolean (use true/false); treating it as false");
+    }
+    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE, BridgePolicy::IsTruthy(allowOffline))) {
+      case BridgePolicy::Outcome::Start:
+        SetWebSocketBridgeTarget(socketUri);
+        InstallWebSocketBridge();
+        break;
+      case BridgePolicy::Outcome::SkipClient:
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
+            "— bridge NOT started; the game will talk to services directly and login injection "
+            "cannot fire");
+        break;
+      case BridgePolicy::Outcome::SkipOfflineServer:
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS] no services.socket_uri — bridge NOT started; services.allow_offline_server is "
+            "set, so this server boots offline and will never log in or register");
+        break;
+      case BridgePolicy::Outcome::RefuseServer:
+        // A server without the bridge never sends a LoginRequest: it idles silently (#16).
+        ServerFatal(
+            "no services.socket_uri in config.yaml — a dedicated server cannot log in without the "
+            "login bridge. Set services.socket_uri, or services.allow_offline_server: true for an "
+            "offline boot");
+        break;
+    }
+  }
+
+  // #58: hold the game's return to lobby for an empty server (network.empty_server_ttl_seconds,
+  // default 0 = off). Server only: a client's returns to lobby are the player's.
+  if (g_isServer) {
+    std::string ttlProblem;
+    const uint64_t ttlSeconds =
+        ReturnToLobbyHold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
+    if (!ttlProblem.empty()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] network.empty_server_ttl_seconds is %s; using %llu s", ttlProblem.c_str(),
+          static_cast<unsigned long long>(ttlSeconds));
+    }
+    if (!ReturnToLobby::Configure(ttlSeconds)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
   }
 
@@ -531,12 +530,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
-
-  // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
-  // Our handler is installed behind the game's during Initialize(); this
-  // re-registers it at the front so it fires before the game's handler.
-  // Previously only called from the server path (GameServerLib::Terminate).
-  RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",

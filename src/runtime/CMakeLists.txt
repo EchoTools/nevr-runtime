@@ -13,22 +13,25 @@ set(PATCHES_SOURCES
     "lifecycle/boot.cpp"
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
+    "lifecycle/service_redirect.cpp"
+    "lifecycle/stable_string_pool.cpp"
     "lifecycle/service_config.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
-    "patch/broadcaster_hook_stats.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
+    "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
     "lifecycle/state_machine.cpp"
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
+    "ext/plugin_manifest.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
-    "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/login_profile.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -46,9 +49,14 @@ set(PATCHES_SOURCES
     "patch/broadcaster_guard.cpp"
     "hook/dll_load_hook.cpp"
     "patch/asset_cdn.cpp"
+    "patch/evrp_package.cpp"
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
+    "server/gameserver_callbacks.cpp"
+    "server/gameserver_telemetry.cpp"
+    "server/gameserver_serverdb.cpp"
+    "server/registration_envelope.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
@@ -57,7 +65,10 @@ set(PATCHES_SOURCES
     "server/session_success_dispatch.cpp"
     "server/callback_unregistration.cpp"
     "server/session_unregister.cpp"
+    "server/main_thread_handoff.cpp"
+    "server/serverdb_uri.cpp"
     "server/telemetry_streamer.cpp"
+    "server/bearer_reconnect_auth.cpp"
     "server/upnp.cpp"
 )
 
@@ -66,20 +77,27 @@ set(PATCHES_HEADERS
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
     "lifecycle/system_module_loader.h"
+    "log/boot_lines.h"
     "log/boot_log_tee.h"
+    "log/boot_replay.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
+    "lifecycle/config_redirect_result.h"
     "lifecycle/service_map.h"
+    "lifecycle/service_redirect.h"
+    "lifecycle/stable_string_pool.h"
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
-    "patch/broadcaster_hook_stats.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/return_to_lobby.h"
+    "lifecycle/return_to_lobby_hold.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
+    "lifecycle/console_ctrl_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
@@ -87,9 +105,10 @@ set(PATCHES_HEADERS
     "ext/plugin_loader.h"
     "ext/plugin_load_plan.h"
     "ext/plugin_load_plan_build.h"
+    "ext/plugin_manifest.h"
     "ext/module_loader.h"
-    "compat/winhttp_stub.h"
     "patch/asset_cdn.h"
+    "patch/evrp_package.h"
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
@@ -110,6 +129,8 @@ set(PATCHES_HEADERS
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
+    "server/gameserver_internal.h"
+    "server/registration_envelope.h"
     "server/server_context.h"
     "server/websocket_client.h"
     "server/websocket_frame.h"
@@ -117,7 +138,11 @@ set(PATCHES_HEADERS
     "server/session_success_dispatch.h"
     "server/callback_unregistration.h"
     "server/session_unregister.h"
+    "server/main_thread_handoff.h"
+    "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
+    "server/bearer_reconnect_auth.h"
+    "server/serialized_mint.h"
     "server/messages.h"
     "server/upnp.h"
     "server/constants.h"
@@ -159,17 +184,32 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
-set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp lifecycle/login_redirect_override.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(
+  lifecycle/service_map.cpp
+  lifecycle/service_redirect.cpp
+  lifecycle/stable_string_pool.cpp
+  lifecycle/service_config.cpp
+  lifecycle/login_redirect_override.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
+# pure and PCH-free for the same reason as plugin_load_plan.cpp.
+set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
+# ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
+# The property is directory-scoped, so the test target that compiles the same file gets it too.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set_source_files_properties(compat/ws_bridge.cpp PROPERTIES COMPILE_OPTIONS "-Werror=old-style-cast")
+endif()
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -206,8 +246,10 @@ if(MINGW)
   add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/stubs"
-    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
-            -l "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
+    # dlltool names the archive's import-name symbol after the -l argument as given, so an absolute
+    # path would put the build directory into the DLL: run it in the output directory with a bare name.
+    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def" -l libbcrypt.a
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
     COMMENT "Generating minimal bcrypt import library for nevr_runtime"
   )
@@ -282,13 +324,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_websocket_frame PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_websocket_frame DISCOVERY_MODE PRE_TEST)
 
+    # test_registration_roundtrip.cpp (#46): the registration against a local fake ServerDB.
     add_executable(test_protobuf_transport
       tests/test_protobuf_transport.cpp
+      tests/test_registration_roundtrip.cpp
+      server/registration_envelope.cpp
       server/protobuf_transport.cpp
       server/websocket_frame.cpp
       log/url_diagnostics.cpp
       server/websocket_client.cpp)
-    set_source_files_properties(tests/test_protobuf_transport.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
+    set_source_files_properties(tests/test_protobuf_transport.cpp tests/test_registration_roundtrip.cpp server/registration_envelope.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_protobuf_transport PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_protobuf_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -300,6 +345,27 @@ if(BUILD_TESTING)
     endif()
     gtest_discover_tests(test_protobuf_transport DISCOVERY_MODE PRE_TEST)
 
+    # Issue #39: the bearer header presented on ixwebsocket's automatic reconnect,
+    # driven against a scripted loopback upgrade server.
+    # #114: BearerReconnectAuth (the telemetry socket's equivalent) rides in this executable.
+    add_executable(test_websocket_client_auth
+      tests/test_websocket_client_auth.cpp
+      server/bearer_reconnect_auth.cpp
+      server/websocket_client.cpp
+      server/websocket_frame.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_websocket_client_auth.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_websocket_client_auth PRIVATE
+      GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_websocket_client_auth nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_websocket_client_auth PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_websocket_client_auth DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
       log/url_diagnostics.cpp)
@@ -309,15 +375,47 @@ if(BUILD_TESTING)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
     gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
 
+    # test_main_thread_handoff.cpp (GH #44) rides in this executable, so the
+    # existing `just test-auth-unit` loop runs it with no recipe change.
+
+    # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
+    # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
+    # test_boot_replay.cpp (#5, header-only log/boot_lines.h and log/boot_replay.h) rides in this executable.
+    add_executable(test_serverdb_uri
+      tests/test_serverdb_uri.cpp
+      tests/test_failure_detail.cpp
+      tests/test_boot_replay.cpp
+      tests/test_login_session.cpp
+      server/serverdb_uri.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_boot_replay.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
+    gtest_discover_tests(test_serverdb_uri DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
+      tests/test_main_thread_handoff.cpp
       server/callback_unregistration.cpp
+      server/main_thread_handoff.cpp
       server/server_context.cpp)
-    set_source_files_properties(tests/test_callback_unregistration.cpp server/callback_unregistration.cpp server/server_context.cpp
+    set_source_files_properties(tests/test_callback_unregistration.cpp tests/test_main_thread_handoff.cpp
+      server/callback_unregistration.cpp server/main_thread_handoff.cpp server/server_context.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_callback_unregistration PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_callback_unregistration PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_callback_unregistration DISCOVERY_MODE PRE_TEST)
+
+    # Issue #38: entrant accessors read the lobby's live entrant array.
+    add_executable(test_server_context
+      tests/test_server_context.cpp
+      server/server_context.cpp)
+    set_source_files_properties(tests/test_server_context.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_context PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_session_unregister
       tests/test_session_unregister.cpp
@@ -372,12 +470,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_mic_dsp PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_mic_dsp DISCOVERY_MODE PRE_TEST)
 
+    # test_mic_owner_thread.cpp (GH #51) rides in the same executable, so the
+    # existing `just test-auth-unit` loop runs it with no recipe change.
     add_executable(test_mic_lifecycle
       tests/test_mic_lifecycle.cpp
+      tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
-      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp)
-    set_source_files_properties(tests/test_mic_lifecycle.cpp ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp)
+    set_source_files_properties(tests/test_mic_lifecycle.cpp tests/test_mic_owner_thread.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_mic_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_mic_lifecycle PRIVATE GTest::gtest GTest::gtest_main)
@@ -412,19 +516,75 @@ if(BUILD_TESTING)
 
     # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
     # of the config.cpp cutover (flat->path map, service-host fallback, scheme
-    # redirect). Compiles service_map.cpp directly (the same TU nevr_runtime links)
+    # redirect). Compiles service_map.cpp and service_redirect.cpp directly (the
+    # same TUs nevr_runtime links)
     # + nevr_core (nevr_config) + yaml-cpp. No game stubs: service_map.cpp has no
     # windows/Log/extern dependencies. The impure half (service_config.cpp) is NOT
     # linked here — it is exercised by the differential server run.
     add_executable(test_service_map
       tests/test_service_map.cpp
-      lifecycle/service_map.cpp)
-    set_source_files_properties(tests/test_service_map.cpp lifecycle/service_map.cpp
+      tests/test_bridge_policy.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp)
+    set_source_files_properties(
+      tests/test_service_map.cpp
+      tests/test_bridge_policy.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_service_map PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_service_map PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
+
+    # Stable C-string storage and direct config-accessor failure-boundary tests.
+    add_executable(test_service_config
+      tests/test_service_config.cpp
+      tests/test_stable_string_pool.cpp
+      lifecycle/service_config.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
+      lifecycle/stable_string_pool.cpp
+      ext/plugin_load_plan.cpp)
+    target_compile_definitions(test_service_config PRIVATE NEVR_TEST_HOOKS)
+    set_source_files_properties(
+      tests/test_service_config.cpp
+      tests/test_stable_string_pool.cpp
+      lifecycle/service_config.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
+      lifecycle/stable_string_pool.cpp
+      ext/plugin_load_plan.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_service_config PRIVATE
+      ${CMAKE_SOURCE_DIR}/src
+      ${CMAKE_BINARY_DIR})
+    target_link_libraries(test_service_config PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core nevr_abi yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_service_config DISCOVERY_MODE PRE_TEST)
+
+    add_library(test_stable_string_pool_fixture SHARED
+      tests/stable_string_pool_fixture.cpp
+      lifecycle/stable_string_pool.cpp)
+    target_include_directories(test_stable_string_pool_fixture PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_source_files_properties(
+      tests/stable_string_pool_fixture.cpp
+      lifecycle/stable_string_pool.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_target_properties(test_stable_string_pool_fixture PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_stable_string_pool_fixture"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+    add_library(test_stable_string_pool_destructible_control SHARED
+      tests/stable_string_pool_destructible_control.cpp)
+    set_target_properties(test_stable_string_pool_destructible_control PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_stable_string_pool_destructible_control"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    add_dependencies(test_service_config
+      test_stable_string_pool_fixture
+      test_stable_string_pool_destructible_control)
 
     add_executable(test_social_facade
       tests/test_social_facade.cpp
@@ -451,7 +611,8 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
@@ -463,7 +624,7 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
-    # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,
+    # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
     # required/target carry), ArgsToJson (the v4 args_json contract), and
     # ChoosePluginInit (v4-preferred/v3-fallback). Compiles plugin_load_plan.cpp
     # directly (the same TU nevr_runtime links) + nevr_core (nevr_config) + yaml-cpp
@@ -472,8 +633,10 @@ if(BUILD_TESTING)
     # is exercised by the differential server run.
     add_executable(test_plugin_load_plan
       tests/test_plugin_load_plan.cpp
-      ext/plugin_load_plan.cpp)
+      ext/plugin_load_plan.cpp
+      ext/plugin_manifest.cpp)
     set_source_files_properties(tests/test_plugin_load_plan.cpp ext/plugin_load_plan.cpp
+      ext/plugin_manifest.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_load_plan PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_load_plan PRIVATE
@@ -492,6 +655,9 @@ if(BUILD_TESTING)
     # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
+      tests/test_evrp_package.cpp
+      # evrp_package.cpp is pure parsing; the test drives the production parser.
+      patch/evrp_package.cpp
       # ws_bridge.cpp calls SystemInfo::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
@@ -503,21 +669,22 @@ if(BUILD_TESTING)
       # system_info.cpp so the test drives the REAL compile-time constants.
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       ext/plugin_loader.cpp
+      # #60: plugin_loader.cpp builds the login's plugin report through this.
+      ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
+      # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
+      log/boot_log_tee.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
+      # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
-      # N83/N84: link the full production patch unit so the test calls the
-      # real LogBroadcasterHookStats entry point, not merely its formatter.
-      # The test invokes only that log-only function with its zero-initialized
-      # counters; no game-memory patch or hook installation path is entered.
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
-      patch/broadcaster_hook_stats.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS USE_MINHOOK
       PROJECT_VERSION="${PROJECT_VERSION}"
@@ -530,14 +697,17 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
+      tests/test_evrp_package.cpp
+      patch/evrp_package.cpp
       ext/plugin_loader.cpp
+      ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
-      patch/broadcaster_hook_stats.cpp
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
@@ -589,7 +759,23 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_onframe"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe)
+    add_library(test_plugin_init_fail SHARED
+      tests/plugin_init_fail_test_dll.cpp)
+    target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_init_fail PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_init_fail PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_init_fail"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_library(test_plugin_info_keeper SHARED
+      tests/plugin_info_keeper_test_dll.cpp)
+    target_compile_definitions(test_plugin_info_keeper PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_info_keeper PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_info_keeper PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_info_keeper"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail test_plugin_info_keeper)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -616,11 +802,14 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
+    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
+    # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
+      ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()

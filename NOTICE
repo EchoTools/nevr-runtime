@@ -1,0 +1,6 @@
+nevr-runtime
+Copyright 2025-2026 Andrew Bates <a@sprock.io>
+
+This product includes software developed by third parties under their own licenses:
+MinHook (extern/minhook), Google Breakpad (extern/breakpad) and linux-syscall-support (extern/lss).
+See each directory for its license.

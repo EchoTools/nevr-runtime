@@ -1,4 +1,6 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/hmd_serial.h"
+#include "runtime/compat/login_profile.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -35,6 +37,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/server/serverdb_uri.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -99,6 +102,60 @@ std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::stri
   uint64_t statusCode = 0;
   memcpy(&statusCode, frame.data() + kEnvelopeHeaderSize + 16, sizeof(statusCode));
   return LoginFailureDiagnostic{statusCode, payloadSize - kLoginFailureFixedPayloadSize};
+}
+
+// The server's NewLocationError (nakama server/evr_pipeline_login.go) puts the line
+// "Select code >>> NN <<<" last; the game's login-failure screen shows only the first lines, so the
+// player never sees the code (#201). When the frame is exactly one LoginFailure whose text has such a
+// line, return the frame with that line moved to the front and the rest of the text after it. Any other
+// frame or text returns nullopt and is forwarded byte-identical.
+std::optional<std::string> MoveCodeLineFirst(const std::string& frame) {
+  if (frame.size() < kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize + 1) return std::nullopt;
+  uint64_t symbol = 0;
+  uint64_t payloadLength = 0;
+  memcpy(&symbol, frame.data() + 8, sizeof(symbol));
+  memcpy(&payloadLength, frame.data() + 16, sizeof(payloadLength));
+  if (symbol != kLoginFailureSymbol || payloadLength != frame.size() - kEnvelopeHeaderSize) return std::nullopt;
+  if (frame.back() != '\0') return std::nullopt;
+
+  const size_t textStart = kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize;
+  const std::string text = frame.substr(textStart, frame.size() - 1 - textStart);
+  if (text.find('\0') != std::string::npos) return std::nullopt;
+
+  std::vector<std::string> lines;
+  size_t begin = 0;
+  while (true) {
+    const size_t end = text.find('\n', begin);
+    lines.push_back(text.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
+    if (end == std::string::npos) break;
+    begin = end + 1;
+  }
+  static const std::string kPrefix = "Select code >>> ";
+  static const std::string kSuffix = " <<<";
+  size_t codeLine = lines.size();
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string& line = lines[i];
+    if (line.size() <= kPrefix.size() + kSuffix.size() || line.compare(0, kPrefix.size(), kPrefix) != 0 ||
+        line.compare(line.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) {
+      continue;
+    }
+    const std::string code = line.substr(kPrefix.size(), line.size() - kPrefix.size() - kSuffix.size());
+    if (!code.empty() && code.find_first_not_of("0123456789") == std::string::npos) codeLine = i;
+  }
+  if (codeLine == lines.size() || codeLine == 0) return std::nullopt;
+
+  std::string reordered = lines[codeLine];
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i == codeLine) continue;
+    reordered += '\n';
+    reordered += lines[i];
+  }
+  std::string out = frame.substr(0, textStart);
+  out += reordered;
+  out.push_back('\0');
+  const uint64_t newLength = out.size() - kEnvelopeHeaderSize;
+  memcpy(&out[16], &newLength, sizeof(newLength));
+  return out;
 }
 }  // namespace
 
@@ -526,7 +583,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       }
       // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
       // server for the list again; the reply rebuilds the roster (a friend added on the website
-      // used to stay invisible until the next login).
+      // would otherwise stay invisible until the next login).
       if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
         uint64_t friendId = 0;
         if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
@@ -616,20 +673,22 @@ static const bool g_partySenderRegistered = (SocialParty::SetSender(&SendFrameTo
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
-  for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
+  for (int i = 0; i < 8; i++) { buf.push_back(static_cast<char>(val & 0xFF)); val >>= 8; }
 }
 
-// Platform codes match the server's wire enum (empirically verified 2026-08-04).
-// Wire: STM=0, DSC=1, XBX=2, OVR=3, OVR_ORG=4, BOT=5, DMO=6
+// Platform codes: Nakama's PlatformCode and the game's own provider numbering are the same
+// 1-indexed enum: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7. Code 2 is "PSN" in the
+// game's string table and reads "DSC" only after PatchDscProvider rewrites it. Anything else
+// yields "UNK" (the game's own fallback prefix for an unknown provider is "???").
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
-    case 0: return "STM";
-    case 1: return "DSC";
-    case 2: return "XBX";
-    case 3: return "OVR";
+    case 1: return "STM";
+    case 2: return "DSC";
+    case 3: return "XBX";
     case 4: return "OVR-ORG";
-    case 5: return "BOT";
-    case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
+    case 5: return "OVR";
+    case 6: return "BOT";
+    case 7: return "DMO";
     default: return "UNK";
   }
 }
@@ -645,14 +704,14 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // game's own CNSUser (the login-state patch below), because the game then names itself with
 // that platform in every later request (LobbyPlayerSessionsRequest, ...) and Nakama looks the
 // requester up in the match under the platform the LoginRequest carried. Measured 2026-09-30:
-// a token-auth client logged in as platform 6 (DMO) while the game asked for its player
+// a token-auth client logged in as platform 6 (BOT in the 1-indexed enum; -noovr sent it) while the game asked for its player
 // sessions as OVR-ORG, and Nakama answered "requesting player not found in match:
 // OVR-ORG-<id>" (the host never accepted the player, the game ended at "Server connection
 // failed"). Platform 4 is what every URL-credential login already sent.
 static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
 
-// Pure function — testable without config or globals. The arguments no longer influence the
-// result: -noovr (DMO, 6) and the token-auth default (DSC, 1) produced an identity the game
+// Pure function — testable without config or globals. The arguments do not influence the
+// result: -noovr (6) and the token-auth default (1) would be an identity the game
 // itself does not use.
 static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
   return kBridgeLoginPlatform;
@@ -681,20 +740,30 @@ static bool IsBearerReplacingPath(const std::string& url) {
   return url.compare(pathStart, pathEnd == std::string::npos ? std::string::npos : pathEnd - pathStart, "/ws") == 0;
 }
 
+// The HMD serial field the stock client sends (#83): relay the game's serial buffer, or its stock "N/A"
+// value in No-VR mode. Outside the game (unit tests) there is nothing to read.
+static HmdSerial::Choice GameHmdSerial() {
+  if (EchoVR::g_GameBaseAddress == nullptr || g_pGame == nullptr) return HmdSerial::Select(false, nullptr);
+  uint32_t flags = 0;
+  memcpy(&flags, static_cast<const char*>(g_pGame) + 0x7AE0, sizeof(flags));
+  const char* serial = reinterpret_cast<const char*>(EchoVR::g_GameBaseAddress) + 0x20C7834;
+  return HmdSerial::Select((flags & HmdSerial::kNoVrFlag) != 0, serial);
+}
+
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
                                      const std::string& password = std::string()) {
-  // Platform codes match Go server iota: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
+  // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
-  // Host facts, MEASURED. Every value in this block used to be a literal —
-  // "cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores, 8 logical,
-  // 16384 MB total, 8192 used — sent as though read from the machine. That is
+  // Host facts, MEASURED. No value in this block is a literal ("cpu":"Wine",
+  // "video_card":"Wine D3D12", 4 physical cores, 8 logical, 16384 MB total,
+  // 8192 used would be sent as though read from the machine). That is
   // worse than sending nothing: absent data is visibly absent, while invented
   // data is indistinguishable from a reading and gets acted on.
   //
-  // Fields this process cannot honestly determine are now sent EMPTY or 0
+  // Fields this process cannot honestly determine are sent EMPTY or 0
   // rather than guessed. video_card and dedicated_gpu_memory have no truthful
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
@@ -705,78 +774,56 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
                     : std::string();
 
-  // Empty means the account's name is genuinely not known yet. Fall back to the
-  // account id — a true, unique identifier — rather than a constant. A shared
-  // placeholder is what made every NEVR client announce the same name.
-  std::string resolvedName = displayName;
-  if (resolvedName.empty()) resolvedName = std::to_string(accountId);
-
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format.
-  //
-  // N146: nlohmann_json instead of hand-built snprintf.  A hand-built format
-  // string cannot escape its own values, so a version string or display name
-  // containing a double-quote produces malformed JSON the server rejects.
-  // nlohmann::json guarantees valid output regardless of input.
+  // Keep its construction portable so Quest and Windows use the same fields
+  // and JSON escaping rules.
   const BuildIdentity::Info& buildId = BuildIdentity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
+  // The serial is the one the stock client sends: the game's serial buffer in
+  // VR, "N/A" with no VR, "unknown" only when the game has none. Only its source
+  // and length are logged, never the value.
+  const HmdSerial::Choice hmd = GameHmdSerial();
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login hmd serial source=%s length=%zu",
+      HmdSerial::SourceName(hmd.source), hmd.value.size());
 
-  std::string jsonStr;
-  {
-    nlohmann::json j;
-    j["accountid"] = accountId;
-    j["displayname"] = resolvedName;
-    j["bypassauth"] = false;
-    j["access_token"] = accessToken;
-    // 2026-09-13: the account requires password authentication — measured
-    // via Nakama's own rejection before this fix, "LOGIN FAILURE: status=400
-    // ... account requires password authentication". The injected
-    // LoginRequest never sent one. Confirmed live: adding this field (and
-    // fixing config.yaml's truncated auth.password, "spritz-srv-7f3a9c" ->
-    // "spritz-srv-7f3a9c8") produced a real LoginSuccess from Nakama.
-    j["password"] = password;
-    j["nonce"] = "";
-    j["buildversion"] = 631547;
-    j["lobbyversion"] = 0;
-    j["appid"] = 0;
-    j["publisher_lock"] = "";
-    j["hmdserialnumber"] = "nEVR-Wine";
-    j["desiredclientprofileversion"] = 0;
-
-    auto& ident = j["nevr_identity"];
-    ident["version"] = buildId.project_version;
-    ident["commit"] = buildId.git_commit;
-    ident["build"] = buildId.git_describe;
-    ident["build_type"] = buildId.build_type;
-    // The social message level this runtime understands; the server sends a newer social message only
-    // to a session that declared its level (docs/design/2026-10-01-social-nakama-proposal.md §0).
-    j["nevr_social"] = SocialParty::kSocialLevel;
-
-    // nevr_plugins: parse the pre-built manifest so the field is a JSON array,
-    // not a string-escaped copy of one.
-    if (!pluginManifest.empty()) {
-      try {
-        j["nevr_plugins"] = nlohmann::json::parse(pluginManifest);
-      } catch (...) {
-        j["nevr_plugins"] = nlohmann::json::array();
-      }
-    } else {
-      j["nevr_plugins"] = nlohmann::json::array();
-    }
-
-    auto& sys = j["system_info"];
-    sys["headset_type"] = "No VR";
-    sys["driver_version"] = driverVersion;
-    sys["network_type"] = "";
-    sys["video_card"] = "";
-    sys["cpu"] = host.cpu_brand;
-    sys["num_physical_cores"] = host.physical_cores;
-    sys["num_logical_cores"] = host.logical_cores;
-    sys["memory_total"] = host.memory_total_mb;
-    sys["memory_used"] = host.memory_used_mb;
-    sys["dedicated_gpu_memory"] = 0;
-
-    jsonStr = j.dump();
+  // nevr_plugins lists every configured plugin with what the loader did with it
+  // (loaded, failed, or disabled). The manifest is parsed so the login field is a
+  // JSON array, not a string-escaped copy of one. The non-throwing parse does not
+  // fail on the builder's own nlohmann output; if it ever did, the login still
+  // goes out with an empty list and a Warning that says so.
+  nlohmann::json plugins = nlohmann::json::parse(pluginManifest, nullptr, false);
+  if (plugins.is_discarded() || !plugins.is_array()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] login nevr_plugins: plugin report is not a JSON array (%zu bytes) — sending []",
+        pluginManifest.size());
+    plugins = nlohmann::json::array();
   }
+  size_t loaded = 0;
+  for (const nlohmann::json& plugin : plugins) {
+    if (plugin.is_object() && plugin.value("loaded", false)) ++loaded;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_plugins configured=%zu loaded=%zu", plugins.size(),
+      loaded);
+
+  LoginProfile::LoginProfileInputs profileInputs;
+  profileInputs.account_id = accountId;
+  profileInputs.display_name = displayName;
+  profileInputs.access_token = accessToken;
+  profileInputs.password = password;
+  profileInputs.hmd_serial_number = hmd.value;
+  profileInputs.driver_version = driverVersion;
+  profileInputs.cpu = host.cpu_brand;
+  profileInputs.physical_cores = host.physical_cores;
+  profileInputs.logical_cores = host.logical_cores;
+  profileInputs.memory_total_mb = host.memory_total_mb;
+  profileInputs.memory_used_mb = host.memory_used_mb;
+  profileInputs.project_version = buildId.project_version;
+  profileInputs.git_commit = buildId.git_commit;
+  profileInputs.git_describe = buildId.git_describe;
+  profileInputs.build_type = buildId.build_type;
+  profileInputs.social_level = SocialParty::kSocialLevel;
+  profileInputs.plugins = std::move(plugins);
+  const std::string jsonStr = LoginProfile::BuildLoginProfileJson(profileInputs);
 
   size_t jsonLen = jsonStr.size() + 1;  // include null terminator
 
@@ -792,7 +839,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Build full message: marker + symbol + length + payload
   std::string msg;
   msg.reserve(8 + 8 + 8 + payload.size());
-  msg.append((const char*)MSG_MARKER, 8);
+  msg.append(reinterpret_cast<const char*>(MSG_MARKER), 8);
   AppendLE64(msg, SYM_LOGIN_REQUEST);
   AppendLE64(msg, payload.size());
   msg.append(payload);
@@ -887,8 +934,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, (void*)&gameWs);
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -899,10 +946,10 @@ void InstallWebSocketBridge() {
               ix::WebSocket* gameWsPtr = &gameWs;
 
               // N61: register an independent callback for each matchmaker
-              // connection on the shared remote. Previously matchmaker relied
-              // entirely on the login connection's callback — when login
-              // disconnected and B2/N54 nulled that callback, all matchmaker
-              // server→game message routing silently died.
+              // connection on the shared remote. Relying on the login
+              // connection's callback alone fails: when login
+              // disconnects and B2/N54 nulls that callback, all matchmaker
+              // server→game message routing silently dies.
               g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
                   [pairPtr, gameWsPtr, connIdx,
                    remoteAddress = static_cast<const ix::WebSocket*>(g_loginRemoteWs.get())](const ix::WebSocketMessagePtr& rmsg) {
@@ -961,33 +1008,36 @@ void InstallWebSocketBridge() {
             // password just means "no URL credentials" — we fall through to the
             // Bearer/JWT path and never put an empty secret on the wire (N115).
             // The password value is never logged.
+            // Issue #41: both values are percent-encoded (ServerDbUri, the same
+            // encoder the ServerDB registration URI uses), so a password with
+            // '&', '=', '#', '%', '+' or whitespace reaches Nakama byte-for-byte.
             {
               const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
               const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-              if (cfgDiscordId && cfgDiscordId[0] != '\0' && cfgPassword && cfgPassword[0] != '\0') {
-                char sep = (remoteUrl.find('?') != std::string::npos) ? '&' : '?';
-                remoteUrl += sep;
-                remoteUrl += "discordid=";
-                remoteUrl += cfgDiscordId;
-                remoteUrl += "&password=";
-                remoteUrl += cfgPassword;
+              std::optional<std::string> withCredentials = ServerDbUri::BuildBridgeCredentialUri(
+                  remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
+                  cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+              if (withCredentials) {
+                remoteUrl = std::move(*withCredentials);
+              } else {
+                // Allocation failure in the encoder: connect without URL credentials
+                // (Bearer path below) rather than put an unencoded secret on the wire.
+                Log(EchoVR::LogLevel::Error,
+                    "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
+                    connIdx, ConnLabel(connIdx));
               }
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
+            // Issue #116: format=evr is routinely the FIRST query param here: a configured
+            // socket_uri such as "wss://host/ws?format=evr&token=..." already
+            // carries it before the credentials block above appends
+            // discordid/password. A naive "delete the preceding
+            // ? or &" deleted the URI's only '?' and glued the path to the
+            // remaining query. ServerDbUri::RemoveQueryParam handles leading/
+            // middle/trailing/sole position correctly; see its own tests.
             if (connIdx >= 2) {
-              auto pos = remoteUrl.find("format=evr");
-              if (pos != std::string::npos) {
-                // Remove "format=evr" and the preceding ? or &
-                size_t start = (pos > 0 && (remoteUrl[pos-1] == '?' || remoteUrl[pos-1] == '&'))
-                               ? pos - 1 : pos;
-                size_t end = pos + 10;  // len("format=evr")
-                // If there's a trailing & after format=evr, remove it too
-                if (end < remoteUrl.size() && remoteUrl[end] == '&') end++;
-                remoteUrl.erase(start, end - start);
-                // If we left a trailing ? with nothing after, remove it
-                if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
-              }
+              remoteUrl = ServerDbUri::RemoveQueryParam(remoteUrl, "format=evr");
               const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
                   "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
               Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1001,12 +1051,12 @@ void InstallWebSocketBridge() {
             std::string accountName;  // N123 — empty means "not known", never a placeholder
             uint64_t discordId = 0;
             {
-              auto getTokenFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetToken");
-              auto getDiscordIdFn = (uint64_t (*)())ResolveModuleProc("TokenAuth_GetDiscordId");
+              auto getTokenFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetToken"));
+              auto getDiscordIdFn = reinterpret_cast<uint64_t (*)()>(ResolveModuleProc("TokenAuth_GetDiscordId"));
               // N123. Optional by design: an older token_auth.dll without this
               // export must still load. A null here means "no name available",
               // which BuildLoginRequest already handles.
-              auto getUsernameFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetUsername");
+              auto getUsernameFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetUsername"));
               if (getTokenFn) {
                 const char* tok = getTokenFn();
                 if (tok) bearerToken = tok;
@@ -1034,7 +1084,7 @@ void InstallWebSocketBridge() {
                 discordId = strtoull(cfgId, nullptr, 10);
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.WS] Using nevr_discord_id from config: %llu",
-                    (unsigned long long)discordId);
+                    static_cast<unsigned long long>(discordId));
               }
             }
             if (discordId == 0) {
@@ -1095,7 +1145,8 @@ void InstallWebSocketBridge() {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
                       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
-                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
+                          g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
@@ -1117,36 +1168,36 @@ void InstallWebSocketBridge() {
                           HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
                           if (hPnsrad) {
                             typedef void* (*UsersFn)();
-                            auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                            auto Users = reinterpret_cast<UsersFn>(GetProcAddress(hPnsrad, "Users"));
                             if (Users) {
-                              auto* usersObj = (uint8_t*)Users();
+                              auto* usersObj = reinterpret_cast<uint8_t*>(Users());
                               if (usersObj) {
-                                uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
-                                uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                                uint64_t userCount = *reinterpret_cast<uint64_t*>(usersObj + 0x398);
+                                uint8_t** bufCtx = *reinterpret_cast<uint8_t***>(usersObj + 0x368);
                                 if (userCount > 0 && bufCtx && *bufCtx) {
                                   uint8_t* user = *bufCtx;
-                                  int64_t*  accountId  = (int64_t*)(user + 0x88);
-                                  uint64_t* loginState = (uint64_t*)(user + 0x90);
-                                  uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                  int64_t*  accountId  = reinterpret_cast<int64_t*>(user + 0x88);
+                                  uint64_t* loginState = reinterpret_cast<uint64_t*>(user + 0x90);
+                                  uint32_t* stateFlags = reinterpret_cast<uint32_t*>(user + 0x9c);
                                   int64_t  beforeAcct    = *accountId;
                                   uint64_t beforeState   = *loginState;
                                   uint32_t beforeFlags   = *stateFlags;
-                                  int      beforeProvider = (int)(beforeState & 0xf);
+                                  int      beforeProvider = static_cast<int>(beforeState & 0xf);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
                                   // +0x90 low nibble = provider enum (2 = PSN in binary,
                                   //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
-                                  *accountId  = (int64_t)discordId;
+                                  *accountId  = static_cast<int64_t>(discordId);
                                   *loginState = (*loginState & ~0xFULL) | kBridgeLoginPlatform;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
                                       "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
                                       "state=0x%llx->0x%llx provider=%d->%d flags=0x%x->0x%x "
                                       "(unblocks LogInSuccessCB)",
-                                      (long long)beforeAcct, (long long)*accountId,
-                                      (unsigned long long)beforeState, (unsigned long long)*loginState,
-                                      beforeProvider, (int)(*loginState & 0xf), beforeFlags, *stateFlags);
+                                      static_cast<long long>(beforeAcct), static_cast<long long>(*accountId),
+                                      static_cast<unsigned long long>(beforeState), static_cast<unsigned long long>(*loginState),
+                                      beforeProvider, static_cast<int>(*loginState & 0xf), beforeFlags, *stateFlags);
                                 }
                               }
                             }
@@ -1168,8 +1219,8 @@ void InstallWebSocketBridge() {
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, ConnLabel(connIdx), loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -1244,10 +1295,10 @@ void InstallWebSocketBridge() {
                           // Server ignores the payload, so send zeros.
                           uint8_t payload[0x20] = {};
                           std::string subscribeMsg;
-                          subscribeMsg.append((const char*)MSG_MARKER, 8);
+                          subscribeMsg.append(reinterpret_cast<const char*>(MSG_MARKER), 8);
                           AppendLE64(subscribeMsg, SYM_FRIEND_SUBSCRIBE);
                           AppendLE64(subscribeMsg, sizeof(payload));
-                          subscribeMsg.append((const char*)payload, sizeof(payload));
+                          subscribeMsg.append(reinterpret_cast<const char*>(payload), sizeof(payload));
                           pairPtr->remoteWs->sendBinary(subscribeMsg);
                           Log(EchoVR::LogLevel::Debug,
                               "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
@@ -1265,10 +1316,10 @@ void InstallWebSocketBridge() {
                         uint64_t friendId = 0;
                         uint8_t statusCode = 0;
                         memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
-                        statusCode = (uint8_t)rmsg->str.data()[24 + 16];
+                        statusCode = static_cast<uint8_t>(rmsg->str.data()[24 + 16]);
                         Log(EchoVR::LogLevel::Warning,
                             "[NEVR.WS] FRIEND INVITE FAILURE: friendId=%llu status=%u",
-                            (unsigned long long)friendId, statusCode);
+                            static_cast<unsigned long long>(friendId), statusCode);
                       }
                       // InviteSuccess (0x7f0c6a3ac83c6f77): Header(8)+FriendID(8)
                       if (rsym == 0x7f0c6a3ac83c6f77 && rmsg->str.size() >= 24 + 16) {
@@ -1276,7 +1327,7 @@ void InstallWebSocketBridge() {
                         memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
                         Log(EchoVR::LogLevel::Debug,
                             "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
-                            (unsigned long long)friendId);
+                            static_cast<unsigned long long>(friendId));
                       }
                       // FriendListResponse (0xa78aeb2a4e89b10b): counts + per-friend entries
                       if (rsym == 0xa78aeb2a4e89b10b && rmsg->str.size() >= 24 + 0x20) {
@@ -1291,7 +1342,7 @@ void InstallWebSocketBridge() {
                             non, nbusy, noff, nsent, nrecv);
                         // Hex dump full payload for friend entry analysis
                         size_t payloadLen = rmsg->str.size() - 24;
-                        const uint8_t* pp = (const uint8_t*)rmsg->str.data() + 24;
+                        const uint8_t* pp = reinterpret_cast<const uint8_t*>(rmsg->str.data()) + 24;
                         char hex[4096] = {};
                         int hoff = 0;
                         for (size_t i = 0; i < payloadLen && hoff < 4000; i++) {
@@ -1319,10 +1370,20 @@ void InstallWebSocketBridge() {
                           LogSharedFrameDropped(rmsg->str.size());
                           break;
                         }
+                        std::optional<std::string> reordered;
+                        if (rmsg->binary && rsym == kLoginFailureSymbol) {
+                          reordered = MoveCodeLineFirst(rmsg->str);
+                          if (reordered.has_value()) {
+                            Log(EchoVR::LogLevel::Info,
+                                "[NEVR.WS] login failure text reordered: code line moved first bytes=%zu",
+                                reordered->size());
+                          }
+                        }
+                        const std::string& outFrame = reordered.has_value() ? *reordered : rmsg->str;
                         if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
+                          target->sendBinary(outFrame);
                         } else {
-                          target->sendText(rmsg->str);
+                          target->sendText(outFrame);
                         }
                       }
                       break;
@@ -1364,8 +1425,8 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
-                static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
+                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
                 LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
@@ -1379,7 +1440,7 @@ void InstallWebSocketBridge() {
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
               const uint8_t marker_bytes[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
-              const uint8_t* p = (const uint8_t*)msg->str.data();
+              const uint8_t* p = reinterpret_cast<const uint8_t*>(msg->str.data());
               size_t remaining = msg->str.size();
               int msgIdx = 0;
               while (remaining >= 24) {
@@ -1397,13 +1458,13 @@ void InstallWebSocketBridge() {
                 const char* symName = EchoVR::LookupSymbolName(sym);
                 if (symName) {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
-                           (unsigned long long)sym, symName);
+                           static_cast<unsigned long long>(sym), symName);
                 } else {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx",
-                           (unsigned long long)sym);
+                           static_cast<unsigned long long>(sym));
                 }
                 Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s",
-                    msgIdx, symBuf, (unsigned long long)len,
+                    msgIdx, symBuf, static_cast<unsigned long long>(len),
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
                 if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
@@ -1424,8 +1485,8 @@ void InstallWebSocketBridge() {
                   memcpy(&targetUserId, p + 24 + 32, 8);
                   Log(EchoVR::LogLevel::Debug,
                       "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
-                      (unsigned long long)routingId, (unsigned long long)targetUserId,
-                      (unsigned long long)sessionGuid);
+                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+                      static_cast<unsigned long long>(sessionGuid));
                 }
                 // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
                 // (was briefly logged at Info for a 2026-09-13 investigation into whether
@@ -1438,19 +1499,19 @@ void InstallWebSocketBridge() {
                   memcpy(&targetUserId, p + 24 + 32, 8);
                   Log(EchoVR::LogLevel::Debug,
                       "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
-                      (unsigned long long)routingId, (unsigned long long)targetUserId,
-                      (unsigned long long)sessionGuid);
+                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+                      static_cast<unsigned long long>(sessionGuid));
                 }
                 // FriendListSubscribe (0xdcfa94680e8d19fc)
                 if (sym == 0xdcfa94680e8d19fc) {
                   Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
                 }
-                size_t total = 24 + (size_t)len;
+                size_t total = 24 + static_cast<size_t>(len);
                 if (total > remaining) {
                   Log(EchoVR::LogLevel::Warning,
                       "[NEVR.WS]   truncated: need %llu but only %zu remaining — per-message "
                       "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
-                      (unsigned long long)total, remaining);
+                      static_cast<unsigned long long>(total), remaining);
                   break;
                 }
                 p += total;
@@ -1500,7 +1561,7 @@ void InstallWebSocketBridge() {
               if (dropped == 1 || dropped % 100 == 0) {
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
-                    (unsigned long long)dropped);
+                    static_cast<unsigned long long>(dropped));
               }
             }
             break;
@@ -1708,6 +1769,14 @@ bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* sta
   if (!diagnostic.has_value()) return false;
   *statusCode = diagnostic->statusCode;
   *messageBytes = diagnostic->messageBytes;
+  return true;
+}
+
+bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out) {
+  if (out == nullptr) return false;
+  const std::optional<std::string> reordered = MoveCodeLineFirst(frame);
+  if (!reordered.has_value()) return false;
+  *out = *reordered;
   return true;
 }
 

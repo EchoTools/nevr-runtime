@@ -42,11 +42,11 @@ WebSocketClient::~WebSocketClient() {
 
 BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
   if (!uri || strlen(uri) == 0) {
-    Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Invalid URI provided for connection");
+    Log(EchoVR::LogLevel::Error, "[NEVR.SERVERDB] Invalid URI provided for connection");
     return FALSE;
   }
 
-  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[WEBSOCKET] Connecting to ServerDB at ", uri);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // Set the URL
@@ -54,10 +54,8 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
 
   // Attach Bearer token on WebSocket upgrade request
   if (!bearerToken.empty()) {
-    ix::WebSocketHttpHeaders headers;
-    headers["Authorization"] = "Bearer " + bearerToken;
-    webSocket_->setExtraHeaders(headers);
-    Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Using Bearer auth token");
+    ApplyBearerToken(bearerToken);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Using Bearer auth token");
   }
 
   // Start the connection (non-blocking)
@@ -68,7 +66,7 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
 
 VOID WebSocketClient::Disconnect() {
   if (webSocket_) {
-    Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnecting from ServerDB");
+    Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Disconnecting from ServerDB");
     webSocket_->stop();
     connected_.store(false);
   }
@@ -80,7 +78,7 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
 
 WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
   if (size > 1024 * 1024) {
-    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Rejecting oversized send (msgId: 0x%llX, size: %llu)", msgId, size);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Rejecting oversized send (msgId: 0x%llX, size: %llu)", msgId, size);
     return WebSocketSendStatus::Rejected;
   }
   const UINT64 MAGIC = 0xBB8CE7A278BB40F6;
@@ -101,13 +99,13 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
     if (pendingMessages_.size() >= 256) {
       LeaveCriticalSection(&receivedMessagesMutex_);
       Log(EchoVR::LogLevel::Warning,
-          "[WEBSOCKET] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
+          "[NEVR.SERVERDB] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
       return WebSocketSendStatus::Rejected;
     }
     pendingMessages_.push_back(message);
     LeaveCriticalSection(&receivedMessagesMutex_);
     Log(EchoVR::LogLevel::Debug,
-        "[WEBSOCKET] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
+        "[NEVR.SERVERDB] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
         msgId, size, size);
     return WebSocketSendStatus::Queued;
   }
@@ -115,7 +113,7 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
 #ifdef NEVR_TEST_HOOKS
   if (testTransportHandler_) {
     if (!testTransportHandler_(message)) {
-      Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send message (msgId: 0x%llX)", msgId);
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Failed to send message (msgId: 0x%llX)", msgId);
       return WebSocketSendStatus::Rejected;
     }
     return WebSocketSendStatus::Sent;
@@ -125,11 +123,11 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
   auto result = webSocket_->send(message, true);
 
   if (!result.success) {
-    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send message (msgId: 0x%llX)", msgId);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Failed to send message (msgId: 0x%llX)", msgId);
     return WebSocketSendStatus::Rejected;
   }
 
-  Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sent message (msgId: 0x%llX, size: %llu bytes, total: %zu bytes)", msgId,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Sent message (msgId: 0x%llX, size: %llu bytes, total: %zu bytes)", msgId,
       size, messageBuffer.size());
 
   return WebSocketSendStatus::Sent;
@@ -147,6 +145,71 @@ VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallb
 
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
+VOID WebSocketClient::SetBearerTokenRefresher(BearerTokenRefresher refresher) {
+  std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+  bearerTokenRefresher_ = std::move(refresher);
+}
+
+VOID WebSocketClient::ApplyBearerToken(const std::string& token) {
+  std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+  bearerToken_ = token;
+  ix::WebSocketHttpHeaders headers;
+  headers["Authorization"] = "Bearer " + token;
+  webSocket_->setExtraHeaders(headers);
+}
+
+// Issue #39. ixwebsocket 11.4.6 reconnects by calling WebSocket::connect() again,
+// which copies the stored _extraHeaders (IXWebSocket.cpp:210) — the header set at
+// Connect. Nakama rejects an expired JWT at the upgrade with 401 (parseToken uses
+// jwt.WithExpirationRequired), so without this every reconnect after the token's
+// TTL fails the same way, forever.
+//
+// Only 401 triggers it. A network failure or a 5xx is not a token problem, and
+// minting on those would call the auth endpoint on every network blip.
+//
+// Thread: an Error message is emitted only by WebSocket::checkConnection
+// (IXWebSocket.cpp:362), on ixwebsocket's own thread — the thread whose next
+// connect() reads _extraHeaders without the config mutex. Writing the header
+// here orders the write before that read. A Close message can also arrive on the
+// game thread (a failed send closes the socket), so this must not move there.
+VOID WebSocketClient::RefreshBearerTokenAfterRejection() {
+  BearerTokenRefresher refresher;
+  bool usingBearer = false;
+  {
+    std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+    refresher = bearerTokenRefresher_;
+    usingBearer = !bearerToken_.empty();
+  }
+  // No bearer header was sent, so the 401 is about other credentials (the
+  // legacy url-param route); the Error line above already records it.
+  if (!usingBearer) return;
+
+  if (!refresher) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.SERVERDB] ServerDB rejected the bearer token (HTTP 401) and no token refresher is set "
+        "— every reconnect presents the same token");
+    return;
+  }
+  if (!webSocket_->isAutomaticReconnectionEnabled()) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SERVERDB] ServerDB rejected the bearer token (HTTP 401) after reconnection was disabled "
+        "— not re-acquiring");
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.SERVERDB] ServerDB rejected the bearer token (HTTP 401) — re-acquiring before the next reconnect attempt");
+  const std::string fresh = refresher();
+  if (fresh.empty()) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.SERVERDB] Bearer token re-acquisition failed — the next reconnect attempt presents the rejected token");
+    return;
+  }
+  ApplyBearerToken(fresh);
+  const uint32_t count = ++bearerTokenRefreshCount_;
+  Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Bearer token replaced after HTTP 401 refresh_count=%u", count);
+}
+
 BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
@@ -154,7 +217,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
     case ix::WebSocketMessageType::Open:
       if (s_wsHasConnectedOnce) ++s_wsReconnectCount;
       s_wsHasConnectedOnce = true;
-      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB reconnect_count=%u", s_wsReconnectCount);
+      Log(EchoVR::LogLevel::Info, "[NEVR.SERVERDB] Connected to ServerDB reconnect_count=%u", s_wsReconnectCount);
       connected_.store(true);
       FlushPendingMessages();
       if (connectionCallback_) {
@@ -165,7 +228,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
     case ix::WebSocketMessageType::Close:
       {
         const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
-            "[WEBSOCKET] Disconnected from ServerDB ", msg->closeInfo.code, s_wsReconnectCount);
+            "[NEVR.SERVERDB] Disconnected from ServerDB ", msg->closeInfo.code, s_wsReconnectCount);
         Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
       }
       connected_.store(false);
@@ -174,11 +237,12 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
     case ix::WebSocketMessageType::Error:
       {
         const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
-            "[WEBSOCKET] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
+            "[NEVR.SERVERDB] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
             s_wsReconnectCount);
         Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
       }
       connected_.store(false);
+      if (msg->errorInfo.http_status == 401) RefreshBearerTokenAfterRejection();
       break;
 
     case ix::WebSocketMessageType::Message:
@@ -205,26 +269,26 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           case GameServer::WebSocketFrameStatus::Complete:
             break;
           case GameServer::WebSocketFrameStatus::TooShort:
-            Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received malformed binary message (too short: %zu bytes)",
+            Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Received malformed binary message (too short: %zu bytes)",
                 payload.size());
             break;
           case GameServer::WebSocketFrameStatus::InvalidMagic:
-            Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received binary frame with invalid magic at offset %zu",
+            Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Received binary frame with invalid magic at offset %zu",
                 parsed.errorOffset);
             break;
           case GameServer::WebSocketFrameStatus::TruncatedHeader:
-            Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Truncated message header at offset %zu (%zu bytes remain)",
+            Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Truncated message header at offset %zu (%zu bytes remain)",
                 parsed.errorOffset, parsed.remainingLength);
             break;
           case GameServer::WebSocketFrameStatus::TruncatedPayload:
             Log(EchoVR::LogLevel::Warning,
-                "[WEBSOCKET] Message length exceeds frame (msgId: 0x%llX, length: %llu, remaining: %zu)",
+                "[NEVR.SERVERDB] Message length exceeds frame (msgId: 0x%llX, length: %llu, remaining: %zu)",
                 parsed.errorMessageId, static_cast<unsigned long long>(parsed.declaredLength),
                 parsed.remainingLength);
             break;
           case GameServer::WebSocketFrameStatus::OversizedMessage:
             Log(EchoVR::LogLevel::Warning,
-                "[WEBSOCKET] Dropped oversized message (msgId: 0x%llX, size: %llu bytes)",
+                "[NEVR.SERVERDB] Dropped oversized message (msgId: 0x%llX, size: %llu bytes)",
                 parsed.errorMessageId, static_cast<unsigned long long>(parsed.declaredLength));
             break;
           case GameServer::WebSocketFrameStatus::QueueLimit:
@@ -232,14 +296,14 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
             break;
         }
         if (queueFull) {
-          Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Receive queue full (1024) — remaining frame messages dropped");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Receive queue full (1024) — remaining frame messages dropped");
         }
         if (parsed.messages.size() > 1) {
-          Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Parsed %zu messages from single frame (%zu bytes)",
+          Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Parsed %zu messages from single frame (%zu bytes)",
               parsed.messages.size(), payload.size());
         }
       } else {
-        Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received unexpected text message (%zu bytes)",
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Received unexpected text message (%zu bytes)",
             msg->str.size());
       }
       break;
@@ -265,15 +329,15 @@ VOID WebSocketClient::FlushPendingMessages() {
     return;
   }
 
-  Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Flushing %zu pending messages", toSend.size());
+  Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Flushing %zu pending messages", toSend.size());
 
   for (const auto& message : toSend) {
-    Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sending pending message: size=%zu bytes", message.size());
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Sending pending message: size=%zu bytes", message.size());
     auto result = webSocket_->send(message, true);
     if (!result.success) {
-      Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send pending message");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVERDB] Failed to send pending message");
     } else {
-      Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Successfully sent pending message");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.SERVERDB] Successfully sent pending message");
     }
   }
 }
@@ -285,9 +349,11 @@ VOID WebSocketClient::ProcessReceivedMessages() {
   messagesToProcess.swap(receivedMessages_);
   LeaveCriticalSection(&receivedMessagesMutex_);
 
-  for (const auto& msg : messagesToProcess) {
+  // Non-const iteration: messagesToProcess is this function's own copy and is
+  // discarded after dispatch, so handing the handler a writable payload is honest.
+  for (auto& msg : messagesToProcess) {
     if (messageCallback_) {
-      const VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
+      VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
       messageCallback_(msg.msgId, data, msg.payload.size());
     }
   }
@@ -309,5 +375,11 @@ std::vector<std::string> WebSocketClient::TestCopyPendingMessages() {
 
 void WebSocketClient::TestSetTransportHandler(std::function<bool(const std::string&)> handler) {
   testTransportHandler_ = std::move(handler);
+}
+
+void WebSocketClient::TestEnqueueReceivedMessage(GameServer::ReceivedWebSocketMessage message) {
+  EnterCriticalSection(&receivedMessagesMutex_);
+  receivedMessages_.push_back(std::move(message));
+  LeaveCriticalSection(&receivedMessagesMutex_);
 }
 #endif

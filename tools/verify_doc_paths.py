@@ -10,9 +10,13 @@ wrong in a way anything notices.
 Scope: CURRENT-STATE documents only. A record is immutable — audit records and
 `docs/audits/` describe the tree as it was when written, and a path that has since
 moved is correct history, not a defect. Amending them would violate the ledger's
-own append-only rule. (`extras/` moved to nevr-runtime-plugins on 2026-07-27.)
+own append-only rule.
 
 Checked: README.md, AGENTS.md, CLAUDE.md, docs/ (except audits), tests/**/README.md.
+
+Also checked: every `docs/...md` path named in a tracked C/C++ source file (comments cite
+documents without backticks, so the markdown rules above never saw them; #128). A reference
+preceded on its line by `echovr-reconstruction` names a file in that repository and is skipped.
 
 Backticked paths in those files that look like repo paths. A path is
 "claimed" if it starts with a known top-level directory. Trailing slashes and
@@ -30,7 +34,7 @@ ROOTS = ("src/", "plugins/", "tools/", "docs/", "extern/", "gen/", "tests/", "cm
 
 # Paths that are deliberately referenced but shall not exist on disk.
 ALLOWED_ABSENT = {
-    # N34/N103: deleted 2026-07-28. Still cited by point-in-time records that
+    # N34/N103: no longer in the tree. Still cited by point-in-time records that
     # correctly describe the tree as it was.
     "src/gameserver",
     "src/gameserver/gameserver.cpp",
@@ -45,19 +49,12 @@ ALLOWED_ABSENT = {
     # re-added; the real harness lives outside the repo and is not wired in.
     "extern/evr-test-harness",
     # Pre-rename layer/directory names. The engineer primer cites these to record
-    # WHAT MOVED WHERE (N108 split `src/common/`; N109 renamed `src/gamepatches/`;
-    # N105 deleted `src/modules/ws-bridge/`). A rename note has to name the old
-    # path or it cannot do its job — that is the opposite of a stale claim.
+    # WHAT MOVED WHERE (`src/common/` is now core/abi; `src/gamepatches/` is now
+    # `src/runtime/`; `src/modules/ws-bridge/` is gone). A rename note has to name
+    # the old path or it cannot do its job — that is the opposite of a stale claim.
     "src/gamepatches",
     "src/common",
     "src/modules/ws-bridge",
-    # The local Nakama rig creates these machine-local files on first setup. The
-    # docs correctly tell a fresh clone where credentials/config will appear, but
-    # `setup.py` is the only producer and `.gitignore` deliberately excludes the
-    # state directory. Requiring it on disk makes doc verification depend on
-    # someone having started the optional local test service.
-    "tools/nakama-local/.state",
-    "tools/nakama-local/.state/nakama.yml",
 }
 
 
@@ -75,9 +72,9 @@ CITATION_RE = re.compile(r"git show ([0-9a-f]{40}):([A-Za-z0-9_./-]+)")
 # A backticked BARE filename — `foo.cpp`, not `src/runtime/foo.cpp`. The
 # directory-prefixed check below cannot see these, because it only inspects
 # tokens starting with a known ROOT. That blind spot let two renames rot in
-# place: `wave0_instrumentation.cpp` (renamed to binary_bug_fixes.cpp in the
-# 2026-07-29 reorganisation) and `builtin_server_timing.cpp` (deleted as dead
-# code, ledger N26). Both read as current source files and neither existed.
+# place: `wave0_instrumentation.cpp` (now binary_bug_fixes.cpp) and
+# `builtin_server_timing.cpp` (gone). Both read as current source files and
+# neither existed.
 #
 # A bare filename is resolved against every tracked BASENAME in the repo, so it
 # does not care which directory the file lives in — which is exactly right: a
@@ -126,11 +123,10 @@ def cited_paths() -> set:
 # the private hardening overlay, its local symlink path, and the purged leak
 # commit, none of which may be republished into this public repo.
 #
-# But "untracked" is exactly why the primer rotted. It sat outside every gate and
-# accumulated 14 references to `src/gamepatches/`, a directory deleted in N109,
-# plus a `src/common/` layer split apart in N108 — and a dispatched agent walked
-# into all of them before anything noticed. A file does not have to be committed
-# to be checked; it only has to be on disk.
+# But "untracked" is exactly how a primer rots: outside every gate it accumulates
+# references to directories that no longer exist (e.g. `src/gamepatches/`, N109;
+# the `src/common/` layer split, N108), and a dispatched agent walks into them. A
+# file does not have to be committed to be checked; it only has to be on disk.
 #
 # So these are scanned when present and silently skipped when absent, which keeps
 # a fresh clone green while still gating the owner's checkout where the file lives.
@@ -149,7 +145,7 @@ def all_doc_files():
                              capture_output=True, text=True).stdout.split()
     seen = set()
     for f in list(tracked) + list(local_docs()):
-        if f == "BUGS.md" or f.startswith("docs/audits/"):
+        if f.startswith("docs/audits/"):
             continue                          # immutable records or pending removal
         if f not in seen:
             seen.add(f)
@@ -173,7 +169,7 @@ def line_citations():
 def claimed_paths():
     for f in all_doc_files():
         text = (REPO / f).read_text(errors="replace")
-        # The class MUST include ':'. It did not until 2026-07-30, so a backticked
+        # The class MUST include ':'. Without it a backticked
         # token carrying a line number — `src/runtime/foo.cpp:35`, the single most
         # common way this repo cites code — never matched, and the `re.sub` strip
         # below was dead code that could not fire. Every path:line claim in every
@@ -190,6 +186,41 @@ def claimed_paths():
             if "*" in p or p.endswith("."):
                 continue
             yield f, raw, p
+
+
+# A document path in a source comment: no backticks, so claimed_paths() never saw these. The
+# stale citation behind #110 (a comment pointing at a deleted doc) was invisible for that reason.
+SOURCE_DOC_RE = re.compile(r"docs/[A-Za-z0-9_./-]*[A-Za-z0-9_]\.md")
+EXTERNAL_REPO_MARKER = "echovr-reconstruction"
+SOURCE_GLOBS = ("*.cpp", "*.h", "*.hpp")
+
+
+def source_doc_refs(text: str):
+    """(line number, path) for each repo-local docs/*.md reference in `text`.
+
+    A reference with `echovr-reconstruction` earlier on the same line points into that repository,
+    where "exists in this tree" is not the question, so it is not returned."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        for m in SOURCE_DOC_RE.finditer(line):
+            if EXTERNAL_REPO_MARKER in line[:m.start()]:
+                continue
+            yield number, m.group(0)
+
+
+def bad_source_refs(files, read=lambda f: (REPO / f).read_text(errors="replace"),
+                    exists=lambda p: (REPO / p).exists()):
+    """(file, line, path) for every source reference whose document is not in the tree."""
+    bad = []
+    for f in files:
+        for number, path in source_doc_refs(read(f)):
+            if not exists(path):
+                bad.append((f, number, path))
+    return bad
+
+
+def tracked_source_files():
+    out = subprocess.run(["git", "ls-files", *SOURCE_GLOBS], cwd=REPO, capture_output=True, text=True)
+    return out.stdout.split()
 
 
 def main() -> int:
@@ -245,16 +276,17 @@ def main() -> int:
             bad.append((f, raw))
     for f, raw in bad:
         print(f"doc-paths: FAIL {f} claims `{raw}` — no such path", file=sys.stderr)
-    # Each explanation prints for its OWN failure class. This used to be one
-    # `if bad or dead_citations or bare_bad:` that returned 1 from inside, which
-    # made the bare-filename explanation below unreachable whenever bare_bad was
-    # the only failure — the check still failed the build, but with no reason
-    # attached, which is the least useful way to fail.
+    bad_source = bad_source_refs(tracked_source_files())
+    for f, number, path in bad_source:
+        print(f"doc-paths: FAIL {f}:{number} cites `{path}` — no such document. Point the comment at "
+              f"the document that exists, or drop the citation.", file=sys.stderr)
+    # Each explanation prints for its OWN failure class, so the bare-filename
+    # explanation below is reachable when bare_bad is the only failure — a check
+    # that fails the build with no reason attached is the least useful way to fail.
     if bad:
         print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
               f"names a path that is not there sends the next reader somewhere real "
-              f"and wrong. If the file was deliberately removed, cite it instead: "
-              f"`git show <40-hex-sha>:<path>`.", file=sys.stderr)
+              f"and wrong. If the file was deliberately removed, remove the citation.", file=sys.stderr)
     if dead_citations:
         print(f"\ndoc-paths: {len(dead_citations)} historical citation(s) do not "
               f"resolve. Get the sha with `git log -1 --format=%H -- <path>` and "
@@ -270,7 +302,7 @@ def main() -> int:
               f"path that still resolves while its line number does not is the quietest "
               f"kind of rot: it reads as correct until someone follows it. Re-derive the "
               f"line with grep rather than adjusting it by hand.", file=sys.stderr)
-    if bad or dead_citations or bare_bad or stale_lines:
+    if bad or dead_citations or bare_bad or stale_lines or bad_source:
         return 1
     n = len(cited_paths())
     local = sum(1 for _ in local_docs())

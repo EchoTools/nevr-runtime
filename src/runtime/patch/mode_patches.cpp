@@ -7,7 +7,6 @@
 #include <setjmp.h>
 
 #include "runtime/lifecycle/cli.h"
-#include "runtime/patch/broadcaster_hook_stats.h"
 #include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -119,7 +118,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // echovr.exe), so the game's parser never acted on it and NOTHING applied
   // that mask. g_isHeadless gated OUR patches only. This block wrote just
   // ENGINE_FLAGS_NOAUDIO_MASK, so bit 0 — the render/window master bit — stayed
-  // SET on every `-server`-only run. Measured before this fix, `-server` alone:
+  // SET on every `-server`-only run. Without this write, `-server` alone gives:
   //   engine flags 0x00000137 -> 0x00000135 (bit0_render=SET(WINDOWED))
   // with one game window present for the entire run.
   //
@@ -145,7 +144,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
         "The engine-flags offset or mask no longer matches this build of echovr.exe.");
   }
 
-  // WriteLog hook removed — log_filter plugin now owns CLog::PrintfImpl.
+  // No WriteLog hook here — the log_filter plugin owns CLog::PrintfImpl.
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
@@ -393,24 +392,14 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 //     (0x14019c280) discards EAX after each of its five calls. So a trip here is
 //     silent to the game and only visible in the Warning below (first 3 only).
 //
-// Whether it ever trips on a real server is THE open question for N83, and the
-// log line below is the only instrument that answers it. If you are debugging a
-// server that registers but receives nothing, grep the log for it first.
-static volatile LONG g_listenHookEntries = 0;
-static volatile LONG g_dispatchHookEntries = 0;
-
-// N83/N84 exit condition: "if the guard does not trip across representative runs,
-// remove the detour." That inference is only valid if the hook RAN. A guard that
-// never trips because its function is never called is not evidence of anything.
-// These counters make the two states distinguishable.
-void LogBroadcasterHookStats() {
-  char line[192] = {};
-  BroadcasterHookStats::Format(line, sizeof(line), g_listenHookEntries, g_dispatchHookEntries);
-  Log(EchoVR::LogLevel::Info, "%s", line);
-}
+// Whether it ever trips on a real server is THE open question for N83. The instrument that answers
+// it is HookLiveness (hook/hook_liveness.h): kBroadcasterListen and kBroadcasterReceiveLocal count
+// every entry into the two hooks below, and tick.cpp reports them periodically. "Guard never
+// tripped" is evidence only when those counts are non-zero; a guard that never trips because its
+// function is never called proves nothing. If you are debugging a server that registers but
+// receives nothing, grep the log for `hook_liveness name=CBroadcaster::Listen` first.
 
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  InterlockedIncrement(&g_listenHookEntries);
   HookLiveness::Mark(HookLiveness::kBroadcasterListen);
   if (g_isServer) {
     // Check if the structure pointer chain is valid before calling original
@@ -461,7 +450,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // CBroadcaster::ReceiveLocalEvent (the listener dispatcher, not entity property
 // dispatch), that skip suppressed all message delivery on a server, including our
 // own 15 ServerLib injections which reach this VA via
-// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87).
+// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp).
 //
 // The AV is guarded precisely instead. Disassembly gives the exact fault chain:
 //   0x140f87b81  MOV R8, qword ptr [RDI]          ; inner = *arg1
@@ -473,7 +462,6 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
 // The original protection is preserved; the collateral severance is not.
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  InterlockedIncrement(&g_dispatchHookEntries);
   HookLiveness::Mark(HookLiveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     // Exact AV condition from the disassembly above — nothing broader.
@@ -519,9 +507,9 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   // lifecycle, not rendering. The stated justification was falsified by its own
   // callers; nobody re-checked because the constant was named ENGINE_ENTITY_*.
   //
-  // Worse, src/abi/echovr_functions.cpp:87 points
-  // EchoVR::BroadcasterReceiveLocalEvent at this same RVA, so all 15 injection
-  // sites in gameserver/gameserver.cpp re-enter THIS hook and hit THIS return.
+  // Worse, src/abi/echovr_functions.cpp points
+  // EchoVR::BroadcasterReceiveLocalEvent at this same RVA, so every injection
+  // site in gameserver/gameserver.cpp re-enters THIS hook and hit THIS return.
   // That is the entire ServerDB→game path: LobbyRegistrationSuccess/Failure,
   // LobbyStartSessionV4, LobbyAcceptPlayersSuccess/FailureV2,
   // LobbySessionSuccessV5, LobbySmiteEntrant.
@@ -767,8 +755,8 @@ VOID PatchBlockOculusSDK() {
   // second detour on the same two addresses loses. MinHook allows one detour per
   // target. So the Oculus filter here never installs — but it is moot on a
   // headless server anyway (the OVR SDK is never loaded), and DllLoadHook's own
-  // hook does not do Oculus blocking. PatchDetour now reports the failure with its
-  // reason (N126/N128); this log used to claim "Installed" unconditionally.
+  // hook does not do Oculus blocking. PatchDetour reports the failure with its
+  // reason (N126/N128), so this log must not claim "Installed" unconditionally.
   // Proper fix (flagged, not done): fold the ovrplatform filter into DllLoadHook's
   // HookedLoadLibraryW so one hook serves both, or drop these as redundant.
   //
@@ -846,14 +834,11 @@ VOID PatchSpectatorStreamAlways() {
 // Server Frame Pacing Optimization
 // ===================================================================================================
 
-// PatchServerFramePacing was removed 2026-07-29 (N113). It wrote 0xC3 to
-// CPrecisionSleep::BusyWait via ApplyPatch with NO prologue validation and no
-// original-byte save — both of which the canonical site in
-// patch/binary_bug_fixes.cpp does (ResolveVA_Checked, then memcpy the original
-// into s_busywait_original_byte for the N33 shutdown restore). It was marked
-// DEPRECATED by N25 with the exit condition "remove once all paths route
-// through BinaryBugFixes::Init"; that condition was already met, since Init
-// patches unconditionally while this copy was server-gated.
+// Server frame pacing is patched only by patch/binary_bug_fixes.cpp, which validates
+// the address (ResolveVA_Checked) and saves the original byte
+// (s_busywait_original_byte) for the N33 shutdown restore. A second writer of 0xC3 to
+// CPrecisionSleep::BusyWait here, without validation or a saved byte, would race
+// that restore.
 
 // ============================================================================
 // PatchLogServerProfile — log memory and module snapshot

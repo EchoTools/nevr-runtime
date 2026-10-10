@@ -61,17 +61,21 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         start = text.index("const nevr_cfg::FlatDefaults& BuiltinDefaults()")
         end = text.index("// One lookup for every flat key", start)
         body = text[start:end]
-        for value_name in ("kSocketUri", "kHttpUri", "kHttpKey", "kServerKey"):
+        for value_name in ("kSocketUri", "kHttpUri", "kPublicApiKey", "kPublicSocketKey"):
             self.assertEqual(body.count(f"nevr_builtin::{value_name}"), 1, value_name)
         # The only Log arguments are the joined key-name lists.
         for call in re.findall(r"Log\(.*?\);", body, re.S):
             self.assertNotIn("nevr_builtin::", call)
-            self.assertNotIn("e.value", call)
             self.assertNotIn("it->second", call)
 
     def test_defaults_are_client_only(self):
         text = source("src/runtime/lifecycle/service_config.cpp")
-        self.assertRegex(text, r"if \(g_isServer\) \{\s*Log\(EchoVR::LogLevel::Info,\s*\"\[NEVR\.CONFIG\] built-in defaults are not applied in server mode")
+        # IsServerMode() is the one server-mode test; outside test builds it is g_isServer.
+        self.assertRegex(text, r"bool IsServerMode\(\) \{(?:\s*#[^\n]*\n[^\n]*\n[^\n]*)?\s*return g_isServer != FALSE;")
+        # The gate itself is the pure SelectBuiltinDefaults (tested in test_service_map.cpp); production
+        # passes the one server-mode test into it.
+        self.assertRegex(text, r"SelectBuiltinDefaults\(\s*IsServerMode\(\),")
+        self.assertRegex(text, r"if \(IsServerMode\(\)\) \{\s*Log\(EchoVR::LogLevel::Info,\s*\"\[NEVR\.CONFIG\] built-in defaults are not applied in server mode")
 
 
 if __name__ == "__main__":

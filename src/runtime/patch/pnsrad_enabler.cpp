@@ -29,7 +29,9 @@
 
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/provider_identity.h"
+#include "runtime/hook/process_memory.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
+#include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 
@@ -99,7 +101,7 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 //   RVA 0x1c84d8 (.rdata section, VMA 0x1801c6000, file offset 0x1c5200 per
 //   `objdump -h`; string file offset = 0x1c76d8, verified byte-for-byte via
 //   `dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd`) —
-//   a 49-byte slot (the 48-char string + NUL, then unrelated data
+//   a 48-byte slot (the 47-char string + NUL, then unrelated data
 //   immediately follows with no padding) holding
 //   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
 // Replacing with "ws://127.0.0.1:PPPPP\0" (21 bytes, port always 5 digits —
@@ -108,25 +110,12 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // pattern xpid_patch.cpp already uses for a shorter replacement in a fixed
 // slot.
 //
-// 2026-09-13 (Andrew): the replacement was originally the literal port
-// 42148. Static ports collide with a still-releasing socket from a
-// just-killed prior process (TIME_WAIT), so ws_bridge.cpp now binds an
-// ephemeral port with retry instead of a fixed one — this patch reads
-// GetMatchmakerBridgePort() at call time and builds the replacement string
-// to match, rather than a compile-time constant.
-//
-// CONFIRMED LIVE 2026-09-13 (against the original hardcoded-42148 version):
-// patch applied ("[pnsradmatchmaking] patched matchmaker host default at
-// +0x1c84d8"), matchmaker connected through our own listener, "[NSLOBBY]
-// received lobby session success", joined a real server
-// (108.218.163.196:6792), loaded into a live social lobby. Not yet
-// re-confirmed live against the ephemeral-port version below — the string
-// length and patch mechanics are identical either way, but flagging that
-// the "CONFIRMED LIVE" evidence predates this specific change.
-static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = 0x1c84d8;
-static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = 49;
-static constexpr char      PNSRADMATCHMAKING_HOST_EXPECTED[] =
-    "wss://matchmaker.readyatdawn.com/rad/rad15_live";
+// The replacement is built from GetMatchmakerBridgePort() at call time: ws_bridge.cpp binds an
+// ephemeral port with retry (a fixed port collides with a still-releasing socket from a just-killed
+// process), so no compile-time constant exists.
+static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = MatchmakerHostPatch::kHostRva;
+static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = MatchmakerHostPatch::kHostSlotSize;
+static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = MatchmakerHostPatch::kHostExpected;
 
 // 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
@@ -164,17 +153,6 @@ static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
 /* --------------------------------------------------------------------
  * Memory patching
  * -------------------------------------------------------------------- */
-
-static bool PatchMemory(void* addr, const void* data, size_t len, DWORD* outError = nullptr) {
-    DWORD oldProtect;
-    if (!VirtualProtect(addr, len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        if (outError) *outError = GetLastError();
-        return false;
-    }
-    std::memcpy(addr, data, len);
-    VirtualProtect(addr, len, oldProtect, &oldProtect);
-    return true;
-}
 
 /// Lowercase hex dump — same shape as asset_cdn.cpp's BytesToHex, kept local
 /// since this is the only file in this pair that needs it for variable-length
@@ -233,55 +211,43 @@ static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* a
  * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
  * the full measurement (RVA, file offset, slot size, exact original bytes). */
 static void PatchMatchmakingHost(uintptr_t base) {
-    // The matchmaker listener binds before login (InstallWebSocketBridge, at
-    // early boot) while pnsradmatchmaking.dll loads lazily at the lobby stage
-    // (well after login — see the load-timing note above), so by the time
-    // this runs the port is already chosen. CONFESSION: that ordering isn't
-    // enforced by anything here, just observed live — if the listener bind
-    // ever moved to run later than this DLL's load, this would silently
-    // patch in port 0 with no error. Worth an assert/guard if that ordering
-    // ever becomes less obviously true.
-    uint16_t port = GetMatchmakerBridgePort();
-    if (port == 0) {
+    // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
+    // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
+    // ordering is observed, not enforced; a zero port is reported below instead of patched in.
+    const uint16_t port = GetMatchmakerBridgePort();
+    auto* image = reinterpret_cast<uint8_t*>(base);
+    DWORD err = 0;
+    const MatchmakerHostPatch::Result result = MatchmakerHostPatch::Apply(
+        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+    switch (result) {
+    case MatchmakerHostPatch::Result::Patched:
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
+            "\"%s\" -> \"ws://127.0.0.1:%u\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
+            PNSRADMATCHMAKING_HOST_EXPECTED, static_cast<unsigned>(port));
+        break;
+    case MatchmakerHostPatch::Result::NoPort:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking matchmaker listener never bound a port — NOT "
             "patching (matchmaking will fail regardless)");
-        return;
-    }
-
-    char replacement[32];
-    int replacementLen = std::snprintf(replacement, sizeof(replacement),
-                                        "ws://127.0.0.1:%u", (unsigned)port);
-    if (replacementLen <= 0 || static_cast<size_t>(replacementLen) + 1 > PNSRADMATCHMAKING_HOST_SLOT_SIZE) {
+        break;
+    case MatchmakerHostPatch::Result::DoesNotFit:
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] pnsradmatchmaking formatted replacement (%d bytes) doesn't fit the "
-            "%zu-byte slot — NOT patched", replacementLen, PNSRADMATCHMAKING_HOST_SLOT_SIZE);
-        return;
-    }
-
-    auto* site = reinterpret_cast<uint8_t*>(base + PNSRADMATCHMAKING_HOST_RVA);
-    if (std::memcmp(site, PNSRADMATCHMAKING_HOST_EXPECTED,
-                     sizeof(PNSRADMATCHMAKING_HOST_EXPECTED) - 1) != 0) {
+            "[NEVR.PATCH] pnsradmatchmaking replacement does not fit the %zu-byte slot at +0x%x — NOT patched",
+            PNSRADMATCHMAKING_HOST_SLOT_SIZE, static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA));
+        break;
+    case MatchmakerHostPatch::Result::BytesMismatch:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking host patch skipped rva=0x%x reason=bytes_mismatch "
-            "expected=\"%s\" actual=\"%.49s\"",
-            (unsigned)PNSRADMATCHMAKING_HOST_RVA, PNSRADMATCHMAKING_HOST_EXPECTED,
-            reinterpret_cast<const char*>(site));
-        return;
-    }
-    // Replacement is shorter than the original slot (21 of 49 bytes); the
-    // trailing original bytes become inert garbage after our new NUL, same
-    // as xpid_patch.cpp's shorter-replacement-in-a-fixed-slot pattern.
-    DWORD err = 0;
-    if (PatchMemory(site, replacement, static_cast<size_t>(replacementLen) + 1, &err)) {
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
-            "\"%s\" -> \"%s\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
-            PNSRADMATCHMAKING_HOST_EXPECTED, replacement);
-    } else {
+            "expected=\"%s\" actual=\"%.48s\"",
+            static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA), PNSRADMATCHMAKING_HOST_EXPECTED,
+            reinterpret_cast<const char*>(image + PNSRADMATCHMAKING_HOST_RVA));
+        break;
+    case MatchmakerHostPatch::Result::WriteFailed:
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] pnsradmatchmaking PatchMemory FAILED rva=0x%x error=%lu — prologue matched "
+            "[NEVR.PATCH] pnsradmatchmaking PatchMemory FAILED rva=0x%x error=%lu — bytes matched "
             "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA, err);
+        break;
     }
 }
 
@@ -373,7 +339,7 @@ static int s_pnsradOk = 0;
 static int s_pnsradFail = 0;
 
 /* Apply one NOP patch, counting and reporting every outcome including the
- * previously-silent PatchMemory failure. */
+ * PatchMemory failure. */
 static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen,
                            size_t nopLen, const char* what, unsigned rva) {
     if (!nevr::ValidatePrologue(site, expected, expLen)) {
@@ -386,7 +352,7 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
     uint8_t nops[8];
     for (size_t i = 0; i < nopLen && i < sizeof(nops); i++) nops[i] = 0x90;
     DWORD err = 0;
-    if (PatchMemory(site, nops, nopLen, &err)) {
+    if (ProcessMemcpy(site, nops, nopLen, &err)) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad patched %s at +0x%x", what, rva);
         s_pnsradOk++;
     } else {
@@ -414,7 +380,7 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
     }
     const auto code = ReturnConstant(kOvrProviderSymbol);
     DWORD err = 0;
-    if (PatchMemory(site, code.data(), code.size(), &err)) {
+    if (ProcessMemcpy(site, code.data(), code.size(), &err)) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad UserProviderID now returns OVR at +0x%x",
             static_cast<unsigned>(kPnsradUserProviderIdRva));
         s_pnsradOk++;
@@ -435,15 +401,12 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
     // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
     // must not be gated on s_pnsradPatched.
     //
-    // 2026-09-13 (BUGS.md 81c7e6b): this DLL unloads/reloads mid-session — a
-    // reload gets a fresh DllBase with the original (unpatched) bytes, so a
-    // one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
-    // uses, since that DLL doesn't reload) left the reloaded copy unpatched
-    // and the matchmaker fell back to the dead readyatdawn.com default —
-    // blank terminal, no queue. No guard: patch unconditionally on every
-    // load. Idempotent by construction — PatchMatchmakingHost's own memcmp
-    // against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a Warning log)
-    // if this exact base was somehow already patched.
+    // This DLL unloads and reloads mid-session: a reload gets a fresh DllBase with the original
+    // (unpatched) bytes, so a one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
+    // uses, since that DLL does not reload) would leave the reloaded copy unpatched and the
+    // matchmaker on the dead readyatdawn.com default. No guard: patch on every load.
+    // PatchMatchmakingHost's own memcmp against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a
+    // Warning log) if this exact base was already patched.
     if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
                              "pnsradmatchmaking.dll")) {
         PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
@@ -509,7 +472,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSOVR);
         if (std::memcmp(p, "pnsovr", 6) == 0) {
             DWORD err = 0;
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsovr\" -> \"pnsrad\" rva=0x%x",
                     (unsigned)STR_PNSOVR);
                 patched++;
@@ -532,7 +495,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSDEMO);
         if (std::memcmp(p, "pnsdemo", 7) == 0) {
             DWORD err = 0;
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+            if (ProcessMemcpy(p, "pnsrad\0", STR_SIZE, &err)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsdemo\" -> \"pnsrad\" rva=0x%x",
                     (unsigned)STR_PNSDEMO);
                 patched++;
@@ -558,7 +521,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         } else if (nevr::ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
             uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
             DWORD err = 0;
-            if (PatchMemory(p, nops, sizeof(nops), &err)) {
+            if (ProcessMemcpy(p, nops, sizeof(nops), &err)) {
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] pnsrad patched OVR branch rva=0x%x (bypasses OVR platform branch)",
                     (unsigned)OVR_BRANCH);

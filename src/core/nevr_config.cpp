@@ -47,8 +47,21 @@ std::optional<std::string> GetEnv(const std::string& name) {
   return s;
 }
 
+// Collects the names of unset bare ${VAR} references while a load validates the
+// tree; null outside that pass, so the repeated read-time interpolation is silent.
+thread_local std::set<std::string>* t_unsetBareVars = nullptr;
+
+// Points t_unsetBareVars at a set for the guard's lifetime, including on a throw.
+class UnsetBareSink {
+ public:
+  explicit UnsetBareSink(std::set<std::string>* sink) { t_unsetBareVars = sink; }
+  ~UnsetBareSink() { t_unsetBareVars = nullptr; }
+  UnsetBareSink(const UnsetBareSink&) = delete;
+  UnsetBareSink& operator=(const UnsetBareSink&) = delete;
+};
+
 // Resolve one `${...}` body. Forms:
-//   ${VAR}        required — throws if unset
+//   ${VAR}        optional in effect — stays literal "${VAR}" if unset (warned at load)
 //   ${VAR:?msg}   required — throws with `msg` (or a default) if unset
 //   ${VAR:-def}   optional — `def` if unset
 std::string ResolveVar(const std::string& inner) {
@@ -71,16 +84,27 @@ std::string ResolveVar(const std::string& inner) {
                               ? ("config: required environment variable " + var + " is not set")
                               : ("config: " + rest));
   }
-  throw NevrConfigError("config: required environment variable " + var +
-                        " is not set (referenced as ${" + var + "})");
+  // Bare ${VAR}, unset: the text stays as written. Failing here would cost a client
+  // its whole config (every plugin) over one value; secrets use ${VAR:?msg}, which
+  // still throws. The name is reported once per load by LoadFromString.
+  if (t_unsetBareVars != nullptr) t_unsetBareVars->insert(var);
+  return "${" + inner + "}";
 }
 
-// Replace every ${...} in `in`. An unterminated ${ is left literal.
+// Replace every ${...} in `in`. An unterminated ${ is left literal. The three-char
+// sequence $${ becomes a literal ${ and nothing after it is looked up, so it is the
+// way to write ${ that isn't a variable (e.g. in a plugin's args, whose value would
+// otherwise be read as a variable reference). No other `$` is special: $$ not followed by
+// { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
+// variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
 std::string InterpolateString(const std::string& in) {
   std::string out;
   std::size_t i = 0;
   while (i < in.size()) {
-    if (in[i] == '$' && i + 1 < in.size() && in[i + 1] == '{') {
+    if (in[i] == '$' && i + 2 < in.size() && in[i + 1] == '$' && in[i + 2] == '{') {
+      out += "${";
+      i += 3;
+    } else if (in[i] == '$' && i + 1 < in.size() && in[i + 1] == '{') {
       const std::size_t close = in.find('}', i + 2);
       if (close == std::string::npos) {
         out += in.substr(i);
@@ -102,8 +126,8 @@ std::optional<std::string> InterpolateScalar(const YAML::Node& n) {
 }
 
 // Read-only walk that interpolates every scalar and DISCARDS the result — its
-// sole purpose is to make a required ${VAR:?}/${VAR} that is unset fail LOUD at
-// load time (InterpolateString throws). It never mutates the tree: reassigning a
+// sole purpose is to make a required ${VAR:?} that is unset fail LOUD at
+// load time (InterpolateString throws) and to collect unset bare ${VAR} names. It never mutates the tree: reassigning a
 // scalar in place during map iteration corrupts later sibling map entries in
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
@@ -150,15 +174,6 @@ YAML::Node ResolvePath(const YAML::Node& root, const std::string& path) {
     if (!cur.IsDefined() || dot == std::string::npos) return cur;
     start = dot + 1;
   }
-}
-
-std::optional<bool> ParseBool(const std::string& s) {
-  std::string t;
-  t.reserve(s.size());
-  for (char c : s) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (t == "true" || t == "yes" || t == "on" || t == "1") return true;
-  if (t == "false" || t == "no" || t == "off" || t == "0") return false;
-  return std::nullopt;
 }
 
 // --- top-level validation + plugins ----------------------------------------
@@ -242,6 +257,15 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
 
 }  // namespace
 
+std::optional<bool> ParseBool(const std::string& s) {
+  std::string t;
+  t.reserve(s.size());
+  for (char c : s) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (t == "true" || t == "yes" || t == "on" || t == "1") return true;
+  if (t == "false" || t == "no" || t == "off" || t == "0") return false;
+  return std::nullopt;
+}
+
 // --- NevrConfig -------------------------------------------------------------
 
 NevrConfig::NevrConfig() = default;
@@ -268,7 +292,18 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   if (!raw.IsMap()) throw NevrConfigError("config: the top level must be a mapping");
 
   ValidateTopLevel(raw);
-  ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  std::set<std::string> unsetBare;
+  {
+    UnsetBareSink sink(&unsetBare);
+    ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  }
+  cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
+  for (const std::string& name : unsetBare) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written, and a "
+        "service key that uses it counts as unset",
+        name.c_str(), name.c_str());
+  }
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_);
   cfg.empty_ = false;
@@ -302,9 +337,14 @@ NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_serve
   }
 }
 
-std::optional<std::string> NevrConfig::GetString(const std::string& path) const {
+std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* hadUnsetBare) const {
   if (!impl_) return std::nullopt;
-  return InterpolateScalar(ResolvePath(impl_->root, path));
+  if (hadUnsetBare == nullptr) return InterpolateScalar(ResolvePath(impl_->root, path));
+  std::set<std::string> unset;
+  UnsetBareSink sink(&unset);
+  std::optional<std::string> value = InterpolateScalar(ResolvePath(impl_->root, path));
+  *hadUnsetBare = !unset.empty();
+  return value;
 }
 
 std::optional<bool> NevrConfig::GetBool(const std::string& path) const {

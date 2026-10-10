@@ -39,6 +39,14 @@ uint64_t MicDetected();
 /// required here.
 uint64_t MicRead(void* buffer, uint64_t sampleCount);
 
+/// Threading (GH #51): MicCreate/MicStart/MicStop/MicDestroy may be called
+/// from any thread — the game issues them from a component-system job
+/// (CR15NetVoipBroadcasterCS::UpdateGlobal, echovr.exe 0x140d7cfc0) that
+/// lands on different threads across frames. Each call is marshalled onto a
+/// single capture owner thread (core/mic_owner_thread.h) and the caller blocks
+/// until it has run, so COM initialization and the WASAPI objects never leave
+/// that thread. MicAvailable/MicRead/MicDetected are not marshalled.
+
 /// Starts capture after successful MicCreate. A retained worker or pending
 /// stop recovery blocks restart and is logged; Closed is a no-op.
 void MicStart();
@@ -49,9 +57,10 @@ void MicStart();
 /// later Stop/Destroy retry.
 void MicStop();
 
-/// Stops capture and releases WASAPI resources after the worker has exited.
-/// A timeout, failed wait, or non-owner-thread call fails closed and retains
-/// resources so a later owner-thread Destroy can retry safely.
+/// Stops capture and releases WASAPI resources after the worker has exited,
+/// then stops the capture owner thread. A timeout or failed wait fails closed
+/// and retains resources (and the owner thread) so a later Destroy can retry
+/// the CoUninitialize on the thread that initialized COM.
 void MicDestroy();
 
 } // namespace MicProvider

@@ -6,6 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
+## Branch lifecycle (every agent-created branch)
+
+**Whoever creates a branch deletes it.** Nobody else cleans up after you.
+
+Every branch an agent creates has a documented deletion point from the moment it exists. A merged branch is scratch: the PR keeps the commits, so never keep one "for reference".
+
+- **One branch per PR.** Name it `<seat>/<issue>-<slug>`.
+- **Create:** `git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
+- **Declare the end:** `git worktree lock --reason "<seat>: delete when PR #<n> merges or closes" .claude/worktrees/<branch>`, and the PR body carries the line `Branch lifecycle: deleted when this PR merges or closes.`
+- **Push only by explicit ref:** `git push origin HEAD:refs/heads/<branch>`.
+- **On merge:** the seat that created the branch removes its worktree and deletes the local and origin branch in the same turn it sees the merge. nevr-merge's `tools/reap_merged.py` is a backstop, not the plan.
+- **On close without merge:** same, the creator, same turn.
+- **No PR within 24 hours:** open one or delete the branch.
+- **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
+- **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
+
 ## Build Commands
 
 ```sh
@@ -18,6 +34,8 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/, gen/, .env from the main checkout)
+just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
@@ -48,7 +66,7 @@ just test-auth-integration    # Auth integration (needs game binary + MCP harnes
 
 just scenario invite          # One social scenario end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md)
 just scenario-all             # Every social scenario in turn, one PASS/FAIL table (tools/scenario/run_all.py)
-just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; docs/reference/windows-vm-system-test.md)
+just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
 ```
 
 Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
@@ -71,7 +89,7 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -81,7 +99,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/hook/` | patching.h, addresses.h, process_memory.h, hook_guard, hook_liveness, dll_load_hook, symbol_corpus | *how* we attach to the binary at all |
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
-| `src/runtime/compat/` | ws_bridge, winhttp_stub | making the game's ageing network stack work against modern services |
+| `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -103,9 +121,9 @@ Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the g
 | `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
 | `example`            | `example.dll`            | Reference implementation for new plugin authors      |
 
-`broadcaster-bridge` moved to `nevr-runtime-plugins` on 2026-07-26 — this repo is
-public and it is a broadcaster injection tool. `anim-debugger` moved there on
-2026-07-27 for the same reason: it is RE instrumentation that hooks three engine
+`broadcaster-bridge` lives in `nevr-runtime-plugins`, not here — this repo is
+public and it is a broadcaster injection tool. `anim-debugger` lives there for the
+same reason: it is RE instrumentation that hooks three engine
 animation entry points and publishes a map of animation internals, and it does
 nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
 filter and the loader refuses to load it (N89). Other plugins (audio-intercom,
@@ -116,17 +134,17 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Runtime-loaded modules
 
-`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll` (2026-08-02). There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
+`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll`. There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
 | `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
 Split by **what the knowledge is**, not by who uses it. A single directory named
-"common" used to hold all three — the classic junk drawer.
+"common" holding all three is the classic junk drawer.
 
 - **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
   (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
@@ -148,8 +166,9 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
 
 - **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
-  `common/nevr_plugin_interface.h` out of the pre-2026-07-29 shared directory.
+  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
+  `common/nevr_plugin_interface.h`, which these headers provide from
+  `src/legacy-compat/common/`.
   Scoped to that
   one target. Delete with `src/legacy/`.
 
@@ -175,7 +194,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   `CMakeLists.txt`, `just launcher`).
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
-- Android/Quest standalone target lives in `src/quest/` (separate CMake project). The former src/standalone/ stub was deleted 2026-08-02.
+- Android/Quest standalone target lives in `src/quest/` (separate CMake project).
 - **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions
@@ -185,6 +204,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
+- **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
@@ -219,6 +239,7 @@ You are not the first agent to work here, and you won't be the last. Act like it
 
 ## Methodology
 
+- **Planning on GitHub**: releases, points, sprints, story states and hygiene follow `docs/standards/planning.md`. File new work against a release milestone or the `backlog` label.
 - **Plan before code**: Non-trivial changes require a written plan before implementation.
 - **Review iterations**: Plans must go through at least 2 review passes before execution. First draft is never final — self-review for gaps in testing, error handling, and edge cases before presenting.
 - **Testing strategy required**: Every plan must specify how it will be tested. Automated tests first (unit + integration). Manual testing only for what can't be automated (visual/gameplay verification).
@@ -233,6 +254,101 @@ You are not the first agent to work here, and you won't be the last. Act like it
 - **Commit before handing work off.** A verified tranche must be committed before another agent starts a different tranche or the active agent starts unrelated work. If implementation is in a separate worktree, commit there, integrate that commit, and remove the worktree only after confirming the changes are safely integrated. Do not leave abandoned dirty worktrees.
 - **Close each commit loop.** Follow the commit identity rules below, verify the commit identity immediately, and run the required post-commit checks before proceeding. If a required check cannot run or fails, stop the sequence, report the exact blocker, and do not start another tranche.
 - **End-of-turn status.** Report the commit hash for completed work and identify any uncommitted changes as belonging only to the active, unfinished tranche. Do not leave completed work uncommitted without an explicit blocker and a clear recovery step.
+
+## Working practices for every agent
+
+These bind every agent that works here, whatever its model or vendor. Another agent's
+worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
+Only the agent the owner has told to merge merges PRs; other agents hand off. `<agent>` below is
+your seat name, for example `claude-main` or `codex`.
+
+### Ownership and cleanup
+
+- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` is a markdown table
+  (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, issue, PR and
+  push to another agent's branch an agent has made; the owner is your seat name. Add the row in
+  the same turn you create the thing. Read the ledger before deleting anything; an item not in it
+  is not yours.
+- **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
+  .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
+  remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
+- **Scratch is per agent.** Files you create by hand go under `/var/tmp/work-nevr-runtime/<agent>/`;
+  files the repo's own tools write at the scratch root stay where they are. When you are done,
+  delete the scripts, copies and build output you created, outright, not into the user's trash.
+  Run logs and evidence are kept. Never delete by pattern across the shared directory.
+- **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
+  `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
+  and `git status --short --ignored` lists only build output (move any run log you need out
+  first); no process has its cwd inside. Run
+  `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
+  run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
+  commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
+  (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
+  the branch locally (and on origin once merged) and update the ledger row.
+- **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
+  remove it when its PR merges.
+
+### Git
+
+- **Branches are cut with `--no-track` and pushed by explicit refspec:**
+  `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
+  and compare after it; read the `->` line of every push.
+- **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch.
+  Fix a pushed mistake with a new commit.
+- **PRs target `main`.** Do not base a PR on another feature branch.
+- **Report a mistake the moment you see it,** with the command and its output.
+
+### Review, verification and merge
+
+- **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
+  surrounding code, reproduces what the PR claims, and reports findings with `file:line` and quoted
+  evidence. Merge only when the review is clean, or when each finding is fixed and re-verified on
+  the new tip.
+- **A test must fail without the change.** For every test you add or change, revert or mutate the
+  source, run it, paste the failing output, restore the source and show it passing.
+- **The PR body is the evidence.** It states each command run on the exact tip and its result, what
+  was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **Verification before merge.** `just verify` green on the tip, and for a change to runtime code
+  the client login test as described under "System test after every commit". The run's log must
+  show all four keys
+  (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
+  `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
+- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
+  copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
+  checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
+  to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
+  that `extern/<d>` and run `git submodule update --init extern/<d>`). Never print `.env`.
+  The build embeds the production endpoints from `.env`.
+- **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
+  BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
+  `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
+  exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
+  endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
+  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` overrides which
+  checkout's `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
+
+### Documentation, plans and findings
+
+- **Docs state the current tree.** No "removed", "previously", "approved by", commit shas or dated
+  narrative in markdown or comments you write or change, and no citation of a deleted file.
+  Design lives in
+  `docs/adr/`, tests, code comments, or a GitHub issue; `docs/design/` holds only unimplemented
+  design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
+  files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
+  the owner's confirmation; move its load-bearing facts first and say where.
+- **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
+  with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
+
+### Dispatching agents
+
+- **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
+  adversarial reviews and open design questions; a small model for search and mechanical edits.
+- **Brief them with the rules above.** Name their worktree, their own scratch subdirectory (never
+  the dispatcher's) and push refspec; forbid rebase, force-push, merging and pushing to `main`;
+  require mutation proof for tests; ask for commands run with raw output and a list of what was
+  not verified.
+- **Subagents report observations, not verdicts.** Check what they claim before relying on it.
 
 ## Production Deployment — FORBIDDEN without explicit user approval
 
@@ -323,8 +439,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
-  `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
-  in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
+  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
+  repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` under Wine, then ~35
@@ -335,9 +451,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 ---
 
 The content after this separator is `CPP-MINGW-ADDENDUM` — binding rules
-for cross-compiling C++ Windows DLLs with mingw-w64.  It was previously a
-separate document in a private repository; inlining it here ensures every
-agent reads it (it is required reading per the pre-read gate above).
+for cross-compiling C++ Windows DLLs with mingw-w64.  It is inlined here
+so that every agent reads it (it is required reading per the pre-read gate above).
 
 ---
 

@@ -36,8 +36,10 @@ class ReleaseContractTest(unittest.TestCase):
             "test_system_module_loader",
             "test_websocket_frame",
             "test_protobuf_transport",
+            "test_websocket_client_auth",
             "test_url_diagnostics",
             "test_callback_unregistration",
+            "test_server_context",
             "test_session_unregister",
             "test_mic_lifecycle",
             "test_telemetry_snapshot_store",
@@ -51,8 +53,8 @@ class ReleaseContractTest(unittest.TestCase):
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
         websocket = (REPO / "src/runtime/server/websocket_client.cpp").read_text()
         telemetry = (REPO / "src/runtime/server/telemetry_streamer.cpp").read_text()
-        winhttp = (REPO / "src/runtime/compat/winhttp_stub.cpp").read_text()
-        gameserver = (REPO / "src/runtime/server/gameserver.cpp").read_text()
+        gameserver = "\n".join((REPO / "src/runtime/server" / name).read_text()
+                               for name in ("gameserver.cpp", "gameserver_callbacks.cpp", "gameserver_telemetry.cpp", "gameserver_serverdb.cpp"))
         self.assertIn("FormatRedactedUrlDiagnostic", websocket)
         self.assertIn("FormatWebSocketCloseDiagnostic", websocket)
         self.assertIn("FormatWebSocketErrorDiagnostic", websocket)
@@ -62,10 +64,6 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("FormatWebSocketCloseDiagnostic", telemetry)
         self.assertIn("FormatWebSocketErrorDiagnostic", telemetry)
         self.assertNotIn("msg->errorInfo.reason.c_str()", telemetry)
-        self.assertIn("FormatRedactedUrlDiagnostic", winhttp)
-        self.assertIn("IsCredentialHeaderName", winhttp)
-        self.assertNotIn("curl_easy_strerror", winhttp)
-        self.assertNotIn("url=%ls", winhttp)
         self.assertNotIn("sessionSuccess.endpoint().c_str()", gameserver)
 
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
@@ -101,17 +99,32 @@ class ReleaseContractTest(unittest.TestCase):
     def test_release_ci_installs_tools_and_uploads_the_actual_artifact_directory(self):
         workflow = (REPO / ".github/workflows/build.yml").read_text()
         self.assertIn("just-version:", workflow)
-        self.assertRegex(workflow, r"cmake==4\.[0-9.]+")
-        self.assertIn("wine", workflow)
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bzstd\b")
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bosslsigncode\b")
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bopenssl\b")
+        # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
+        # from pacman in an archlinux container, with every version logged per run.
+        self.assertIn("image: archlinux:base-devel", workflow)
+        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", workflow)
+        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -Syu")
+        for pkg in ("mingw-w64-gcc", "cmake", "ninja", "wine", "zstd", "openssl", "python-yaml"):
+            self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
+        self.assertIn("mtrojnar/osslsigncode.git", workflow)  # not in Arch's official repos: pinned build
+        self.assertIn("- name: Toolchain versions", workflow)
+        # Only the build job's toolchain has to come from one pacman -Syu (#81/#82); the publish job
+        # runs on ubuntu-latest (not the Arch container) and installs zstd with apt-get there (#79).
+        build_job = workflow.split("\n  sign:", 1)[0]
+        self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", workflow)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        self.assertIn("CODESIGN_PFX_BASE64", workflow)
+        # Release signing is Microsoft Artifact Signing in the `codesign` environment (#78): the only
+        # environment Azure's federated credential trusts. The private-CA secrets are gone from CI.
+        self.assertIn("azure/artifact-signing-action@v2", workflow)
+        self.assertIn("environment: codesign", workflow)
+        self.assertIn("id-token: write", workflow)
+        self.assertIn("Get-AuthenticodeSignature", workflow)
+        self.assertNotIn("CODESIGN_PASS", workflow)
+        self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
         self.assertIn("          dist/*.zip", workflow)
         self.assertIn("          dist/*.tar.zst", workflow)
         self.assertIn("Verify distribution archives", workflow)

@@ -13,6 +13,7 @@ constexpr NvrPluginInfo kInfo = {
 };
 
 uint32_t g_frameCount = 0u;
+uint32_t g_initCount = 0u;
 
 }  // namespace
 
@@ -25,6 +26,7 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
 }
 
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext*) {
+  ++g_initCount;
   g_frameCount = 0u;
   return 0;
 }
@@ -38,6 +40,11 @@ NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext*) {
 // the callback running came from this DLL rather than an injected test hook.
 NEVR_PLUGIN_API uint32_t NvrTestPluginGetFrameCount(void) {
   return g_frameCount;
+}
+
+// Test-only observability export: how many times the loader ran this DLL's init.
+NEVR_PLUGIN_API uint32_t NvrTestPluginGetInitCount(void) {
+  return g_initCount;
 }
 
 NEVR_PLUGIN_API void NvrPluginShutdown(void) {

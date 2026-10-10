@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 #include <cstdarg>
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <cstdint>
 #include <cstdio>
 #include <nlohmann/json.hpp>
@@ -30,10 +32,12 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/compat/login_profile.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/patch/evrp_package.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -95,7 +99,6 @@ CHAR   g_internalIpOverride[46] = {};
 CHAR   g_externalIpOverride[46] = {};
 CHAR   g_customConfigPath[MAX_PATH] = {};
 CHAR   g_regionOverride[64]   = {};
-GUID   g_loginSessionId       = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
@@ -133,6 +136,9 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   g_testLogMessages.emplace_back(buffer);
 }
 
+// boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
+const CHAR* GetRunId() { return "test-run"; }
+
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
 
@@ -159,6 +165,7 @@ void ServerFatal(const CHAR* format, ...) {
 }
 
 // --- config.h extern (used by ws_bridge.cpp) ---
+PVOID g_pGame = nullptr;
 void* g_earlyConfigPtr = nullptr;
 
 // --- service_config.h accessor (N133 S4a, used by ws_bridge.cpp login injection) ---
@@ -188,12 +195,13 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
+#include "core/hex_dump.h"
+#include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/patch/broadcaster_hook_stats.h"
-#include "runtime/patch/mode_patches.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -330,6 +338,325 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
+// The number of times the loaded fixture's init ran, read through its test-only
+// export. -1 when the fixture is not loaded.
+static long OnFrameFixtureInitCount() {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
+  if (plugin == nullptr) return -1;
+  const auto getInitCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetInitCount"));
+  if (getInitCount == nullptr) return -1;
+  return static_cast<long>(getInitCount());
+}
+
+static void TickLoadedPluginsOnce() {
+  NvrGameContext ctx = {};
+  ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+  ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
+  TickPlugins(&ctx);
+}
+
+static uint32_t OnFrameFixtureFrameCount() {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
+  if (plugin == nullptr) return 0xFFFFFFFFu;
+  const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+  return getFrameCount != nullptr ? getFrameCount() : 0xFFFFFFFFu;
+}
+
+// The same DLL listed twice is loaded once: one init, and each OnFrame reaches it
+// once. Before, LoadLibrary handed back the loaded module for the repeat, its init
+// ran again, and it was staged twice, so every tick called it twice.
+TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe-again", "TEST_PLUGIN_ONFRAME.DLL", false, "",
+                                  R"({"other":"args"})"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-again (TEST_PLUGIN_ONFRAME.DLL)"));
+  EXPECT_TRUE(TestLogContains("args were ignored"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[1].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
+}
+
+// N89 (#100 regression net): a plugin whose function is built in is refused even when it is listed
+// as required, with the reason in the login's report; the plugin after it still loads.
+TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) {
+  g_testPluginLoadPlan.push_back({"filter", "Log_Filter.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED Log_Filter.dll"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[0].at("error"), "superseded by the built-in log filter");
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
+// The same DLL under another spelling of its path passes the file-name check, so
+// the loader's same-module check is what stops it.
+TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe-dotted", ".\\test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-dotted"));
+  EXPECT_TRUE(TestLogContains("the same module as onframe"));
+  EXPECT_TRUE(TestLogContains("args were ignored"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[1].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("error"), "the same module as onframe");
+}
+
+// A required repeat of an optional entry that failed to load: the plugin the
+// config declared required is missing, so that is fatal, not a skipped duplicate.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"gone", "plugin_that_does_not_exist.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"gone-again", "plugin_that_does_not_exist.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_NE(g_lastServerFatal.find("gone"), std::string::npos) << g_lastServerFatal;
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("required"), true);
+}
+
+// The same, for a plugin that loads but whose init fails: the failure surfaces
+// later (pass 2), and must still be fatal because a repeat required it.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfInitFailingOptionalEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-again", "TEST_PLUGIN_INIT_FAIL.DLL", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_NE(g_lastServerFatal.find("flaky"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// Same, when the repeat is only caught by the same-module check.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFailingEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-dotted", ".\\test_plugin_init_fail.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// A required repeat of a spelling that was itself skipped as the same module: the
+// requirement reaches the entry that holds the module, not the skipped one. The
+// holder loaded fine, so nothing is fatal.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("required"), true);
+}
+
+// The same chain when the holder's init fails: the fatal names the holder (the
+// first entry), the entry that really holds the module.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfInitFailingEntryNamesHolder) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_init_fail.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("first"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(g_lastServerFatal.find("second"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// An optional first entry that loads, then a required repeat of the same spelling.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSameSpellingOfLoadedEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"again", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+}
+
+// Control: an optional repeat of an optional entry stays non-fatal.
+TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-again", "test_plugin_init_fail.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// AGENTS.md logging rule 6: the Warning the loader writes for an arg whose bytes
+// were replaced exists, names the plugin and the arg KEY, and never carries the value.
+TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
+  PluginLoadItem item;
+  item.name = "onframe";
+  item.file = "test_plugin_onframe.dll";
+  item.args_json = "{\"path\":\"SECRETVALUE\"}";
+  item.args_replaced_keys = {"path"};
+  g_testPluginLoadPlan.push_back(item);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
+  EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
+// #152: a plugin may keep what get_plugin_info returned during its init. The loader reserves
+// g_plugins before any init so the push_back that follows that init cannot move the entry the kept
+// pointer names. The keeper fixture takes plugin 0's pointer in its init; after the load it must still
+// be the pointer the host hands out for index 0.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysValid) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"keeper", "test_plugin_info_keeper.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
+// get_plugin_info reports each plugin's own API version and capabilities. Casting
+// NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
+// api_version read the padding and capabilities read the API version: a v5
+// plugin declaring no capabilities would show as caps 5.
+TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilities) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  const NvrLoadedPluginInfo* second = GetLoadedPluginInfo(1);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  // Both declare no capabilities: same priority band, config order kept.
+  EXPECT_STREQ(first->name, "test-plugin-onframe");
+  EXPECT_EQ(first->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION));
+  EXPECT_EQ(first->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
+  EXPECT_STREQ(second->name, "test-plugin-future-api");
+  EXPECT_EQ(second->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION + 1u));
+  EXPECT_EQ(second->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
+  EXPECT_EQ(second->version_major, 1u);
+}
+
+// #60: the login reports every configured plugin — the one that loaded, the one
+// that is enabled but failed, and the one that is disabled — with the real loader
+// filling the record from a real LoadLibraryExA run. The disabled entry names a
+// DLL that exists in plugins/ and would load, so "not loaded" proves the loader
+// honours enabled:false now that the plan carries disabled entries.
+TEST_F(PluginLoaderDiagnosticTest, LoginCarriesLoadedFailedAndDisabledPlugins) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}", true});
+  g_testPluginLoadPlan.push_back({"missing", "plugin_that_does_not_exist.dll", true, "", "{}", true});
+  g_testPluginLoadPlan.push_back({"off", "test_plugin_future_api.dll", false, "", "{}", false});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_future_api.dll"), nullptr) << "a disabled plugin was loaded";
+  EXPECT_TRUE(TestLogContains("off (test_plugin_future_api.dll): disabled in config.yaml"));
+  EXPECT_TRUE(TestLogContains("plugin load complete: 1/2 loaded"));
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_TRUE(manifest.is_array());
+  ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
+
+  const nlohmann::json& loaded = manifest[0];
+  EXPECT_EQ(loaded.at("name"), "onframe");
+  EXPECT_EQ(loaded.at("file"), "test_plugin_onframe.dll");
+  EXPECT_EQ(loaded.at("enabled"), true);
+  EXPECT_EQ(loaded.at("required"), false);
+  EXPECT_EQ(loaded.at("loaded"), true);
+  EXPECT_EQ(loaded.at("ver"), "1.0.0");
+  EXPECT_EQ(loaded.at("api"), NEVR_PLUGIN_API_VERSION);
+  EXPECT_EQ(loaded.at("caps"), NEVR_PLUGIN_CAP_UNDECLARED);
+  EXPECT_FALSE(loaded.contains("error"));
+
+  const nlohmann::json& failed = manifest[1];
+  EXPECT_EQ(failed.at("name"), "missing");
+  EXPECT_EQ(failed.at("required"), true);
+  EXPECT_EQ(failed.at("loaded"), false);
+  EXPECT_EQ(failed.at("error").get<std::string>().rfind("LoadLibrary failed: error ", 0), 0u)
+      << failed.dump();
+  EXPECT_FALSE(failed.contains("ver"));
+
+  const nlohmann::json& disabled = manifest[2];
+  EXPECT_EQ(disabled.at("name"), "off");
+  EXPECT_EQ(disabled.at("enabled"), false);
+  EXPECT_EQ(disabled.at("loaded"), false);
+  EXPECT_FALSE(disabled.contains("error"));
+
+  // The wire payload: the same array, as a JSON array (not a string), under the
+  // top-level `nevr_plugins` key of the LoginProfile JSON.
+  const std::string request = TestHook_BuildLoginRequest(55, 4, "Player", "token");
+  constexpr size_t kJsonOffset = 56;
+  ASSERT_GT(request.size(), kJsonOffset);
+  ASSERT_EQ(request.back(), '\0');
+  const nlohmann::json login =
+      nlohmann::json::parse(request.substr(kJsonOffset, request.size() - kJsonOffset - 1));
+  ASSERT_TRUE(login.contains("nevr_plugins"));
+  ASSERT_TRUE(login.at("nevr_plugins").is_array());
+  EXPECT_EQ(login.at("nevr_plugins"), manifest);
+  EXPECT_TRUE(TestLogContains("login nevr_plugins configured=3 loaded=1"));
+
+  // After unload nothing is loaded, so the report is empty rather than stale.
+  UnloadPlugins();
+  EXPECT_EQ(nlohmann::json::parse(BuildPluginManifestJson()), nlohmann::json::array());
+}
+
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterPluginOnFrame(N68_PluginOnFrame);
   NvrGameContext ctx = {};
@@ -408,12 +735,11 @@ TEST_F(N68_ModuleTickTest, OnStateChange_Fires_When_Registered) {
 }
 
 // ============================================================================
-// N133 S5 — module API version gate. The loader refuses a module whose reported
-// version exceeds the host's (module_loader.cpp LoadModule -> FatalError, N120).
-// LoadModule itself is not unit-testable (real LoadLibraryExA + a process-killing
-// FatalError), so the refusal RULE is factored into the header-only predicate
-// NvrModuleApiVersionSupported, which the loader and these tests share. Verifying
-// the predicate verifies the mismatch decision without spawning a process.
+// N133 S5 — module API version gate. The host refuses a module whose reported
+// version exceeds its own (boot.cpp, N120). The refusal RULE is the header-only
+// predicate NvrModuleApiVersionSupported, which boot.cpp and these tests share.
+// Verifying the predicate verifies the mismatch decision without spawning a
+// process.
 // ============================================================================
 
 TEST(N133_ModuleApiVersion, HostVersionIsTwo) {
@@ -689,6 +1015,121 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
 }
 
+// #47: the one hex-dump helper behind the SAVE_SUCCESS, CURRENT_LOADOUT and bone dumps.
+TEST(HexDump, FormatsBytesAsUppercaseHexWithATrailingSpace) {
+  const uint8_t bytes[] = {0xDE, 0xAD, 0x0B, 0x00};
+  const auto lines = nevr::HexDumpLines(bytes, sizeof(bytes), 256, 32);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(lines[0], "DE AD 0B 00 ");
+}
+
+TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
+  std::vector<uint8_t> bytes(100);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(i);
+  const auto lines = nevr::HexDumpLines(bytes.data(), bytes.size(), 70, 32);
+  ASSERT_EQ(lines.size(), 3U);                 // 32 + 32 + 6 of the first 70 bytes
+  EXPECT_EQ(lines[0].size(), 32U * 3U);
+  EXPECT_EQ(lines[2], "40 41 42 43 44 45 ");
+  EXPECT_TRUE(nevr::HexDumpLines(bytes.data(), 0, 70, 32).empty());
+  EXPECT_TRUE(nevr::HexDumpLines(nullptr, 4, 70, 32).empty());
+}
+
+// #18: pnsradmatchmaking.dll is unloaded and reloaded mid-session and every load maps a fresh image,
+// so the host rewrite must apply to each image on its own.
+namespace {
+std::vector<uint8_t> FreshMatchmakerImage() {
+  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
+              sizeof(MatchmakerHostPatch::kHostExpected));
+  return image;
+}
+bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
+  std::memcpy(dst, src, len);
+  return true;
+}
+const char* HostOf(const std::vector<uint8_t>& image) {
+  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+}
+}  // namespace
+
+// The slot is the original string and its NUL: the byte after it belongs to other data
+// (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
+TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
+  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+}
+
+TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+
+  // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
+  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
+}
+
+TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            MatchmakerHostPatch::Result::WriteFailed);
+}
+
+// #201: the server's new-location text ends with the code line, which the game's screen drops.
+namespace {
+std::string FrameWithText(const std::string& text) {
+  const std::string withNul = text + std::string(1, '\0');
+  return BuildLoginFailureFrame(24 + withNul.size(), 400, withNul);
+}
+}  // namespace
+
+TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
+  const std::string text =
+      "[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+      "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<";
+  std::string out;
+  ASSERT_TRUE(TestHook_MoveCodeLineFirst(FrameWithText(text), &out));
+  EXPECT_EQ(out, FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                               "location.\nCheck your Discord DMs from @EchoVRCE."));
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+  ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
+  EXPECT_EQ(statusCode, 400U);
+  EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
+  std::string out;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Account banned."), &out));
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Select code >>> 42 <<<"), &out));  // already first
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>> xx <<<"), &out));  // not digits
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>>  <<<"), &out));  // empty code
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Go to G, type /verify\nWhen prompted, select code >>> 42 <<<"),
+                                         &out));  // guild variant: code is not a line of its own
+  // Two frames in one message are not rewritten.
+  const std::string two = FrameWithText("a\nSelect code >>> 42 <<<") + FrameWithText("b");
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(two, &out));
+  // A different message symbol is not touched.
+  std::string other = FrameWithText("a\nSelect code >>> 42 <<<");
+  other[8] ^= 1;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(other, &out));
+}
+
 TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
   ClearTestLogs();
   constexpr char kSecret[] = "login-failure-secret-sentinel";
@@ -726,8 +1167,8 @@ std::string BuildMarkedMessage(uint64_t symbol, const std::string& payload) {
 }  // namespace
 
 // Nakama batches LoginSuccess, STcpConnectionUnrequireEvent and GameSettings into one frame. The
-// bridge used to log only the first symbol of a server->game frame, so the other two never
-// appeared in a server's log. Every message in the frame must be logged.
+// bridge logs every symbol of a server->game frame; logging only the first would leave the other
+// two out of a server's log. Every message in the frame must be logged.
 TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
   ClearTestLogs();
   const std::string frame = BuildMarkedMessage(0x1111111111111111ULL, std::string(40, 'a')) +
@@ -783,9 +1224,8 @@ TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
 }
 
 // PlatformCode=4 (OVR_ORG in game numbering) at wire offset 40.
-// Regression test for 2026-08-04: PlatformCode was sent as 3 (Nakama enum
-// OVR_ORG), but the game interprets wire values through its own numbering
-// where OVR_ORG=4. The server echoes the value unchanged into LoginSuccess
+// Regression test for 2026-08-04: PlatformCode was sent as 3, which the game
+// resolves to XBX; OVR_ORG is 4 in the game's and Nakama's shared numbering. The server echoes the value unchanged into LoginSuccess
 // (evr_pipeline_login.go:185), and the game resolves it through
 // GetProviderPrefix (echovr.exe fcn.14060d640, switch case 4→\"OVR-ORG\").
 TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
@@ -818,6 +1258,8 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
   EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
+  // Outside the game there is no headset serial to read: "unknown", which alt detection ignores (#83).
+  EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
@@ -841,14 +1283,86 @@ TEST(WsBridgeLoginRequest, JsonEmitsPositiveCpuAndRamMeasurements) {
   EXPECT_GT(systemInfo.at("memory_total").get<uint64_t>(), 0U);
 }
 
+TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
+  LoginProfile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.display_name = "Quest \"player\"";
+  inputs.access_token = "jwt-\\-token";
+  inputs.password = "secret-\"value";
+  inputs.hmd_serial_number = "quest-serial";
+  inputs.headset_type = "Quest";
+  inputs.cpu = "Quest measured CPU";
+  inputs.physical_cores = 8;
+  inputs.logical_cores = 8;
+  inputs.memory_total_mb = 8192;
+  inputs.memory_used_mb = 3072;
+  inputs.project_version = "1.2.3";
+  inputs.git_commit = "abcdef0";
+  inputs.git_describe = "v1.2.3-4-gabcdef0";
+  inputs.build_type = "RelWithDebInfo";
+  inputs.social_level = 2;
+  inputs.plugins = nlohmann::json::parse(R"([{"name":"example","loaded":true}])");
+
+  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  EXPECT_EQ(profile.at("accountid"), 90210);
+  EXPECT_EQ(profile.at("displayname"), inputs.display_name);
+  EXPECT_EQ(profile.at("access_token"), inputs.access_token);
+  EXPECT_EQ(profile.at("password"), inputs.password);
+  EXPECT_EQ(profile.at("hmdserialnumber"), "quest-serial");
+  EXPECT_EQ(profile.at("nevr_identity").at("commit"), "abcdef0");
+  EXPECT_EQ(profile.at("system_info").at("headset_type"), "Quest");
+  EXPECT_EQ(profile.at("system_info").at("cpu"), "Quest measured CPU");
+  EXPECT_EQ(profile.at("system_info").at("num_physical_cores"), 8);
+  EXPECT_EQ(profile.at("system_info").at("memory_total"), 8192);
+  EXPECT_EQ(profile.at("nonce"), "");
+  EXPECT_EQ(profile.at("nevr_social"), 2);
+  EXPECT_EQ(profile.at("nevr_plugins"), inputs.plugins);
+  EXPECT_TRUE(profile.at("nevr_plugins").is_array());
+}
+
+TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
+  LoginProfile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.display_name = "";
+
+  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  EXPECT_EQ(profile.at("displayname"), "90210");
+}
+
+// A buffer shorter than the 28-byte header must be rejected by the size guard before any header
+// byte is read (the later checks would reject it too, but only after reading past the buffer).
+// The guard's own Warning is the only observable difference, so the test reads the captured log.
+TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
+  ClearTestLogs();
+  int64_t symbol = 0;
+  Evrp::TintData tint;
+  const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
+  EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
+  EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
+
+  // Exactly the header size is not "too small": it is a header whose data_length promises 80
+  // bytes that are not there, so the size check rejects it instead.
+  ClearTestLogs();
+  std::vector<uint8_t> headerOnly(Evrp::kHeaderSize, 0);
+  const uint8_t header[] = {0x45, 0x56, 0x52, 0x50, 0x01, 0x00, 0x00, 0x00, 0x86, 0xDC, 0xC5, 0x9D,
+                            0xD0, 0x28, 0xD2, 0x74, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x50, 0x00, 0x00, 0x00};
+  std::copy(std::begin(header), std::end(header), headerOnly.begin());
+  EXPECT_FALSE(Evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
+  EXPECT_FALSE(TestLogContains("file too small"));
+  EXPECT_TRUE(TestLogContains("size mismatch: file=header.evrp"));
+}
+
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
-  EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
-  EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
-  EXPECT_STREQ(TestHook_PlatformPrefix(2), "XBX");
-  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(0), "UNK");
+  EXPECT_STREQ(TestHook_PlatformPrefix(1), "STM");
+  EXPECT_STREQ(TestHook_PlatformPrefix(2), "DSC");
+  EXPECT_STREQ(TestHook_PlatformPrefix(3), "XBX");
   EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR-ORG");
-  EXPECT_STREQ(TestHook_PlatformPrefix(5), "BOT");
-  EXPECT_STREQ(TestHook_PlatformPrefix(6), "DSC-NOVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(5), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(6), "BOT");
+  EXPECT_STREQ(TestHook_PlatformPrefix(7), "DMO");
+  EXPECT_STREQ(TestHook_PlatformPrefix(8), "UNK");
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
@@ -880,7 +1394,7 @@ TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
 }
 
 // SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
-// into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
+// into the game's own CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's
 // later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
 // match", so the game never reached a lobby host.
 TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
@@ -888,6 +1402,8 @@ TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
+  // The code the bridge logs in as is the one labelled OVR-ORG, the provider the game names itself with.
+  EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, false)), "OVR-ORG");
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
@@ -926,33 +1442,6 @@ TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
 
   EXPECT_EQ(ResolveModuleProc(kName), &kProbe);
   EXPECT_EQ(ResolveModuleProc("test.module_proc_registry.absent"), nullptr);
-}
-
-TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
-  char line[192] = {};
-  EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
-  EXPECT_STREQ(line,
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(zero entries means idle runs prove nothing)");
-}
-
-// The live counters are translation-unit state in mode_patches.cpp.  They are
-// zero before any hook entry, which is the only state this test needs: call the
-// REAL reporting entry point and capture the structured line through the test
-// logger.  It does not read game memory, patch code, or install a hook.
-TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
-  {
-    std::lock_guard<std::mutex> lock(g_testLogMutex);
-    g_testLogMessages.clear();
-  }
-
-  LogBroadcasterHookStats();
-
-  std::lock_guard<std::mutex> lock(g_testLogMutex);
-  ASSERT_EQ(g_testLogMessages.size(), 1U);
-  EXPECT_EQ(g_testLogMessages.front(),
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
-      "(zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================
@@ -1174,7 +1663,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
     EXPECT_LE(h.memory_used_mb, h.memory_total_mb) << "used exceeds total — derivation is wrong";
 
-    // The old fabricated tuple, guarded as a set. Any single value could
+    // The fabricated tuple (4 cores, 8 threads, 16384 MB total, 8192 MB used), guarded as a set. Any single value could
     // legitimately match on some machine; all of them matching means the
     // literals came back.
     const bool all_old_literals = (h.physical_cores == 4 && h.logical_cores == 8 &&
@@ -1211,7 +1700,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
 //   block -> not caught here (that is a format string, not a value this test
 //   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
-//   itself starts returning the old tuple; the `just verify` sensor catches
+//   itself starts returning the fabricated tuple; the `just verify` sensor catches
 //   the format string.
 
 // ============================================================================
@@ -1358,4 +1847,23 @@ TEST(S8_CapsPriority, CombinedCapsTakeHighestBand) {
               CapsLoadPriority(NEVR_PLUGIN_CAP_COSMETIC));
     EXPECT_EQ(CapsLoadPriority(cosmeticAndRules),
               CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES));
+}
+
+// #83: the stock HMD serial field choice (hmd_serial.h): the game's 24-byte buffer in VR, "N/A" with
+// the No-VR flag, and "unknown" only when the serial buffer is absent or invalid.
+TEST(HmdSerial, StockChoice) {
+  char serial[HmdSerial::kSerialBytes] = {};
+  std::memcpy(serial, "1WMHHA1234567", 13);
+  const auto vr = HmdSerial::Select(false, serial);
+  EXPECT_EQ(vr.value, "1WMHHA1234567");
+  EXPECT_EQ(vr.source, HmdSerial::Source::GameBuffer);
+  EXPECT_EQ(HmdSerial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
+  char empty[HmdSerial::kSerialBytes] = {};
+  EXPECT_EQ(HmdSerial::Select(false, empty).value, "unknown");
+  EXPECT_EQ(HmdSerial::Select(false, nullptr).value, "unknown");
+  char garbage[HmdSerial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
+  EXPECT_EQ(HmdSerial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
+  char full[HmdSerial::kSerialBytes];
+  std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
+  EXPECT_EQ(HmdSerial::Select(false, full).value, std::string(24, 'Z'));
 }

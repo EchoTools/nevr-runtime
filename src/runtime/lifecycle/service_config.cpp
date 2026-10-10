@@ -15,6 +15,7 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
 #include "runtime/ext/plugin_load_plan.h"        // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
@@ -24,13 +25,39 @@
 #include "core/nevr_config.h"
 #include "generated/nevr_builtin_defaults.h"  // build-tree only; values from env/.env at configure
 
+#ifdef NEVR_TEST_HOOKS
+#include "runtime/tests/service_config_test_hooks.h"
+#endif
+
 #include <fstream>
-#include <mutex>
+#include <cstdlib>
+#include <exception>
 #include <optional>
-#include <set>
 #include <string>
+#include <string_view>
+#include <vector>
+
+#ifdef NEVR_TEST_HOOKS
+#include <stdexcept>
+#endif
 
 namespace {
+
+#ifdef NEVR_TEST_HOOKS
+const nevr::NevrConfig* g_testConfig = nullptr;
+const nevr_cfg::FlatDefaults* g_testDefaults = nullptr;
+bool g_testInputsSet = false;
+bool g_testServerMode = false;
+std::string_view g_failInternAccessor;
+std::string_view g_throwAccessor;
+#endif
+
+bool IsServerMode() {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testInputsSet) return g_testServerMode;
+#endif
+  return g_isServer != FALSE;
+}
 
 // --- config.yaml discovery -------------------------------------------------
 // Mirrors LoadEarlyConfig's search for config.json (config.cpp): _local next to
@@ -94,6 +121,9 @@ std::string FindNevrConfigYamlPath() {
 // login, far later still. So an unset ${NEVR_PASSWORD:?} fails loud at first
 // access (the socket_uri read, boot.cpp) instead of ever reaching ws_bridge.
 const nevr::NevrConfig& NevrCfg() {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testInputsSet && g_testConfig != nullptr) return *g_testConfig;
+#endif
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
     const std::string path = FindNevrConfigYamlPath();
     if (path.empty()) {
@@ -127,31 +157,36 @@ const nevr::NevrConfig& NevrCfg() {
 // config.yaml can override any of them and a rejected or absent file still leaves them in
 // place. Client mode only: a dedicated server has always been configured explicitly, and
 // must not silently start a bridge or authenticate with an embedded key. Only key NAMES are
-// logged, never values (two of these are secrets, socket_uri may carry a token).
+// logged, never values (the two keys are public by design (#76), but socket_uri may carry a token).
 const nevr_cfg::FlatDefaults& BuiltinDefaults() {
-  static const nevr_cfg::FlatDefaults defaults = []() {
-    nevr_cfg::FlatDefaults d;
-    if (g_isServer) {
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
-      return d;
+#ifdef NEVR_TEST_HOOKS
+  if (g_testInputsSet) {
+    // The injected defaults go through the same gate as the embedded ones.
+    static nevr_cfg::FlatDefaults gated;
+    std::vector<nevr_cfg::EmbeddedDefault> entries;
+    if (g_testDefaults != nullptr) {
+      for (const auto& kv : *g_testDefaults) entries.push_back({kv.first.c_str(), kv.second.c_str()});
     }
-    const struct {
-      const char* flatKey;
-      const char* value;
-    } kEmbedded[] = {
+    gated = nevr_cfg::SelectBuiltinDefaults(g_testServerMode, entries.data(), entries.size(), nullptr,
+                                            nullptr);
+    return gated;
+  }
+#endif
+  static const nevr_cfg::FlatDefaults defaults = []() {
+    const nevr_cfg::EmbeddedDefault kEmbedded[] = {
         {"nevr_socket_uri", nevr_builtin::kSocketUri},
         {"nevr_http_uri", nevr_builtin::kHttpUri},
-        {"nevr_http_key", nevr_builtin::kHttpKey},
-        {"nevr_server_key", nevr_builtin::kServerKey},
+        {"nevr_http_key", nevr_builtin::kPublicApiKey},
+        {"nevr_server_key", nevr_builtin::kPublicSocketKey},
     };
     std::string embedded;
     std::string missing;
-    for (const auto& e : kEmbedded) {
-      std::string& list = (e.value[0] != '\0') ? embedded : missing;
-      if (e.value[0] != '\0') d[e.flatKey] = e.value;
-      if (!list.empty()) list += ", ";
-      list += e.flatKey;
+    nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+        IsServerMode(), kEmbedded, sizeof(kEmbedded) / sizeof(kEmbedded[0]), &embedded, &missing);
+    if (IsServerMode()) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
+      return d;
     }
     Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] built-in defaults embedded in this build: %s",
         embedded.empty() ? "(none)" : embedded.c_str());
@@ -164,81 +199,173 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
   return defaults;
 }
 
-// One lookup for every flat key: config.yaml value, else the embedded default.
-std::optional<std::string> Flat(const std::string& flatKey) {
-  return nevr_cfg::LookupFlatWithDefaults(NevrCfg(), BuiltinDefaults(), flatKey);
+// The runtime's environment overrides (#76): NEVR_API_KEY and NEVR_SOCKET_KEY, read once at
+// start-up, above config.yaml and the built-in defaults. In both modes. Names logged, never values.
+const nevr_cfg::FlatEnvOverrides& EnvOverrides() {
+  static const nevr_cfg::FlatEnvOverrides overrides = []() {
+    nevr_cfg::FlatEnvOverrides o = nevr_cfg::ReadFlatEnvOverrides([](const char* name) -> std::optional<std::string> {
+      char buf[1024];
+      const DWORD len = GetEnvironmentVariableA(name, buf, sizeof(buf));
+      if (len == 0 || len >= sizeof(buf)) return std::nullopt;
+      return std::string(buf, len);
+    });
+    std::string names;
+    for (const nevr_cfg::FlatEnvVar& var : nevr_cfg::kFlatEnvVars) {
+      if (o.count(var.flatKey) == 0) continue;
+      if (!names.empty()) names += ", ";
+      names += std::string(var.envName) + " (" + nevr_cfg::FlatKeyToYamlPath(var.flatKey) + ")";
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] environment overrides: %s", names.empty() ? "(none)" : names.c_str());
+    return o;
+  }();
+  return overrides;
 }
 
-// --- interning -------------------------------------------------------------
-// The game keeps the CHAR* we return for the process lifetime (JsonValueAsString
-// handed back tree-stable pointers). std::set nodes are address-stable across
-// inserts and never erased here, so c_str() stays valid forever. Deduplicated by
-// value, so the pool is bounded by the number of distinct configured strings.
-const char* InternCStr(const std::string& s) {
-  static std::mutex m;
-  static std::set<std::string> pool;
-  std::lock_guard<std::mutex> lk(m);
-  return pool.insert(s).first->c_str();
+// One lookup for every flat key: environment override, else config.yaml value, else the
+// embedded default.
+std::optional<std::string> Flat(const std::string& flatKey) {
+#ifdef NEVR_TEST_HOOKS
+  if (g_testInputsSet && g_testConfig != nullptr) {
+    return nevr_cfg::LookupFlatWithDefaults(*g_testConfig, BuiltinDefaults(), flatKey);
+  }
+#endif
+  return nevr_cfg::LookupFlatLayered(NevrCfg(), EnvOverrides(), BuiltinDefaults(), flatKey);
+}
+
+[[noreturn]] void FailAccessor(const char* accessor, const char* status, std::size_t count,
+                               std::size_t liveBytes) {
+  Log(EchoVR::LogLevel::Error,
+      "[NEVR.CONFIG] C accessor failed accessor=%s status=%s strings=%zu live_bytes=%zu",
+      accessor, status, count, liveBytes);
+  ForceFatalExit(1);
+  std::abort();
+}
+
+const char* InternCStr(std::string_view value, const char* accessor) {
+  nevr_runtime::lifecycle::InternResult result{};
+#ifdef NEVR_TEST_HOOKS
+  if (g_failInternAccessor == accessor) {
+    result = {nevr_runtime::lifecycle::InternStatus::kAllocationFailure, nullptr, 7, 13};
+  } else
+#endif
+  {
+    result = nevr_runtime::lifecycle::InternStableCStr(value);
+  }
+  if (result.status != nevr_runtime::lifecycle::InternStatus::kSuccess || result.pointer == nullptr) {
+    FailAccessor(accessor, nevr_runtime::lifecycle::InternStatusName(result.status), result.stringCount,
+                 result.liveBytes);
+  }
+  return result.pointer;
+}
+
+template <typename Body>
+const char* AccessorBoundary(const char* accessor, Body body) {
+  try {
+#ifdef NEVR_TEST_HOOKS
+    if (g_throwAccessor == accessor) throw std::runtime_error("injected accessor exception");
+#endif
+    return body();
+  } catch (const std::exception&) {
+    FailAccessor(accessor, "exception", 0, 0);
+  }
 }
 
 }  // namespace
 
+#ifdef NEVR_TEST_HOOKS
+namespace nevr_runtime::lifecycle::test {
+
+void SetAccessorInputs(const nevr::NevrConfig* config, const nevr_cfg::FlatDefaults* defaults,
+                       bool serverMode) {
+  g_testConfig = config;
+  g_testDefaults = defaults;
+  g_testServerMode = serverMode;
+  g_testInputsSet = true;
+}
+
+void FailInternAtAccessor(std::string_view accessor) { g_failInternAccessor = accessor; }
+void ThrowAtAccessor(std::string_view accessor) { g_throwAccessor = accessor; }
+
+void ResetAccessorInputs() {
+  g_testConfig = nullptr;
+  g_testDefaults = nullptr;
+  g_testInputsSet = false;
+  g_testServerMode = false;
+  g_failInternAccessor = {};
+  g_throwAccessor = {};
+}
+
+}  // namespace nevr_runtime::lifecycle::test
+#endif
+
 // --- C accessors -----------------------------------------------------------
 
 const char* NevrCfgGetFlat(const char* flatKey) {
-  if (flatKey == nullptr) return nullptr;
-  const std::optional<std::string> v = Flat(flatKey);
-  if (!v) return nullptr;  // unmapped or absent
-  return InternCStr(*v);   // present (possibly ""): caller applies its own [0] check
+  return AccessorBoundary("NevrCfgGetFlat", [&]() -> const char* {
+    if (flatKey == nullptr) return nullptr;
+    const std::optional<std::string> v = Flat(flatKey);
+    if (!v) return nullptr;  // unmapped or absent
+    return InternCStr(*v, "NevrCfgGetFlat");
+  });
 }
 
 const char* NevrCfgGetFlatCsv(const char* flatKey) {
-  // List-shaped keys (guilds, regions): a yaml list or a scalar CSV both come
-  // back as the "a,b" string gameserver builds into guilds=/regions= URL params.
-  if (flatKey == nullptr) return nullptr;
-  const std::optional<std::string> v = nevr_cfg::LookupFlatCsv(NevrCfg(), flatKey);
-  if (!v) return nullptr;  // unmapped or absent
-  return InternCStr(*v);
+  return AccessorBoundary("NevrCfgGetFlatCsv", [&]() -> const char* {
+    // List-shaped keys (guilds, regions): a yaml list or a scalar CSV both come
+    // back as the "a,b" string gameserver builds into guilds=/regions= URL params.
+    if (flatKey == nullptr) return nullptr;
+    const std::optional<std::string> v = nevr_cfg::LookupFlatCsv(NevrCfg(), flatKey);
+    if (!v) return nullptr;  // unmapped or absent
+    return InternCStr(*v, "NevrCfgGetFlatCsv");
+  });
 }
 
 const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource) {
-  const nevr_cfg::ServiceHostResult r =
-      nevr_cfg::ResolveServiceHost(NevrCfg(), flatServiceKey ? flatServiceKey : "");
-  if (outSource != nullptr) {
-    switch (r.source) {
-      case nevr_cfg::HostSource::kPrimary: *outSource = 0; break;
-      case nevr_cfg::HostSource::kLoginFallback: *outSource = 1; break;
-      case nevr_cfg::HostSource::kNone: *outSource = 2; break;
+  return AccessorBoundary("NevrCfgServiceHost", [&]() -> const char* {
+    const nevr_cfg::ServiceHostResult r =
+        nevr_cfg::ResolveServiceHost(NevrCfg(), flatServiceKey ? flatServiceKey : "");
+    if (!r.value) {
+      if (outSource != nullptr) *outSource = 2;
+      return nullptr;  // caller uses its hardcoded default
     }
-  }
-  if (!r.value) return nullptr;  // caller uses its hardcoded default
-  return InternCStr(*r.value);
+    const char* value = InternCStr(*r.value, "NevrCfgServiceHost");
+    if (outSource != nullptr) {
+      *outSource = r.source == nevr_cfg::HostSource::kPrimary ? 0 : 1;
+    }
+    return value;
+  });
 }
 
 const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int bridgeActive,
                             unsigned bridgePort) {
-  if (result == nullptr) return nullptr;
-  const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
-  std::optional<std::string> httpTarget;
-  if (httpTargetJson != nullptr && httpTargetJson[0] != '\0') httpTarget = std::string(httpTargetJson);
+  return AccessorBoundary("NevrCfgRedirect", [&]() -> const char* {
+    if (result == nullptr) return nullptr;
+    const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
+    std::optional<std::string> httpTarget;
+    if (httpTargetJson != nullptr && httpTargetJson[0] != '\0') httpTarget = std::string(httpTargetJson);
 
-  const std::optional<std::string> redir =
-      nevr_cfg::ResolveRedirect(result, socketTarget, httpTarget, bridgeActive != 0, bridgePort);
-  if (!redir) return nullptr;
-  return InternCStr(*redir);
+    const std::optional<std::string> redir =
+        nevr_cfg::ResolveRedirect(result, socketTarget, httpTarget, bridgeActive != 0, bridgePort);
+    if (!redir) return nullptr;
+    return InternCStr(*redir, "NevrCfgRedirect");
+  });
 }
 
 const char* NevrGameNativeDefault(const char* key) {
-  if (key == nullptr) return nullptr;
-  const std::optional<std::string> v = nevr_cfg::GameNativeDefault(key);
-  if (!v) return nullptr;
-  return InternCStr(*v);
+  return AccessorBoundary("NevrGameNativeDefault", [&]() -> const char* {
+    if (key == nullptr) return nullptr;
+    const std::optional<std::string> v = nevr_cfg::GameNativeDefault(key);
+    if (!v) return nullptr;
+    return InternCStr(*v, "NevrGameNativeDefault");
+  });
 }
 
 const char* NevrCfgAutoRelay(unsigned bridgePort) {
-  const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
-  if (!socketTarget || socketTarget->empty()) return nullptr;
-  return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort));
+  return AccessorBoundary("NevrCfgAutoRelay", [&]() -> const char* {
+    const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
+    if (!socketTarget || socketTarget->empty()) return nullptr;
+    return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort), "NevrCfgAutoRelay");
+  });
 }
 
 bool NevrCfgSocialFacadeEnabled() {
@@ -246,18 +373,20 @@ bool NevrCfgSocialFacadeEnabled() {
 }
 
 const char* NevrCfgGameNativeConfigJson() {
-  if (g_isServer) return nullptr;  // a dedicated server has no social layer to configure
-  const std::optional<std::string> httpUri = Flat("nevr_http_uri");
-  const std::optional<std::string> serverKey = Flat("nevr_server_key");
-  if (!httpUri || !serverKey) return nullptr;
-  const std::optional<std::string> json = nevr_cfg::BuildGameNativeConfigJson(*httpUri, *serverKey);
-  if (!json) return nullptr;
-  return InternCStr(*json);
+  return AccessorBoundary("NevrCfgGameNativeConfigJson", [&]() -> const char* {
+    if (IsServerMode()) return nullptr;  // a dedicated server has no social layer to configure
+    const std::optional<std::string> httpUri = Flat("nevr_http_uri");
+    const std::optional<std::string> serverKey = Flat("nevr_server_key");
+    if (!httpUri || !serverKey) return nullptr;
+    const std::optional<std::string> json = nevr_cfg::BuildGameNativeConfigJson(*httpUri, *serverKey);
+    if (!json) return nullptr;
+    return InternCStr(*json, "NevrCfgGameNativeConfigJson");
+  });
 }
 
 // N134 S6 — the plugin loader's config source. The impure half: reads the same
 // config.yaml singleton (loaded + fail-loud-validated once, above) and hands the
-// loader the ordered, enabled-only plan built by the pure BuildLoadPlan. Kept
+// loader the ordered plan (disabled entries flagged) built by the pure BuildLoadPlan. Kept
 // here (not in plugin_load_plan.cpp) so the pure builder stays singleton-free and
 // the test links it without dragging the singleton/Windows/Log surface.
 std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() {

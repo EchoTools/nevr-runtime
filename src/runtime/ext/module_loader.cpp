@@ -8,13 +8,10 @@
 #include "core/logging.h"
 
 struct LoadedModule {
-  HMODULE                       hModule;
   const char*                   name;
-  NvrModuleInit_fn              init;
   NvrModuleShutdown_fn          shutdown;
   NvrModuleOnFrame_fn           on_frame;
   NvrModuleOnGameStateChange_fn on_state;
-  std::string                   path;
 };
 
 static std::vector<LoadedModule> g_modules;
@@ -39,117 +36,12 @@ void* ResolveModuleProc(const char* name) {
   return NULL;
 }
 
-void LoadModule(const char* name, const NvrModuleContext* ctx) {
-  // Resolve modules/ directory relative to echovr.exe
-  CHAR moduleDir[MAX_PATH] = {0};
-  GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
-  CHAR* lastSlash = strrchr(moduleDir, '\\');
-  if (lastSlash) *(lastSlash + 1) = '\0';
-
-  std::string dllPath = std::string(moduleDir) + "modules\\" + name + ".dll";
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loading: %s", name);
-
-  /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
-   *
-   * The risk was never loading OUR dll — we pass a full path. It is how ITS
-   * dependencies resolve: with dwFlags=0 the search order starts at the
-   * application directory, so a dll dropped next to echovr.exe can satisfy a
-   * dependency ahead of the real one. These flags restrict the search to the
-   * loaded dll's own directory plus System32.
-   *
-   * Not hypothetical: N89 was a stale dll sitting in plugins/ silently taking
-   * over the log filter for entire runs. That was an accident; the same directory
-   * and the same loader are what an attacker would use deliberately.
-   *
-   * The flags require an absolute path (we have one). If the OS rejects them we
-   * log and fall back rather than failing to load — but we say so, because a
-   * silent fallback would defeat the whole point. */
-  HMODULE hModule = LoadLibraryExA(dllPath.c_str(), nullptr,
-                                   LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
-  if (!hModule && GetLastError() == ERROR_INVALID_PARAMETER) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MODULE] %s: restricted search flags unsupported — falling back to "
-        "default search order (hardening inactive for this load)", name);
-    hModule = LoadLibraryA(dllPath.c_str());
-  }
-  if (!hModule) {
-    DWORD err = GetLastError();
-    Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] Failed to load %s: error %lu (path: %s)", name, err, dllPath.c_str());
-    // The Log() line above already carries the error code and path; without
-    // them here, a fatal-path consumer that only sees FatalError's own
-    // rendered line (crash reporting, an alert keyed off these args rather
-    // than the full log stream) has nothing but "Required module missing".
-    char msg[512];
-    snprintf(msg, sizeof(msg),
-             "Required module '%s' failed to load: LoadLibrary error %lu (path: %s)",
-             name, err, dllPath.c_str());
-    FatalError(msg, "NEVR Module Error");
-    return;
-  }
-
-  auto initFn = (NvrModuleInit_fn)GetProcAddress(hModule, "NvrModuleInit");
-  if (!initFn) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] %s: missing NvrModuleInit export", name);
-    FreeLibrary(hModule);
-    FatalError("Module missing NvrModuleInit", name);
-    return;
-  }
-
-  // N133 S5: enforce the module API version BEFORE init. A module exports its
-  // compiled-against version via NvrModuleApiVersion; absent means v1 (pre-
-  // versioning). A version exceeding this host's is refused — it would expect
-  // NvrModuleContext fields (e.g. config_get) this host does not set. Modules are
-  // required, so an unsupported version is fatal (N120), not a warning.
-  auto verFn = reinterpret_cast<NvrModuleGetApiVersion_fn>(
-      GetProcAddress(hModule, "NvrModuleApiVersion"));
-  uint32_t moduleApiVersion = verFn ? verFn() : 1u;
-  if (!NvrModuleApiVersionSupported(moduleApiVersion)) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.MODULE] %s: API v%u exceeds host v%u — refusing (rebuild the module "
-        "against this host)", name, moduleApiVersion,
-        static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
-    FreeLibrary(hModule);
-    // Carry both version numbers and the actionable instruction through to
-    // FatalError — the Log() above has them, but its rendered line alone was
-    // just "Module API version unsupported" with no versions or next step.
-    char msg[256];
-    snprintf(msg, sizeof(msg),
-             "Module '%s' API v%u exceeds host v%u — rebuild the module against this host",
-             name, moduleApiVersion, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
-    FatalError(msg, "NEVR Module Error");
-    return;
-  }
-
-  int result = initFn(ctx);
-  if (result != 0) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] %s: init failed with code %d", name, result);
-    FreeLibrary(hModule);
-    // Carry the init return code (already computed above) into FatalError's
-    // own message instead of dropping it.
-    char msg[256];
-    snprintf(msg, sizeof(msg), "Module '%s' init failed with code %d", name, result);
-    FatalError(msg, "NEVR Module Error");
-    return;
-  }
-
-  auto shutdownFn = (NvrModuleShutdown_fn)GetProcAddress(hModule, "NvrModuleShutdown");
-  auto onFrameFn = (NvrModuleOnFrame_fn)GetProcAddress(hModule, "NvrModuleOnFrame");
-  auto onStateFn = (NvrModuleOnGameStateChange_fn)GetProcAddress(hModule, "NvrModuleOnGameStateChange");
-
-  g_modules.push_back({hModule, name, initFn, shutdownFn, onFrameFn, onStateFn, dllPath});
-  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loaded: %s (API v%u)", name, moduleApiVersion);
-}
-
 void RegisterStaticModule(const char* name, uint32_t api_version,
                           NvrModuleOnFrame_fn on_frame,
                           NvrModuleOnGameStateChange_fn on_state,
                           NvrModuleShutdown_fn shutdown) {
   LoadedModule m = {};
-  m.hModule = nullptr;  // static — no DLL to free
   m.name = name;
-  m.init = nullptr;      // already called
   m.shutdown = shutdown;
   m.on_frame = on_frame;
   m.on_state = on_state;
@@ -161,9 +53,6 @@ void UnloadModules() {
   for (auto it = g_modules.rbegin(); it != g_modules.rend(); ++it) {
     if (it->shutdown) {
       it->shutdown();
-    }
-    if (it->hModule) {
-      FreeLibrary(it->hModule);
     }
   }
   g_modules.clear();
@@ -197,9 +86,7 @@ void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, u
 
 void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
   LoadedModule m = {};
-  m.hModule = nullptr;
   m.name = "test_mock";
-  m.init = nullptr;
   m.shutdown = nullptr;
   m.on_frame = fn;
   m.on_state = nullptr;
@@ -208,9 +95,7 @@ void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
 
 void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn) {
   LoadedModule m = {};
-  m.hModule = nullptr;
   m.name = "test_mock";
-  m.init = nullptr;
   m.shutdown = nullptr;
   m.on_frame = nullptr;
   m.on_state = fn;

@@ -14,8 +14,11 @@
 
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
+#include "core/json_escape.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/log/boot_replay.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -23,6 +26,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <mutex>
@@ -379,10 +383,10 @@ static LogFilterConfig MakeDefaultConfig() {
         //       battle-pass/store cosmetics, allocator stats) accounted for the
         //       remainder.
 
-        // REMOVED 2026-07-26 (N77/N78): "ExitProcess(".
-        // It was the #1 noise source (97.5% of sustained volume) — but it is a
-        // NEVR-emitted line, and matching it by substring also deleted
-        // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp:140), the report
+        // Not suppressed (N77/N78): "ExitProcess(".
+        // It is the #1 noise source (97.5% of sustained volume in the 2026-06-28 sample) — but it is a
+        // NEVR-emitted line, and matching it by substring would also delete
+        // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp, ExitProcessHook), the report
         // of a REAL, allowed process exit. A rule that cannot tell a suppressed exit
         // from a real one is not a noise rule. NEVR lines are now exempt from these
         // patterns (ShouldSuppress/N77) and the volume is handled by rate-limited
@@ -405,11 +409,11 @@ static LogFilterConfig MakeDefaultConfig() {
         "Loading global archives",
         "Loading game archives",
         "Loading archive 0x",
-        // REMOVED 2026-07-26 (N77): "Finished initializing engine".
-        // This string is the witness quoted in the N7, N8 and N10 close records as
-        // the proof that headless boot advanced past each render gate. It fires ONCE
-        // per boot, so suppressing it saved nothing measurable and destroyed the
-        // evidence the next headless regression would be diagnosed with.
+        // Not suppressed (N77): "Finished initializing engine".
+        // This string is the witness that headless boot advanced past each render
+        // gate (N7, N8, N10). It fires ONCE per boot, so suppressing it would save
+        // nothing measurable and destroy the evidence the next headless regression
+        // is diagnosed with.
         "Initializing enumerate thread",
         "Forking enumerate thread",
 
@@ -624,6 +628,57 @@ static std::string GetDefaultLogDir() {
 #endif
 }
 
+/* One record in the main log. fromBoot marks a line replayed from nevr-boot.jsonl (#5). */
+static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
+    if (g_config.file_jsonl) {
+        std::string line = "{\"ts\":\"";
+        JsonEscape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
+        line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
+        line += GetRunId();
+        line += "\",\"level\":\"";
+        JsonEscape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
+        line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
+        JsonEscape::AppendTo(line, message, len);
+        line += "\"}\n";
+
+        size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
+        g_file_bytes_written += written;
+    } else {
+        int n;
+        if (g_config.timestamps) {
+            n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
+        } else {
+            n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
+        }
+        if (n > 0) g_file_bytes_written += n;
+    }
+}
+
+/* Where the replay of this run's nevr-boot.jsonl stopped (#5). */
+static BootReplay::Cursor g_boot_cursor;
+
+/* #5: replay this run's nevr-boot.jsonl lines that are not yet in the main log, so boot and runtime
+ * events are one stream. Called at the main log's first open and once more after the boot tee has
+ * closed (BuiltinLogFilter::ReplayBootTail); not on rotation. The second call reads from the byte
+ * offset the first stopped at. The boot file stays where it is: it is the crash spool and is never
+ * deleted. The first read looks at the last 1 MiB only (the file accumulates every run). */
+static void ReplayBootLines() {
+    const char* path = BootLogTee::Path();
+    if (path == nullptr || path[0] == '\0' || !g_log_file) return;
+    std::vector<BootReplay::Line> lines;
+    int err = 0;
+    if (!BootReplay::ReadNew(path, GetRunId(), g_boot_cursor, lines, &err)) {
+        BlfLog("boot log %s is not readable (errno=%d); its lines are not replayed into this log", path, err);
+        return;
+    }
+    for (const BootReplay::Line& line : lines) {
+        WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
+                        /*fromBoot=*/true);
+    }
+    std::fflush(g_log_file);
+    BlfLog("replayed %zu boot line(s) from %s into this log", lines.size(), path);
+}
+
 static void InitFileLogging() {
     if (!g_config.file_enabled) return;
 
@@ -641,38 +696,17 @@ static void InitFileLogging() {
     }
 
     OpenLogFile();
+    ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
+}
+
+void BuiltinLogFilter::ReplayBootTail() {
+    std::lock_guard<std::mutex> lock(g_file_mutex);
+    ReplayBootLines();
 }
 
 static void ShutdownFileLogging() {
     std::lock_guard<std::mutex> lock(g_file_mutex);
     CloseLogFile();
-}
-
-/* ------------------------------------------------------------------ */
-/* JSON escaping for JSONL output                                      */
-/* ------------------------------------------------------------------ */
-
-static void JsonEscapeAppend(std::string& out, const char* s, int len) {
-    out.reserve(out.size() + len + 16);
-    for (int i = 0; i < len; i++) {
-        char c = s[i];
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char esc[8];
-                    snprintf(esc, sizeof(esc), "\\u%04x", static_cast<unsigned char>(c));
-                    out += esc;
-                } else {
-                    out += c;
-                }
-                break;
-        }
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -743,8 +777,8 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
  * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and
  * "ExitProcess(3) ... (call #42)" must collapse together, so runs of digits are
  * folded to a single sentinel before hashing. Fixed-size table, no heap in the hot
- * path, its own mutex (never g_file_mutex — that is the lock the crash path used to
- * deadlock on, see N70).
+ * path, its own mutex (never g_file_mutex — a fault raised while that lock was held
+ * would deadlock the crash path, see N70).
  */
 
 static constexpr uint32_t kRateWindowSec = 5;
@@ -887,29 +921,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     /* File output */
     if (g_config.file_enabled && g_log_file) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-
-        if (g_config.file_jsonl) {
-            std::string line = "{\"ts\":\"";
-            line += ts;
-            line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
-            line += GetRunId();
-            line += "\",\"level\":\"";
-            line += lvl;
-            line += "\",\"msg\":\"";
-            JsonEscapeAppend(line, message, len);
-            line += "\"}\n";
-
-            size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
-            g_file_bytes_written += written;
-        } else {
-            int n;
-            if (g_config.timestamps) {
-                n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
-            } else {
-                n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
-            }
-            if (n > 0) g_file_bytes_written += n;
-        }
+        WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
 
         std::fflush(g_log_file);
         RotateIfNeeded();
@@ -957,6 +969,9 @@ static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
  * It is now also driven from the N86 per-frame tick, a site whose liveness is
  * independently proven. Same lesson as N86 and N88: a monitor must not depend on
  * the thing it monitors. */
+/* The CLog::PrintfImpl detour target; null until Init resolved it, and again after Shutdown. */
+static void* g_hook_target = nullptr;
+
 static void MaybeEmitHealth() {
     const uint64_t now = GetEpochSeconds();
     uint64_t last = g_last_health_report.load(std::memory_order_relaxed);
@@ -999,13 +1014,23 @@ static void MaybeEmitHealth() {
     s_lastGameLines = gameLines;
 
     if (delta == 0) {
-        char warn[320];
+        char warn[512];
+        /* Name the cause when the hook guard can tell: the hook was never installed, its target's
+         * bytes changed since install (another module took it), or it is intact, in which case
+         * the game itself is silent. */
+        const char* cause;
+        if (g_hook_target == nullptr) {
+            cause = "the CLog hook is not installed (see the 'hook failed name=CLog::PrintfImpl' line at boot)";
+        } else if (!HookGuard::IsOurDetour(g_hook_target)) {
+            cause = "another module took the hook target (see the 'hook overwritten name=CLog::PrintfImpl' error)";
+        } else {
+            cause = "the hook is intact, so the game is idle or blocked (waiting for a login, or on a modal dialog)";
+        }
         const int wn = snprintf(warn, sizeof(warn),
                                 "[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval "
-                                "(total=%llu) — the CLog hook is installed but receiving "
-                                "nothing. Another module has almost certainly taken the target "
-                                "Filtering, truncation and file logging are all inert.",
-                                static_cast<unsigned long long>(gameLines));
+                                "(total=%llu): %s. Filtering, truncation and file logging have "
+                                "nothing to act on until lines arrive.",
+                                static_cast<unsigned long long>(gameLines), cause);
         if (wn > 0) EmitLine(LOG_LEVEL_WARNING, warn, wn);
     }
 }
@@ -1017,7 +1042,6 @@ static void MaybeEmitHealth() {
 typedef void(__fastcall* CLogPrintfImpl_t)(uint32_t level, int64_t category,
                                             const char* fmt, int64_t* varargs);
 static CLogPrintfImpl_t orig_PrintfImpl = nullptr;
-static void* g_hook_target = nullptr;
 
 static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
                                         const char* fmt, int64_t* varargs) {
@@ -1088,9 +1112,9 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     EmitLine(level, buf, emit_len);
 
     if (g_config.passthrough_to_engine && orig_PrintfImpl) {
-        /* N89: max_line_length used to apply ONLY to our JSONL file. The
-         * passthrough below re-sent the ORIGINAL fmt+varargs, so the game
-         * reformatted the FULL line to console — which is what
+        /* N89: max_line_length must apply to the console too, not ONLY to our
+         * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
+         * reformat the FULL line to console — which is what
          * launch-server.sh captures. Measured: two `[NSUSER] saved ...` profile
          * dumps (5600 and 8192 bytes) were 30.5% of an entire server log while
          * max_line_length was 500. The setting silently did nothing for the
@@ -1214,11 +1238,10 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
         static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
 
     // This hook is installed with raw MinHook calls above, not PatchDetour, so
-    // it was previously invisible to HookGuard — a second module taking this
-    // exact address (the N89 failure mode: "CAPTURED ZERO GAME LINES ...
-    // another module has almost certainly taken the target") could never be
-    // named, only guessed at. Recording it here puts it under the same
-    // detection PatchDetour gives every other hook for free.
+    // HookGuard would not see it. Recording it here puts it under the same
+    // detection PatchDetour gives every other hook for free: a second module
+    // taking this address is then named by the "hook overwritten" error and by
+    // the zero-game-lines health warning instead of being guessed at.
     HookGuard::Record(g_hook_target, "CLog::PrintfImpl");
 }
 

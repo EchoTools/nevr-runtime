@@ -371,8 +371,11 @@ enum class NetGameState : INT32 {
 /// Lobby objects can be local, dedicated, etc. As a game server, this is a dedicated lobby object.
 /// </summary>
 struct Lobby {
-  /// Per-player data in the Lobby. Validated against echovr-reconstruction CServerConfig.h.
-  /// sizeof == 0xA0 (160 bytes)
+  /// Per-player data in the Lobby. Field offsets 0x00-0x9F match echovr-reconstruction
+  /// CServerConfig.h. sizeof == 0xD8 (216 bytes): echovr.exe indexes the [lobby+0x360]
+  /// array with a 0xD8 stride — CNSLobby::SmiteEntrant 0x14061665d `IMUL RAX,RDX,0xd8`,
+  /// fcn_1406082b0 0x1406082c9 `IMUL RDX,RDX,0xd8`, 0x140616920 loop 0x14061698f
+  /// `ADD R8,0xd8`. The reconstruction's 0xA0 is the mapped prefix, not the element size.
   struct EntrantData {
     XPlatformId userId;            // +0x00
     SymbolId platformId;           // +0x10
@@ -388,6 +391,7 @@ struct Lobby {
     UINT16 genIndex;               // +0x8C
     UINT16 teamIndex;              // +0x8E (0=blue, 1=orange, 2=spec)
     Json json;                     // +0x90 (root + cache pointers, 0x10 bytes)
+    BYTE _unkA0[0x38];             // +0xA0 unmapped tail of the 0xD8-byte element
   };
 
   /// Validated against echovr-reconstruction CServerConfig.h. sizeof == 0x38
@@ -413,7 +417,22 @@ struct Lobby {
   IServerLib* serverLibray;   // 0x38
 
   DelegateProxy acceptEntrantFunc;  // 0x40
-  CHAR _unk3[0xD0];                 // 0x60
+  CHAR _unk3[0xC8 - 0x60];          // 0x60
+
+  /// Per-entrant session slots, stride 0x28. StartSessionCBHost (echovr.exe 0x140616ae0) allocates
+  /// them; AcceptPlayersSuccessCBHost (0x140603e20) memcmp's an accept message's GUIDs against
+  /// each slot's `guid` and uses the matching index as the entrant slot.
+  struct PlayerSessionSlot {
+    UINT64 peer;        // +0x00
+    GUID guid;          // +0x08
+    UINT64 joinState;   // +0x18 (0 not joined, 1 join pending, 2 add pending, 3 state pending, 4 accepted)
+    UINT32 _unk20;      // +0x20
+    FLOAT timeout;      // +0x24 (60.0 at session start)
+  };
+
+  PlayerSessionSlot* playerSessions;  // 0xC8
+  UINT64 playerSessionCount;          // 0xD0
+  CHAR _unk3b[0x130 - 0xD8];          // 0xD8
 
   UINT32 hosting;  // 0x130
 
@@ -452,7 +471,7 @@ struct Lobby {
 };
 
 // --- Lobby sub-struct validation (echovr-reconstruction CServerConfig.h, CLobby.h) ---
-static_assert(sizeof(Lobby::EntrantData) == 0xA0, "EntrantData size mismatch with reconstruction");
+static_assert(sizeof(Lobby::EntrantData) == 0xD8, "EntrantData stride mismatch with echovr.exe (0x14061665d)");
 static_assert(offsetof(Lobby::EntrantData, userId) == 0x00, "EntrantData::userId offset mismatch");
 static_assert(offsetof(Lobby::EntrantData, platformId) == 0x10, "EntrantData::platformId offset mismatch");
 static_assert(offsetof(Lobby::EntrantData, uniqueName) == 0x18, "EntrantData::uniqueName offset mismatch");
@@ -463,6 +482,11 @@ static_assert(offsetof(Lobby::EntrantData, ping) == 0x8A, "EntrantData::ping off
 static_assert(offsetof(Lobby::EntrantData, genIndex) == 0x8C, "EntrantData::genIndex offset mismatch");
 static_assert(offsetof(Lobby::EntrantData, teamIndex) == 0x8E, "EntrantData::teamIndex offset mismatch");
 static_assert(sizeof(Lobby::LocalEntrantv2) == 0x38, "LocalEntrantv2 size mismatch with reconstruction");
+static_assert(sizeof(Lobby::PlayerSessionSlot) == 0x28, "PlayerSessionSlot stride mismatch with echovr.exe (0x140603e20)");
+static_assert(offsetof(Lobby::PlayerSessionSlot, peer) == 0x00, "PlayerSessionSlot::peer offset mismatch");
+static_assert(offsetof(Lobby::PlayerSessionSlot, guid) == 0x08, "PlayerSessionSlot::guid offset mismatch");
+static_assert(offsetof(Lobby::PlayerSessionSlot, joinState) == 0x18, "PlayerSessionSlot::joinState offset mismatch");
+static_assert(offsetof(Lobby::PlayerSessionSlot, timeout) == 0x24, "PlayerSessionSlot::timeout offset mismatch");
 
 // Lobby field offset validation (echovr-reconstruction CLobby.h)
 // sizeof(Lobby) == 0x378 per reconstruction, but cannot static_assert due to
@@ -473,6 +497,8 @@ static_assert(offsetof(Lobby, maxEntrants) == 0x18, "Lobby::maxEntrants offset m
 static_assert(offsetof(Lobby, hostingFlags) == 0x1C, "Lobby::hostingFlags offset mismatch");
 static_assert(offsetof(Lobby, serverLibraryModule) == 0x30, "Lobby::serverLibraryModule offset mismatch");
 static_assert(offsetof(Lobby, serverLibray) == 0x38, "Lobby::serverLibray offset mismatch");
+static_assert(offsetof(Lobby, playerSessions) == 0xC8, "Lobby::playerSessions offset mismatch");
+static_assert(offsetof(Lobby, playerSessionCount) == 0xD0, "Lobby::playerSessionCount offset mismatch");
 static_assert(offsetof(Lobby, hosting) == 0x130, "Lobby::hosting offset mismatch");
 static_assert(offsetof(Lobby, hostPeer) == 0x138, "Lobby::hostPeer offset mismatch");
 static_assert(offsetof(Lobby, internalHostPeer) == 0x140, "Lobby::internalHostPeer offset mismatch");

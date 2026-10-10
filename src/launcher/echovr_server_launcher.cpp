@@ -151,10 +151,18 @@ int main(int argc, char* argv[]) {
                        "Waiting for shutdown...\n",
                static_cast<unsigned long>(pi.dwProcessId));
 
-  WaitForSingleObject(pi.hProcess, INFINITE);
+  if (WaitForSingleObject(pi.hProcess, INFINITE) != WAIT_OBJECT_0) {
+    PrintError("WaitForSingleObject failed", GetLastError());
+    CloseHandle(pi.hProcess);
+    return 1;
+  }
 
   DWORD exit_code = 0;
-  GetExitCodeProcess(pi.hProcess, &exit_code);
+  if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+    PrintError("GetExitCodeProcess failed", GetLastError());
+    CloseHandle(pi.hProcess);
+    return 1;
+  }
   CloseHandle(pi.hProcess);
 
   std::fprintf(stderr, "[echovr_server] Server exited with code: %lu\n",

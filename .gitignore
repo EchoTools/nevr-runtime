@@ -110,8 +110,10 @@ echovr
 _temp/
 
 # Environment files. The root .env holds the build-time defaults embedded into the
-# runtime (NEVR_HTTP_KEY, NEVR_SERVER_KEY, ...): secrets, never committed.
+# runtime (NEVR_PUBLIC_API_KEY, NEVR_PUBLIC_SOCKET_KEY, ...): local values, never committed.
 extras/.env
+# scratch of tools/worktree-setup.sh
+/.nevr-worktree-setup/
 /.env
 
 # Claude Code session files
@@ -144,4 +146,8 @@ dump.rdb
 !/modules/README.md
 
 # Local Claude Code assets (private hardening tooling) — never commit
-.claude/
+.claude/*
+# The merge-cleanup skill is the one tracked thing under .claude/.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/merge-cleanup/

@@ -30,6 +30,7 @@
 #include "core/mic_dsp.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_lifecycle.h"
+#include "core/mic_owner_thread.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -72,10 +73,14 @@ MicRingBuffer g_ring(kRingCapacitySamples);
 bool g_ringOverflowLogged = false;
 
 // --- WASAPI state ------------------------------------------------------
-// The lifecycle controller serializes public create/start/stop/destroy calls,
-// releases this state only on its recorded owner thread, and retains it until
-// a worker join is confirmed. The capture worker owns packet reads while live;
-// only the ring buffer is shared with the game thread.
+// Every public create/start/stop/destroy call is marshalled onto
+// g_ownerThread (GH #51): the game issues them from whichever thread its
+// CR15NetVoipBroadcasterCS::UpdateGlobal job (echovr.exe 0x140d7cfc0) lands
+// on, but CoInitializeEx/CoUninitialize and the WASAPI objects must stay on
+// one thread. The lifecycle controller serializes transitions, still checks
+// that each runs on its recorded owner thread (now always g_ownerThread), and
+// retains state until a worker join is confirmed. The capture worker owns
+// packet reads while live; only the ring buffer is shared with game threads.
 IMMDeviceEnumerator* g_enumerator = nullptr;
 IMMDevice* g_device = nullptr;
 IAudioClient* g_audioClient = nullptr;
@@ -89,6 +94,7 @@ std::atomic<bool> g_workerSetupSucceeded{false};
 bool g_ownerMustUninitializeCom = false;
 MicCapturePacketAdapter g_captureAdapter;
 MicCaptureLifecycle g_lifecycle;
+MicOwnerThread g_ownerThread;
 
 void ReleaseWasapi() {
   if (g_captureClient) { g_captureClient->Release(); g_captureClient = nullptr; }
@@ -338,7 +344,10 @@ MicWorkerCreateResult CreateCaptureWorker(void*) {
 
   const DWORD wait = WaitForSingleObject(g_workerStartupEvent, 2000);
   if (wait == WAIT_OBJECT_0 && g_workerSetupSucceeded.load(std::memory_order_acquire)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture started");
+    // The operator-facing "capture started" line (with caller and owner
+    // thread ids) is written by MicProvider::MicStart once the transition
+    // has committed.
+    Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture worker ready");
     return MicWorkerCreateResult::Started;
   }
   if (wait == WAIT_TIMEOUT) {
@@ -414,6 +423,107 @@ const MicLifecycleOperations kMicLifecycleOperations = {
     nullptr, CreateWasapiResources, StartAudio, CreateCaptureWorker, RequestCaptureStop,
     WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream};
 
+const char* StateName(MicLifecycleState state) {
+  switch (state) {
+    case MicLifecycleState::Closed: return "closed";
+    case MicLifecycleState::Ready: return "ready";
+    case MicLifecycleState::Running: return "running";
+    case MicLifecycleState::Stopping: return "stopping";
+    case MicLifecycleState::FaultedWorker: return "faulted-worker";
+    case MicLifecycleState::FaultedNoWorker: return "faulted-no-worker";
+  }
+  return "unknown";
+}
+
+// --- Owner-thread marshalling (GH #51) ----------------------------------
+enum class MicCall { Create, Start, Stop, Destroy };
+
+const char* CallName(MicCall call) {
+  switch (call) {
+    case MicCall::Create: return "MicCreate";
+    case MicCall::Start: return "MicStart";
+    case MicCall::Stop: return "MicStop";
+    case MicCall::Destroy: return "MicDestroy";
+  }
+  return "Mic?";
+}
+
+struct MicCallRequest {
+  MicCall call;
+  DWORD callerThread;
+  DWORD ownerThread;
+  MicLifecycleState before;
+  MicLifecycleState after;
+  bool result;
+};
+
+// Runs on g_ownerThread. The lifecycle sees the owner thread's id, which is
+// the thread CreateWasapiResources ran CoInitializeEx on.
+void RunMicCall(void* context) {
+  auto& request = *static_cast<MicCallRequest*>(context);
+  const DWORD ownerThread = GetCurrentThreadId();
+  request.ownerThread = ownerThread;
+  request.before = g_lifecycle.State();
+  switch (request.call) {
+    case MicCall::Create:
+      request.result = g_lifecycle.Create(ownerThread, kMicLifecycleOperations);
+      break;
+    case MicCall::Start:
+      request.result = g_lifecycle.Start(ownerThread, kMicLifecycleOperations);
+      break;
+    case MicCall::Stop:
+      request.result = g_lifecycle.Stop(ownerThread, kMicLifecycleOperations, 2000);
+      break;
+    case MicCall::Destroy:
+      request.result = g_lifecycle.Destroy(ownerThread, kMicLifecycleOperations, 2000);
+      break;
+  }
+  request.after = g_lifecycle.State();
+}
+
+bool ProviderClosed(void*) { return g_lifecycle.State() == MicLifecycleState::Closed; }
+
+// The owner thread exists only while there are WASAPI resources for it to own.
+// Once the provider is closed, stop it (the next MicCreate starts a fresh one).
+// A provider that is not closed keeps its thread: a retained-resource retry
+// must CoUninitialize on the same thread that initialized COM.
+void StopOwnerThreadIfClosed() {
+  if (!g_ownerThread.ShutdownWhen(ProviderClosed, nullptr) && ProviderClosed(nullptr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture owner thread could not be stopped after close");
+  }
+}
+
+// Marshals one lifecycle call onto the owner thread and blocks until it has
+// run. Returns false (call not executed) when the owner thread could not be
+// started or the transition threw. Every call leaves a record naming the
+// game thread that asked and the owner thread that ran it.
+bool DispatchMicCall(MicCall call, MicCallRequest* request) {
+  *request = MicCallRequest{call, GetCurrentThreadId(), 0, MicLifecycleState::Closed,
+                            MicLifecycleState::Closed, false};
+  // Start/Stop/Destroy on a closed provider are no-ops in the lifecycle; do
+  // not spin up an owner thread just to run one. (Serializing such a call
+  // before a concurrent MicCreate is an equally valid ordering.)
+  if (call != MicCall::Create && ProviderClosed(nullptr)) {
+    request->result = true;
+    Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] %s caller_thread=%lu ignored: provider closed",
+        CallName(call), static_cast<unsigned long>(request->callerThread));
+    return true;
+  }
+  if (!g_ownerThread.Run(RunMicCall, request)) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] %s from thread %lu was not executed: capture owner thread unavailable or transition threw",
+        CallName(call), static_cast<unsigned long>(request->callerThread));
+    StopOwnerThreadIfClosed();
+    return false;
+  }
+  Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] %s caller_thread=%lu owner_thread=%lu state=%s->%s result=%s",
+      CallName(call), static_cast<unsigned long>(request->callerThread),
+      static_cast<unsigned long>(request->ownerThread), StateName(request->before),
+      StateName(request->after), request->result ? "ok" : "refused");
+  if (request->after == MicLifecycleState::Closed) StopOwnerThreadIfClosed();
+  return true;
+}
+
 }  // namespace
 
 uint64_t MicProvider::MicAvailable() {
@@ -421,13 +531,12 @@ uint64_t MicProvider::MicAvailable() {
 }
 
 uint64_t MicProvider::MicCreate() {
-  const DWORD ownerThread = GetCurrentThreadId();
-  if (g_lifecycle.IsCreated() && ownerThread != g_lifecycle.OwnerThread()) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicCreate rejected on non-owner thread");
-    return 1;
-  }
-  if (!g_lifecycle.Create(ownerThread, kMicLifecycleOperations)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture provider creation failed or requires Destroy retry");
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Create, &request)) return 1;
+  if (!request.result) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] capture provider creation failed or requires Destroy retry (state=%s, caller thread %lu)",
+        StateName(request.after), static_cast<unsigned long>(request.callerThread));
     return 1;
   }
   return 0;
@@ -465,49 +574,55 @@ uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
 }
 
 void MicProvider::MicStart() {
-  const DWORD callerThread = GetCurrentThreadId();
-  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStart rejected on non-owner thread");
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Start, &request)) return;
+  if (request.result) {
+    if (request.before == MicLifecycleState::Ready) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture started (caller thread %lu, owner thread %lu)",
+          static_cast<unsigned long>(request.callerThread), static_cast<unsigned long>(request.ownerThread));
+    }
     return;
   }
-  if (!g_lifecycle.Start(callerThread, kMicLifecycleOperations)) {
-    const MicLifecycleState state = g_lifecycle.State();
-    if (state == MicLifecycleState::FaultedNoWorker) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while audio stop recovery is pending; call Destroy");
-    } else if (state == MicLifecycleState::FaultedWorker || state == MicLifecycleState::Stopping) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while previous capture worker is retained; retry Stop/Destroy");
-    } else if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStart rejected on non-owner thread");
-    }
+  const MicLifecycleState state = request.after;
+  if (state == MicLifecycleState::FaultedNoWorker) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while audio stop recovery is pending; call Destroy");
+  } else if (state == MicLifecycleState::FaultedWorker || state == MicLifecycleState::Stopping) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while previous capture worker is retained; retry Stop/Destroy");
+  } else if (state == MicLifecycleState::Closed) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.MIC] MicStart ignored: provider not created (caller thread %lu)",
+        static_cast<unsigned long>(request.callerThread));
   }
 }
 
 void MicProvider::MicStop() {
-  const DWORD callerThread = GetCurrentThreadId();
-  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStop rejected on non-owner thread; resources retained");
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Stop, &request)) return;
+  if (!request.result) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] stop incomplete (state=%s); resources retained for retry",
+        StateName(request.after));
     return;
   }
-  if (!g_lifecycle.Stop(callerThread, kMicLifecycleOperations, 2000)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] stop incomplete (state=%u); resources retained for retry",
-        static_cast<unsigned>(g_lifecycle.State()));
-    return;
+  // The game also calls MicStop when nothing is capturing (e.g. entering a
+  // match, CR15NetVoipBroadcasterCS vslot[16] at 0x140d18a00). Only a real
+  // stop is an operator event.
+  if (request.before != MicLifecycleState::Ready && request.before != MicLifecycleState::Closed) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture stopped (caller thread %lu, owner thread %lu)",
+        static_cast<unsigned long>(request.callerThread), static_cast<unsigned long>(request.ownerThread));
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture stopped");
 }
 
 void MicProvider::MicDestroy() {
-  const DWORD callerThread = GetCurrentThreadId();
-  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicDestroy rejected on non-owner thread; resources retained");
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Destroy, &request)) return;
+  if (!request.result) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] destroy incomplete (state=%s); resources retained for retry",
+        StateName(request.after));
     return;
   }
-  if (!g_lifecycle.Destroy(callerThread, kMicLifecycleOperations, 2000)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] destroy incomplete (state=%u); resources retained for retry",
-        static_cast<unsigned>(g_lifecycle.State()));
-    return;
+  if (request.before != MicLifecycleState::Closed) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] destroyed (caller thread %lu, owner thread %lu)",
+        static_cast<unsigned long>(request.callerThread), static_cast<unsigned long>(request.ownerThread));
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.MIC] destroyed");
 }
 
 #else  // !_WIN32

@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import pathlib
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -17,52 +15,31 @@ import verify_doc_paths  # noqa: E402
 
 
 class VerifyDocPathsTest(unittest.TestCase):
-    def test_ignored_local_nakama_state_paths_are_optional_in_clean_checkout(self):
-        """Local server state references do not make a fresh clone fail the gate."""
-        scratch = pathlib.Path("/var/tmp/work-nevr-runtime")
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="doc-paths-clean-checkout-", dir=scratch) as temp_dir:
-            fixture = pathlib.Path(temp_dir)
-            subprocess.run(["git", "init", "-q", str(fixture)], check=True)
-            docs = fixture / "docs" / "reference"
-            docs.mkdir(parents=True)
-            (docs / "local-nakama.md").write_text(
-                "Local setup writes `tools/nakama-local/.state/nakama.yml`.\n"
-                "The generated state directory is `tools/nakama-local/.state/`.\n",
-                encoding="utf-8",
-            )
-            subprocess.run(["git", "-C", str(fixture), "add", "docs"], check=True)
-            subprocess.run(
-                ["git", "-C", str(fixture), "-c", "user.name=Doc Path Test",
-                 "-c", "user.email=doc-path-test@example.invalid", "commit", "-q", "-m", "fixture"],
-                check=True,
-            )
-            (fixture / "tools").mkdir()
-            shutil.copy2(VERIFIER, fixture / "tools" / VERIFIER.name)
-            state_dir = fixture / "tools" / "nakama-local" / ".state"
-            state_file = state_dir / "nakama.yml"
-            self.assertFalse(state_dir.exists())
-            self.assertFalse(state_file.exists())
-            result = subprocess.run(
-                [sys.executable, fixture / "tools" / VERIFIER.name], cwd=fixture,
-                capture_output=True, check=False, text=True,
-            )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-    def test_nakama_state_allowlist_matches_setup_and_gitignore(self):
-        allowlist = {"tools/nakama-local/.state", "tools/nakama-local/.state/nakama.yml"}
-        self.assertTrue(allowlist.issubset(verify_doc_paths.ALLOWED_ABSENT))
-        self.assertIn("Writes tools/nakama-local/.state/ (git-ignored)",
-                      (REPO / "tools/nakama-local/setup.py").read_text())
-        self.assertIn(".state/", (REPO / "tools/nakama-local/.gitignore").read_text())
-        self.assertIn("local Nakama rig creates these machine-local files",
-                      VERIFIER.read_text())
-
-    def test_doc_path_gate_passes_without_optional_nakama_setup(self):
+    def test_doc_path_gate_passes_on_current_docs(self):
         result = subprocess.run([sys.executable, str(VERIFIER)], cwd=REPO,
                                  capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("doc-paths: OK", result.stdout)
+
+    def test_source_comment_citation_to_a_missing_document_is_reported(self):
+        files = {"a.cpp": "// see docs/design/gone.md for why\nint x;\n"}
+        bad = verify_doc_paths.bad_source_refs(files, read=files.__getitem__, exists=lambda p: False)
+        self.assertEqual(bad, [("a.cpp", 1, "docs/design/gone.md")])
+
+    def test_source_comment_citation_to_an_existing_document_passes(self):
+        files = {"a.h": "/// spec: docs/adr/0005-x.md\n"}
+        bad = verify_doc_paths.bad_source_refs(files, read=files.__getitem__, exists=lambda p: True)
+        self.assertEqual(bad, [])
+
+    def test_other_repository_reference_is_not_checked_here(self):
+        text = "// (echovr-reconstruction docs/earlyquit_field_analysis.md, from ReVault)\n"
+        self.assertEqual(list(verify_doc_paths.source_doc_refs(text)), [])
+        # The marker only exempts what follows it on the same line.
+        self.assertEqual(list(verify_doc_paths.source_doc_refs("// docs/a.md and echovr-reconstruction\n")),
+                         [(1, "docs/a.md")])
+
+    def test_every_tracked_source_citation_resolves_now(self):
+        self.assertEqual(verify_doc_paths.bad_source_refs(verify_doc_paths.tracked_source_files()), [])
 
 
 if __name__ == "__main__":

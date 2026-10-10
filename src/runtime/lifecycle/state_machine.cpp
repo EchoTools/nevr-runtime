@@ -9,6 +9,7 @@
 #include "runtime/ext/module_loader.h"
 #include "runtime/ext/plugin_loader.h"
 #include "core/globals.h"
+#include "core/login_session.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
 
@@ -60,9 +61,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   }
 
   if (g_isServer) {
-    // Redirect "no network" — the WinHTTP stub succeeds for COM calls but the
-    // game's HTTP client rejects ws:// service-redirect URLs before calling Open.
-    // The actual service traffic goes through the ws_bridge, which handles the
+    // Redirect "no network". The actual service traffic goes through the ws_bridge, which handles the
     // WebSocket connection independently. Redirect back to LoadingRoot so the
     // game re-attempts the loading process without ending multiplayer.
     if (state == EchoVR::NetGameState::NoNetwork) {
@@ -88,13 +87,14 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // Session ended: we were in-game and now returning to lobby. Exit cleanly
     // so the fleet manager can spawn a fresh instance.
     if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
+      const GUID endedSession = LoginSession::Get();
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] session ended session_id=%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X "
           "— server exiting via graceful shutdown",
-          g_loginSessionId.Data1, g_loginSessionId.Data2, g_loginSessionId.Data3,
-          g_loginSessionId.Data4[0], g_loginSessionId.Data4[1], g_loginSessionId.Data4[2],
-          g_loginSessionId.Data4[3], g_loginSessionId.Data4[4], g_loginSessionId.Data4[5],
-          g_loginSessionId.Data4[6], g_loginSessionId.Data4[7]);
+          endedSession.Data1, endedSession.Data2, endedSession.Data3,
+          endedSession.Data4[0], endedSession.Data4[1], endedSession.Data4[2],
+          endedSession.Data4[3], endedSession.Data4[4], endedSession.Data4[5],
+          endedSession.Data4[6], endedSession.Data4[7]);
       PerformGracefulShutdown(0);
       // Unreachable
     }
@@ -104,7 +104,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   // By this point the Lobby is initialized and localEntrants contains the server's
   // own login session at entrant[0]. The GUID was set by pnsrad.dll's LoginIdResponseCB
   // after the WebSocket login completed. We read it from the Lobby structure.
-  if (state == EchoVR::NetGameState::Lobby && g_loginSessionId.Data1 == 0 && g_pGame) {
+  if (state == EchoVR::NetGameState::Lobby && LoginSession::Get().Data1 == 0 && g_pGame) {
     // The game's CR15NetGame has a lobby at a known offset. The IServerLib::Initialize
     // already receives the Lobby*. But here we read it from the Lobby's localEntrants
     // pool, which contains LoginSession GUIDs for each entrant.
@@ -140,10 +140,12 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
               unsigned int d2, d3, d4[8];
               if (sscanf(loginIdStr, "%8lX-%4X-%4X-%2X%2X-%2X%2X%2X%2X%2X%2X",
                          &d1, &d2, &d3, &d4[0], &d4[1], &d4[2], &d4[3], &d4[4], &d4[5], &d4[6], &d4[7]) == 11) {
-                g_loginSessionId.Data1 = d1;
-                g_loginSessionId.Data2 = (USHORT)d2;
-                g_loginSessionId.Data3 = (USHORT)d3;
-                for (int i = 0; i < 8; i++) g_loginSessionId.Data4[i] = (BYTE)d4[i];
+                GUID captured = {};
+                captured.Data1 = d1;
+                captured.Data2 = static_cast<USHORT>(d2);
+                captured.Data3 = static_cast<USHORT>(d3);
+                for (int i = 0; i < 8; i++) captured.Data4[i] = static_cast<BYTE>(d4[i]);
+                LoginSession::Set(captured);
               }
             }
           }
@@ -152,13 +154,14 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
       }
     }
 
-    if (g_loginSessionId.Data1 != 0) {
+    const GUID session = LoginSession::Get();
+    if (session.Data1 != 0) {
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] Captured login session: %08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
-          g_loginSessionId.Data1, g_loginSessionId.Data2, g_loginSessionId.Data3,
-          g_loginSessionId.Data4[0], g_loginSessionId.Data4[1], g_loginSessionId.Data4[2],
-          g_loginSessionId.Data4[3], g_loginSessionId.Data4[4], g_loginSessionId.Data4[5],
-          g_loginSessionId.Data4[6], g_loginSessionId.Data4[7]);
+          session.Data1, session.Data2, session.Data3,
+          session.Data4[0], session.Data4[1], session.Data4[2],
+          session.Data4[3], session.Data4[4], session.Data4[5],
+          session.Data4[6], session.Data4[7]);
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Login session GUID not found in game log");
     }

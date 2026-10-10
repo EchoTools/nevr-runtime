@@ -22,9 +22,21 @@ generate-symcache:
         echo "generate-symcache: Go source not found at $go_file — skipping (using committed symcache_data.cpp)" >&2
     fi
 
-# Configure CMake
-configure: generate-symcache _vcpkg-mingw
+# Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
+configure: generate-symcache _vcpkg-mingw _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
+
+# Stop with the fix when the submodule or gen/ a root-preset build needs is missing (after vcpkg, whose protoc `just proto` uses)
+_build-inputs:
+    @tools/worktree-setup.sh --check
+
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout
+worktree-setup:
+    tools/worktree-setup.sh
+
+# Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
+reap-merged *args:
+    python3 -I tools/reap_merged.py {{ args }}
 
 # Build all components
 build: configure
@@ -78,8 +90,9 @@ configure-android:
     cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
+# Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
 build-android: configure-android
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -90,7 +103,7 @@ test-android: build-android
     cd tests/quest && go test -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
-# see docs/design/2026-09-15-crash-report-ingest-implementation-contract.md.
+# see docs/adr/0002-crash-report-ingest.md.
 test-crash-ingest-contract:
     cd tests/crash-ingest && go test -v ./...
 
@@ -164,7 +177,28 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
     echo "Signed sideload APK ready -> $signed"
-    echo "Install with: adb install -r \"$signed\""
+    echo "Install with: just quest-install"
+
+# Install the repacked Quest APK + game data onto the connected headset (sideload).
+# Pass `yes` (`just quest-install yes`) to allow removing the store build when the
+# headset refuses an in-place update because the debug signature differs; that
+# uninstall deletes the app's data on the headset. Without `yes` the recipe stops
+# and prints what would be deleted. Order: check host tools and the APK, require
+# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
+# fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
+# (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
+# `yes`), then push the data zip and extract it to the legacy path the unpatched
+# APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
+# be mounted by a debug-signed sideload, so it is never used.
+# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
+# different data_sha256 gets its own _data-<hash prefix>.zip),
+# written as .part and renamed only after the hash matches. data_sha256
+# is trust-on-first-use: it is the SHA-256 of the file served from data_url when
+# the pin was taken, not a publisher-signed value; a cached file that does not
+# match its own hash is deleted. The download and every long adb call have time
+# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
+quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
+    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
 
 # --- Tests ---
 
@@ -186,13 +220,11 @@ test-system-verbose:
 
 # Run the built runtime on a native Windows VM (libvirt) and judge the boot.
 # Needs WINVM_USER/WINVM_PASS and `just build` first; see
-# docs/reference/windows-vm-system-test.md. Exit 1 = runtime failed a check,
+# tools/winvm/README.md. Exit 1 = runtime failed a check,
 # exit 2 = the VM/environment is unusable.
 test-winvm *ARGS:
     tools/winvm/systest.py {{ARGS}}
 
-# Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
-# login/registration path. See docs/reference/local-nakama.md.
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
@@ -208,46 +240,7 @@ scenario-all:
     set -euo pipefail
     just preset=mingw-scenario build
     cmake --build --preset mingw-scenario
-    # `server: local` scenarios run against the nakama built from the social feature branch.
-    just nakama-dev-up
-    just nakama-seed
     python3 tools/scenario/run_all.py
-
-nakama-up:
-    python3 tools/nakama-local/setup.py
-    docker compose -f tools/nakama-local/docker-compose.yml up -d
-
-# The local stack running a nakama built from source (NAKAMA_SRC, default the social feature worktree
-# ~/src/nakama-worktrees/nevr-social, branch feat/nevr-social): a static
-# binary in the scratch dir, mounted over the image's (tools/nakama-local/docker-compose.dev.yml).
-# Unreleased server changes are tested here; nothing is built into an image or pushed.
-nakama-dev-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src="${NAKAMA_SRC:-$HOME/src/nakama-worktrees/nevr-social}"
-    out=/var/tmp/work-nevr-runtime/nakama-dev/nakama
-    mkdir -p "$(dirname "$out")"
-    commit=$(git -C "$src" rev-parse --short HEAD)
-    dirty=$(git -C "$src" status --porcelain | wc -l)
-    echo "nakama-dev: building $src at $commit (uncommitted files: $dirty) -> $out"
-    (cd "$src" && CGO_ENABLED=0 go build -trimpath -mod=mod -ldflags "-s -w -X main.version=nevr-local-$commit" -o "$out" .)
-    python3 tools/nakama-local/setup.py
-    NAKAMA_DEV_BINARY="$out" docker compose -f tools/nakama-local/docker-compose.yml -f tools/nakama-local/docker-compose.dev.yml up -d --force-recreate nakama
-    echo "nakama-dev: started nevr-local-$commit"
-
-nakama-down:
-    docker compose -f tools/nakama-local/docker-compose.yml down
-
-# Also drops the database volume.
-nakama-reset:
-    docker compose -f tools/nakama-local/docker-compose.yml down -v
-
-nakama-logs:
-    docker compose -f tools/nakama-local/docker-compose.yml logs -f nakama
-
-# Insert the test account (fake Discord ID + password) a runtime can log in as.
-nakama-seed:
-    tools/nakama-local/seed.py
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
@@ -279,7 +272,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_url_diagnostics --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -347,6 +340,12 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
+    bin="build/{{ preset }}/bin/test_service_config.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
     bin="build/{{ preset }}/bin/test_social_facade.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -384,7 +383,7 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_url_diagnostics test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -403,6 +402,23 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
+# compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
+# compiles the same test, the same vectors (service_redirect_vectors.h) and the same
+# shared source (src/runtime/lifecycle/service_redirect.cpp) with the host g++ and runs
+# it. No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
+test-quest-shared:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-shared-host"
+    mkdir -p "$out"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/tests/service_redirect_test.cpp \
+        -o "$out/service_redirect_test"
+    "$out/service_redirect_test"
+    echo "test-quest-shared: all redirect vectors pass on the host"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -420,7 +436,8 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
+    just test-quest-shared
+    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_server_hold -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -476,13 +493,12 @@ verify:
     # whitespace, `/`, or end of line. Use this spelling, not the obvious one.
     #   ^-anchored (file content):  ^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
     #   :-anchored (grep -n output): :[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
-    # N34/N103: src/gameserver/ was DELETED on 2026-07-28 after its one piece of
-    # stranded work (N48's fail-fast) was recovered as N102. This guard remains
-    # so the tree cannot be recreated and wired: a second gameserver copy is how
-    # N48 shipped half-implemented for five weeks. CMake would now hard-fail on a
-    # missing directory, but this names the reason instead of the symptom.
+    # N34/N103: src/gameserver/ does not exist. This guard keeps the tree from
+    # being recreated and wired: a second gameserver copy is how N48 shipped
+    # half-implemented for five weeks. CMake would hard-fail on a missing
+    # directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/runtime/server/." >&2
+        echo "verify: FAIL — src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/." >&2
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
@@ -542,9 +558,9 @@ verify:
     # password auth. Nothing else refreshes in server mode: TokenAuth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
-    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N106_RC=$?
-    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp" "$N106_RC"
-    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp" "$N106_GS"
+    N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
+    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp" "$N106_RC"
+    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp and gameserver_serverdb.cpp" "$N106_GS"
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
         echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
         echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
@@ -557,10 +573,9 @@ verify:
         exit 1
     fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
-    # The old sensor matched the STRING 'WsBridge_Shutdown', which a
-    # GetProcAddress returning null satisfies perfectly — and did, on every run
-    # from the N92 fold until 2026-07-28. Assert the DIRECT call instead: a
-    # symbol the linker must resolve, not a name looked up at runtime.
+    # Assert the DIRECT call: a symbol the linker must resolve, not a name looked up at runtime.
+    # (Matching the STRING 'WsBridge_Shutdown' would be satisfied on every run by a GetProcAddress
+    # that returns null.)
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
         echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
@@ -575,8 +590,8 @@ verify:
     # Scoped to ResolveShutdownDependencies, NOT the whole file: crash_recovery.cpp
     # legitimately resolves the four kernel32 hooks (CreateProcessA/W, ExitProcess,
     # TerminateProcess) at INIT, where the loader lock is fine. The constraint is
-    # that the shutdown-dependency resolver no longer performs a lookup at all —
-    # the bridge is in-process now. PerformGracefulShutdown's own body is covered
+    # that the shutdown-dependency resolver performs no lookup at all —
+    # the bridge is in-process. PerformGracefulShutdown's own body is covered
     # separately by the N62 sensor above.
     N105_RC=0; N105_RSD=$(awk '/^void ResolveShutdownDependencies/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N105_RC=$?
     sensor_stage1 "N105 shutdown resolver" "src/runtime/lifecycle/crash_recovery.cpp" "$N105_RC"
@@ -591,9 +606,9 @@ verify:
     # built on 2026-06-26 — so the feature was recorded as done while production
     # had no fatal path at all for either condition. Assert on the compiled file
     # (src/runtime/server/), never the dead one.
-    N102_RC=0; N102_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N102_RC=$?
-    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp" "$N102_RC"
-    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of src/runtime/server/gameserver.cpp" "$N102_GS"
+    N102_RC=0; N102_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp) || N102_RC=$?
+    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp" "$N102_RC"
+    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp, gameserver_callbacks.cpp and gameserver_serverdb.cpp" "$N102_GS"
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
             echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
@@ -608,12 +623,11 @@ verify:
         echo "verify: FAIL — N102 a gameserver fail-fast uses FatalError; use ServerFatal (mode-gated)." >&2
         exit 1
     fi
-    # N72/N73: the broadcaster ingress guards moved with the plugin to
-    # ~/src/nevr-runtime-plugins on 2026-07-26 (this repo is PUBLIC and the
-    # plugin is a broadcaster injection tool). Their sensors moved with them —
-    # asserting on a path that no longer exists here would fail-closed forever,
-    # and asserting nothing would silently drop the guarantee. Recorded in the
-    # N72/N73 ledger entries instead, which name the new owning repo.
+    # N72/N73: the broadcaster ingress guards live with the plugin in
+    # ~/src/nevr-runtime-plugins (this repo is PUBLIC and the
+    # plugin is a broadcaster injection tool), and their sensors live there too —
+    # asserting on a path that does not exist here would fail-closed forever,
+    # and asserting nothing would silently drop the guarantee.
     # --- Crash-path invariants (N67/N69/N70) ---------------------------------
     # These are call-graph assertions, not behavioural tests. A crash handler that
     # violates them fails only during a crash, where no test is watching — so the
@@ -683,7 +697,10 @@ verify:
     N36_RC=0; N36_BODY=$(awk '/^static VOID InitializeAfterGameImageGuard\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
     sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
     sensor_nonempty "N36 Initialize Log census" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
-    LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | grep -cF 'Log(EchoVR::LogLevel' || true)
+    # Every Log( call, ternary-selected levels included (a literal 'Log(EchoVR::LogLevel' match
+    # missed `Log(cond ? ... : ...)`); // comments are dropped first. Callees are covered by
+    # tools/tests/test_patch_detour_logging.py.
+    LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | sed 's#//.*##' | grep -cE '(^|[^A-Za-z_:])Log\(' || true)
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
         echo "verify: FAIL — N36 guarded initialization contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
         echo "InitializeAfterGameImageGuard() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
@@ -703,8 +720,8 @@ verify:
     # --- Observability invariants (N77/N78/N79/N80/N81) ----------------------
     # N77: NEVR's own lines must be exempt from game-noise suppression patterns.
     # Without the guard, a substring rule aimed at echovr noise silently deletes
-    # NEVR structured output — it previously erased "Finished initializing engine"
-    # (the witness cited in the N7/N8/N10 closes) and masked real ExitProcess reports.
+    # NEVR structured output — e.g. it would erase "Finished initializing engine"
+    # (the witness cited in the N7/N8/N10 closes) and mask real ExitProcess reports.
     if ! grep -q 'if (IsNevrLine(message)) return false;' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N77 NEVR-line exemption missing from ShouldSuppress; game-noise patterns can delete NEVR output." >&2
         exit 1
@@ -753,11 +770,10 @@ verify:
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
     # --- N115: the login system_info block must be MEASURED, not invented --------
-    # It used to be literals — "cpu":"Wine", 4 physical cores, 8 logical, 16384 MB
-    # total, 8192 used — emitted as though read from the machine. Measured on this
-    # host, the truth was 16/32 cores and 32000 MB. Every field was wrong, and
-    # nothing could tell, because invented data and a real reading look identical
-    # once they are on the wire.
+    # Literals ("cpu":"Wine", 4 physical cores, 8 logical, 16384 MB total, 8192
+    # used) would be emitted as though read from the machine, and nothing could
+    # tell, because invented data and a real reading look identical once they are
+    # on the wire. Every field is read from the host (SystemInfo::Get).
     #
     # The unit tests cover SystemInfo itself; they cannot see this format string.
     # This sensor is the half that watches the wire format.
@@ -784,10 +800,10 @@ verify:
 
     # --- N131: the Asset CDN must not fetch on a server --------------------------
     # A headless server has nothing to render, so it must not open the CDN
-    # connection (it opens ServerDB + login only). AssetCDN::Initialize used to run
-    # unconditionally from initialize.cpp BEFORE the CLI was parsed, so g_isServer
-    # was FALSE there and a gate could not distinguish server from client. The call
-    # now lives in boot.cpp, post-CLI-parse, gated on the client. Guard both facts.
+    # connection (it opens ServerDB + login only). initialize.cpp runs BEFORE the
+    # CLI is parsed, so g_isServer is FALSE there and a gate could not distinguish
+    # server from client. The call therefore lives in boot.cpp, post-CLI-parse,
+    # gated on the client. Guard both facts.
     N131_RC=0; N131_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N131_RC=$?
     sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
     sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
@@ -882,10 +898,10 @@ verify:
 
     # --- N126: a failed hook must not be silent --------------------------------
     # PatchDetour is the one choke point every detour passes through. A failed
-    # Attach used to return FALSE and log nothing, and 9 of 10 mode_patches call
-    # sites ignore the return and log "installed" on the next line regardless — so
-    # a server-critical hook that never installed still printed "installed" and
-    # produced no failure signal at any level. The failure branch must Log.
+    # 9 of 10 mode_patches call sites ignore the return and log "installed" on the
+    # next line regardless — so a failed Attach that logged nothing would leave a
+    # server-critical hook uninstalled, still printing "installed", with no failure
+    # signal at any level. The failure branch must Log.
     N126_RC=0; N126_PD=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || N126_RC=$?
     sensor_stage1 "N126 failed hook is reported" "src/runtime/hook/patching.h" "$N126_RC"
     sensor_nonempty "N126 failed hook is reported" "non-comment lines of patching.h" "$N126_PD"
@@ -897,9 +913,9 @@ verify:
 
     # --- N125: the game-loop setjmp and its longjmp live in the SAME file --------
     # g_gameLoopJmpBuf is a crash-recovery jump buffer: GameMainWrapperHook does the
-    # setjmp, the VEH does the longjmp. They used to sit in different translation
-    # units coupled by an `extern`, which is the seam that reads as "which file owns
-    # crash recovery?". N125 co-located them in crash_recovery.cpp. This fails if the
+    # setjmp, the VEH does the longjmp. Split across translation units by an
+    # `extern`, they would leave "which file owns crash recovery?" unanswered, so
+    # N125 keeps both in crash_recovery.cpp. This fails if the
     # setjmp side drifts back to mode_patches.cpp — a split nobody would notice,
     # because no run crashes the server on purpose and the smoke suite cannot reach
     # the recovery path.
@@ -924,9 +940,9 @@ verify:
         echo "verify: FAIL — N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp." >&2
         exit 1
     fi
-    # The recovery hook must still be INSTALLED — the move surfaced that nothing
-    # verified this. A dropped InstallGameMainHook() call means the server no longer
-    # sets up its longjmp point and dies on the first crash it was built to survive.
+    # The recovery hook must be INSTALLED, and no other sensor verifies it. A dropped
+    # InstallGameMainHook() call means the server no longer sets up its longjmp point
+    # and dies on the first crash it was built to survive.
     if ! grep -q 'InstallGameMainHook()' src/runtime/lifecycle/initialize.cpp; then
         echo "verify: FAIL — N125 initialize.cpp no longer calls InstallGameMainHook()." >&2
         echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
@@ -939,21 +955,26 @@ verify:
     # whole time — token_auth parsed it from the auth response and persisted it to
     # the credential cache — it had simply never been exposed.
     #
-    # Flattened before matching (tr -d '\\'): the JSON lives inside a C string
-    # literal, so every quote is backslash-escaped and matching it through a
-    # justfile recipe means three layers of escaping. N115's sensor silently
-    # matched NOTHING for exactly this reason and its falsification went green.
+    # The profile is assembled by key assignments (profile["displayname"] = ...), not
+    # inside a C string literal, so these patterns match the source text directly.
+    # A check that matches JSON text inside a string literal has to strip the
+    # backslash before every quote first (see N115): left escaped, such a pattern
+    # matches nothing and a broken tree still passes.
     N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
-    N123_FLAT=$(tr -d '\\' <<<"$N123_WS")
-    # N146: displayname is now set via nlohmann_json, not a hand-built snprintf
-    # format string.  The old pattern was "\"displayname\":\"%s\""; the new one
-    # is j["displayname"] = resolvedName (where resolvedName traces back to
-    # TokenAuth_GetUsername, verified by the second check below).
-    if ! grep -qE 'displayname.*=.*resolvedName|displayname.*=.*displayName' <<<"$N123_FLAT"; then
-        echo "verify: FAIL — N123 the login displayname is no longer sourced from a variable." >&2
+    if ! grep -qF 'profileInputs.display_name = displayName;' <<<"$N123_WS"; then
+        echo "verify: FAIL — N123 ws_bridge no longer forwards the resolved display name into the login profile." >&2
         echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
+        exit 1
+    fi
+    N123_PROFILE_RC=0; N123_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N123_PROFILE_RC=$?
+    sensor_stage1 "N123 login profile display name" "src/runtime/compat/login_profile.cpp" "$N123_PROFILE_RC"
+    sensor_nonempty "N123 login profile display name" "non-comment lines of compat/login_profile.cpp" "$N123_PROFILE"
+    if ! grep -qF 'profile["displayname"] = inputs.display_name.empty()' <<<"$N123_PROFILE" || \
+       ! grep -qF 'std::to_string(inputs.account_id)' <<<"$N123_PROFILE"; then
+        echo "verify: FAIL — N123 login profile no longer serializes the resolved display name with the account-id fallback." >&2
+        echo "Every NEVR client could announce the same literal name if this fallback is replaced with a placeholder." >&2
         exit 1
     fi
     # Anchored on the exact call form: a rename that APPENDS characters
@@ -974,9 +995,9 @@ verify:
     fi
 
     # --- N120: on a server, a degraded runtime must not keep running -------------
-    # Four conditions used to be logged and stepped over. On a dedicated server
-    # nobody reads a console, so "logged" means "lost", and the process ran on to
-    # fail later somewhere unrelated — broken AND misattributed.
+    # Four conditions must not be merely logged and stepped over. On a dedicated
+    # server nobody reads a console, so "logged" means "lost", and the process
+    # would run on to fail later somewhere unrelated — broken AND misattributed.
     #
     # All four are comment-stripped: a commented-out ServerFatal would satisfy a
     # plain grep and the sensor would pass on a disabled guard (N111).
@@ -998,8 +1019,7 @@ verify:
         exit 1
     fi
 
-    # platform_compat returned 0 even when the hook its own comment calls
-    # silent-but-fatal had failed. It must report failure so module_loader's
+    # platform_compat returned 0 even when the TLS hook had failed. It must report failure so module_loader's
     # existing FatalError fires at the point of the defect.
     N120_RC2=0; N120_PC=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/platform-compat/src/platform_compat.cpp) || N120_RC2=$?
     sensor_stage1 "N120 platform_compat reports failure" "src/modules/platform-compat/src/platform_compat.cpp" "$N120_RC2"
@@ -1009,9 +1029,9 @@ verify:
         echo "It must return failure ONLY on a server: module_loader treats a non-zero init as fatal in both modes, so an unconditional failure would hard-fail a client that should merely warn." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *isServer *&& *\( *!tlsOk *\|\| *!httpOk *\) *\)' <<<"$N120_PC"; then
-        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS or WinHTTP hook." >&2
-        echo "Without this it returns success with a degraded network stack, which is how a silently-failing WinHTTP hook looked identical to a working one." >&2
+    if ! grep -qE 'if *\( *isServer *&& *!tlsOk *\)' <<<"$N120_PC"; then
+        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS hook." >&2
+        echo "Without this it returns success with a degraded network stack, which is how a silently-failing TLS hook looked identical to a working one." >&2
         exit 1
     fi
 
@@ -1094,10 +1114,9 @@ verify:
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.
     #
-    # That was the live arrangement until 2026-07-29 — PatchServerFramePacing
-    # blind-wrote the same VA with no validation and no save. It was safe only
-    # because Init happened to run first, which is an ordering accident, not a
-    # design. It stays deleted.
+    # A PatchServerFramePacing that blind-wrote the same VA with no validation and
+    # no save would be safe only because Init happens to run first, which is an
+    # ordering accident, not a design; this guard keeps it from existing.
     if grep -rn 'PatchServerFramePacing' src/runtime --include='*.cpp' --include='*.h' \
          | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save." >&2
@@ -1120,9 +1139,8 @@ verify:
     # never runs on a server (N86)". The one path that runs only on a client told
     # every plugin it was on a server, for as long as both copies existed.
     #
-    # Two copies is the shape, not the typo: N86 measured the truth, added a
-    # correct dispatcher, and left the old one asserting the opposite. So the
-    # invariant is about COUNT, not about the flag value.
+    # Two copies is the shape to guard against: a correct dispatcher beside a second one that
+    # asserts the opposite flag. So the invariant is about COUNT, not about the flag value.
     N110_RC=0; N110_TICKS=$(grep -rn 'TickPlugins(&\|TickModules(&' src/runtime --include='*.cpp') || N110_RC=$?
     sensor_stage1 "N110 single dispatcher" "src/runtime/**/*.cpp" "$N110_RC"
     sensor_nonempty "N110 single dispatcher" "Tick*(&...) call sites" "$N110_TICKS"
@@ -1186,8 +1204,8 @@ verify:
         echo "The ABI layer records what the binary told us; it must not depend on our own primitives. Move the shared piece INTO abi/, or stop using it there." >&2
         exit 1
     fi
-    # No "do these directories still exist" loop here on purpose. It was written,
-    # then removed as unfalsifiable: emptying any of the three fails EARLIER than
+    # No "do these directories still exist" loop here on purpose: it would be
+    # unfalsifiable, because emptying any of the three fails EARLIER than
     # this point and for a different reason, so the loop could never be shown to
     # be the thing that caught it. Measured 2026-07-29 — emptying src/extension/
     # dies at configure with `No SOURCES given to target: nevr_core`, because the
@@ -1240,6 +1258,20 @@ verify:
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
         exit 1
     fi
+    # Issue #43: received ServerDB payloads reach the game through
+    # CBroadcaster::ReceiveLocalEvent, which takes them as mutable. The receive
+    # callback therefore hands out a writable dispatcher-owned copy, and no server
+    # code casts const away from a payload pointer. test_protobuf_transport pins the
+    # callback type; this catches a handler that re-declares its parameter const
+    # and casts it back. :-anchored N99 comment stripper.
+    I43_RC=0; I43_HITS=$(grep -rnF -- 'const_cast<VOID*>' src/runtime/server) || I43_RC=$?
+    sensor_stage1 "issue #43 const_cast on received payload" "src/runtime/server" "$I43_RC"
+    if [ "$I43_RC" -eq 0 ] && printf '%s\n' "$I43_HITS" \
+         | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
+        echo "verify: FAIL — issue #43 const_cast<VOID*> is back in src/runtime/server." >&2
+        echo "Take the payload as VOID* from WebSocketClient::MessageCallback; it is writable by contract." >&2
+        exit 1
+    fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
     # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
     # generic branch still exists, and the attribution table is still populated
@@ -1272,7 +1304,7 @@ verify:
             exit 1
         fi
     done
-    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources were removed —
+    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources are kept out —
     # the stderr FILE lock (Log -> vfprintf) and the loader lock
     # (GetModuleHandleA/GetProcAddress). Both must stay out of PerformGracefulShutdown.
     # Strip comment lines first: the function's own comment says "NO
@@ -1334,6 +1366,27 @@ verify:
          | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_' | grep .; then
         echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
         echo "identity must come from the presented credential or config, never the binary." >&2
+        exit 1
+    fi
+    # #41: config credentials reach Nakama in a URL query from two places — the
+    # ServerDB registration URI (server/gameserver.cpp) and the bridge's config/
+    # login connections (compat/ws_bridge.cpp). Both must go through the
+    # percent-encoder in server/serverdb_uri.cpp. A raw append lets a password
+    # with '&', '#', '%' or '+' rewrite the query, and if only one site encodes,
+    # the two paths send different passwords for the same account.
+    # Falsified 2026-10-05 against 323352b: the pattern hits gameserver.cpp:1433
+    # and ws_bridge.cpp:1002-1003; on the fixed tree it exits 1.
+    I41_RC=0; I41_HITS=$(grep -nE '[?&]password=%s|\+= *cfgPassword|"&password="' \
+        src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
+    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp server/gameserver_serverdb.cpp compat/ws_bridge.cpp" "$I41_RC"
+    if [ "$I41_RC" -eq 0 ]; then
+        printf '%s\n' "$I41_HITS" >&2
+        echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
+        exit 1
+    fi
+    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
+       || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
+        echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
     fi
     # N20 (owner decision, 2026-07-27): the nevr_discord_id config fallback applies
@@ -1435,11 +1488,12 @@ verify:
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1
     fi
-    # N75: plugins and modules must load with a restricted search path. With
+    # N75: plugins must load with a restricted search path (modules are statically
+    # linked and load no DLL). With
     # dwFlags=0 the search starts at the application directory, so a dll dropped
     # next to echovr.exe can satisfy a dependency ahead of the real one. N89
     # demonstrated the mechanism accidentally.
-    for f in src/runtime/ext/plugin_loader.cpp src/runtime/ext/module_loader.cpp; do
+    for f in src/runtime/ext/plugin_loader.cpp; do
         if ! grep -q 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' "$f"; then
             echo "verify: FAIL — N75 restricted search flags missing from $f;" >&2
             echo "dependencies would resolve from the application directory first." >&2
@@ -1452,11 +1506,10 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
-    # N92/N105: exactly one ws_bridge. Two divergent copies existed for months —
-    # only the module ran, while N61's matchmaker fix landed in the gamepatches
-    # copy that never did. The module tree was DELETED 2026-07-28 once its last
-    # unique symbol (WsBridge_Shutdown) was brought in-process as
-    # StopWebSocketBridgeListener. This guard keeps it from coming back.
+    # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
+    # the one that does not run (N61's matchmaker fix did). The bridge is
+    # in-process (StopWebSocketBridgeListener); this guard keeps a separate
+    # module build from coming back.
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then
@@ -1464,7 +1517,7 @@ verify:
         echo "compiled into gamepatches; two copies is the bug (fixes land in the dead one)." >&2
         exit 1
     fi
-    N92B_RC=0; grep -q 'LoadModule("ws_bridge"' src/runtime/lifecycle/boot.cpp || N92B_RC=$?
+    N92B_RC=0; grep -qE '(LoadModule|LoadLibrary[AW]?|RegisterStaticModule)\(\s*"ws_bridge' src/runtime/lifecycle/boot.cpp || N92B_RC=$?
     sensor_stage1 "N92 ws_bridge module load" "src/runtime/lifecycle/boot.cpp" "$N92B_RC"
     if [ "$N92B_RC" -eq 0 ]; then
         echo "verify: FAIL — N92 boot.cpp still loads ws_bridge as a required module; with the" >&2
@@ -1495,10 +1548,10 @@ verify:
     fi
     # logging.md: no INFO-level logging inside a per-frame hot path (~125Hz).
     python3 tools/verify_log_rules.py
-    # D1/N78: exactly ONE strong definition of ::Log. gameserver.cpp used to define
-    # a second one with no WriteLog null-check, so which definition every call in
-    # the DLL bound to was link-order dependent — and if that one won, the
-    # early-boot stderr fallback silently did not exist.
+    # D1/N78: exactly ONE strong definition of ::Log. A second definition (e.g. in
+    # gameserver.cpp) would make which one every call in the DLL binds to link-order
+    # dependent — and if the one without the WriteLog null-check won, the
+    # early-boot stderr fallback would silently not exist.
     # .cpp only (a header carries the declaration), and tests are exempt — they
     # deliberately stub Log to run without the game.
     LOG_DEFS=$(grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' \
@@ -1569,10 +1622,6 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
-    # N100 sensor removed 2026-08-02: its subject (BUGS.md) is being purged from
-    # the public repo. The evidence-rank rule it enforced lives on in
-    # docs/standards/verification.md; the N-ledger entries it checked are now
-    # git history or migrated to ADRs.
     # --- N99: -server shall apply the game's own headless mask --------------
     # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
     # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
@@ -1596,8 +1645,8 @@ verify:
         exit 1
     fi
     # And boot.cpp shall not tell the operator to remove a flag that is native
-    # to the game. A unit believed that message, removed -headless, and a
-    # window opened on the owner's screen.
+    # to the game: acting on that message by removing -headless opens a
+    # window on the owner's screen.
     N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N99_BOOT_RC=$?
     sensor_stage1 "N99 boot flag advice" "src/runtime/lifecycle/boot.cpp" "$N99_BOOT_RC"
     sensor_nonempty "N99 boot flag advice" "non-comment lines of src/runtime/lifecycle/boot.cpp" "$N99_BOOT"
@@ -1672,17 +1721,18 @@ verify:
         echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
         exit 1
     fi
-    # S7b — flat-map structural gate: exactly 29 entries. Adding or removing a
+    # S7b — flat-map structural gate: exactly 31 entries. Adding or removing a
     # flat-map entry without updating this number fails the build — a deliberate
-    # reminder to also add a test for the new mapping. The 29 entries are the
-    # complete key surface measured in S0, verified migrated through S3-S5b.
+    # reminder to also add a test for the new mapping. The 29 entries measured in
+    # S0 and migrated through S3-S5b, plus nevr_allow_offline_server (#16) and
+    # nevr_empty_server_ttl_s (#58).
     N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
-    if [ "$N133_S7B" -ne 29 ]; then
-        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 29." >&2
+    if [ "$N133_S7B" -ne 31 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 31." >&2
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2
-        echo "falls back to the old game-JSON path (exactly what the cutover prevents)." >&2
+        echo "falls back to the game-JSON path (exactly what the cutover prevents)." >&2
         exit 1
     fi
     # S7c — the module context config_get accessor (S5 deliverable) must remain
@@ -1757,8 +1807,8 @@ verify:
     # N112 — BuildIdentity: the client login and server registration now carry
     # NEVR build identity (version, commit, git describe, build type) and a
     # plugin manifest. These sensors prove the wiring is present and catch the
-    # case where the old literals ("buildversion":631547, bare GIT_DESCRIBE)
-    # are restored by a merge or refactor.
+    # literals ("buildversion":631547, bare GIT_DESCRIBE) being restored by a
+    # merge or refactor.
     #
     # N112a — BuildIdentity struct exists and is compiled.
     if [ ! -f src/core/build_identity.h ]; then
@@ -1771,19 +1821,22 @@ verify:
         echo "verify: FAIL — N112a: src/core/build_identity.cpp is missing." >&2
         exit 1
     fi
-    # N112b — client login carries nevr_identity and nevr_plugins.
-    if ! grep -q 'nevr_identity' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    # N112b — the shared client login profile carries nevr_identity and nevr_plugins.
+    N112_PROFILE_RC=0; N112_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N112_PROFILE_RC=$?
+    sensor_stage1 "N112 client login identity and plugins" "src/runtime/compat/login_profile.cpp" "$N112_PROFILE_RC"
+    sensor_nonempty "N112 client login identity and plugins" "non-comment lines of compat/login_profile.cpp" "$N112_PROFILE"
+    if ! grep -qF 'profile["nevr_identity"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_identity. The client login must send NEVR version info (N112)." >&2
         exit 1
     fi
-    if ! grep -q 'nevr_plugins' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    if ! grep -qF 'profile["nevr_plugins"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_plugins. The client login must send a plugin manifest (N112)." >&2
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp; then
+    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
         echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
@@ -1827,10 +1880,6 @@ verify:
     python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
 
-# ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
-# (tests/token-auth-smoke.sh) was deleted — superseded by just verify's
-# test-auth-unit and the auth ground-truth tests.
-
 # Generate combat override files from echomod build output
 generate-combat-overrides build_dir:
     python tools/echomod/generate_resources.py \
@@ -1873,6 +1922,28 @@ verify-sign file:
     osslsigncode verify -CAfile certs/root-ca.crt -in {{ file }}
 
 # --- Internal ---
+
+# Fail unless the local ~/.vcpkg is on the revision CI builds (.vcpkg-commit). Bumping that file is a
+# deliberate dependency upgrade: the vcpkg ports, and so the library versions, change with it.
+vcpkg-pin-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    want=$(tr -d '[:space:]' < "{{ justfile_directory() }}/.vcpkg-commit")
+    have=$(git -C "$HOME/.vcpkg" rev-parse HEAD)
+    if [ "$have" != "$want" ]; then
+        echo "vcpkg-pin-check: FAIL — ~/.vcpkg is at $have, CI builds $want (.vcpkg-commit)." >&2
+        echo "Fix: git -C ~/.vcpkg checkout --detach $want   (or bump .vcpkg-commit on purpose, in its own PR)." >&2
+        exit 1
+    fi
+    # The pinned ixwebsocket port links -lCrypt32; the MinGW package ships libcrypt32.a only and ld on
+    # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
+    lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
+    if [ ! -e "$lib/libCrypt32.a" ]; then
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
+        exit 1
+    fi
+    echo "vcpkg-pin-check: OK ($have, libCrypt32.a present)"
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
 [private]

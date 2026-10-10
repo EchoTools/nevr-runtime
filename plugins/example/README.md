@@ -22,7 +22,7 @@ do I...", the answer is in `plugins/example/src/plugin.cpp`.
 | Cleanup (optional)                  | `NvrPluginShutdown()` -- reverse-order hook removal                             |
 | ctx_size runtime discovery (v5+)    | Compares `ctx->ctx_size` against `sizeof(NvrGameContext)` to discover query API |
 | Plugin query API (v5+)              | `ctx->get_plugin_count()` and `ctx->get_plugin_info(n)` for neighbour discovery |
-| Structured logging                  | `NEVR_DEFINE_PLUGIN_LOG` macro from `plugin_logger.h`                           |
+| Leveled logging                     | `NEVR_DEFINE_PLUGIN_LOG` macro from `plugin_logger.h`: `PluginLog` / `PluginLogWarning` / `PluginLogError` |
 | Config args from config.yaml (v4+)  | Parses `args_json` with `nlohmann::json` -- logs known-safe keys only          |
 | Local config loading                | `LoadConfigFile("_local/config.json")` with graceful absence handling           |
 | Safe hooking                        | ResolveVA_Checked + ValidatePrologue + HookManager::CreateAndEnable             |
@@ -155,7 +155,7 @@ All plugins link against `nevr_plugin_common`, an INTERFACE library providing:
 | Header                    | Provides                                                                    |
 | ------------------------- | --------------------------------------------------------------------------- |
 | `plugin_interface.h`      | Types, enums, `NEVR_PLUGIN_API` export macro                               |
-| `plugin_logger.h`         | `NEVR_DEFINE_PLUGIN_LOG(prefix)` -- printf-style logging to stderr         |
+| `plugin_logger.h`         | `NEVR_DEFINE_PLUGIN_LOG(prefix)` -- leveled printf-style logging to stderr (`PluginLog`, `PluginLogWarning`, `PluginLogError`) |
 | `hook_manager.h`          | `nevr::HookManager` -- scoped MinHook lifecycle (CreateAndEnable, RemoveAll) |
 | `nevr_common.h`           | `ResolveVA_Checked`, `ResolveVA_Unchecked`, `ValidatePrologue`, `LoadConfigFile` |
 | `address_registry.h`      | Verified VA constants for game functions                                   |
@@ -237,7 +237,7 @@ When `NvrPluginInitEx` is exported, the host passes the plugin's `args` map from
 its `config.yaml` entry serialized to a flat JSON object string:
 
 - Keys are flattened dotted paths (a nested YAML `a: {b: 1}` becomes `"a.b"`)
-- Values are strings (post-interpolation; the host resolves `${VAR}` refs before serialization)
+- Values are strings (post-interpolation; the host resolves `${VAR}` refs before serialization, an unset bare `${VAR}` stays as written, and `$${` yields a literal `${`)
 - When the entry declared no args, `args_json` is the empty object `"{}"` (never null)
 
 Example: `{"greeting":"hi","limits.max":"5"}`

@@ -34,9 +34,15 @@ void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 // Never use the game directory for config-load unit-test fixtures.
 constexpr const char* kScratchConfigDirectory = R"(Z:\var\tmp\work-nevr-runtime\nevr-config-tests\)";
 
+// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): on a fresh machine (the CI container,
+// run 37151801289) only Z:\var\tmp exists, and CreateDirectoryA makes one level at a time.
 bool EnsureScratchConfigDirectory() {
-  if (CreateDirectoryA(kScratchConfigDirectory, nullptr) != FALSE) return true;
-  return GetLastError() == ERROR_ALREADY_EXISTS;
+  const std::string full(kScratchConfigDirectory);
+  for (size_t sep = full.find('\\', 3); sep != std::string::npos; sep = full.find('\\', sep + 1)) {
+    const std::string level = full.substr(0, sep);
+    if (CreateDirectoryA(level.c_str(), nullptr) == FALSE && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+  }
+  return true;
 }
 
 std::string ScratchConfigPath(const char* name) {
@@ -219,10 +225,102 @@ TEST(NevrConfig, AuthServerKeyRequiredRefUnsetFailsLoud) {
   }
 }
 
-TEST(NevrConfig, BareRequiredVarUnsetThrows) {
+// An unset bare ${VAR} keeps its text and does not fail the load (#137): on a client
+// a throw would drop every plugin over one value. ${VAR:?msg} still throws.
+TEST(NevrConfig, BareVarUnsetKeepsLiteralText) {
   UnsetEnv("NEVR_TEST_BARE");
-  EXPECT_THROW(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE}\"\n"),
-               nevr::NevrConfigError);
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"pre-${NEVR_TEST_BARE}-post\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "pre-${NEVR_TEST_BARE}-post");
+}
+
+// One name per unset variable however often it is referenced: the load logs one warning per entry.
+TEST(NevrConfig, UnsetBareVarIsReportedOncePerName) {
+  UnsetEnv("NEVR_TEST_BARE_ONCE");
+  UnsetEnv("NEVR_TEST_BARE_TWICE");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_BARE_ONCE}\"\n  loginservice: \"${NEVR_TEST_BARE_ONCE}/${NEVR_TEST_BARE_TWICE}\"\n");
+  EXPECT_EQ(cfg.UnsetBareVars(), (std::vector<std::string>{"NEVR_TEST_BARE_ONCE", "NEVR_TEST_BARE_TWICE"}));
+  SetEnv("NEVR_TEST_BARE_ONCE", "x");
+  SetEnv("NEVR_TEST_BARE_TWICE", "y");
+  EXPECT_TRUE(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_ONCE}\"\n").UnsetBareVars().empty());
+  UnsetEnv("NEVR_TEST_BARE_ONCE");
+  UnsetEnv("NEVR_TEST_BARE_TWICE");
+}
+
+TEST(NevrConfig, BareVarUnsetInPluginArgKeepsPlugins) {
+  UnsetEnv("NEVR_TEST_BARE_ARG");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "plugins:\n  - name: alpha\n    args:\n      template: \"${NEVR_TEST_BARE_ARG}\"\n  - name: beta\n");
+  ASSERT_EQ(cfg.Plugins().size(), 2u);
+  EXPECT_EQ(cfg.Plugins()[0].args.at("template"), "${NEVR_TEST_BARE_ARG}");
+}
+
+TEST(NevrConfig, BareVarSetStillResolves) {
+  SetEnv("NEVR_TEST_BARE_SET", "value");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_SET}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "value");
+  UnsetEnv("NEVR_TEST_BARE_SET");
+}
+
+// $${ is a literal ${: no variable is looked up, so an unset one can't fail the load.
+TEST(NevrConfig, EscapedDollarBraceIsLiteral) {
+  UnsetEnv("NEVR_TEST_ESCAPED");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${NEVR_TEST_ESCAPED}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESCAPED}");
+}
+
+// An escaped ${ beside a real variable: only the real one is resolved.
+TEST(NevrConfig, EscapedDollarBraceBesideVariable) {
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"$${literal}-${NEVR_TEST_REAL}-$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${literal}-value-$$plain");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
+// Only the `$${` triple is special. In `$$${X}` the first `$` is plain and the
+// following `$${` yields `${`, so the output is `$${X}` and X is never looked up.
+TEST(NevrConfig, TripleDollarBraceYieldsDoubleDollarLiteral) {
+  UnsetEnv("NEVR_TEST_TRIPLE");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$${NEVR_TEST_TRIPLE}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$${NEVR_TEST_TRIPLE}");
+}
+
+// An unterminated `$${X` is still an escape: `${X`, no throw.
+TEST(NevrConfig, EscapedUnterminatedDollarBraceIsLiteral) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${X\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${X");
+}
+
+// The escape also covers the required-with-message syntax: no lookup, no throw.
+TEST(NevrConfig, EscapedRequiredSyntaxIsLiteralAndDoesNotThrow) {
+  UnsetEnv("NEVR_TEST_ESC_REQ");
+  nevr::NevrConfig cfg;
+  EXPECT_NO_THROW(cfg = nevr::NevrConfig::LoadFromString(
+                      "services:\n  serverdb: \"$${NEVR_TEST_ESC_REQ:?msg}\"\n"));
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESC_REQ:?msg}");
+}
+
+// A literal `$` directly before a variable's value: the unset variable's default is `$`.
+TEST(NevrConfig, LiteralDollarBeforeValueViaDefault) {
+  UnsetEnv("NEVR_TEST_NOT_SET");
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_NOT_SET:-$}${NEVR_TEST_REAL}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$value");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
+// `$$` not followed by `{` is two literal dollars.
+TEST(NevrConfig, DoubleDollarWithoutBraceIsUnchanged) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$$plain");
 }
 
 TEST(NevrConfig, DefaultInterpolationWhenUnset) {

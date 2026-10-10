@@ -1,9 +1,11 @@
 #include "runtime/server/telemetry_streamer.h"
+#include "core/hex_dump.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 
 #include <cstring>
+#include <utility>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -30,6 +32,10 @@ TelemetryStreamer::~TelemetryStreamer() {
   Disconnect();
 }
 
+void TelemetryStreamer::SetBearerTokenRefresher(BearerReconnectAuth::Refresher refresher) {
+  m_bearerRefresher = std::move(refresher);
+}
+
 bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token) {
   if (uri.empty()) return false;
 
@@ -37,12 +43,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   m_ws = std::make_unique<ix::WebSocket>();
   m_ws->setUrl(uri);
 
-  // Auth — send JWT on WebSocket upgrade request
-  if (!m_token.empty()) {
-    ix::WebSocketHttpHeaders headers;
-    headers["Authorization"] = "Bearer " + m_token;
-    m_ws->setExtraHeaders(headers);
-  }
+  // Auth — send JWT on WebSocket upgrade request, and keep it fresh across auto-reconnects (#114)
+  m_bearerAuth.Attach(*m_ws, m_token, m_bearerRefresher);
 
   // Heartbeat — detect dead connections faster than TCP timeout
   m_ws->setPingInterval(30);
@@ -80,6 +82,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
           Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         }
         m_wsConnected.store(false, std::memory_order_release);
+        m_bearerAuth.OnError(msg->errorInfo.http_status);
         break;
       case ix::WebSocketMessageType::Message:
         // Telemetry server responses (acks) — currently just log
@@ -177,6 +180,7 @@ void TelemetryStreamer::StopLocked() {
 void TelemetryStreamer::Disconnect() {
   if (m_ws) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Disconnecting from telemetry server");
+    m_bearerAuth.Cancel();  // stop() joins the thread a 401 mint would run on
     m_ws->stop();
     m_ws.reset();
     m_wsConnected.store(false, std::memory_order_relaxed);
@@ -365,12 +369,9 @@ void TelemetryStreamer::RunDiagnostics() {
 
             // Hex dump first 64 bytes of bone data for manual inspection
             uint8_t* raw = reinterpret_cast<uint8_t*>(bone0);
-            char hex[200] = {0};
-            int pos = 0;
-            for (int j = 0; j < 64 && pos < 190; j++) {
-              pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", raw[j]);
+            for (const std::string& hex : nevr::HexDumpLines(raw, 64, 64, 64)) {
+              Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex.c_str());
             }
-            Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex);
           }
 
           // Try bone 4 (assumed head)

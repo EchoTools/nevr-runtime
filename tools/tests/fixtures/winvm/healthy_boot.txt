@@ -24,7 +24,7 @@
 [NEVR.BOOT] installing game function hooks...
 [NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=OK
 [NEVR.PATCH] hook name=PreprocessCommandLine result=OK
-[90m2026-09-21T16:37:44.806Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=00007ff6ebe2aef0 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
+[90m2026-09-21T16:37:44.806Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=00007ff6ebe2aef0 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
 [NEVR.PATCH] game hooks installed
 [NEVR.PATCH] tls deferred=ws_bridge stage=boot
 [NEVR.BOOT] installing crash recovery hooks...
@@ -75,7 +75,7 @@
 [90m2026-09-21T16:37:45.035Z[0m [0minfo[0m [NEVR.RESOURCE] Registered embedded override: splash_texture (type=0xbeac1969cb7b8861 name=0x1f72c5e0fc9fc8c0, 1050548 bytes)[0m
 [90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.RESOURCE] Init complete (1 overrides registered)[0m
 [90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.PATCH] Fatal error handler installed �?" server will exit on fatal errors[0m
-[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized: 3/3 hooks installed (tls=ok createdir=ok winhttp=ok)[0m
+[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized: 3/3 hooks installed (tls=ok createdir=ok msxml6=ok)[0m
 [90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] Loaded: platform_compat (API v2, static)[0m
 [90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.AUTH] Running in server mode -- token auth disabled[0m
 [90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.MODULE] token_auth initialized[0m
@@ -87,9 +87,8 @@
 [90m2026-09-21T16:37:45.099Z[0m [0minfo[0m [EVR] [pnsrad] patched "pnsdemo" -> "pnsrad"[0m
 [90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [EVR] [pnsrad] init complete (3 echovr.exe patches)[0m
 [90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization[0m
-[90m2026-09-21T16:37:45.100Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryW target=00007ffab1f5f710 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
-[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
-[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=FAILED LoadLibraryExW=FAILED (redundant on headless �?" OVR SDK is never loaded; N127)[0m
+[90m2026-09-21T16:37:45.100Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryW target=00007ffab1f5f710 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
+[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
 [90m2026-09-21T16:37:45.102Z[0m [0minfo[0m [NEVR.PATCH] Disabled loading tips system for server mode[0m
 [90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.CONFIG] no config.yaml found �?" NEVR config keys use built-in defaults[0m
 [90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.WS] no services.socket_uri in config.yaml �?" bridge NOT started; the game will talk to services directly and login injection cannot fire[0m

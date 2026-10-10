@@ -1,6 +1,9 @@
 # Nakama support for the remaining social features (proposal)
 
-2026-10-01. A proposal, not an implementation: nothing here is built. It answers the "Needs the
+2026-10-01. A proposal. Status: built in the runtime are the login capability field (§0,
+`nevr_social`), the receive half of §1 (`FriendPresenceNotify`), §2, §3 and the join-policy message of §4
+(`kSetJoinPolicyRequest`); §2 and §3 carry "As built" notes with the Nakama and runtime commits. Not
+built: §1's presence publish (`SNSPresenceUpdateRequest`), which has no runtime sender. It answers the "Needs the
 owner" list in `docs/design/2026-10-01-social-features-test-plan.md`, under the owner's ruling (via
 Spritz): "all those oculus features exist in nakama in one form or another, we just need to support
 them, and that can include modifying an evr message", and "stay away from matchmaking, because i've
@@ -48,7 +51,7 @@ checked by name, not by hash).
 existing `server/evr_pipeline_party_invite_test.go`; (b) a scenario in the runtime's suite
 (`just scenario-all`) that injects the new server message and asserts the game-visible slots, as
 `party_invite_join` does for PartyJoinSuccess; and (c) for the server half end to end, the same
-scenario against the local Nakama (`tools/nakama-local`, `just nakama-up`), which a one-client suite
+scenario against a local Nakama, which a one-client suite
 can only do for one side of a two-person feature (the other side is a second session, marked where it
 applies).
 

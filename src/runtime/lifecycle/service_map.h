@@ -3,8 +3,9 @@
 // This is the single source of truth for two things the migration must get
 // exactly right:
 //   1. the legacy-flat-key -> config.yaml dotted-path map, and
-//   2. the service-endpoint resolution logic (host fallback + scheme redirect)
-//      that config.cpp's hooks used to run against the game JSON.
+//   2. the service-endpoint resolution logic (host fallback) that config.cpp's
+//      hooks run against the game JSON. The scheme redirect decision lives in
+//      service_redirect.h, shared with Quest; this header includes it.
 //
 // Everything here is a pure function of a `nevr::NevrConfig` (+ scalar bridge
 // state) — no game functions, no windows.h, no singleton, no I/O — so a gtest
@@ -17,12 +18,15 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
 
 #include "core/nevr_config.h"
+#include "runtime/lifecycle/service_redirect.h"
 
 namespace nevr_cfg {
 
@@ -41,6 +45,20 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
 /// Built-in defaults embedded at build time, keyed by flat key (non-empty values only).
 using FlatDefaults = std::map<std::string, std::string>;
 
+/// One build-time default: a flat key and its embedded value ("" when the build did not embed it).
+struct EmbeddedDefault {
+  const char* flatKey;
+  const char* value;
+};
+
+/// The built-in defaults a run may see. Client mode: every entry with a non-empty value, with
+/// `embeddedNames` / `missingNames` (when non-null) receiving the comma-joined key names of the
+/// entries that have / lack a value (names only, never values). Server mode: empty, with both name
+/// lists left untouched, because a dedicated server is configured explicitly and must never start a
+/// bridge or authenticate with an embedded key.
+FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+                                   std::string* embeddedNames, std::string* missingNames);
+
 /// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is
 /// present and non-empty after interpolation; otherwise the embedded default is used; with
 /// no default the file's own answer is returned unchanged (nullopt, or a present-but-empty
@@ -51,6 +69,31 @@ using FlatDefaults = std::map<std::string, std::string>;
 std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
                                                   const FlatDefaults& defaults,
                                                   const std::string& flatKey);
+
+/// Runtime environment overrides (#76), keyed by flat key: the value of an environment variable
+/// read at start-up. They sit above config.yaml and the built-in defaults.
+using FlatEnvOverrides = std::map<std::string, std::string>;
+
+/// The environment variables that override flat keys: NEVR_API_KEY -> nevr_http_key
+/// (auth.http_key), NEVR_SOCKET_KEY -> nevr_server_key (auth.server_key). The build never reads
+/// them (cmake/nevr_builtin_defaults.cmake embeds NEVR_PUBLIC_API_KEY / NEVR_PUBLIC_SOCKET_KEY).
+struct FlatEnvVar {
+  const char* envName;
+  const char* flatKey;
+};
+inline constexpr FlatEnvVar kFlatEnvVars[] = {
+    {"NEVR_API_KEY", "nevr_http_key"},
+    {"NEVR_SOCKET_KEY", "nevr_server_key"},
+};
+
+/// Reads kFlatEnvVars through `getEnv` (nullopt = unset). A set but empty variable is no override,
+/// the same "empty is unset" rule as the rest of the config layer.
+FlatEnvOverrides ReadFlatEnvOverrides(const std::function<std::optional<std::string>(const char*)>& getEnv);
+
+/// The flat lookup with every layer, highest first: environment override, config.yaml value,
+/// built-in default (LookupFlatWithDefaults for the last two).
+std::optional<std::string> LookupFlatLayered(const nevr::NevrConfig& cfg, const FlatEnvOverrides& env,
+                                             const FlatDefaults& defaults, const std::string& flatKey);
 
 /// Read a LIST-shaped migrated flat key (guilds, regions) as a CSV string — the
 /// shape the game-JSON readers built into `guilds=%s` / `regions=%s`. A config.yaml
@@ -76,19 +119,6 @@ struct ServiceHostResult {
 /// kNone means "no override": the caller returns its own default URL, which is
 /// the *unchanged* game default, preserving today's behaviour for an absent key.
 ServiceHostResult ResolveServiceHost(const nevr::NevrConfig& cfg, const std::string& flatServiceKey);
-
-/// Pure scheme-based redirect — the core of RedirectServiceUrl. Given the URL the
-/// game produced (`result`) and the two configured redirect targets, decide the
-/// replacement, or nullopt to leave `result` untouched.
-///   socketTarget : nevr_socket_uri, migrated to config.yaml (services.socket_uri)
-///   httpTarget   : nevr_http_uri, NOT migrated in S3 — the caller passes the raw
-///                  early-JSON value so the https branch is byte-for-byte unchanged
-/// A ws/wss `result` with the bridge active rewrites to ws://127.0.0.1:<port>;
-/// otherwise the raw target passes through. https redirects never hit the bridge.
-std::optional<std::string> ResolveRedirect(const std::string& result,
-                                           const std::optional<std::string>& socketTarget,
-                                           const std::optional<std::string>& httpTarget,
-                                           bool bridgeActive, unsigned bridgePort);
 
 /// Issue #21 — the value NEVR supplies for a key the STOCK ENGINE reads from its
 /// own JSON config (never a NEVR setting), used only when no config anywhere

@@ -1,14 +1,28 @@
 name: Build
 
+# Builds and runs `just verify` on every non-draft pull request, and builds the release artifact
+# when a release is created (drafted). The toolchain is reinstalled from scratch every run (~29
+# billed minutes), so a push to main does not trigger it (a burst of 6 merges cost ~175 min), a new
+# push to a PR cancels that PR's run still in flight, and a draft PR is skipped until it is ready.
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   release:
     types: [created]
 
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
+    if: github.event_name == 'release' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    # The current toolchain, the same one development uses (#81): Arch's MinGW-w64 GCC and headers
+    # from pacman, not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
+    # model). Rolling by design; the "Toolchain versions" step records what built each run.
+    container:
+      image: archlinux:base-devel
     # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
     # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
     # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
@@ -16,47 +30,138 @@ jobs:
     env:
       NEVR_SOCKET_URI: ${{ github.event_name == 'release' && secrets.NEVR_SOCKET_URI || '' }}
       NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
-      NEVR_HTTP_KEY: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_KEY || '' }}
-      NEVR_SERVER_KEY: ${{ github.event_name == 'release' && secrets.NEVR_SERVER_KEY || '' }}
+      NEVR_PUBLIC_API_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_API_KEY || '' }}
+      NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
+      # just verify runs the C++ tests under Wine. The container runs as root but HOME (/github/home)
+      # belongs to the runner user, and Wine refuses a prefix there ("'/github/home' is not owned by
+      # you", run 37149598909); give it a root-owned prefix, and skip the Mono/Gecko install prompts.
+      WINEPREFIX: /root/.wine-ci
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+      WINEDEBUG: "-all"
 
     steps:
+    # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
+    - name: Install the toolchain (pacman)
+      run: |
+        set -euo pipefail
+        pacman -Syu --noconfirm --needed \
+          git mingw-w64-gcc ninja cmake python python-yaml go just zstd openssl wine \
+          curl zip unzip tar pkgconf zlib
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
         fetch-depth: 0
+
+    - name: Trust the workspace for git
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - name: Setup pinned just
       uses: extractions/setup-just@v4
       with:
         just-version: '1.46.0'
 
-    - name: Setup pinned CMake
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - run: python -m pip install cmake==4.0.0
-    - run: cmake --version
-
-    - name: Install MinGW toolchain
+    # osslsigncode is not in Arch's official repositories; build a pinned upstream release so the
+    # throwaway-certificate signing test in tools/tests runs instead of skipping.
+    - name: Build osslsigncode (pinned)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build wine zstd osslsigncode openssl
+        set -euo pipefail
+        git clone --depth 1 --branch 2.14 https://github.com/mtrojnar/osslsigncode.git /tmp/osslsigncode
+        cmake -S /tmp/osslsigncode -B /tmp/osslsigncode/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build /tmp/osslsigncode/build
+        cmake --install /tmp/osslsigncode/build
+
+    # Buf takes about a minute to compile from source; the binary is cached by Buf and Go version.
+    - name: Locate the Go bin directory
+      id: gobin
+      run: |
+        set -euo pipefail
+        echo "dir=$(go env GOPATH)/bin" >> "$GITHUB_OUTPUT"
+        echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Buf
+      id: buf_cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.gobin.outputs.dir }}/buf
+        key: buf-v1.47.2-${{ steps.gobin.outputs.go }}
 
     - name: Setup pinned Buf
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23.6'
-    - run: |
-        go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        echo "$HOME/go/bin" >> "$GITHUB_PATH"
-
-    - name: Setup vcpkg
       run: |
+        set -euo pipefail
+        if [ "${{ steps.buf_cache.outputs.cache-hit }}" != "true" ]; then
+          go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+        fi
+        echo "${{ steps.gobin.outputs.dir }}" >> "$GITHUB_PATH"
+
+    - name: Toolchain versions
+      run: |
+        set -euo pipefail
+        pacman -Q mingw-w64-gcc mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads cmake ninja wine go python
+        x86_64-w64-mingw32-g++ --version
+        x86_64-w64-mingw32-g++ -v 2>&1 | grep "Thread model"
+        cmake --version
+        just --version
+        osslsigncode --version
+        buf --version
+
+    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
+    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
+    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
+    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
+      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
+
+    - name: Bootstrap vcpkg
+      id: vcpkg
+      run: |
+        set -euo pipefail
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        # The vcpkg revision is the one in .vcpkg-commit, the same one `just vcpkg-pin-check` holds a
+        # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
+        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+    # Building the dependencies from source is about 80% of a run (29.6 of 37.8 minutes in run
+    # 37872101662). vcpkg's file binary cache stores one archive per package, named by an ABI hash that
+    # covers the port files, its dependencies, the triplet and the compiler, so a changed or bumped
+    # dependency is rebuilt even when the cache is restored. The cache key and its restore keys both
+    # contain the hash of vcpkg.json: editing vcpkg.json misses the cache entirely and builds everything.
+    # Changing the vcpkg revision or the MinGW compiler starts a new entry seeded from the latest entry
+    # for the same vcpkg.json.
+    - name: Restore the vcpkg binary cache
+      id: vcpkg_cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        restore-keys: |
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
+
+    - name: Install vcpkg dependencies
+      run: |
+        set -euo pipefail
+        # $GITHUB_WORKSPACE, not ${{ github.workspace }}: in a container job the second is the host's
+        # path, which does not exist here, and vcpkg would write its archives where nothing saves them.
+        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
+        echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
+        count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
+        echo "archives in the binary cache now: $count"
+        test "$count" -gt 0
+
+    # Saved right after the install, so a failure in a later step does not lose the dependency build.
+    - name: Save the vcpkg binary cache
+      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Generate pinned protobuf sources
       run: |
@@ -66,7 +171,9 @@ jobs:
         just proto
 
     - name: Configure CMake
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=${{ github.event_name == 'release' && 'ON' || 'OFF' }} -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
+      # Never signs here: release binaries are signed by the `sign` job with Microsoft Artifact Signing.
+      # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
 
     - name: Build
       run: cmake --build --preset mingw-release
@@ -82,32 +189,9 @@ jobs:
         echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
         echo "Version: ${VERSION#v}"
 
-    - name: Create distribution packages
+    - name: Create distribution packages (unsigned)
       if: github.event_name == 'release'
-      env:
-        CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
-        CODESIGN_PASS: ${{ secrets.CODESIGN_PASS }}
-        CODESIGN_CA_BASE64: ${{ secrets.CODESIGN_CA_BASE64 }}
-        CODESIGN_SIGNER_SHA256: ${{ secrets.CODESIGN_SIGNER_SHA256 }}
-        CODESIGN_ROOT_SHA256: ${{ secrets.CODESIGN_ROOT_SHA256 }}
-      run: |
-        set -euo pipefail
-        test -n "$CODESIGN_PFX_BASE64"
-        test -n "$CODESIGN_PASS"
-        test -n "$CODESIGN_CA_BASE64"
-        test -n "$CODESIGN_SIGNER_SHA256"
-        test -n "$CODESIGN_ROOT_SHA256"
-        signing_dir="$RUNNER_TEMP/nevr-codesign"
-        mkdir -p "$signing_dir"
-        printf '%s' "$CODESIGN_PFX_BASE64" | base64 --decode > "$signing_dir/signing.pfx"
-        printf '%s' "$CODESIGN_CA_BASE64" | base64 --decode > "$signing_dir/root-ca.pem"
-        chmod 600 "$signing_dir/signing.pfx" "$signing_dir/root-ca.pem"
-        {
-          echo "CODESIGN_PFX=$signing_dir/signing.pfx"
-          echo "CODESIGN_CA_FILE=$signing_dir/root-ca.pem"
-          echo "CODESIGN_ROOT_SHA256=$CODESIGN_ROOT_SHA256"
-        } >> "$GITHUB_ENV"
-        cmake --build --preset mingw-release --target dist dist-lite
+      run: cmake --build --preset mingw-release --target dist dist-lite
 
     - name: Verify distribution archives
       if: github.event_name == 'release'
@@ -132,8 +216,124 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
-    - name: Upload dist artifacts
+    # The unpacked package trees (dist/<name>/, normal and lite) go to the sign job; the unsigned
+    # archives are never published.
+    - name: Upload the unsigned packages for signing
       if: github.event_name == 'release'
+      uses: actions/upload-artifact@v4
+      with:
+        name: unsigned-packages
+        path: |
+          dist/nevr-runtime-v*/
+          !dist/.staging/
+        if-no-files-found: error
+        retention-days: 7
+
+  # Microsoft Artifact Signing (#78). Azure trusts exactly the OIDC subject
+  # repo:EchoTools/nevr-runtime:environment:codesign, so this job must run in the `codesign`
+  # environment. The values below are identifiers, not secrets.
+  sign:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    environment: codesign
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: unsigned-packages
+        path: packages
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: e01842c0-2630-49dd-b305-d2b2e866a747
+        tenant-id: d3ce3222-f299-41bb-8231-dbde3b35abc9
+        allow-no-subscriptions: true
+
+    - name: Sign BugSplat64.dll and echovr_server.exe (normal and lite)
+      uses: azure/artifact-signing-action@v2
+      with:
+        endpoint: https://eus.codesigning.azure.net/
+        signing-account-name: sprockeesigning
+        certificate-profile-name: andrew-bates-public
+        files-folder: ${{ github.workspace }}\packages
+        files-folder-filter: dll,exe
+        files-folder-recurse: true
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+
+    - name: Verify every signature (fail if any file is unsigned)
+      shell: pwsh
+      run: |
+        $files = Get-ChildItem -Path packages -Recurse -Include *.dll,*.exe
+        if ($files.Count -lt 4) { throw "expected BugSplat64.dll and echovr_server.exe in both packages, found $($files.Count) files" }
+        $bad = 0
+        foreach ($f in $files) {
+          $s = Get-AuthenticodeSignature -FilePath $f.FullName
+          "{0}  status={1}  signer={2}  timestamp={3}" -f $f.FullName, $s.Status, $s.SignerCertificate.Subject, $s.TimeStamperCertificate.Subject
+          if ($s.Status -ne 'Valid') { $bad++ }
+        }
+        if ($bad -ne 0) { throw "$bad file(s) not validly signed" }
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: signed-packages
+        path: packages
+        if-no-files-found: error
+        retention-days: 7
+
+  # Repack the signed trees into the same archives the build job made, check them, publish.
+  publish:
+    needs: sign
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install archive tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y zstd
+        python -m pip install cmake==4.0.0
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: signed-packages
+        path: signed
+
+    - name: Repack the signed packages
+      shell: bash
+      env:
+        CODESIGN_SKIP: "1"  # the files are already signed; the packager must not touch them
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+        for pkg in signed/nevr-runtime-v*/; do
+          name=$(basename "$pkg")
+          python3 tools/build_distribution.py --package "$pkg" --destination "dist/$name" \
+            --tar "dist/$name.tar.zst" --zip "dist/$name.zip"
+          cmake -DARCHIVE_TAR="dist/$name.tar.zst" -DARCHIVE_ZIP="dist/$name.zip" \
+            -P cmake/VerifyDistribution.cmake
+        done
+        ls -la dist
+
+    - name: Verify distribution archives
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        zips=(dist/*.zip)
+        tars=(dist/*.tar.zst)
+        test "${#zips[@]}" -eq 2
+        test "${#tars[@]}" -eq 2
+
+    - name: Upload dist artifacts
       uses: softprops/action-gh-release@v2
       with:
         files: |

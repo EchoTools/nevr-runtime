@@ -15,8 +15,8 @@ Three checks, in descending order of how badly their absence hurt:
      not also be an address we install a detour on. Otherwise our own call
      re-enters our own hook. This is what severed the ServerDB -> game message
      path: echovr_functions.cpp assigns BroadcasterReceiveLocalEvent = base +
-     0xF87AA0, and mode_patches.cpp detours that same RVA, so all 15 injection
-     sites in gameserver.cpp land in a hook that returns early on a server.
+     0xF87AA0, and mode_patches.cpp detours that same RVA, so every injection
+     site in gameserver.cpp lands in a hook with a server-only guard.
 
   2. IDENTITY PINNING — the bytes at each hooked address must still match what
      was there when the hook was written. Catches both binary drift and the
@@ -26,6 +26,11 @@ Three checks, in descending order of how badly their absence hurt:
      extern/minhook, plugins link vcpkg minhook — separate static copies with
      separate private hook tables) means the second builds its trampoline out
      of the first's JMP stub.
+
+  4. DUPLICATE RUNTIME DETOUR — one address, two detours inside the runtime
+     itself (an EchoVR:: function pointer plus an inline VA, or two pointers
+     that name the same RVA). MinHook refuses the second with
+     MH_ERROR_ALREADY_CREATED, so its hook silently never runs (#93).
 
 KNOWN_* entries below are open bugs, recorded so they are visible and tracked.
 They do NOT pass silently — each prints a warning naming its ledger ID. Anything
@@ -51,15 +56,14 @@ MANIFEST = REPO / "tools" / "hook_identity_manifest.json"
 
 KNOWN_SELF_COLLISIONS = {
     0x140F87AA0: ("N83", "CBroadcaster::ReceiveLocalEvent — called via "
-                         "EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87) AND "
+                         "EchoVR::BroadcasterReceiveLocalEvent AND "
                          "detoured as ENGINE_ENTITY_PROP_DISPATCH (mode_patches.cpp). "
                          "ACCEPTED: since 2026-07-26 the hook is a pass-through null-guard, not "
                          "an early return, so a re-entering call is checked and then dispatched. "
                          "Our own injections get the same guard, which is arguably correct. "
                          "Re-evaluate if that hook ever regains an unconditional return path."),
     0x140F80ED0: ("N83", "CBroadcaster::Listen — called via EchoVR::BroadcasterListen "
-                         "(echovr_functions.cpp:88) AND detoured as ENGINE_ENTITY_LOOKUP "
-                         "(mode_patches.cpp:723)."),
+                         "AND detoured as ENGINE_ENTITY_LOOKUP (mode_patches.cpp)."),
 }
 
 KNOWN_DOUBLE_DETOURS = {
@@ -71,10 +75,9 @@ KNOWN_DOUBLE_DETOURS = {
                          "server runs, the AV it guards is not occurring — remove the gamepatches "
                          "detour entirely and this closes permanently. Runtime HookGuard reports "
                          "the collision at ERROR if the plugin's install actually overwrites ours."),
-    # Previously empty. 0x140F87AA0 was here until 2026-07-26: gamepatches detoured it as
-    # ENGINE_ENTITY_PROP_DISPATCH while broadcaster_bridge hooked it as
-    # VA_BROADCASTER_RECEIVE_LOCAL. Removing the unjustified gamepatches detour
-    # (N83) left the plugin as sole owner, which resolved this too. If a second
+    # 0x140F87AA0 is not registered here: broadcaster_bridge (a plugin outside this
+    # repo) hooks it as VA_BROADCASTER_RECEIVE_LOCAL and gamepatches no longer detours
+    # it as ENGINE_ENTITY_PROP_DISPATCH, so the plugin is its sole owner. If a second
     # owner reappears, that is a NEW violation and fails hard.
 }
 
@@ -230,6 +233,110 @@ def gamepatches_detour_targets() -> dict:
     return require_nonempty(found, DETOUR_SCAN_ROOT, "detour targets")
 
 
+def runtime_detour_sites() -> dict:
+    """
+    VA -> sorted list of "file: label", for every detour the runtime installs on a
+    game address through an EchoVR:: function pointer (InstallBootDetour/PatchDetour
+    on &EchoVR::X) or an inline VA (g_GameBaseAddress + (0x14... - 0x140000000)
+    in a file that calls MH_CreateHook), plus every PatchAddresses:: detour target
+    (gamepatches_detour_targets()). Table-driven MH_CreateHook calls (an array of
+    {name, va, detour} entries) are not matched here.
+    """
+    by_name = {name: va for va, name in live_function_pointers().items()}
+    found = {}
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        rel = path.relative_to(REPO).as_posix()
+        text = path.read_text(errors="replace")
+        # InstallBootDetour/PatchDetour(&EchoVR::X, ...) and Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::X), ...)
+        for m in re.finditer(
+            r"\b(?:InstallBootDetour|PatchDetour|Attach)\s*\(\s*(?:reinterpret_cast\s*<\s*PVOID\s*\*\s*>\s*\(\s*)?&\s*EchoVR::(\w+)",
+            text,
+        ):
+            va = by_name.get(m.group(1))
+            if va is not None:
+                found.setdefault(va, []).append(f"{rel}: EchoVR::{m.group(1)}")
+        if "MH_CreateHook" in text:
+            for m in re.finditer(
+                r"g_GameBaseAddress\)\s*\+\s*\(\s*(0x14[0-9A-Fa-f]+)\s*-\s*0x140000000\s*\)", text
+            ):
+                found.setdefault(norm_va(int(m.group(1), 16)), []).append(f"{rel}: inline {m.group(1)}")
+    # A PatchAddresses:: constant detoured at the same address as an EchoVR:: pointer is the same
+    # collision: the constants are the other way this runtime names a game address.
+    for va, const in gamepatches_detour_targets().items():
+        found.setdefault(va, []).append(f"{DETOUR_SCAN_ROOT}: PatchAddresses::{const}")
+    return {va: sorted(sites) for va, sites in found.items()}
+
+
+_FILE_VA_CONSTANT = re.compile(
+    r"(?:static\s+)?constexpr\s+(?:std::)?uint64_t\s+(\w+)\s*=\s*(0x14[0-9A-Fa-f]{7,8})\s*;")
+_HOOK_TABLE_ROW = re.compile(
+    r"\{\s*(\w+)\s*,\s*\(void\*\)\s*&\s*(\w+)\s*,\s*\(void\*\*\)\s*&\s*\w+\s*,\s*"
+    r"\"([^\"]+)\"\s*,\s*(nullptr|\w+)\s*,")
+
+
+def _va_names(text: str) -> dict:
+    """name -> normalized VA for every address constant a runtime file can name: PatchAddresses::
+    (RVAs), address_registry (full VAs) and the file's own `constexpr uint64_t NAME = 0x14...;`."""
+    names = dict(patch_address_constants())
+    names.update(registry_constants())
+    for m in _FILE_VA_CONSTANT.finditer(text):
+        names[m.group(1)] = norm_va(int(m.group(2), 16))
+    return names
+
+
+def mh_create_hook_sites() -> dict:
+    """
+    VA -> sorted list of "file: MH_CreateHook NAME", for the detours runtime files install with
+    MH_CreateHook directly: rows of a `{ VA_X, (void*)&Hook, (void**)&orig, "name", PROLOGUE, ...}`
+    hook table, the address (a named constant or a literal RVA) assigned to the variable passed as
+    the first argument of an MH_CreateHook call, and InstallJsonProbe/InstallChecked(kXVA, ...) probes. Targets that resolve to no known game
+    address (Win32 exports, a runtime-computed module base) are not game addresses and are skipped.
+    """
+    found = {}
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        text = path.read_text(errors="replace")
+        if "MH_CreateHook" not in text:
+            continue
+        rel = path.relative_to(REPO).as_posix()
+        names = _va_names(text)
+
+        def add(name, via):
+            if name in names:
+                found.setdefault(names[name], []).append(f"{rel}: MH_CreateHook {via}{name}")
+
+        for m in _HOOK_TABLE_ROW.finditer(text):
+            add(m.group(1), "table ")
+        for m in re.finditer(r"Install(?:JsonProbe|Checked)\s*\(\s*(?:\w+\s*,\s*)?(k\w+VA)\b", text):
+            add(m.group(1), "probe ")
+        for m in re.finditer(r"MH_CreateHook\s*\(\s*(?:\(void\*\)\s*)?(\w+)\s*,", text):
+            window = text[max(0, m.start() - 3000):m.start()]
+            assignments = list(re.finditer(rf"\b{re.escape(m.group(1))}\s*=\s*([^;]+);", window))
+            if not assignments:
+                continue
+            expression = assignments[-1].group(1)
+            for ident in re.findall(r"[A-Za-z_][\w:]*", expression):
+                add(ident.split("::")[-1], "")
+            # `g_GameBaseAddress + 0xFA16D0`: a literal RVA written in place.
+            for literal in re.findall(r"\+\s*(0x[0-9A-Fa-f]{5,8})\b", expression):
+                found.setdefault(norm_va(int(literal, 16)), []).append(
+                    f"{rel}: MH_CreateHook literal RVA {literal}")
+    return require_nonempty({va: sorted(set(sites)) for va, sites in found.items()},
+                            DETOUR_SCAN_ROOT, "MH_CreateHook detour targets")
+
+
+def hook_table_rows_without_prologue() -> list:
+    """(file, hook name, address constant) for every hook-table row with a nullptr prologue:
+    a binary detour installed without checking the bytes it is about to displace."""
+    rows = []
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        text = path.read_text(errors="replace")
+        rel = path.relative_to(REPO).as_posix()
+        for m in _HOOK_TABLE_ROW.finditer(text):
+            if m.group(4) == "nullptr":
+                rows.append((rel, m.group(3), m.group(1)))
+    return rows
+
+
 def plugin_hooked_vas() -> dict:
     """VA -> (plugin, registry-constant) for address_registry constants used in plugins."""
     reg = registry_constants()
@@ -354,6 +461,27 @@ def check_double_detour(failures, warnings, seen):
             failures.append("DOUBLE-DETOUR: " + desc)
 
 
+def check_runtime_duplicate_detours(failures):
+    """#93: two runtime detours on one target; the second never installs."""
+    sites = runtime_detour_sites()
+    for va, labels in mh_create_hook_sites().items():
+        sites.setdefault(va, []).extend(labels)
+    for va in sites:
+        sites[va] = sorted(set(sites[va]))
+    for rel, name, constant in hook_table_rows_without_prologue():
+        failures.append(
+            f"UNVALIDATED-HOOK: {name} ({constant}) in {rel} is installed with a nullptr prologue. "
+            f"Binary patches require prologue validation; read the first bytes at the address "
+            f"and add them to the table row.")
+    for va in sorted(sites):
+        if len(sites[va]) > 1:
+            failures.append(
+                f"DUPLICATE-RUNTIME-DETOUR: 0x{va:X} is detoured more than once in "
+                f"{DETOUR_SCAN_ROOT}/ ({'; '.join(sites[va])}). MinHook allows one detour per "
+                f"target: the second fails with MH_ERROR_ALREADY_CREATED and never runs. "
+                f"Fold the second hook's logic into the first.")
+
+
 def check_identity(failures, warnings):
     if not MANIFEST.exists():
         warnings.append(f"identity manifest absent ({MANIFEST.relative_to(REPO)}) — "
@@ -434,8 +562,8 @@ def write_manifest():
 VEH_BREAKPOINT_OWNER = "src/runtime/lifecycle/crash_recovery.cpp"
 
 # Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter and
-# example. (broadcaster-bridge moved out 2026-07-26, anim-debugger 2026-07-27 —
-# both to nevr-runtime-plugins, because this repo is PUBLIC.) This file ships
+# example. (broadcaster-bridge and anim-debugger live in nevr-runtime-plugins,
+# because this repo is PUBLIC.) This file ships
 # nowhere, so it cannot be a second live owner. If it is ever added to the build
 # it MUST be reworked first — hence it is excluded by path, not by pretending it
 # is clean.
@@ -493,6 +621,7 @@ def main() -> int:
     try:
         check_self_collision(failures, warnings, seen_self)
         check_double_detour(failures, warnings, seen_double)
+        check_runtime_duplicate_detours(failures)
         check_identity(failures, notices)
         check_veh_ownership(failures, warnings)
         check_registers_observed(failures, notices, seen_self, seen_double,

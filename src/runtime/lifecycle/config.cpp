@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/config.h"
+#include "runtime/lifecycle/config_redirect_result.h"
 #include "runtime/lifecycle/login_redirect_override.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/log/url_diagnostics.h"
@@ -38,8 +39,8 @@ EchoVR::Json* g_earlyConfigPtr = NULL;
 /// Issue #21: this file is OPTIONAL. N133 moved every NEVR-owned key to
 /// config.yaml; what is left in a config.json is only what the stock engine reads
 /// natively, and the engine loads its own copy regardless (LoadLocalConfigHook).
-/// A server used to ServerFatal when this found nothing (N48, from before N133),
-/// killing a correctly configured config.yaml-only deployment. Absent is now
+/// A server must not ServerFatal when this finds nothing: that would kill a
+/// correctly configured config.yaml-only deployment. Absent is
 /// normal (Info); present but unparseable is a Warning naming the file, because
 /// the operator wrote something the engine is going to ignore.
 /// </summary>
@@ -333,7 +334,7 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
 
   // N133 S3: nevr_socket_uri now comes from config.yaml. NevrCfgAutoRelay returns
   // the interned ws://127.0.0.1:<port> relay when socket_uri is configured, else
-  // null (the old early-JSON presence check + thread_local buffer, migrated).
+  // null.
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
@@ -366,7 +367,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
       uri = GetServiceHostWithFallback("apiservice_host", uri);
       // Legacy compatibility: also try "api_host" (N133 S3: from config.yaml).
       // Present -> use it (JsonValueAsString returned the value); absent -> uri
-      // stays the game default, exactly as the old default=uri argument did.
+      // stays the game default.
       if (uri == originalUri) {
         const char* apiHost = NevrCfgGetFlat("api_host");
         if (apiHost != NULL) uri = const_cast<CHAR*>(apiHost);
@@ -441,18 +442,15 @@ static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
 
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
-  if (result == NULL || keyName == NULL) return result;
-  // Issue #21: this used to be `if (g_earlyConfigPtr == NULL) return result;`,
-  // which made every redirect depend on a config.json existing, although both
-  // targets come from config.yaml (N133 S3/S5b). That guard ALSO did a second,
-  // unstated job, kept here: g_earlyConfigPtr only became non-null at the start
+  // Issue #21: redirects do not depend on a config.json existing (both
+  // targets come from config.yaml, N133 S3/S5b), so there is no
+  // `g_earlyConfigPtr == NULL` guard. The armed flag does the job that guard
+  // would otherwise do: g_earlyConfigPtr is only non-null from the start
   // of RunDeferredRuntimeBootstrap, so no redirect — and therefore no
   // NevrCfgGetFlat, which is the first access to the lazily loaded config.yaml
   // singleton — ran on the engine's JsonValueAsString calls before the
   // bootstrap. ArmServiceRedirects() is called at exactly that point, so a
   // config.json-less run arms at the same moment a config.json run always did.
-  if (!s_serviceRedirectsArmed.load(std::memory_order_acquire)) return result;
-
   // N133 S3: the ws/wss redirect target (nevr_socket_uri) resolves from
   // config.yaml inside NevrCfgRedirect. N133 S5b: the https target
   // (nevr_http_uri) resolves from config.yaml too (auth.http_uri, the key
@@ -461,15 +459,18 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   // nothing. NevrCfgRedirect runs the scheme detection + bridge rewrite
   // (ws/wss any-host or https readyatdawn.com only; bridge-active ws ->
   // ws://127.0.0.1:<port>; https never hits the bridge).
-  const char* httpTarget = NevrCfgGetFlat("nevr_http_uri");
-  const char* redirected =
-      NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
-  if (redirected == NULL) return result;
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      s_serviceRedirectsArmed.load(std::memory_order_acquire), keyName, result,
+      [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* url, const char* httpTarget) {
+        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
+      });
+  if (chosen == result) return result;
 
   const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
-      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", redirected);
+      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", chosen);
   Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
-  return const_cast<CHAR*>(redirected);
+  return const_cast<CHAR*>(chosen);
 }
 
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
@@ -513,8 +514,8 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
     return const_cast<CHAR*>(overrideOutcome.value);
   }
 
-  // Issue #21: _local/config.json is optional, and it used to be the only source
-  // of publisher_lock (read by the engine through THIS function: 10 of the 12
+  // Issue #21: _local/config.json is optional, and publisher_lock may come from
+  // NEVR config instead (read by the engine through THIS function: 10 of the 12
   // code references to the "publisher_lock" string at 0x1416D2F08 are followed
   // by a call to 0x1405FE290, incl. CNSLobby::RequestRegistration). When no
   // config supplied the key — same "result is still the default" test as the

@@ -127,6 +127,9 @@ if(MINGW)
   add_compile_options(
     -Wall
     -Wextra
+    -Werror=unused-function
+    -Werror=unused-variable
+    -Werror=unused-but-set-variable
     # Disable specific warnings that are unavoidable in this codebase
     -Wno-unknown-pragmas           # Windows-specific pragmas like #pragma comment
     -Wno-unused-parameter          # DLL export functions have required but unused params
@@ -138,6 +141,12 @@ if(MINGW)
     "$<$<CONFIG:Debug>:-O0>"
     "$<$<CONFIG:Release>:-O3>"
     "$<$<CONFIG:Release>:-DNDEBUG>"
+  )
+  # The same commit built in two directories must give the same bytes: keep the source and build
+  # directories out of __FILE__, assertions and debug info.
+  add_compile_options(
+    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+    "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build"
   )
   # C++-only warning suppressions
   add_compile_options(
@@ -166,6 +175,9 @@ if(MINGW)
     -static
     -static-libgcc
     -static-libstdc++
+    # The PE header, export and debug directories carry a link-time timestamp; without this the same
+    # objects link to different bytes on every run.
+    -Wl,--no-insert-timestamp
   )
 endif()
 
@@ -206,22 +218,23 @@ add_subdirectory(src/legacy/gamepatches)
 # "common/hooking.h" (patches.cpp:8) and "common/nevr_plugin_interface.h"
 # (plugin_loader.h:3). Confirmed from the compiler's dependency graph:
 #   ninja -C build/<preset> -t deps | grep gamepatcheslegacy | grep src/common
-# The 2026-07-29 reorganization moved both. Rather than edit a frozen file, give
+# Both now live under src/core/. Rather than edit a frozen file, give
 # this ONE target a compatibility include root holding two forwarding headers.
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
 target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
-# src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
-# OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
-# and its approach (a replacement pnsrad.dll whose GetLoggedInUser reads
-# nevr_discord_id from config) is superseded by the shipping one: ws_bridge pokes
-# the game's ORIGINAL pnsrad.dll at the same offsets (+0x88 account_id,
-# +0x90 login state, +0x9c flags), and those layouts are documented there.
-# It was also the only consumer of a symlink into a PRIVATE repo, which broke
-# every clean clone. The pure-RE copy lives in echovr-reconstruction.
+# Frozen code carries an unused variable it may not lose; the new -Werror=unused-* flags apply to everything else.
+if(MINGW)
+  target_compile_options(gamepatcheslegacy PRIVATE -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=unused-but-set-variable)
+endif()
+# There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
+# pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
+# and those layouts are documented there. The pure-RE copy of pnsrad lives in
+# echovr-reconstruction; nothing here may symlink into a private repo, which
+# breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
-# telemetryagent lives in nevr-runtime-plugins (extras/ moved there 2026-07-27) —
-# needs a protobuf-lite refactor before it could be reintegrated here
+# telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
+# refactor before it could be reintegrated here
 
 add_subdirectory(src/libovr-stub)
 
