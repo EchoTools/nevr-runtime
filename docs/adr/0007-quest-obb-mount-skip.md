@@ -48,8 +48,18 @@ involved. Neither logs on the game's call path. Counters: `obb_mount_skipped`, `
 `obb_mount_thunk_faults`, `obb_path_thunk_faults` (faults).
 
 **What it leaves alone.** `libpnsovr.so`, `libpnsrad.so` and `libpnsradmatchmaking.so` each carry a static copy of
-`CSysFile::Init`, the callback and `GetDataRootDir` and import `gOBBPath` from libr15. Their slots are not hooked; only
-one `Loading OBB from` sequence ran in the measured launch.
+`CSysFile::Init`, the callback and `GetDataRootDir`, and each defines and exports its own `gOBBPath` (`readelf -rW`:
+GLOB_DAT slot `0x6e4c98`, `0x735c18`, `0x6bdc90`; symbol values `0x70c670`, `0x75d760`, `0x6ef1b8`). Their slots are not
+hooked; only one `Loading OBB from` sequence ran in the measured launch.
+
+**Known gap: the static initializers.** Each of the three libraries clears its `gOBBPath` through that GLOB_DAT slot with
+`CMemory::Fill(gOBBPath, 0, 0x200)` in an unnamed function (`libpnsrad.so` `0x1b8db0`, the call is the function's tail;
+`libpnsovr.so` `0x1b6710`; `libpnsradmatchmaking.so` `0x1ae95c`), probably a static initializer. Two outcomes are
+possible and which holds was not measured: the slot binds to libr15's `gOBBPath` (then loading the library wipes the
+path the hook caused to be recorded, and a later `CSysFile::Init` of that library loses its early-out and does the real,
+refused mount: the same ~30 s, elsewhere), or it binds to the library's own copy (then that library's `Init`, if it is
+ever called, runs the refused mount regardless of this hook). The sentinel counters do not show either; only the logcat
+deviation lines do (a second `Loading OBB from`, any `mounting encrypted OBBs is no longer supported`, a ~30 s gap).
 
 ## Prediction (logcat, with the flag on)
 
