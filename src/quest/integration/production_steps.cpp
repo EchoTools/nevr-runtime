@@ -196,8 +196,8 @@ nevr_quest::redirect::BridgeState BridgeProbe() {
 
 // --- post-load actions ---------------------------------------------------------------------------
 
-QuestLogin::BuildInfo ThisBuild() {
-  QuestLogin::BuildInfo build;
+nevr_quest_login::BuildInfo ThisBuild() {
+  nevr_quest_login::BuildInfo build;
   build.project_version = NEVR_QUEST_PROJECT_VERSION;
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
@@ -206,14 +206,14 @@ QuestLogin::BuildInfo ThisBuild() {
 }
 
 // The login library's own records, plus the stage line `login_rewritten` for each login it handled.
-void LoginLog(QuestLogin::Level level, const char* event, const QuestLogin::LogKv* fields, std::size_t count) {
-  QuestLogin::SentinelLog(level, event, fields, count);
+void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest_login::LogKv* fields, std::size_t count) {
+  nevr_quest_login::SentinelLog(level, event, fields, count);
   if (std::strcmp(event, "quest_login") != 0) return;
   const char* outcome = "unknown";
   for (std::size_t i = 0; i < count; ++i) {
     if (std::strcmp(fields[i].key, "outcome") == 0 && fields[i].text != nullptr) outcome = fields[i].text;
   }
-  const bool ok = std::strcmp(outcome, QuestLogin::OutcomeName(QuestLogin::Outcome::Rewritten)) == 0;
+  const bool ok = std::strcmp(outcome, nevr_quest_login::OutcomeName(nevr_quest_login::Outcome::Rewritten)) == 0;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "login_rewritten",
                       {{"status", ok ? "ok" : "failed"}, {"class", outcome}});
 }
@@ -230,18 +230,18 @@ ActionResult Staged(const char* stage, ActionResult result) {
 
 ActionResult LoginAction() noexcept {
   try {
-    static const QuestLogin::BuildInfo build = ThisBuild();
-    switch (QuestLogin::TryInstallLoginHook(R().identity.get(), build, &LoginLog)) {
-      case QuestLogin::InstallState::Installed: return Staged("login_hook_installed", {Settle::kDone, "installed"});
-      case QuestLogin::InstallState::AlreadyInstalled:
+    static const nevr_quest_login::BuildInfo build = ThisBuild();
+    switch (nevr_quest_login::TryInstallLoginHook(R().identity.get(), build, &LoginLog)) {
+      case nevr_quest_login::InstallState::Installed: return Staged("login_hook_installed", {Settle::kDone, "installed"});
+      case nevr_quest_login::InstallState::AlreadyInstalled:
         return Staged("login_hook_installed", {Settle::kDone, "already_installed"});
-      case QuestLogin::InstallState::ModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
-      case QuestLogin::InstallState::BuildMismatch:
+      case nevr_quest_login::InstallState::ModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
+      case nevr_quest_login::InstallState::BuildMismatch:
         return Staged("login_hook_installed", {Settle::kGiveUp, "build_mismatch"});
-      case QuestLogin::InstallState::SlotInvalid: return Staged("login_hook_installed", {Settle::kGiveUp, "slot_invalid"});
-      case QuestLogin::InstallState::SymbolMissing:
+      case nevr_quest_login::InstallState::SlotInvalid: return Staged("login_hook_installed", {Settle::kGiveUp, "slot_invalid"});
+      case nevr_quest_login::InstallState::SymbolMissing:
         return Staged("login_hook_installed", {Settle::kGiveUp, "symbol_missing"});
-      case QuestLogin::InstallState::HookFailed: return Staged("login_hook_installed", {Settle::kGiveUp, "hook_failed"});
+      case nevr_quest_login::InstallState::HookFailed: return Staged("login_hook_installed", {Settle::kGiveUp, "hook_failed"});
     }
     return Staged("login_hook_installed", {Settle::kGiveUp, "unknown_state"});
   } catch (const std::exception&) {
@@ -292,7 +292,7 @@ class ProductionSteps final : public Steps {
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
-  bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
+  bool RegisterLoginCounters() override { return nevr_quest_login::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
   bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }

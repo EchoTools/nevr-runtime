@@ -5,9 +5,9 @@
 
 #include "quest/sentinel/callback_thunk.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 struct LoginTag {};
 using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

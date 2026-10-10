@@ -21,7 +21,7 @@ namespace nevr_quest::integration {
 //   Expired / Failed / Stopped                NoToken
 // The account id is the NEVR account id the token carries (`discord_id` in the session snapshot, the
 // id the PCVR bridge sends as its account); the display name is the session's user name.
-class TokenIdentitySource final : public QuestLogin::IdentitySource {
+class TokenIdentitySource final : public nevr_quest_login::IdentitySource {
  public:
   using SnapshotFn = std::function<nevr::quest_auth::Snapshot()>;
   // `socialLevel` is asked on every Fetch and answers the level the login declares ("nevr_social"):
@@ -30,10 +30,10 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
   // and not poisoned: the process has one.
   explicit TokenIdentitySource(SnapshotFn snapshot, std::function<int()> socialLevel = nullptr)
       : snapshot_(std::move(snapshot)), socialLevel_(std::move(socialLevel)) {
-    QuestLogin::attempt_gate::Reset();
+    nevr_quest_login::attempt_gate::Reset();
   }
 
-  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override;
+  nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity& out) override;
 
   // The router's login gate for one token-auth state: Ready when Fetch would answer Ok, Awaiting while a
   // token is still to come (starting, refreshing, waiting for the player, expired and being replaced, a
@@ -49,7 +49,7 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
   // too: no snapshot, no allocation, no lock. True only after the last observed state was one in which
   // Fetch returns Ok (token auth Ready with an access token and a NEVR account id) and the current login
   // attempt has not been poisoned by a skipped logging-in page.
-  bool Ready() const noexcept override { return QuestLogin::attempt_gate::LoginMayProceed(); }
+  bool Ready() const noexcept override { return nevr_quest_login::attempt_gate::LoginMayProceed(); }
 
   // Records a token-auth state change: sets the Ready flag to (Classify(snap) == Ok), so it is cleared in
   // every other state (starting, refreshing, awaiting the player, expired, failed, stopped, no token, no
@@ -59,7 +59,7 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
 
  private:
   // The answer for one snapshot, shared by Fetch and Observe so Fetch and Ready cannot disagree.
-  static QuestLogin::IdentityStatus Classify(const nevr::quest_auth::Snapshot& snap) noexcept;
+  static nevr_quest_login::IdentityStatus Classify(const nevr::quest_auth::Snapshot& snap) noexcept;
 
   SnapshotFn snapshot_;
   std::function<int()> socialLevel_;

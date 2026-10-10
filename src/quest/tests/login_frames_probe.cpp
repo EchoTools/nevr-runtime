@@ -6,8 +6,8 @@
 
 int main(int argc, char**) {
   if (argc > 1000) {  // never true; keeps the install path, and the handler it arms, linked
-    const QuestLogin::BuildInfo build;
-    return static_cast<int>(QuestLogin::TryInstallLoginHook(nullptr, build, nullptr));
+    const nevr_quest_login::BuildInfo build;
+    return static_cast<int>(nevr_quest_login::TryInstallLoginHook(nullptr, build, nullptr));
   }
   return 0;
 }

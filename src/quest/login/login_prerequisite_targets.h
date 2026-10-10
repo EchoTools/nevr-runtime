@@ -8,7 +8,7 @@
 
 #include "quest/sentinel/got_hook.h"
 
-namespace QuestLogin::PrerequisiteTargets {
+namespace nevr_quest_login::PrerequisiteTargets {
 
 inline constexpr const char* kPnsovr = "libpnsovr.so";
 inline constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
@@ -94,4 +94,4 @@ inline sentinel::GotTarget TargetFor(const PinnedSlot& slot, std::uintptr_t base
   return sentinel::GotTarget(kPnsovr, slot.symbol, slot.kind, kPnsovrBuildId, slot.slot, expected);
 }
 
-}  // namespace QuestLogin::PrerequisiteTargets
+}  // namespace nevr_quest_login::PrerequisiteTargets

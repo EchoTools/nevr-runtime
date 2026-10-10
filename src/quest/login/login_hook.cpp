@@ -17,7 +17,7 @@
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 namespace {
 
@@ -607,4 +607,4 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   return InstallState::Installed;
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

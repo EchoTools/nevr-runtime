@@ -35,7 +35,7 @@
 
 #include "runtime/compat/social_level.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 // Platform code the PCVR bridge logs in as (ws_bridge.cpp kBridgeLoginPlatform). The game
 // names itself with this platform in every later request.
@@ -474,4 +474,4 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
 // outcome.
 
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

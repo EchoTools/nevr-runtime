@@ -474,38 +474,38 @@ nevr::quest_auth::Snapshot Snap(nevr::quest_auth::Readiness r, const char* token
   return s;
 }
 
-QuestLogin::IdentityStatus Fetch(nevr::quest_auth::Snapshot snap, QuestLogin::Identity* out) {
+nevr_quest_login::IdentityStatus Fetch(nevr::quest_auth::Snapshot snap, nevr_quest_login::Identity* out) {
   TokenIdentitySource source([snap] { return snap; });
   return source.Fetch(*out);
 }
 
 void TestIdentitySourceAnswers() {
   using nevr::quest_auth::Readiness;
-  QuestLogin::Identity id;
-  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 4242, "player"), &id) == QuestLogin::IdentityStatus::Ok);
+  nevr_quest_login::Identity id;
+  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 4242, "player"), &id) == nevr_quest_login::IdentityStatus::Ok);
   QCHECK(id.account_id == 4242 && id.access_token == "tok" && id.display_name == "player");
   QCHECK(id.social_level == 0);  // no facade installed: the login declares no social level
   {
     TokenIdentitySource withSocial([] { return Snap(Readiness::Ready, "tok", 4242, "player"); }, [] { return 1; });
-    QuestLogin::Identity declared;
-    QCHECK(withSocial.Fetch(declared) == QuestLogin::IdentityStatus::Ok && declared.social_level == 1);
+    nevr_quest_login::Identity declared;
+    QCHECK(withSocial.Fetch(declared) == nevr_quest_login::IdentityStatus::Ok && declared.social_level == 1);
   }
 
   for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser}) {
-    QuestLogin::Identity none;
-    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == QuestLogin::IdentityStatus::NotReady);
+    nevr_quest_login::Identity none;
+    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NotReady);
     QCHECK(none.access_token.empty() && none.account_id == 0);  // nothing leaks out of a refusal
   }
   for (Readiness r : {Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
-    QuestLogin::Identity none;
-    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == QuestLogin::IdentityStatus::NoToken);
+    nevr_quest_login::Identity none;
+    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NoToken);
     QCHECK(none.access_token.empty());
   }
-  QuestLogin::Identity none;
-  QCHECK(Fetch(Snap(Readiness::Ready, "", 4242, "p"), &none) == QuestLogin::IdentityStatus::NoToken);
-  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 0, "p"), &none) == QuestLogin::IdentityStatus::NoAccount);
+  nevr_quest_login::Identity none;
+  QCHECK(Fetch(Snap(Readiness::Ready, "", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NoToken);
+  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 0, "p"), &none) == nevr_quest_login::IdentityStatus::NoAccount);
   TokenIdentitySource empty(nullptr);
-  QCHECK(empty.Fetch(none) == QuestLogin::IdentityStatus::NotReady);
+  QCHECK(empty.Fetch(none) == nevr_quest_login::IdentityStatus::NotReady);
 }
 
 // #239: the router holds the login connection exactly while Fetch would say NotReady, opens it when Fetch
@@ -539,7 +539,7 @@ void TestLoginGateFollowsTheIdentityAnswer() {
 // until the poison is cleared; a new source starts not ready.
 void TestIdentitySourcePublishesTheSharedAttemptGate() {
   using nevr::quest_auth::Readiness;
-  namespace gate = QuestLogin::attempt_gate;
+  namespace gate = nevr_quest_login::attempt_gate;
   TokenIdentitySource source(nullptr);
   QCHECK(!source.Ready() && !gate::IsReady());
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
@@ -547,7 +547,7 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   gate::Poison();  // an attempt's logging-in page was skipped
   QCHECK(gate::IsReady());  // the readiness itself is unchanged: the page-enable skip has stopped
   QCHECK(!source.Ready());  // but that attempt fails its prerequisites, through the base-class call too
-  const QuestLogin::IdentitySource& base = source;
+  const nevr_quest_login::IdentitySource& base = source;
   QCHECK(!base.Ready());
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));  // a later observation does not lift it
   QCHECK(!source.Ready());
@@ -583,14 +583,14 @@ void TestIdentitySourceReadyFollowsObservedState() {
         const nevr::quest_auth::Snapshot snap = Snap(r, token, account, "p");
         // Fetch's answer from a separate source, so the flag below comes from Observe alone.
         TokenIdentitySource fetcher([snap] { return snap; });
-        QuestLogin::Identity id;
-        const bool fetchOk = fetcher.Fetch(id) == QuestLogin::IdentityStatus::Ok;
+        nevr_quest_login::Identity id;
+        const bool fetchOk = fetcher.Fetch(id) == nevr_quest_login::IdentityStatus::Ok;
         for (bool startReady : {false, true}) {  // from either earlier flag value
           TokenIdentitySource source([snap] { return snap; });
           source.Observe(startReady ? Snap(Readiness::Ready, "tok", 4242, "p") : Snap(Readiness::Starting, "", 0, "p"));
           QCHECK(source.Ready() == startReady);
           source.Observe(snap);
-          const QuestLogin::IdentitySource& asBase = source;  // the prerequisites call it through the base
+          const nevr_quest_login::IdentitySource& asBase = source;  // the prerequisites call it through the base
           QCHECK(asBase.Ready() == fetchOk);
           if (!startReady) readyCount += asBase.Ready() ? 1 : 0;
         }
@@ -620,12 +620,12 @@ void TestIdentitySourceReadyFollowsObservedState() {
     nevr::quest_auth::Snapshot state = Snap(Readiness::Ready, "tok", 4242, "p");
     TokenIdentitySource source([&state] { return state; });
     QCHECK(!source.Ready());  // nothing observed yet
-    QuestLogin::Identity id;
-    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::Ok && source.Ready());
+    nevr_quest_login::Identity id;
+    QCHECK(source.Fetch(id) == nevr_quest_login::IdentityStatus::Ok && source.Ready());
     state = Snap(Readiness::Expired, "tok", 4242, "p");
-    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::NoToken && !source.Ready());
+    QCHECK(source.Fetch(id) == nevr_quest_login::IdentityStatus::NoToken && !source.Ready());
     TokenIdentitySource none(nullptr);
-    QCHECK(!none.Ready() && none.Fetch(id) == QuestLogin::IdentityStatus::NotReady && !none.Ready());
+    QCHECK(!none.Ready() && none.Fetch(id) == nevr_quest_login::IdentityStatus::NotReady && !none.Ready());
   }
   static_assert(noexcept(std::declval<const TokenIdentitySource&>().Ready()), "Ready must be noexcept");
   static_assert(noexcept(std::declval<TokenIdentitySource&>().Observe(std::declval<const nevr::quest_auth::Snapshot&>())),

@@ -20,7 +20,7 @@
 #include <atomic>
 #include <cstdint>
 
-namespace QuestLogin::attempt_gate {
+namespace nevr_quest_login::attempt_gate {
 
 inline constexpr std::uint32_t kReadyBit = 1;
 inline constexpr std::uint32_t kPoisonedBit = 2;
@@ -66,4 +66,4 @@ inline bool LoginMayProceed() noexcept { return g_state.load(std::memory_order_a
 
 inline void Reset() noexcept { g_state.store(0, std::memory_order_release); }
 
-}  // namespace QuestLogin::attempt_gate
+}  // namespace nevr_quest_login::attempt_gate

@@ -3,7 +3,7 @@
 #include "quest/login/login_thunk.h"
 #include "quest/sentinel/hook_report.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 // A hook never logs on the game's call path; the reporter thread reads these (hook_report.h). Without
 // them a smoke test cannot tell from the reporter lines whether CNSUser::SendLogInRequest was reached.
@@ -35,4 +35,4 @@ bool RegisterLoginHookCounters() noexcept {
   return ok;
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login
