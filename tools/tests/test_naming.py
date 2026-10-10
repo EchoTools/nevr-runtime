@@ -173,6 +173,26 @@ class NamingTest(unittest.TestCase):
                             stray.setdefault(path, []).append("%d:%s" % (n, old))
         self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
+    def test_every_namespace_is_nevr_or_the_games(self):
+        # The rule is `nevr` or `nevr_<area>` (#131). The two PascalCase namespaces left are named here with
+        # the reason; a new one fails this test, and an entry whose namespace is gone fails it too.
+        exceptions = {
+            # The frozen src/legacy calls Hooking::Attach and Hooking::Initialize through the compat header.
+            "src/core/hooking.h": {"Hooking"},
+            # Nested in the game's EchoVR namespace and named after the game's own symbol tables.
+            "src/abi/symbols.h": {"EchoVR::Symbols", "Social", "Tcp"},
+        }
+        decl = re.compile(r"^\s*namespace\s+([A-Z][A-Za-z0-9_]*(?:::[A-Za-z0-9_]+)*)\s*\{")
+        found = {}
+        for path, text in project_files():
+            if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")) or path.startswith("plugins/"):
+                continue
+            for line in text.split("\n"):
+                m = decl.match(line)
+                if m and m.group(1) not in {"EchoVR", "NRadEngine"}:
+                    found.setdefault(path, set()).add(m.group(1))
+        self.assertEqual(found, exceptions, "namespaces are nevr or nevr_<area> (docs/standards/naming.md)")
+
     def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())
         gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()

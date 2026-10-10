@@ -76,14 +76,24 @@ separate namespace is an open ABI decision, issue #130.
 - Targets whose name is the name of a file users touch or of a third party, so `nevr_` is not applied:
   `echovr_server` (the launcher), `LibOVRPlatform64_1` (the stub DLL), `ovrplatformloader` (the Quest
   loader library) and `breakpad_client`.
-- Flat config keys without it (`asset_cdn_url`, `telemetry_uri`, `upnp`), macros without `NEVR_`
-  (`PROJECT_VERSION`, `GIT_COMMIT_HASH`), log tags outside `[NEVR.<AREA>]` (`[TELEMETRY.DIAG]`,
-  a bare `[NEVR]`), and the PascalCase namespaces (`GameServer`, `TokenAuth`).
+- Flat config keys without the `nevr_` prefix (`asset_cdn_url`, `telemetry_uri`, `upnp`): a key is a name
+  users write in their config file.
+- Log tags outside `[NEVR.<AREA>]`: `[NETGAME]`, `[NSLOBBY]`, `[RBX]`, `[SAVE_LOADOUT]`, `[SAVE_SUCCESS]`,
+  `[CURRENT_LOADOUT]`, `[TELEMETRY.DIAG]` and a bare `[NEVR]`: scripts and the score log grep the text.
+- Two PascalCase namespaces: `Hooking` (`src/core/hooking.h`; the frozen `src/legacy` calls
+  `Hooking::Attach` and `Hooking::Initialize` through the compat header) and `EchoVR::Symbols` with its
+  nested `Social` and `Tcp` (`src/abi/symbols.h`, named after the game's symbol tables).
+- `PROJECT_VERSION`, `GIT_COMMIT_HASH` and `USE_MINHOOK` as macro names: only the frozen `src/legacy` reads
+  them; the root `CMakeLists.txt` defines them for those two targets, and every other target defines
+  `NEVR_PROJECT_VERSION`, `NEVR_GIT_COMMIT_HASH` and `NEVR_USE_MINHOOK`.
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
 `tools/tests/test_naming.py` enforces the machine-checkable rules: no `Nvr` identifier outside the frozen set,
 no non-canonical spelling of the project name in a file (or token) that does not already carry one
 (`LEGACY_SPELLINGS`, which only shrinks, and `BRAND_PROSE_SPELLINGS`, the documents whose prose spells the brand
-`nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), and the brand spelling `nEVR` in the
-prose of documents. The other rules above are checked in review.
+`nEVR`), one spelling of the lifecycle namespace (`nevr::lifecycle`), the brand spelling `nEVR` in the
+prose of documents, `NEVR_` project macros, `nevr_` CMake targets (four named exceptions), every namespace
+`nevr` or `nevr_<area>` (the two exceptions above, listed in the test), and the old names of renamed
+namespaces (`tools/tests/renamed_namespaces/*.json`). `python3 tools/naming_inventory.py` lists what the tree
+still holds that breaks a rule, by category, with `file:line`. The other rules above are checked in review.
