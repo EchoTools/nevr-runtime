@@ -18,11 +18,19 @@ jobs:
   build:
     if: github.event_name == 'release' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
-    # The current toolchain, the same one development uses (#81): Arch's MinGW-w64 GCC and headers
-    # from pacman, not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
-    # model). Rolling by design; the "Toolchain versions" step records what built each run.
+    permissions:
+      contents: read
+      packages: read
+    # The toolchain is the prebuilt builder image (.github/builder/Dockerfile, built by
+    # builder-image.yml): Arch's MinGW-w64 GCC and headers from pacman, the toolchain development
+    # uses (#81), not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
+    # model), plus osslsigncode, buf and the libCrypt32.a link. The tag is the Dockerfile's hash; the
+    # "Toolchain versions" step records what built each run.
     container:
-      image: archlinux:base-devel
+      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
     # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
     # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
@@ -40,14 +48,6 @@ jobs:
       WINEDEBUG: "-all"
 
     steps:
-    # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
-    - name: Install the toolchain (pacman)
-      run: |
-        set -euo pipefail
-        pacman -Syu --noconfirm --needed \
-          git mingw-w64-gcc ninja cmake python python-yaml go just zstd openssl wine \
-          curl zip unzip tar pkgconf zlib
-
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -61,55 +61,16 @@ jobs:
       with:
         just-version: '1.46.0'
 
-    # osslsigncode is not in Arch's official repositories; build a pinned upstream release so the
-    # throwaway-certificate signing test in tools/tests runs instead of skipping.
-    - name: Build osslsigncode (pinned)
-      run: |
-        set -euo pipefail
-        git clone --depth 1 --branch 2.14 https://github.com/mtrojnar/osslsigncode.git /tmp/osslsigncode
-        cmake -S /tmp/osslsigncode -B /tmp/osslsigncode/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-        cmake --build /tmp/osslsigncode/build
-        cmake --install /tmp/osslsigncode/build
-
-    # Buf takes about a minute to compile from source; the binary is cached by Buf and Go version.
-    - name: Locate the Go bin directory
-      id: gobin
-      run: |
-        set -euo pipefail
-        echo "dir=$(go env GOPATH)/bin" >> "$GITHUB_OUTPUT"
-        echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
-
-    - name: Restore Buf
-      id: buf_cache
-      uses: actions/cache@v4
-      with:
-        path: ${{ steps.gobin.outputs.dir }}/buf
-        key: buf-v1.47.2-${{ steps.gobin.outputs.go }}
-
-    - name: Setup pinned Buf
-      run: |
-        set -euo pipefail
-        if [ "${{ steps.buf_cache.outputs.cache-hit }}" != "true" ]; then
-          go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        fi
-        echo "${{ steps.gobin.outputs.dir }}" >> "$GITHUB_PATH"
-
     - name: Toolchain versions
       run: |
         set -euo pipefail
-        pacman -Q mingw-w64-gcc mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads cmake ninja wine go python
+        pacman -Q mingw-w64-gcc mingw-w64-binutils mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads cmake ninja wine go python
         x86_64-w64-mingw32-g++ --version
         x86_64-w64-mingw32-g++ -v 2>&1 | grep "Thread model"
         cmake --version
         just --version
         osslsigncode --version
         buf --version
-
-    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
-    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
-    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
-    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
-      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
 
     - name: Bootstrap vcpkg
       id: vcpkg
@@ -121,7 +82,10 @@ jobs:
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+        # The compiler version plus a hash of every MinGW package vcpkg's compiler hash can see, so a
+        # toolchain that moved under the same gcc version (binutils, headers, crt) is a new key and not
+        # an exact hit whose archives silently never match.
+        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')-$(pacman -Q mingw-w64-gcc mingw-w64-binutils mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
     # Building the dependencies from source is about 80% of a run (29.6 of 37.8 minutes in run
     # 37872101662). vcpkg's file binary cache stores one archive per package, named by an ABI hash that

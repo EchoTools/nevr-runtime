@@ -100,19 +100,23 @@ class ReleaseContractTest(unittest.TestCase):
         workflow = (REPO / ".github/workflows/build.yml").read_text()
         self.assertIn("just-version:", workflow)
         # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
-        # from pacman in an archlinux container, with every version logged per run.
-        self.assertIn("image: archlinux:base-devel", workflow)
-        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", workflow)
+        # from pacman, installed once in the builder image (.github/builder/Dockerfile) that the job
+        # runs in, with every version logged per run.
+        self.assertIn("image: ghcr.io/echotools/nevr-runtime-builder:", workflow)
+        self.assertNotIn("pacman -Syu", workflow, "the toolchain is installed in the builder image, not per run")
+        dockerfile = (REPO / ".github/builder/Dockerfile").read_text()
+        self.assertIn("FROM archlinux:base-devel", dockerfile)
+        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", dockerfile)
         self.assertIsNotNone(pacman, "the toolchain comes from one pacman -Syu")
         for pkg in ("mingw-w64-gcc", "cmake", "ninja", "wine", "zstd", "openssl", "python-yaml"):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
-        self.assertIn("mtrojnar/osslsigncode.git", workflow)  # not in Arch's official repos: pinned build
+        self.assertIn("mtrojnar/osslsigncode.git", dockerfile)  # not in Arch's official repos: pinned build
         self.assertIn("- name: Toolchain versions", workflow)
-        # Only the build job's toolchain has to come from one pacman -Syu (#81/#82); the publish job
-        # runs on ubuntu-latest (not the Arch container) and installs zstd with apt-get there (#79).
+        # The publish job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
+        # there (#79); the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
-        self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", workflow)
+        self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
