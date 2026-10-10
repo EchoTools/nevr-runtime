@@ -1613,6 +1613,47 @@ void TestReplayDueIsConsumedByTheReplay() {
   QCHECK(rig.router->GetStats().loginsReplayed == 1);
 }
 
+// The remote opens while the connection is still unclassified (held), then the connection's first frame names
+// it the login role: the replay goes out ahead of that frame, once, and is no longer due.
+void TestReplaySentAheadOfTheFirstLoginRoleFrameAfterTheOpen() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  QCHECK(SentOn(rig, fresh).empty());  // held
+  QCHECK(rig.router->GetStats().loginReplayDue);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "profile-request"), true);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 2 && sent[0] == kGameLogin && sent[1] == Msg(kSymSomething, "profile-request"));
+  QCHECK(!rig.router->GetStats().loginReplayDue);
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);
+  rig.router->OnGameSilent(4);  // a late notice changes nothing
+  QCHECK(SentOn(rig, fresh).size() == 2);
+}
+
+// A silent connection was sent the replay and then turned out to be another socket (config): its session
+// ends with it and the replay is due again for the real login socket.
+void TestReplayRearmedWhenItWasSpentOnASocketThatTurnedOutNotToBeTheLogin() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId spent = LoseSessionAndReconnect(rig, opens[1].remote);
+  rig.router->OnGameSilent(4);
+  rig.router->OnRemoteOpen(spent);
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);
+  QCHECK(!rig.router->GetStats().loginReplayDue);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // it was the config socket
+  QCHECK(rig.router->GetStats().loginReplayDue);
+  const std::size_t before = rig.remotes.Opens().size();
+  rig.router->OnGameOpen(5);
+  QCHECK(rig.remotes.Opens().size() > before);
+  const RemoteId login = rig.remotes.Opens().back().remote;
+  rig.router->OnGameSilent(5);
+  rig.router->OnRemoteOpen(login);
+  const auto sent = SentOn(rig, login);
+  QCHECK(sent.size() == 1 && sent[0] == kGameLogin);
+  QCHECK(rig.router->GetStats().loginsReplayed == 2);
+}
+
 // Failure caught: a replay on a session that never had a login to replay (a game that never logged in).
 void TestNothingToReplayBeforeTheGameHasLoggedIn() {
   Rig rig(ReplayOptions());
@@ -1670,6 +1711,8 @@ int main() {
   TestLogOutIsSeenOnAnyConnectionDroppedOrEmbedded();
   TestShutdownAndALoginFailureClearTheCache();
   TestReplayDueIsConsumedByTheReplay();
+  TestReplaySentAheadOfTheFirstLoginRoleFrameAfterTheOpen();
+  TestReplayRearmedWhenItWasSpentOnASocketThatTurnedOutNotToBeTheLogin();
   TestNothingToReplayBeforeTheGameHasLoggedIn();
   TestMatchmakerConnectionsAreCapped();
   TestExtraConnectionNeverBecomesASecondLogin();
