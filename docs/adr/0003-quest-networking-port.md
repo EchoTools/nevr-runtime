@@ -317,9 +317,11 @@ contract:
    through the test access class. `just test-quest-hooks` compiles snippets that break each
    type-level rule and requires them to fail with the message that names the rule;
    `TestRawInstallOnlyInTests` reads every `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` and `.inc` file under
-   `src/` and fails if a file outside a `tests/` directory names the test access class or includes
-   (resolved relative to the including file, to `src/` and to `src/quest/sentinel`) anything under
-   `src/quest/tests`, recursively.
+   `src/` and fails if a file other than `src/quest/sentinel/got_hook.h` and the files under
+   `src/quest/tests` names the test access class, or if a file outside a `tests/` directory includes
+   (`#include` or `#include_next`, resolved relative to the including file, to `src/` and to
+   `src/quest/sentinel`) anything under `src/quest/tests`, recursively. A symlink under `src/` fails
+   the test, because the walk does not follow one.
 5. A function a handler calls directly and that can be on the stack across the call into game
    code must be personality-free, and must not make an indirect call (function pointer, virtual,
    `std::function`) into code built with exceptions.
@@ -343,8 +345,11 @@ first hook is installed) logs "reporter_started", then a counter's first change 
 10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
 is installed and the game never called it), and from then on one pass a minute that logs a counter
 only if it changed. The counter table holds 96 counters for the whole program (`sentinel::kMaxReportCounters`), and every
-`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 49th, is
-refused and logged as `register_refused`). The thread ends with the process; creating it from a constructor on a Quest is
+`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 97th, is
+refused and logged as `register_refused` with its `reason`: `reporter_running`, `table_full` or
+`null_argument`). The constructor therefore registers every counter first and starts the reporter once;
+`StopReporter` forgets the table, so a Stop, Register, Start sequence loses the counters registered before
+the Stop. The thread ends with the process; creating it from a constructor on a Quest is
 inferred from the Bionic main-branch source and has not been tried on a headset. A slot where a
 failed install left the sentinel's entry possibly reachable through another writer's hook stays
 reserved for the process and a retry is refused with its own status, `slot_poisoned`;
@@ -504,7 +509,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    or released, for as long as it is the login connection; `LoopbackGameServer` then exempts it from
    `idleFirstFrameMs` (pings are still answered). Config, matchmaker and unclassified connections
    keep the idle close. `ReevaluateHeldLogins`
-   (via `IntegratedBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
+   (via `SessionBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
    Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
    never held: with no token their remote cannot start and they close with 1011 at once. A
    connection opened while the login session has no live login connection is the login connection of
@@ -543,7 +548,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      `CURLOPT_` literal, each critical option set exactly once) is a tripwire, not the guarantee:
      `just test-quest-tls` runs the connector against real servers and is what proves the
      behavior.
-   - `session_bridge` composes them.
+   - `session_bridge` composes them, with the frame tap (`frame_tap`) and the side-channel send the social
+     facade needs (`Config::tap`, `SendToLogin`).
 
    The Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
 
@@ -1616,11 +1622,11 @@ action. The handler restores `errno`. `AfterDlopen` runs after the game's call h
 no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
 
 **Social.** `FeatureEnabled(kSocial)` gates the facade (it requires login). The login declares
-`nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `integrated_bridge.cpp`: the same composition as
-`SessionBridge` with decorators (`tapped_transports.cpp`) that show every relayed frame to
-`frame_tap.cpp`, which feeds `quest_social::ObserveFrames` and, on the service's `LoginSuccess`
-(account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's requests go out
-through `SocialParty::SetSender` on a side channel that refuses until the login is accepted (#236).
+`nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `quest_net::SessionBridge` (`net/session_bridge.cpp`); its
+`Config::tap` (`net/frame_tap.cpp`) sees every relayed frame, which feeds `quest_social::ObserveFrames` and, on the
+service's `LoginSuccess` (account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's
+requests go out through `SocialParty::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
+until the login is accepted.
 
 **Sensor annotation.** `NEVR_OUTSIDE_GAME_CALL` (`sentinel/outside_game_call.h`) places a function in the
 output section `nevr_outside_game_call`. `TestHookFramesCarryNoPersonality` reads that section from the
