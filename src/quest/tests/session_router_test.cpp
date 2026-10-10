@@ -1370,7 +1370,7 @@ void TestLoginRemovedFrameLayout() {
   QCHECK(!nevr_evr_codec::kLoginRemovedUserIdSwapped);
   QCHECK(le64(p) == kTestPlatform && le64(p + 8) == kTestAccount);  // the EvrId as LoginSuccess carries it
   const uint32_t word10 = p[0x10] | (p[0x11] << 8) | (p[0x12] << 16) | (static_cast<uint32_t>(p[0x13]) << 24);
-  QCHECK(word10 == nevr_evr_codec::kLoginRemovedWord10);
+  QCHECK(word10 == nevr_evr_codec::kLoginRemovedWord10 && word10 == 0);  // pinned: changing the unmeasured word is an edit here too
   QCHECK(p[0x14] == nevr_evr_codec::kLoginRemovedReasonText && p[0x14] == 1);
   QCHECK(p[0x15] == 0 && p[0x16] == 0 && p[0x17] == 0);
   const std::string json(reinterpret_cast<const char*>(p + 0x18), static_cast<std::size_t>(m.length - 0x18));
@@ -1435,6 +1435,21 @@ void TestOnlyAConnectionKnownToBeTheLoginSocketIsSentTheNotice() {
   rig2.router->OnGameSilent(4);
   (void)r2;
   QCHECK(SentToGame(rig2, 4).empty());
+}
+
+// Failure caught: a silent connection that is a matchmaker by order (never spoke, opened while the login session
+// is live) being sent the notice because it was silent.
+void TestSilentMatchmakerByOrderIsNeverSentTheNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: the login socket, session live
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameOpen(5);  // a second connection on the live session: matchmaker role
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 5).empty());
+  QCHECK(CountNotices(rig) == 0);
+  rig.router->OnGameSilent(4);  // the login socket
+  QCHECK(SentToGame(rig, 4).size() == 1);
 }
 
 // Failure caught (the RETRY path): the login connection ended with a request outstanding. The game takes its
@@ -1594,6 +1609,7 @@ int main() {
   TestLoginSuccessUserIdIsParsed();
   TestSilentLoginSocketAfterTheLossIsSentOneNotice();
   TestOnlyAConnectionKnownToBeTheLoginSocketIsSentTheNotice();
+  TestSilentMatchmakerByOrderIsNeverSentTheNotice();
   TestNoNoticeWhenTheLoginConnectionHadRequestsOutstanding();
   TestOwnLoginFirstGetsNoNotice();
   TestLoginRoleRequestAfterTheReconnectGetsTheNotice();
