@@ -28,6 +28,7 @@
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
@@ -93,6 +94,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
     AssetCDN::StopBackgroundFetch();
+    ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
@@ -103,6 +105,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
       requested ? "true" : "false", requested ? 0 : 1);
+  ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
   PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return gameResult;

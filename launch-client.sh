@@ -19,17 +19,19 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # verdict. Without it the script returns only after the game exits (the scenario runner relies on that).
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
+TRACE_EXPORTS=""
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
+    --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
     --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -130,6 +132,11 @@ if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")
   echo "=== game config: $CONFIG (config.yaml from its directory) ==="
+fi
+if [[ -n "$TRACE_EXPORTS" ]]; then
+  [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }
+  game_args+=(-traceexports "$TRACE_EXPORTS")
+  echo "=== tracing platform DLL exports: $TRACE_EXPORTS (docs/reference/export-tracer.md) ==="
 fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
