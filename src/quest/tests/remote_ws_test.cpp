@@ -340,6 +340,9 @@ void TestStop() {
   rig.OpenLoginGame();
   QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
   QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
+  // The connection object exists before the open has completed. Wait for the login frame to have been sent
+  // (as the other tests do), or Stop can land first: the worker's send then fails and the game is closed.
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("1")->Sent().size() == 1; }));
   rig.transport->Stop();
   QCHECK(rig.games.closes.empty());  // Stop reports nothing to the router
 }
