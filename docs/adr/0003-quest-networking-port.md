@@ -1608,6 +1608,16 @@ absent from the file. The only consumer is the install call above.
   package does not install; if the owner wants it zeroed, that is a separate change. (c) **The
   invitable-users refresh goes away** (`RefreshInvitableUsers`, bit 1 of `Update`'s flags, libpnsovr
   0x20455c): the facade's friend list is the NEVR service's, so there is nothing to refresh.
+- Rich presence to Meta (`presence_local`, #396). `CNSOVRRichPresence` stays on pnsovr but its three slots that talk
+  to Meta's platform service are wrapped on the same pinned object as the trace: `ShareData` (slot 0, `0x1f044c`,
+  `group_presence set`), `RefreshDestinations` (slot 11, `0x1f1c2c`, `get_destinations`) and `Clear` (slot 16,
+  `0x1f1cf0`, `group_presence clear`). With the feature on they are answered locally and the object's state word
+  (`this+0x30`: bit 0 dirty, bit 1 share in flight, bit 2 clear in flight) is left as the game's own versions leave
+  it once the answer has come back (`Clear` sets bit 2 and `ClearUserPresenceCB` takes it down again, so locally it
+  stays down), so the game sees a completed share and no request leaves. The status text
+  the player sees is the game's member JSON (destination names from the `presence_names` table); a friend's
+  status is derived by the game service from the match they are in (nakama `server/evr_friend_presence.go`), so
+  nothing is published from the client. Off by default; needs the social facade.
 - Name pointers: the facade returns `const char*` from the roster and party views. The three callers
   checked copy them into a 64-byte buffer before returning (`CR15NetFriendExpression` 0x2322db0,
   `CR15NetRecentlyMetUserExpression` 0x2332768, `CR15NetPartyMemberExpression` 0x232c098), so no pointer is

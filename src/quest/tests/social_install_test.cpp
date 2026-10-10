@@ -144,12 +144,13 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes kMaxReportCounters counters in all; the social package uses 23 (the thunk's calls and faults, three
-  // pass-through counters, the selection, the facade's thirteen, and the rich presence trace's four) and leaves the rest.
+  // The reporter takes kMaxReportCounters counters in all; the social package uses 26 (the thunk's calls and faults, three
+  // pass-through counters, the selection, the facade's thirteen, the rich presence trace's four and its three local
+  // answers) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (unsigned i = 0; i < sentinel::kMaxReportCounters - 23; ++i) {
-    QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 23 + the rest = the whole table
+  for (unsigned i = 0; i < sentinel::kMaxReportCounters - 26; ++i) {
+    QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 26 + the rest = the whole table
   }
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
@@ -254,6 +255,31 @@ int FakeDestination(const void*) { return g_destinationAnswer; }
 unsigned FakeCount(const void*) { return g_countAnswer; }
 const char* FakeName(const void*, unsigned) { return g_nameAnswer; }
 void FakeSet(void*, const void*) { ++g_setCalls; }
+// The functions that talk to Meta (#396): what the game's own versions leave in the state word is modelled
+// (ShareData: dirty and in-flight bits go, in-flight comes back; Clear: the clearing bit goes up, and its
+// callback, which a test fires by hand, takes it down again).
+int g_shareCalls = 0;
+int g_refreshCalls = 0;
+int g_clearCalls = 0;
+std::uint32_t FlagsOf(const FakeObject& o) {
+  std::uint32_t f = 0;
+  std::memcpy(&f, reinterpret_cast<const char*>(&o) + kRichPresenceFlagsOffset, sizeof(f));
+  return f;
+}
+void SetFlags(FakeObject* o, std::uint32_t f) {
+  std::memcpy(reinterpret_cast<char*>(o) + kRichPresenceFlagsOffset, &f, sizeof(f));
+}
+void FakeShareData(void* self) {
+  ++g_shareCalls;
+  FakeObject* o = static_cast<FakeObject*>(self);
+  SetFlags(o, (FlagsOf(*o) & ~3u) | kRichPresenceFlagInFlight);
+}
+void FakeRefresh(void*) { ++g_refreshCalls; }
+void FakeClear(void* self) {
+  ++g_clearCalls;
+  FakeObject* o = static_cast<FakeObject*>(self);
+  SetFlags(o, FlagsOf(*o) | kRichPresenceFlagClearing);
+}
 const char* g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
 bool g_encodeFails = false;
 unsigned FakeEncodeJson(const void*, char* out, unsigned long long* size, unsigned, const char*) {
@@ -281,6 +307,9 @@ void BuildFakePresence(FakeObject* object) {
   g_fakeVtable[2 + kRichPresenceSlotDestinationName] = Word(&FakeName);
   g_fakeVtable[2 + kRichPresenceSlotDestination] = Word(&FakeDestination);
   g_fakeVtable[2 + kRichPresenceSlotSet] = Word(&FakeSet);
+  g_fakeVtable[2 + kRichPresenceSlotShareData] = Word(&FakeShareData);
+  g_fakeVtable[2 + kRichPresenceSlotRefreshDestinations] = Word(&FakeRefresh);
+  g_fakeVtable[2 + kRichPresenceSlotClear] = Word(&FakeClear);
   const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(&g_fakeVtable[2]);
   g_presenceBias = address - static_cast<std::uintptr_t>(kOvrRichPresenceVptrVaddr);
   object->vptr = address;
@@ -317,12 +346,13 @@ void TestPresenceSelection() {
   QCHECK(g_lines.empty());  // the decision never logs
 
   // The pinned object (the slot check off for the fakes): the vtable is replaced by a copy that differs in
-  // exactly the three wrapped slots and carries the same offset and typeinfo words.
+  // exactly the six wrapped slots and carries the same offset and typeinfo words.
   QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
   QCHECK(C(counters.selected) == 1 && object.vptr != original);
   for (std::size_t slot = 0; slot < kOvrRichPresenceSlotCount; ++slot) {
     const bool wrapped = slot == kRichPresenceSlotDestinationName || slot == kRichPresenceSlotDestination ||
-                         slot == kRichPresenceSlotSet;
+                         slot == kRichPresenceSlotSet || slot == kRichPresenceSlotShareData ||
+                         slot == kRichPresenceSlotRefreshDestinations || slot == kRichPresenceSlotClear;
     QCHECK((SlotOf(object, slot) != g_fakeVtable[2 + slot]) == wrapped);
   }
   const std::uintptr_t* copy = nullptr;
@@ -348,6 +378,9 @@ void TestPresenceSlotCheckAcceptsTheRealAddresses() {
   g_fakeVtable[2 + kRichPresenceSlotDestinationName] = g_presenceBias + kOvrRichPresenceDestinationNameVaddr;
   g_fakeVtable[2 + kRichPresenceSlotDestination] = g_presenceBias + kOvrRichPresenceDestinationVaddr;
   g_fakeVtable[2 + kRichPresenceSlotSet] = g_presenceBias + kOvrRichPresenceSetVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotShareData] = g_presenceBias + kOvrRichPresenceShareDataVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotRefreshDestinations] = g_presenceBias + kOvrRichPresenceRefreshDestinationsVaddr;
+  g_fakeVtable[2 + kRichPresenceSlotClear] = g_presenceBias + kOvrRichPresenceClearVaddr;
   QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
   QCHECK(object.vptr != original && C(PresenceCountersView().selected) == 1);
   // One slot off by a word: not the pinned build's function, nothing is replaced.
@@ -357,6 +390,17 @@ void TestPresenceSlotCheckAcceptsTheRealAddresses() {
   g_fakeVtable[2 + kRichPresenceSlotDestination] += 4;
   QCHECK(SelectRichPresenceObject(&other, &PresenceLoaded) == &other && other.vptr == original);
   QCHECK(C(PresenceCountersView().passThrough) == 1);
+  // Each of the three slots that talk to Meta is pinned too (#396): one off by a word and nothing is replaced.
+  g_fakeVtable[2 + kRichPresenceSlotDestination] -= 4;
+  for (const std::size_t slot : {kRichPresenceSlotShareData, kRichPresenceSlotRefreshDestinations, kRichPresenceSlotClear}) {
+    ResetPresenceForTest();
+    g_fakeVtable[2 + slot] += 4;
+    FakeObject off;
+    off.vptr = original;
+    QCHECK(SelectRichPresenceObject(&off, &PresenceLoaded) == &off && off.vptr == original);
+    QCHECK(C(PresenceCountersView().passThrough) == 1);
+    g_fakeVtable[2 + slot] -= 4;
+  }
 }
 
 void TestPresenceWrappersPassThroughAndLogOnChange() {
@@ -530,6 +574,75 @@ void TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone() {
   g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
 }
 
+// #396: with presence_local the game's ShareData / RefreshDestinations / Clear are not run (they are the ones
+// that make group_presence requests to Meta); the state word ends up as the game's own versions leave it once
+// the answer has come back. Without it the game's functions run, unchanged.
+void TestPresenceLocalAnswersWithoutTheGamesFunctions() {
+  ResetPresenceForTest();
+  g_lines.clear();
+  FakeObject object;
+  BuildFakePresence(&object);
+  SetPresenceSeamsForTest(false, &FakeEncodeJson);
+  QCHECK(SelectRichPresenceObject(&object, &PresenceLoaded) == &object);
+  using VoidFn = void (*)(void*);
+  const auto call = [&](std::size_t slot) {
+    VoidFn fn;
+    const std::uintptr_t w = SlotOf(object, slot);
+    std::memcpy(&fn, &w, sizeof(w));
+    fn(&object);
+  };
+  g_shareCalls = g_refreshCalls = g_clearCalls = 0;
+  const PresenceCounters counters = PresenceCountersView();
+
+  // Off (the default): the game's own functions run.
+  SetFlags(&object, kRichPresenceFlagDirty);
+  call(kRichPresenceSlotShareData);
+  call(kRichPresenceSlotRefreshDestinations);
+  QCHECK(g_shareCalls == 1 && g_refreshCalls == 1);
+  QCHECK(FlagsOf(object) == kRichPresenceFlagInFlight);  // what the game's ShareData leaves
+  QCHECK(C(counters.localShare) == 0 && C(counters.localRefresh) == 0);
+
+  // On: nothing of the game's runs; a dirty object ends with the dirty bit consumed and nothing in flight.
+  SetPresenceLocal(true);
+  SetFlags(&object, kRichPresenceFlagDirty);
+  call(kRichPresenceSlotShareData);
+  QCHECK(g_shareCalls == 1);  // not called
+  QCHECK(FlagsOf(object) == 0);
+  QCHECK(C(counters.localShare) == 1);
+  call(kRichPresenceSlotRefreshDestinations);
+  QCHECK(g_refreshCalls == 1 && C(counters.localRefresh) == 1);
+
+  // The same gate as the game's ShareData: an object with a clear or a share in flight is left alone.
+  SetFlags(&object, kRichPresenceFlagDirty | kRichPresenceFlagClearing);
+  call(kRichPresenceSlotShareData);
+  QCHECK(FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagClearing));
+  SetFlags(&object, kRichPresenceFlagDirty | kRichPresenceFlagInFlight);
+  call(kRichPresenceSlotShareData);
+  QCHECK(FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagInFlight));
+  QCHECK(g_shareCalls == 1 && C(counters.localShare) == 1);
+
+  // Clear: no request, and no bit left behind (the game's Clear plus its callback net to the bit clear); the
+  // other bits are kept.
+  SetFlags(&object, kRichPresenceFlagDirty);
+  call(kRichPresenceSlotClear);
+  QCHECK(g_clearCalls == 0 && FlagsOf(object) == kRichPresenceFlagDirty);
+  // And a share goes through afterwards: the object is not gated for good.
+  call(kRichPresenceSlotShareData);
+  QCHECK(FlagsOf(object) == 0);
+  QCHECK(C(counters.localClear) == 1);
+
+  // One line per operation, the first time; none from the repeats.
+  QCHECK(CountLines("\"event\":\"rich_presence_local\"") == 3);
+  call(kRichPresenceSlotClear);
+  QCHECK(CountLines("\"event\":\"rich_presence_local\"") == 3 && C(counters.localClear) == 2);
+
+  // Off again: the game's Clear runs.
+  SetPresenceLocal(false);
+  call(kRichPresenceSlotClear);
+  QCHECK(g_clearCalls == 1);
+  SetPresenceLocal(false);
+}
+
 NEVR_HOOK_RECORD(kTestPresenceHook, PresenceThunk, &OnPresenceHandler);
 
 void TestPresenceThroughThunk() {
@@ -630,6 +743,7 @@ int main() {
   TestPresenceEncodeFailureIsLoggedOnce();
   TestPresenceNameTable();
   TestPresenceNamesAnswerOnlyWhenEnabledAndOnlyWhenTheGameFoundNone();
+  TestPresenceLocalAnswersWithoutTheGamesFunctions();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_install_test: %d check(s) failed\n", quest_test::Failures());
