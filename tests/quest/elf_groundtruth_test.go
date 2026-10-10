@@ -404,7 +404,7 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 //
 // It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
 // (callback_thunk.h, "Limits").
-var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
+var includeRe = regexp.MustCompile(`#\s*include(?:_next)?\s*[<"]([^>"]+)[>"]`)
 
 func TestRawInstallOnlyInTests(t *testing.T) {
 	root, err := filepath.Abs("../../src")
@@ -429,6 +429,12 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 	}
 	seen := 0
 	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr == nil && info.Mode()&os.ModeSymlink != 0 {
+			// filepath.Walk does not follow a symlink, so a link under src/ would hide the files behind it
+			// from this scan. None exists; one appearing is an error to be looked at, not a gap.
+			t.Errorf("%s is a symlink under src/: the scan does not follow it", p)
+			return nil
+		}
 		if werr != nil || info.IsDir() || !exts[filepath.Ext(p)] {
 			return werr
 		}
@@ -552,6 +558,33 @@ func sentinelLinkViolations(ninja string) []string {
 }
 
 // The real, configured link line of the built sentinel.
+// The sentinel's DT_NEEDED list is exactly the forward-to-original plus bionic. Everything else it uses at
+// run time (libvulkan, libEGL, libGLESv3, libandroid, libvrapi, libopenxr_loader for the hardware dump, #335)
+// is reached with dlopen/dlsym, so a stray -l link shows up here instead of as a new load-time dependency of
+// the game.
+func TestSentinelNeededList(t *testing.T) {
+	requireArtifact(t)
+	dyn := run(t, "readelf", "-d", soPath(t))
+	var got []string
+	for _, line := range strings.Split(dyn, "\n") {
+		if !strings.Contains(line, "(NEEDED)") {
+			continue
+		}
+		if i, j := strings.Index(line, "["), strings.LastIndex(line, "]"); i >= 0 && j > i {
+			got = append(got, line[i+1:j])
+		}
+	}
+	want := map[string]bool{"libovrplatformloader_orig.so": true, "liblog.so": true, "libdl.so": true, "libm.so": true, "libc.so": true}
+	for _, lib := range got {
+		if !want[lib] {
+			t.Errorf("sentinel NEEDs %s; reach it with dlopen/dlsym instead (DT_NEEDED: %v)", lib, got)
+		}
+	}
+	if len(got) == 0 {
+		t.Errorf("no DT_NEEDED entries read from readelf -d: the check is blind\n%s", dyn)
+	}
+}
+
 func TestSentinelLinkLineGuard(t *testing.T) {
 	requireArtifact(t)
 	p, err := filepath.Abs("../../build/android-arm64/build.ninja")

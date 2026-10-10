@@ -152,7 +152,13 @@ void AtforkChild() {
 bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value, ReportKind kind) {
   pthread_mutex_lock(&g_control);
   pthread_mutex_lock(&g_mutex);
-  const bool ok = !g_running && g_counterCount < kMaxCounters && name != nullptr && value != nullptr;
+  // The first reason that applies, logged with the refusal: a reader of the log can tell a late
+  // registration from a full table from a null argument.
+  const char* refusal = g_running                     ? "reporter_running"
+                        : g_counterCount >= kMaxCounters ? "table_full"
+                        : (name == nullptr || value == nullptr) ? "null_argument"
+                                                              : nullptr;
+  const bool ok = refusal == nullptr;
   if (ok) {
     g_counters[g_counterCount] = Counter{name, value, 0, false, kind == ReportKind::kFaults};
     ++g_counterCount;
@@ -161,7 +167,8 @@ bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* v
   pthread_mutex_unlock(&g_control);
   if (!ok) {
     LogFields(LogLevel::kError, "hook_report",
-              {{"status", "register_refused"}, {"counter", name != nullptr ? name : "(null)"}});
+              {{"status", "register_refused"}, {"counter", name != nullptr ? name : "(null)"},
+               {"reason", refusal}});
   }
   return ok;
 }

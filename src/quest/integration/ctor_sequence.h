@@ -71,6 +71,7 @@ enum class StepId : std::uint8_t {
   kInstallRedirect,
   kInstallSocial,
   kInstallDlopenHook,
+  kInstallHwDump,
   kCount,
 };
 
@@ -115,6 +116,8 @@ class Steps {
   virtual bool InstallSocial() = 0;
   // `login` / `matchmaking`: which post-load installs the dlopen hook is for.
   virtual bool InstallDlopenHook(bool login, bool matchmaking) = 0;
+  // The hardware/environment dump (#335): its libr15 hooks and its thread. No reporter counters.
+  virtual bool StartHwDump() = 0;
 
   // One line per step outcome and per decision. `step` and `reason` are fixed tokens.
   virtual void Note(const char* step, const char* state, const char* reason) = 0;
