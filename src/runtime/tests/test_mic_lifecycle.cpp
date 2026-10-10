@@ -412,10 +412,12 @@ TEST_F(MicCaptureLifecycleTest, FailedRecoverLeavesTheProviderReadyForTheGamesNe
   ASSERT_TRUE(Start());
   fake_.clientInvalidated = true;
   fake_.recoverOk = false;
+  const uint32_t stopsBefore = fake_.stopCalls;
   EXPECT_FALSE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));
   EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
   EXPECT_FALSE(lifecycle_.HasWorker());
   EXPECT_TRUE(Stop());  // the game's Stop is harmless, and its Start re-acquires
+  EXPECT_EQ(fake_.stopCalls, stopsBefore) << "a client that was released must not be stopped again";
   fake_.recoverOk = true;
   EXPECT_TRUE(Start());
   EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
