@@ -342,7 +342,7 @@ an atomic counter, and a reporter thread (`hook_report.h`, created from the cons
 first hook is installed) logs "reporter_started", then a counter's first change within the first
 10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
 is installed and the game never called it), and from then on one pass a minute that logs a counter
-only if it changed. The counter table holds 48 counters for the whole program (`sentinel::kMaxReportCounters`), and every
+only if it changed. The counter table holds 96 counters for the whole program (`sentinel::kMaxReportCounters`), and every
 `RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 49th, is
 refused and logged as `register_refused`). The thread ends with the process; creating it from a constructor on a Quest is
 inferred from the Bionic main-branch source and has not been tried on a headset. A slot where a
@@ -1383,7 +1383,7 @@ Traced in the pinned libraries (ELF vaddrs):
   `FriendStatusNotify` frames logged by `social_frame` and the row reads counted by `social_slot`. The package registers 19
   counters (the hook's 6; the facade's 5 above; the four callback classes; `social_json_failed`, which also counts a
   Reset that could not call the game's `CJson::Reset`; `social_frames_ignored`; the invite gate's 2); the budget is the
-  reporter's 48 for the whole program.
+  reporter's 96 for the whole program.
 - **Logging.** Every request logs its name, symbol and whether it was sent, with the ids it carries: the
   account it is aimed at (`target`: the invite target, the kicked, passed or answered member, the profile
   asked about), the party, and the Standard message's subject (`arg`) or a Targeted message's parameter
@@ -1494,7 +1494,7 @@ What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
    existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 19
-   of the reporter's 48 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
+   of the reporter's 96 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
    `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr
@@ -1584,9 +1584,9 @@ thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage`, `CR
 prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
 (10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
 installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:
-clock 2, redirect 10, dlopen 1, social 19, login prompt 8, 40 of the reporter's 48 slots
-(`integration_hooks_test` runs the sequence against the real registration functions). The login thunk and
-the login prerequisites register none (#237). The production identity source answers the prerequisites'
+clock 2, redirect 10, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
+prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 64 of the reporter's 96
+slots (`integration_hooks_test` runs the sequence against the real registration functions). The production identity source answers the prerequisites'
 `IdentitySource::Ready()` from a lock-free `QuestLogin::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
 (token auth Ready with an access token and a NEVR account) and clear it in every other state, so a

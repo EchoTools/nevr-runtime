@@ -16,16 +16,18 @@ concurrency:
 jobs:
   seed:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # The same builder image as build.yml (.github/builder/Dockerfile): the compiler hash vcpkg puts in
+    # every archive name has to come from the same toolchain the build restores them in.
     container:
-      image: archlinux:base-devel
+      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - name: Install the toolchain (pacman)
-      run: |
-        set -euo pipefail
-        pacman -Syu --noconfirm --needed \
-          git mingw-w64-gcc ninja cmake python curl zip unzip tar pkgconf zlib
-
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Bootstrap vcpkg
       id: vcpkg
@@ -37,17 +39,17 @@ jobs:
         git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')-$(pacman -Q mingw-w64-gcc mingw-w64-binutils mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .vcpkg-binary-cache
+        # No restore-keys: an entry holds only the archives of this key. A fallback to an older entry
+        # carried its 19 unusable archives into the saved one (run 37914950616: "Restored 0 package(s)",
+        # 38 archives saved, 231 MB grew to 547 MB).
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
-        restore-keys: |
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
 
     - name: Install vcpkg dependencies
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
@@ -64,7 +66,7 @@ jobs:
 
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
