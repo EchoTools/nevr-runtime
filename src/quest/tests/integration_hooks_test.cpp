@@ -147,6 +147,7 @@ struct RealCounterSteps final : Steps {
   bool InstallRedirect() override { return true; }
   bool InstallSocial() override { return true; }
   bool InstallDlopenHook(bool, bool) override { return true; }
+  bool StartHwDump() override { return true; }
   void Note(const char*, const char*, const char*) override {}
 };
 

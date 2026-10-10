@@ -31,6 +31,7 @@ const char* StepName(StepId id) {
     case StepId::kInstallRedirect: return "install_redirect";
     case StepId::kInstallSocial: return "install_social";
     case StepId::kInstallDlopenHook: return "install_dlopen_hook";
+    case StepId::kInstallHwDump: return "install_hwdump";
     case StepId::kCount: break;
   }
   return "unknown";
@@ -198,6 +199,15 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Skip(StepId::kInstallDlopenHook, "nothing_to_install_after_load");
     } else {
       r.Run(StepId::kInstallDlopenHook, [&] { return steps.InstallDlopenHook(loginWanted, matchmakingWanted); });
+    }
+
+    // The hardware dump (#335) is independent of every feature above. Still in the constructor, so its
+    // hooks are in place before libr15 runs; it registers no reporter counters, so it may follow
+    // StartReporter.
+    if (want.hwdump) {
+      r.Run(StepId::kInstallHwDump, [&] { return steps.StartHwDump(); });
+    } else {
+      r.Skip(StepId::kInstallHwDump, "hwdump_off");
     }
   } catch (const std::exception&) {
     // Unreachable by construction (every step is contained); the sequence still never throws.

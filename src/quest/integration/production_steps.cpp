@@ -18,6 +18,7 @@
 #include "sentinel.h"
 #include "sentinel_log.h"
 
+#include "quest/diag/hwdump_run.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
@@ -420,6 +421,8 @@ class ProductionSteps final : public Steps {
     if (ok) R().socialLevel.store(SocialParty::kSocialLevel);
     return ok;
   }
+
+  bool StartHwDump() override { return nevr_quest::hwdump::StartHwDump(); }
 
   bool InstallDlopenHook(bool login, bool matchmaking) override {
     PostLoadActions actions;

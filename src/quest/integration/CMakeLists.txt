@@ -40,6 +40,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_social
   nevr_quest_net
   nevr_quest_token_auth
+  nevr_quest_hwdump
   nlohmann_json::nlohmann_json)
 # Hidden visibility: linked into the sentinel, nothing here may become an export
 # (tests/quest TestExportAllowlist).
