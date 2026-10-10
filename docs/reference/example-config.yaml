@@ -1,12 +1,12 @@
-# NEVR Runtime Configuration
+# nEVR Runtime Configuration
 #
 # This file lives at: echovr/_local/config.yaml
-# It is parsed once at boot by the game's internal JSON parser via NEVR's
-# LoadLocalConfigHook — the game natively loads a JSON config; NEVR intercepts
+# It is parsed once at boot by the game's internal JSON parser via nEVR's
+# LoadLocalConfigHook — the game natively loads a JSON config; nEVR intercepts
 # the load and provides the YAML contents through a yaml-cpp → Json bridge.
 #
-# Config keys are read by the gamepatches DLL (BugSplat64.dll) and the
-# gameserver DLL (pnsradgameserver.dll). Both run in-process with echovr.exe.
+# Config keys are read by the nEVR runtime (`BugSplat64.dll`), which runs
+# in-process with echovr.exe.
 #
 # Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable
 # substitution in production. The literal form is for local dev only and MUST
@@ -23,7 +23,7 @@
 
 # Schema version. Bump when adding new required sections or restructuring
 # existing ones. Currently always 1.
-# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+# Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
 version: 1
 
 # ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ social:
 # services — URL overrides for game service endpoints
 #
 # The game hardcodes *.readyatdawn.com URLs that no longer resolve. These keys
-# let you redirect each service to NEVR's community infrastructure. Every key
+# let you redirect each service to nEVR's community infrastructure. Every key
 # is optional; when absent the game's hardcoded default is used (and the
 # connection will fail unless the WebSocket bridge is active).
 #
@@ -51,7 +51,7 @@ social:
 #   2. loginservice_host (shared fallback)
 #   3. Game hardcoded default
 #
-# Reader: gamepatches config.cpp (HttpConnectHook, GetServiceHostWithFallback)
+# Reader: src/runtime/lifecycle/config.cpp (HttpConnectHook, GetServiceHostWithFallback)
 # ---------------------------------------------------------------------------
 
 services:
@@ -113,8 +113,10 @@ services:
 # Controls how the game server advertises itself to ServerDB and which
 # IP addresses it uses for peer-to-peer connections. All keys are optional.
 #
-# Reader: config.cpp (external_ip, upnp, upnp_port), and ReadUPnPConfig callers in
-#         gameserver_serverdb.cpp (RequestRegistration) and gameserver_callbacks.cpp (re-registration)
+# Reader: src/runtime/lifecycle/config.cpp (external_ip, upnp, upnp_port),
+#         src/runtime/server/gameserver.cpp (ReadUPnPConfig),
+#         src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
+#         src/runtime/server/gameserver_callbacks.cpp (re-registration)
 # ---------------------------------------------------------------------------
 
 network:
@@ -153,7 +155,8 @@ network:
 # These identify the server instance to the community infrastructure.
 # All keys are optional but a server without them will fail to register.
 #
-# Reader: gameserver_serverdb.cpp (RequestRegistration), ws_bridge.cpp
+# Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
+#         src/runtime/compat/ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
 identity:
@@ -175,9 +178,9 @@ identity:
 # API calls. The ws_bridge module also reads socket_uri to establish its
 # outbound WebSocket connection to the community relay.
 #
-# Reader: gamepatches config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
-#         gamepatches token_auth.cpp, gameserver_serverdb.cpp (AuthenticateServer),
-#         ws_bridge.cpp
+# Reader: src/runtime/lifecycle/config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
+#         src/runtime/server/gameserver_serverdb.cpp (AuthenticateServer),
+#         src/runtime/compat/ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
 auth:
@@ -217,7 +220,7 @@ auth:
 # in the ServerDB WebSocket URI.
 # Absent: no guild filter (server registers with all guilds).
 # Not a secret.
-# Reader: gameserver_serverdb.cpp (RequestRegistration)
+# Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # guilds: "guild-abc123,guild-def456"
 
@@ -229,7 +232,7 @@ auth:
 # parameter in the ServerDB WebSocket URI.
 # Absent: no region filter.
 # Not a secret.
-# Reader: gameserver_serverdb.cpp (RequestRegistration)
+# Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # regions: "us-west"
 
@@ -240,7 +243,8 @@ auth:
 # servers), the server streams match telemetry over a dedicated WebSocket
 # to a telemetry ingest server. Disable with "-notelemetry".
 #
-# Reader: gameserver_serverdb.cpp (RequestRegistration), gameserver_telemetry.cpp (telemetry streamer)
+# Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
+#         src/runtime/server/gameserver_telemetry.cpp (telemetry streamer)
 # ---------------------------------------------------------------------------
 
 telemetry:
@@ -262,7 +266,7 @@ telemetry:
 # internal netconfig_dedicatedserver.json asset. Values are floats; 0 means
 # "use the game default." All keys are optional.
 #
-# Reader: gamepatches config.cpp (LoadLocalConfigHook, CJsonGetFloatHook)
+# Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook, CJsonGetFloatHook)
 # ---------------------------------------------------------------------------
 
 arena:
@@ -291,7 +295,7 @@ arena:
 # pipeline and redirects requests to this URL.
 # Absent: game downloads from the hardcoded Ready At Dawn CDN (dead).
 # Not a secret.
-# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+# Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
 # ---------------------------------------------------------------------------
 # asset_cdn_url: "https://cdn.echovrce.com/assets"
 
@@ -304,7 +308,7 @@ arena:
 # to false; "-exitonerror" is deprecated (it's now the default).
 # Absent: true (exit on error).
 # Not a secret.
-# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+# Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)
 # ---------------------------------------------------------------------------
 # exitonerror: true
 

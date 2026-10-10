@@ -48,11 +48,11 @@ Or launch your game using the `-datadir` flag ex `echovr.exe -datadir "D:\turbo\
 
 Create `bin\win10\plugins\` folder, If you have a dbgcore thats not a mod loader (ex: the relay dll), throw it into the plugins folder now it will still load at runtime
 Copy `dbgcore.dll` to your games `bin\win10\` folder, this acts as a mod loader. 
-Copy `TurboAHHHH.dll` to the newly or previously created `bin\win10\plugins\` folder.
+Copy `TurboAHHHH.dll` to the `bin\win10\plugins\` folder.
 
 ## Running
 
-1. Launch EchoVR normally (or with launch args covered previously)
+1. Launch EchoVR normally or with the `-datadir` flag shown above.
 2. Load into a server using `mpl_arenacombat`.
 3. The mod auto-activates when the arenacombat level loads
 4. If at any point you find yourself in the arena chassis, use f9 to swap back to combat.

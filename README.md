@@ -1,4 +1,4 @@
-# NEVR Runtime
+# nEVR Runtime
 
 Runtime patches for Echo VR (`echovr.exe`) that let it connect to
 [echovrce](https://github.com/echotools) community game services. Both the game
@@ -45,11 +45,13 @@ loaded via the `NvrPluginInterface` lifecycle.
 
 | Plugin | Output | Purpose |
 | ------ | ------ | ------- |
-| `log-filter` | `log_filter.dll` | Superseded by the built-in filter; the loader refuses it |
-| `example` | `example.dll` | Reference implementation for new plugin authors |
+| `example` | `nevr_example.dll` | Reference implementation for new plugin authors |
+| `debug-lockout` | `nevr_debug_lockout.dll` | Debug instrumentation for early-quit lockout state |
 
 Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
-repository.
+repository. `log-filter` source remains in `plugins/log-filter/`, but it is not
+built or packaged; the loader rejects `log_filter.dll` because its filter is
+already built into the runtime.
 
 ### Other targets
 
@@ -61,7 +63,9 @@ repository.
 - `src/extension/` — header-only published C ABI for third-party plugins/modules
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
   `echovr.exe -server -headless -noconsole`
-- `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub
+- `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
+  separately from the community beta package
+- `src/quest/` — separate Android/Quest arm64 target
 - `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
 
 ## Building
@@ -71,8 +75,11 @@ cross-compile from Linux. Dependencies come from the vcpkg manifest.
 
 ```sh
 just                # list recipes
-just build          # build everything
+just build          # build desktop targets
 just verify         # THE GATE — build + tests under Wine + invariant sensors
+just test-system-short        # quick Go system tests (needs the game binary)
+just test-plugins-groundtruth # plugin tests without the game binary
+just test-android              # Quest binary-shape checks
 just dist           # distribution packages
 just dist-lite      # stripped, no debug symbols
 ```
@@ -91,7 +98,14 @@ From `build/mingw-release/bin/`:
 | -------- | ----------- |
 | `BugSplat64.dll` | game directory (replaces the crash reporter) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
-| `plugins/*.dll` | `plugins/` next to the game binary |
+| Optional plugin DLLs | `plugins/` next to the game binary |
+
+The distribution package includes an empty `plugins/` directory for optional
+operator plugins; plugin DLLs are built separately and are not bundled. The
+community beta install guide covers the supported client install and uses only
+`BugSplat64.dll`.
+
+For the community beta on Windows, follow [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 
 ## Repository layout
 
@@ -116,8 +130,11 @@ docs/              see docs/README.md
 
 | | |
 | - | - |
-| [`AGENTS.md`](AGENTS.md) | Entry point for agents — what binds, and the gate |
-| [`AGENTS.md`](AGENTS.md) | Project conventions, build/test commands, guardrails |
+| [`AGENTS.md`](AGENTS.md) | Project conventions, build/test commands, and agent guardrails |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Build, verify, and submit a change |
+| [`LICENSE`](LICENSE) | Apache License 2.0 |
+| [`NOTICE`](NOTICE) | Bundled third-party software notices |
+| [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting |
 | [`docs/`](docs/) | Standards, guides, reference, design, audits |
 
 ## Dependencies
@@ -138,8 +155,9 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 
 ## Local configuration
 
-`cmake/local.cmake` is auto-included when present (the include is currently
-commented out in the root `CMakeLists.txt`). Use it for local install rules:
+The root `CMakeLists.txt` does not include `cmake/local.cmake` automatically.
+To use that file, enable its include in `CMakeLists.txt`; then a local
+post-build command can copy the DLL into a game directory:
 
 ```cmake
 set(GAME_DIR "/path/to/echovr/bin/win10")
