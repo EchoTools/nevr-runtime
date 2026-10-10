@@ -700,6 +700,7 @@ void ResetPrerequisitesForTest() noexcept {
     g_callbacks[i].store(0, std::memory_order_relaxed);
     g_requests[i].store(0, std::memory_order_relaxed);
   }
+  local::ResetForTest();
   EndPrerequisiteAttempt();
 }
 
