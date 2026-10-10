@@ -295,6 +295,7 @@ class ProductionSteps final : public Steps {
   bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
+  bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -343,6 +344,12 @@ class ProductionSteps final : public Steps {
     });
     detail_ = "launched";
     return true;
+  }
+
+  bool InstallObbSkip(bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallObbSkipHook(countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
   }
 
   bool InstallLoginPrompt(bool countersRegistered) override {

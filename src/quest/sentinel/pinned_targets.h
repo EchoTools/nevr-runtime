@@ -37,6 +37,8 @@ inline constexpr const char* kConfigRequestSendSymbol =
 inline constexpr const char* kSetDelimitedErrorMessageSymbol =
     "_ZN10NRadEngine8NRadGame11CR15NetGame24SetDelimitedErrorMessageEPKc";
 inline constexpr const char* kNetGameUpdateSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame6UpdateEy";
+inline constexpr const char* kMountObbSymbol = "AStorageManager_mountObb";
+inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMountedObbPath";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -72,6 +74,35 @@ using SetDelimitedErrorMessageSig = void(CR15NetGameOpaque* self, const char* me
 struct LibR15SetDelimitedErrorMessageTag {};
 using LibR15SetDelimitedErrorMessageThunk =
     CallbackThunk<LibR15SetDelimitedErrorMessageTag, SetDelimitedErrorMessageSig>;
+
+// Android NDK <android/storage_manager.h>, imported by libr15.so (and by the static copies of the engine in
+// libpnsovr/libpnsrad/libpnsradmatchmaking, which are not hooked). CSysFile::Init (0xf85260) calls
+// AStorageManager_mountObb(mgr, "<obb path>", "37c70a1635a1ad7a", CSysFile_OnObbStateChange, nullptr) at
+// 0xf85434, then polls the flag byte at 0x37623c0 that the callback sets, for about 30 s. Horizon OS refuses
+// keyed OBB mounts ("mounting encrypted OBBs is no longer supported") and never calls the callback.
+//   void AStorageManager_mountObb(AStorageManager*, const char* filename, const char* key,
+//                                 AStorageManager_obbCallbackFunc cb, void* data);
+//   typedef void (*AStorageManager_obbCallbackFunc)(const char* filename, const int32_t state, void* data);
+//   const char* AStorageManager_getMountedObbPath(AStorageManager*, const char* filename);
+// CSysFile_OnObbStateChange (0xf86c28) reads only `state` (a jump table over 1..0x19; 1 and 0x18 are the
+// success cases). On state 1 it calls AStorageManager_getMountedObbPath with the manager the game stored at
+// 0x37623e0 and the path buffer at 0x37623f0, copies the result into gOBBPath (0x3762470), logs
+// "OBB mounted at '%s'" and sets the flag byte. A NULL path zero-fills gOBBPath and logs the same line.
+// GetDataRootDir (0xf87250) returns gOBBPath when its first byte is non-zero, else
+// "/storage/emulated/0/readyatdawn" (0x2b2f5c3).
+struct AStorageManagerOpaque;
+using ObbCallbackFn = void (*)(const char* filename, std::int32_t state, void* data);
+using MountObbSig = void(AStorageManagerOpaque* manager, const char* filename, const char* key, ObbCallbackFn callback,
+                         void* data);
+struct LibR15MountObbTag {};
+using LibR15MountObbThunk = CallbackThunk<LibR15MountObbTag, MountObbSig>;
+using GetMountedObbPathSig = const char*(AStorageManagerOpaque* manager, const char* filename);
+struct LibR15GetMountedObbPathTag {};
+using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, GetMountedObbPathSig>;
+// AOBB_STATE_MOUNTED, the success state the game's callback treats as "mounted".
+inline constexpr std::int32_t kObbStateMounted = 1;
+// The data root the game already falls back to when no OBB path was recorded (GetDataRootDir, above).
+inline constexpr const char* kObbFallbackDataRoot = "/storage/emulated/0/readyatdawn";
 
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
@@ -168,6 +199,15 @@ inline GotTarget LibR15NetGameUpdate() {
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
 inline GotTarget LibR15EnablePageNodeEnter() {
   return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c1cf8ULL};
+}
+
+// libr15.so's slots for the two NDK storage-manager imports (JUMP_SLOT 0x36c39d0 and 0x36f5b48, readelf -rW
+// on the pinned image; both are imported, value 0).
+inline GotTarget LibR15MountObb() {
+  return {kLibR15, kMountObbSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c39d0ULL};
+}
+inline GotTarget LibR15GetMountedObbPath() {
+  return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f5b48ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in
