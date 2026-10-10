@@ -64,7 +64,10 @@ namespace {
 // Matches pnsrad.dll's own (real, unmodified) MicSampleRate/MicBufferSize —
 // nothing downstream needs to change to accommodate these numbers.
 constexpr uint32_t kTargetSampleRate = 48000;
-constexpr uint32_t kRingCapacitySamples = 24000;  // ~500ms at 48kHz mono
+// The most audio the ring holds, so the most latency the game can ever see (#95): ~200 ms at
+// 48 kHz mono. Audio captured before the game's first read of a stream is dropped outright
+// (MicRingBuffer::NoteReaderActive); this cap bounds what a stalled reader can pile up.
+constexpr uint32_t kRingCapacitySamples = 9600;
 
 // --- Ring buffer -----------------------------------------------------------
 // The pure ring/resample logic lives in core/mic_dsp.{h,cpp} (no windows.h),
@@ -154,7 +157,9 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
         "[NEVR.MIC] capture packet rejected (status=%u consumed=%u/%u frames)",
         static_cast<unsigned>(result.status), result.consumedFrames, frameCount);
   }
-  if (result.ringOverflow && !g_ringOverflowLogged) {
+  // A full ring before the game's first read of this stream is expected (nobody is listening yet,
+  // the oldest audio is simply not wanted); the warning is for a game that read and then stopped.
+  if (result.ringOverflow && g_ring.ReaderActive() && !g_ringOverflowLogged) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
         "(game calls so far: MicAvailable=%llu MicRead=%llu samples_read=%llu)",
@@ -548,6 +553,20 @@ bool DispatchMicCall(MicCall call, MicCallRequest* request) {
 
 }  // namespace
 
+// The game's first MicRead of a stream that finds audio waiting drops what was captured before it was
+// listening, so that read gets fresh audio. MicAvailable is only a poll: the game calls it from the moment
+// capture starts and makes its first MicRead hundreds of milliseconds later, so it neither drops nor counts
+// as a consumer (MicRingBuffer::NoteReaderActive).
+static void NoteGameReader() {
+  const uint32_t stale = g_ring.NoteReaderActive();
+  if (stale > 0) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.MIC] first game read of this capture: dropped %u stale samples captured before it "
+        "was listening (ring cap %u samples)",
+        static_cast<unsigned>(stale), static_cast<unsigned>(kRingCapacitySamples));
+  }
+}
+
 uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
   return static_cast<uint64_t>(g_ring.Available());
@@ -592,6 +611,7 @@ uint64_t nevr_mic_provider::MicDetected() {
 
 uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
+  NoteGameReader();
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
   const uint64_t got = g_ring.Pop(static_cast<int16_t*>(buffer), count);
   g_readCalls.fetch_add(1, std::memory_order_relaxed);

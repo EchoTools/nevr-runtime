@@ -60,7 +60,7 @@ std::atomic<int> g_lastCountdownActive{-1};  // for logging transitions only; th
 
 void Dispatch(void* netGame, std::uint64_t event) {
   void* target = nevr::ResolveVA_Checked(g_gameBase, kDispatchEventVA);
-  if (!HookGuard::IsOurDetour(target) &&
+  if (!nevr_hook_guard::IsOurDetour(target) &&
       !nevr::ValidatePrologue(target, kDispatchEventPrologue.data(), kDispatchEventPrologue.size())) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.EARLYQUIT] penalty event not raised: DispatchEventToSession prologue mismatch");
     return;

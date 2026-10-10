@@ -43,11 +43,11 @@ TEST(XpidPatch, ReplacementSameLength) {
   EXPECT_EQ(sizeof(kPsnDash),   sizeof(kDscDash));
   EXPECT_EQ(sizeof(kQmarkDash), sizeof(kDscDash));
   EXPECT_EQ(sizeof(kQmarkNull), sizeof(kDscShort));
-  EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_SHORT_NAME_SIZE);
-  EXPECT_EQ(sizeof(kPsnDash),   PatchAddresses::XPID_PLATFORM_DASH_PREFIX_SIZE);
-  EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_COMPACT_NAME_SIZE);
-  EXPECT_EQ(sizeof(kQmarkDash), PatchAddresses::XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
-  EXPECT_EQ(sizeof(kQmarkNull), PatchAddresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE);
+  EXPECT_EQ(sizeof(kPsnShort),  nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME_SIZE);
+  EXPECT_EQ(sizeof(kPsnDash),   nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX_SIZE);
+  EXPECT_EQ(sizeof(kPsnShort),  nevr_patch_addresses::XPID_PLATFORM_COMPACT_NAME_SIZE);
+  EXPECT_EQ(sizeof(kQmarkDash), nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
+  EXPECT_EQ(sizeof(kQmarkNull), nevr_patch_addresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE);
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ TEST(XpidPatch, ReplacementSameLength) {
 // ---------------------------------------------------------------------------
 
 TEST(XpidPatch, AddressesInRdataRange) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // .rdata for echovr.exe is well above 0x1000000 and below 0x2000000
   EXPECT_GT(XPID_PLATFORM_SHORT_NAME,  0x1000000u);
@@ -71,7 +71,7 @@ TEST(XpidPatch, AddressesInRdataRange) {
 }
 
 TEST(XpidPatch, AddressesDontOverlap) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Each patch site is 4 bytes. Verify no two sites overlap.
   auto overlaps = [](uintptr_t a, size_t asz, uintptr_t b, size_t bsz) {
@@ -95,7 +95,7 @@ TEST(XpidPatch, AddressesDontOverlap) {
 // ---------------------------------------------------------------------------
 
 TEST(XpidPatch, MockPatchReplacesCorrectly) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Allocate a buffer large enough to hold the highest patch offset + 4 bytes.
   const size_t buf_size = std::max({XPID_PLATFORM_SHORT_NAME, XPID_PLATFORM_DASH_PREFIX,
@@ -136,7 +136,7 @@ TEST(XpidPatch, MockPatchReplacesCorrectly) {
 // ---------------------------------------------------------------------------
 
 TEST(XpidPatch, ValidationRejectsWrongBytes) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   const size_t buf_size = std::max({XPID_PLATFORM_SHORT_NAME, XPID_PLATFORM_DASH_PREFIX,
                                     XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX,
@@ -174,7 +174,7 @@ TEST(XpidPatch, ValidationRejectsWrongBytes) {
 // ---------------------------------------------------------------------------
 
 TEST(HeadlessGates, Dx12BranchForceConvention) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   // je -> jmp, opcode-only edit (rel8 displacement preserved).
   EXPECT_EQ(HEADLESS_DX12_INIT_EXPECT, 0x74);  // je rel8
   EXPECT_EQ(HEADLESS_DX12_INIT_PATCH, 0xEB);   // jmp rel8
@@ -182,7 +182,7 @@ TEST(HeadlessGates, Dx12BranchForceConvention) {
 }
 
 TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   // Ground-truth VAs (VA - 0x140000000) verified via objdump on echovr.exe.
   EXPECT_EQ(HEADLESS_DX12_INIT, 0x154AF7Fu);
   EXPECT_EQ(HEADLESS_ENGINE_RENDER_INIT, 0x154B0E4u);
@@ -201,11 +201,11 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
 // ---------------------------------------------------------------------------
 
 TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
-  // N65: the count is derived from PatchAddresses::HEADLESS_GATE_TABLE (defined
+  // N65: the count is derived from nevr_patch_addresses::HEADLESS_GATE_TABLE (defined
   // in hook/addresses.h). mode_patches.cpp iterates this table to install gates,
   // so adding/removing a gate from the table is the ONLY way to change what gets
   // installed. HEADLESS_GATE_COUNT follows mechanically via sizeof division.
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
   // Validate each gate RVA in the production table is sane.
   for (const auto& gate : HEADLESS_GATE_TABLE) {
@@ -215,7 +215,7 @@ TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
 }
 
 TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   const uintptr_t kImageExtent = 0x2231000;  // echovr.exe virtual size
   for (uintptr_t rva : {HEADLESS_DX12_INIT, HEADLESS_ENGINE_RENDER_INIT,
                         HEADLESS_GUI_INIT, HEADLESS_RENDER_SUBMIT_INIT,
@@ -243,11 +243,11 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // Those scripts fail before the fix (call site missing) and pass after —
 // they are the automated red→green tests for the call-site class of fix.
 
-// N65: gate count derived from PatchAddresses::HEADLESS_GATE_COUNT, which comes
+// N65: gate count derived from nevr_patch_addresses::HEADLESS_GATE_COUNT, which comes
 // from HEADLESS_GATE_TABLE in hook/addresses.h. mode_patches.cpp iterates this
 // table, so it IS the single source of truth — gate install can't drift.
 TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
   // Verify each gate in the production table is within .text range and has a
   // valid expected opcode (0x74=je or 0x75=jne).

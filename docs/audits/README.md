@@ -1,5 +1,9 @@
 # Audit Artifacts — retired records
 
+This directory is the historical record. Its entries are dated by design and are exempt from the
+current-tree rule in `AGENTS.md` ("Documentation, plans and findings"): they cite the tree as it was
+when measured, and nothing here is rewritten or deleted without the owner's confirmation.
+
 No audit record lives in the tree any more. Each was checked against the code it
 described; what was still open became a GitHub issue, and the record was removed.
 A deleted file is not a lost file: `git show <sha>:<path>` returns its exact bytes,

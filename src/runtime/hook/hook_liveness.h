@@ -22,7 +22,7 @@
 /// Deliberately cheap: one InterlockedIncrement on a fixed array slot. No heap,
 /// no lock, safe from any thread. IDs are compile-time constants so a hot hook
 /// costs an increment on a known index.
-namespace HookLiveness {
+namespace nevr_hook_liveness {
 
 enum Id : int {
   kGetTimeMicroseconds = 0,
@@ -47,4 +47,4 @@ void Report(const char* context);
 /// bug — some hooks are mode-specific — but every one is a claim needing proof.
 int NeverEnteredCount();
 
-}  // namespace HookLiveness
+}  // namespace nevr_hook_liveness

@@ -94,7 +94,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
     nevr_asset_cdn::StopBackgroundFetch();
-    ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+    nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
     return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
@@ -105,7 +105,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
       requested ? "true" : "false", requested ? 0 : 1);
-  ExportTracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+  nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
   PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return gameResult;
@@ -113,9 +113,9 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
 
 void InstallGameMainHook() {
   // Hook game main wrapper — longjmp recovery on crash keeps server alive
-  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
   OriginalGameMainWrapper =
-      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
   // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
   if (BootLogTee::InBootPhase()) {
@@ -929,9 +929,9 @@ static INT64 GameConsoleHandlerInstallHook(void* arg) {
 }
 
 static void InstallGameConsoleHandlerRearmHook() {
-  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL);
-  if (memcmp(target, PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
-             sizeof(PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
+  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL);
+  if (memcmp(target, nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
+             sizeof(nevr_patch_addresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] hook skipped name=GameConsoleHandlerInstall reason=prologue_mismatch — CTRL+C may be "
         "consumed by the game's handler before ours");
@@ -956,9 +956,9 @@ void InstallCrashFilterInstrumentation() {
     Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: no LOCALAPPDATA or module path");
   }
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
-                                       PatchAddresses::CRASH_EXCEPTION_FILTER);
-  if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
-             sizeof(PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
+                                       nevr_patch_addresses::CRASH_EXCEPTION_FILTER);
+  if (memcmp(filt, nevr_patch_addresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
+             sizeof(nevr_patch_addresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
     OriginalCrashExceptionFilter = reinterpret_cast<CrashExceptionFilterFunc>(filt);
     if (PatchDetour(&OriginalCrashExceptionFilter,
                     reinterpret_cast<PVOID>(CrashExceptionFilterHook), "CrashExceptionFilter")) {

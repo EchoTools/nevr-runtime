@@ -398,7 +398,7 @@ void nevr_asset_cdn::Initialize() {
     if (g_hookInstalled) return;
 
     void* target = reinterpret_cast<void*>(
-        EchoVR::g_GameBaseAddress + PatchAddresses::LOADOUT_RESOLVE_DATA_FROM_ID);
+        EchoVR::g_GameBaseAddress + nevr_patch_addresses::LOADOUT_RESOLVE_DATA_FROM_ID);
 
     if (!nevr::ValidatePrologue(target, EXPECTED_PROLOGUE, PROLOGUE_LEN)) {
         Log(EchoVR::LogLevel::Error,

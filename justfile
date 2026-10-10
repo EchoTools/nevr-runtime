@@ -1448,7 +1448,7 @@ verify:
     sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
     sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
     if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
-        echo "verify: FAIL — N129 DllLoadHook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
+        echo "verify: FAIL — N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
         echo "It would revert to a bare OK/PARTIAL that hides which search-path hook failed — a silent DLL-hijack gap." >&2
         exit 1
     fi
@@ -1500,7 +1500,7 @@ verify:
         echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'DllLoadHook::AddLoadFilter\(' <<<"$N127_MP"; then
+    if ! grep -qE 'nevr_dll_load_hook::AddLoadFilter\(' <<<"$N127_MP"; then
         echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
@@ -1614,11 +1614,11 @@ verify:
     sensor_stage1 "N120 server-fatal plugin guards" "src/runtime/ext/plugin_loader.cpp" "$N120_RC"
     sensor_nonempty "N120 server-fatal plugin guards" "non-comment lines of ext/plugin_loader.cpp" "$N120_LOADER"
 
-    # The HookGuard verdict must be CONSUMED. `HookGuard::VerifyAll(filename);` as
+    # The HookGuard verdict must be CONSUMED. `nevr_hook_guard::VerifyAll(filename);` as
     # a bare statement is the pre-N120 bug: the collision was detected, logged at
     # ERROR, and the plugin loaded anyway — detection that changed nothing.
-    if ! grep -qE '(int|auto) +[a-z_]+ *= *HookGuard::VerifyAll' <<<"$N120_LOADER"; then
-        echo "verify: FAIL — N120 HookGuard::VerifyAll's return is no longer captured." >&2
+    if ! grep -qE '(int|auto) +[a-z_]+ *= *nevr_hook_guard::VerifyAll' <<<"$N120_LOADER"; then
+        echo "verify: FAIL — N120 nevr_hook_guard::VerifyAll's return is no longer captured." >&2
         echo "A discarded verdict means a plugin can re-hook an address this runtime owns, our patch silently stops applying, and the load continues as though nothing happened." >&2
         exit 1
     fi
@@ -1843,12 +1843,12 @@ verify:
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
     # Both call sites are wiring, invisible to the GTest, so they get a sensor.
-    if ! grep -q 'HookGuard::Record(target, name)' src/runtime/hook/patching.h; then
-        echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
+    if ! grep -q 'nevr_hook_guard::Record(target, name)' src/runtime/hook/patching.h; then
+        echo "verify: FAIL — N84 nevr_hook_guard::Record missing from PatchDetour; new detours would be unguarded." >&2
         exit 1
     fi
-    if ! grep -qE 'HookGuard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
-        echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
+    if ! grep -qE 'nevr_hook_guard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
+        echo "verify: FAIL — N84 nevr_hook_guard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi
     # N85: never hand ixwebsocket an empty std::function. It invokes
@@ -2046,7 +2046,7 @@ verify:
     fi
     # MARKED needs no stage-1 capture: src/runtime is the repo itself, and a
     # zero count makes MARKED < DECLARED fail closed below (measured direction).
-    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/runtime \
+    MARKED=$(grep -rhoE 'nevr_hook_liveness::Mark\(nevr_hook_liveness::k[A-Za-z]+\)' src/runtime \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
         echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
