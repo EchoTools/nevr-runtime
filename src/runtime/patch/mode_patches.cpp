@@ -716,12 +716,8 @@ VOID PatchDeadlockMonitor() {
 // The Oculus Platform SDK is refused through DllLoadHook, which owns the LoadLibraryA/W/ExA/ExW detours.
 // This used to install its own detours on LoadLibraryW/ExW; MinHook allows one per target, so on every
 // run the second installer failed with MH_ERROR_ALREADY_CREATED and the block never took effect (#361).
-static bool IsOculusPlatformLoad(const wchar_t* lowerPath) {
-  return std::wcsstr(lowerPath, L"ovrplatform") != nullptr;  // matches libovrplatform64_1.dll too
-}
-
 VOID PatchBlockOculusSDK() {
-  DllLoadHook::AddLoadFilter("oculus-platform-sdk", IsOculusPlatformLoad);
+  DllLoadHook::AddLoadFilter("oculus-platform-sdk", DllLoadHook::IsOculusPlatformPath);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking registered with the DLL load hook");
 }
 

@@ -19,6 +19,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -181,6 +182,15 @@ void AddLoadFilter(const char* name, LoadFilter filter) {
     snprintf(f.name, sizeof(f.name), "%s", name ? name : "?");
     f.predicate = filter;
     g_filters.push_back(f);
+}
+
+bool IsOculusPlatformPath(const wchar_t* lower_path) {
+    if (!lower_path) return false;
+    const wchar_t* leaf = lower_path;
+    for (const wchar_t* p = lower_path; *p; ++p) {
+        if (*p == L'\\' || *p == L'/') leaf = p + 1;
+    }
+    return std::wcsstr(leaf, L"ovrplatform") != nullptr;
 }
 
 bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
