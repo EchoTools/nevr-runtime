@@ -507,10 +507,12 @@ if(BUILD_TESTING)
       tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp)
     set_source_files_properties(tests/test_mic_lifecycle.cpp tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_mic_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
