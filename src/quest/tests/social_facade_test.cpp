@@ -668,6 +668,91 @@ void TestRecentlyMet() {
   QCHECK(SlotFn<U32_0>(failing.Obj(), kRefreshingRecentlyMetUsers)(failing.Obj()) == 0);
 }
 
+// #405: an incoming friend request (SNSFriendInviteNotify) is listed first in the recently-met list, online, with
+// the request text; the requester's profile is asked for; the accept, a remove, a withdrawal or a rejection ends it.
+// The server's own recently-met list does not displace it. The sender's side logs the server's answers.
+constexpr std::uint64_t kSymInviteNotify = 0xca09b0b36bd981b7ULL;
+constexpr std::uint64_t kSymAcceptSuccess = 0x1bbda7fa06af4627ULL;
+constexpr std::uint64_t kSymWithdrawnNotify = 0x191aa30801ec6d03ULL;
+constexpr std::uint64_t kSymInviteSuccess = 0x7f0c6a3ac83c6f77ULL;
+constexpr std::uint64_t kSymInviteFailure = 0x7f197e30c72c6e61ULL;
+
+void TestIncomingFriendRequestIsListedInRecentlyMet() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  nevr_social_names::SetDecoder([](const std::uint8_t*, std::size_t, std::uint64_t* id, std::string* name) {
+    *id = 3003;
+    *name = "Chromium";
+    return true;
+  });
+  g_lines.clear();
+  g_sent.clear();
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 0);
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 3003);
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserName)(obj, 0)) == "3003");  // the id until the profile arrives
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserStatusString)(obj, 0)) == "Sent you a friend request");
+  QCHECK(SlotFn<U32_U32>(obj, kRecentlyMetUserStatus)(obj, 0) == 2);  // online: first
+  QCHECK(CountLines("\"event\":\"social_friend_request\",\"result\":\"received\",\"account\":3003,\"pending\":1") == 1);
+  int profileRequests = 0;
+  for (const nevr_social_party::Message& m : g_sent) profileRequests += m.symbol == nevr_social_names::kProfileRequest ? 1 : 0;
+  QCHECK(profileRequests == 1);  // the requester's profile, once
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));  // a repeat is not a second request
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  QCHECK(CountLines("\"result\":\"received\"") == 1);
+
+  Feed(w, nevr_social_names::kProfileSuccess, Le(0, 16));
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserName)(obj, 0)) == "Chromium");
+  QCHECK(CountLines("\"result\":\"named\",\"account\":3003") == 1);
+
+  // The server's list arrives (the refresh the game polls): the request stays first, once.
+  std::vector<nevr_social_roster::Entry> people(2);
+  people[0].id = 4004;
+  people[0].name = "Other";
+  people[1].id = 3003;
+  people[1].name = "Chromium (server)";
+  people[1].online = true;
+  w.recent.SetList(people);
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 3003);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 1) == 4004);
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserStatusString)(obj, 0)) == "Sent you a friend request");
+
+  // Accepted (our add came back as FriendAcceptSuccess): gone, with the reason.
+  g_lines.clear();
+  Feed(w, kSymAcceptSuccess, Le(0, 8) + Le(3003, 8) + Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);  // the server's own two entries remain
+  QCHECK(CountLines("\"result\":\"cleared\",\"account\":3003,\"reason\":\"FriendAcceptSuccess\",\"pending\":0") == 1);
+
+  // A withdrawal clears a pending one; one for somebody who is not pending changes nothing.
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(5005, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 3);
+  Feed(w, kSymWithdrawnNotify, Le(0, 8) + Le(9999, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 3);
+  Feed(w, kSymWithdrawnNotify, Le(0, 8) + Le(5005, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+
+  // A message too short to carry the account is ignored.
+  Feed(w, kSymInviteNotify, Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+  nevr_social_names::SetDecoder(nullptr);
+}
+
+void TestFriendRequestAnswersAreLoggedForTheSender() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  g_lines.clear();
+  Feed(w, kSymInviteSuccess, Le(0, 8) + Le(793214038254419978ULL, 8));
+  QCHECK(CountLines("\"event\":\"social_frame\",\"dir\":\"server_to_game\",\"name\":\"FriendInviteSuccess\"") == 1);
+  QCHECK(CountLines("\"result\":\"sent\",\"account\":793214038254419978") == 1);
+  // The second request while the first is pending: the server answers the sender only, with error 4.
+  Feed(w, kSymInviteFailure, Le(0, 8) + Le(793214038254419978ULL, 8) + Le(4, 1) + Le(0, 7));
+  QCHECK(CountLines("\"name\":\"FriendInviteFailure\"") == 1);
+  QCHECK(CountLines("\"result\":\"failed\",\"account\":793214038254419978,\"error\":4,\"reason\":\"pending\"") == 1);
+}
+
 void TestExceptionContainment() {
   World w;
   w.party.SetSelf(kSelf, "alice");
@@ -1629,6 +1714,8 @@ int main() {
   TestPartyTabInviteUiSlots();
   TestLobbyFields();
   TestRecentlyMet();
+  TestIncomingFriendRequestIsListedInRecentlyMet();
+  TestFriendRequestAnswersAreLoggedForTheSender();
   TestExceptionContainment();
   TestFrameWalker();
   TestGameExceptionThroughUpdate();
