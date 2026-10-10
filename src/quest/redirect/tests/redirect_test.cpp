@@ -563,7 +563,7 @@ void ApiBaseUrlIsRedirectedBeforeTheOriginalConnects() {
   ConnectEntry()(&handle, "https://api-dev.readyatdawn.com");  // the per-environment form
   QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
 
-  for (const char* other : {"https://graph.oculus.com", "https://apiary.example", "wss://login.readyatdawn.com",
+  for (const char* other : {"https://graph.facebook.com", "https://apiary.example", "wss://login.readyatdawn.com",
                             "https://login.readyatdawn.com", "https://api"}) {
     g_connectUrl = nullptr;
     ConnectEntry()(&handle, other);
@@ -571,6 +571,48 @@ void ApiBaseUrlIsRedirectedBeforeTheOriginalConnects() {
   }
   ConnectEntry()(&handle, nullptr);  // a null URL reaches the original as null
   QCHECK(g_connectUrl == nullptr);
+}
+
+// #414: the matchmaker queue connects to "https://graph.oculus.com" (libr15 0x1286520); its join / poll / leave
+// requests are the matchmaking screen's time remaining, so the connection goes to nevr_http_uri.
+void TheMatchmakerQueuesGraphHostIsRedirectedToTheHttpService() {
+  QCHECK(IsGraphBaseUrl("https://graph.oculus.com"));
+  QCHECK(IsGraphBaseUrl("https://graph.oculus.com/"));
+  QCHECK(IsGraphBaseUrl("https://graph.oculus.com/v1"));
+  QCHECK(!IsGraphBaseUrl("https://graph.oculus.com.evil.example"));
+  QCHECK(!IsGraphBaseUrl("https://graph.oculus.comx"));
+  QCHECK(!IsGraphBaseUrl("http://graph.oculus.com"));
+  QCHECK(!IsGraphBaseUrl("https://graph.facebook.com"));
+  QCHECK(!IsGraphBaseUrl(nullptr));
+
+  Scenario s(Config(kRedirectOn));
+  unsigned long handle = 0;
+  const int rc = ConnectEntry()(&handle, "https://graph.oculus.com");
+  QCHECK(rc == 7);
+  QCHECK(g_connectUrl != nullptr && std::strcmp(g_connectUrl, kHttpTarget) == 0);
+  for (const char* other : {"https://graph.oculus.com.evil.example", "https://graph.facebook.com"}) {
+    g_connectUrl = nullptr;
+    ConnectEntry()(&handle, other);
+    QCHECK(g_connectUrl == other);
+  }
+  // The graph rule is the connect's only: the same string as a config value is not touched.
+  GameConfig()["loginservice_host"] = "https://graph.oculus.com";
+  const char* const read = s.R15("loginservice_host", kDefaultLogin);
+  QCHECK(std::strcmp(read, "https://graph.oculus.com") == 0);
+}
+
+void TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature() {
+  Scenario noHttp(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));
+  unsigned long handle = 0;
+  const char* graph = "https://graph.oculus.com";
+  ConnectEntry()(&handle, graph);
+  QCHECK(g_connectUrl == graph);
+  EmbeddedDefaults embedded;
+  embedded.httpUri = "https://emb.example:7350";
+  Scenario off(nevr_quest::ResolveConfig(embedded, nullptr).config);  // every feature off
+  g_connectUrl = nullptr;
+  ConnectEntry()(&handle, graph);
+  QCHECK(g_connectUrl == graph);
 }
 
 void ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists() {
@@ -765,7 +807,7 @@ void RealHookEndToEnd(const std::string& dir) {
     QCHECK(connectA("https://api.readyatdawn.com", &handle) == 7);  // the provider's result passes through
     QCHECK(handle == 0x1234UL);
     QCHECK(lastUrl() != nullptr && std::strcmp(lastUrl(), kHttpTarget) == 0);
-    const char* other = "https://graph.oculus.com";
+    const char* other = "https://graph.facebook.com";
     QCHECK(connectA(other, &handle) == 7);
     QCHECK(lastUrl() == other);
   }
@@ -887,6 +929,8 @@ int main(int argc, char** argv) {
   HandlerAppliesAfterTheOriginalToItsResult();
   IsApiBaseUrlMatchesOnlyTheTwoRealPrefixes();
   ApiBaseUrlIsRedirectedBeforeTheOriginalConnects();
+  TheMatchmakerQueuesGraphHostIsRedirectedToTheHttpService();
+  TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature();
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
   CacheFullAndStaleBridgeBehaviour();
