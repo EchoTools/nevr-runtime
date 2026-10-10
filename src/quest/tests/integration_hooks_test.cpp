@@ -119,9 +119,9 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // single StartReporter. Every registration must be accepted (a refused one would leave its hook out), and
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
 // names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 10,
-// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), social 19, login prompt 14
-// (#239, login_prompt_hook.h kCounterCount); the login prerequisites register none.
-constexpr int kSentinelCounters = 2 + 10 + 1 + 2 + 19 + 14;
+// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 16 (#338:
+// one calls counter per hook), social 19, login prompt 14 (#239, login_prompt_hook.h kCounterCount).
+constexpr int kSentinelCounters = 2 + 10 + 1 + 2 + 16 + 19 + 14;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
