@@ -62,6 +62,11 @@ enum class InstallState {
 
 const char* InstallStateName(InstallState state);
 
+// Registers the login thunk's call and fault counters and the 16 login-prerequisite thunks' call
+// counters with the reporter (18 counters). Before
+// sentinel::StartReporter: the reporter refuses a later registration. False if one was refused.
+bool RegisterLoginHookCounters() noexcept;
+
 // Thread-safe and idempotent. Returns ModuleNotLoaded until libpnsovr.so has been dlopen'd by
 // the game (CNSProvider::Create loads it), so the caller retries after that point. `source`
 // must outlive the process. `log` defaults to the sentinel's structured logcat sink.

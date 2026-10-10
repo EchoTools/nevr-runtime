@@ -40,16 +40,27 @@ bool WriteAll(int fd, const char* data, std::size_t size, int* err, WriteFn writ
 bool WriteRecord(int fd, const std::string& line, bool* torn, int* err, WriteFn write);
 
 // The on-disk log is rotated (renamed to a name that does not exist yet, never deleted) when it
-// reaches this size: at open, and in-process once this run has written that much.
+// reaches this size: at open, and in-process once this run has written that much. A rename that
+// fails is logged once to logcat and not attempted again for kOpenRetryMs; the log keeps growing
+// meanwhile, and a rotation that later succeeds re-arms the report.
 inline constexpr long long kMaxDiskLogBytes = 1024 * 1024;
 
 // After a failed open the log is not tried again for this long (a missing or not-yet-mounted
-// directory can appear later). A path that is not a regular file is never retried.
+// directory can appear later). That covers every open that fails, including a directory at the
+// path (EISDIR) and a symlink (O_NOFOLLOW: ELOOP). Only a path that opens but is not a regular
+// file (a FIFO or a device: fstat says so) is never retried. Intervals are measured on
+// CLOCK_MONOTONIC; the wall clock is only for timestamps and rotated names.
 inline constexpr long long kOpenRetryMs = 30 * 1000;
 
-// Test seams: a replacement clock (null restores the real one) and the number of open attempts.
+// Test seams: a replacement clock (null restores the real ones) and the number of open attempts.
+// SetClockForTest replaces both clocks; SetWallClockForTest only the wall clock (timestamps and
+// rotated names), so a test can step it while the interval clock runs on.
 using NowFn = long long (*)();
 void SetClockForTest(NowFn now);
+void SetWallClockForTest(NowFn now);
+// A replacement for rename(2) in the rotation (null restores it).
+using RenameFn = int (*)(const char* from, const char* to);
+void SetRenameForTest(RenameFn rename);
 unsigned OpenAttemptsForTest();
 
 }  // namespace sentinel

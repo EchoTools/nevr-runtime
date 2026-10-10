@@ -247,13 +247,13 @@ void ReadConfigFileNeverBlocksOnNonRegularFiles() {
   // Rejected and invalid-value files that carry configured values: none may reach a log line.
   const std::string bad = Dir() + "/bad.json";
   WriteFile(bad, R"({"nevr_http_key":"FILE-SECRET-KEY-31337","nevr_server_key":"FILE-SERVER-SECRET-42042")");
-  (void)sentinel::ResolveFromDisk(bad);
+  static_cast<void>(sentinel::ResolveFromDisk(bad));
   WriteFile(bad, R"({"nevr_socket_uri":"http://file.example/wrong","nevr_http_key":"has space FILE-SECRET-KEY-31337"})");
-  (void)sentinel::ResolveFromDisk(bad);
+  static_cast<void>(sentinel::ResolveFromDisk(bad));
   WriteFile(bad, R"({"FILE-SECRET-KEY-31337":1,"features":{"login":"FILE-SERVER-SECRET-42042"}})");
-  (void)sentinel::ResolveFromDisk(bad);
+  static_cast<void>(sentinel::ResolveFromDisk(bad));
   WriteFile(bad, R"({"5f4dcc3b5aa765d61d8327deb882cf99":"x","defaultkey":1,"defaultkey":2,"features":{"s3cr3tlowercase":true}})");
-  (void)sentinel::ResolveFromDisk(bad);
+  static_cast<void>(sentinel::ResolveFromDisk(bad));
   ::unlink(bad.c_str());
   ScanDiskLogForValues("after rejected files");
 }
@@ -522,6 +522,102 @@ void HostileLogPathsAreRetriedRarelyOrNever() {
   ClearLogs();
 }
 
+// Rotation that cannot rename (#238): the failure is logged once, not once per record, the rename is
+// not attempted again inside the retry window, and the log is not reopened for every record.
+int g_renameCalls = 0;
+int FailingRename(const char*, const char*) {
+  ++g_renameCalls;
+  errno = EACCES;
+  return -1;
+}
+
+void RotationFailureIsThrottled() {
+  ClearLogs();
+  g_fakeNow = 400000;
+  g_renameCalls = 0;
+  sentinel::SetRenameForTest(&FailingRename);
+  const std::size_t big = static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) + 1;
+  WriteFile(LogPath(), std::string(big, 'x'));
+  Captured().clear();
+  const unsigned before = sentinel::OpenAttemptsForTest();
+  for (int i = 0; i < 50; ++i) sentinel::Emit(nevr_quest::LogLevel::kInfo, "rotation blocked");
+  CHECK(Count("on-disk log rotation failed") == 1);
+  CHECK(g_renameCalls == 1);
+  CHECK(sentinel::OpenAttemptsForTest() == before + 1);
+  CHECK(ReadAll(LogPath()).size() > big);  // the log kept growing and nothing was lost
+  CHECK(RotatedNames().empty());
+
+  // Past the window one more attempt is made, and it is not reported a second time.
+  g_fakeNow += sentinel::kOpenRetryMs + 1;
+  for (int i = 0; i < 5; ++i) sentinel::Emit(nevr_quest::LogLevel::kInfo, "rotation blocked later");
+  CHECK(g_renameCalls == 2);
+  CHECK(Count("on-disk log rotation failed") == 1);
+
+  // The rename works again: the log rotates at the next attempt, and a later failure is reported again.
+  sentinel::SetRenameForTest(nullptr);
+  g_fakeNow += sentinel::kOpenRetryMs + 1;
+  for (int i = 0; i < 5; ++i) sentinel::Emit(nevr_quest::LogLevel::kInfo, "rotation recovered");
+  CHECK(RotatedNames().size() == 1);
+  CHECK(ReadAll(LogPath()).size() < 1024);
+  sentinel::SetRenameForTest(nullptr);
+  ClearLogs();
+}
+
+// The retry interval runs on the monotonic clock (#238): stepping the wall clock backwards does not
+// reopen the throttle window. The wall clock only stamps records and names rotated files.
+long long g_fakeWall = 0;
+long long FakeWall() { return g_fakeWall; }
+
+void RetryIntervalIgnoresTheWallClock() {
+  ClearLogs();
+  g_fakeNow = 500000;
+  g_fakeWall = 900000;
+  sentinel::SetWallClockForTest(FakeWall);
+  CHECK(::rmdir(Dir().c_str()) == 0);
+  const unsigned before = sentinel::OpenAttemptsForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "wall clock first");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 1);
+  g_fakeWall = 100000;  // stepped back: a throttle that read it would retry now
+  for (int i = 0; i < 3; ++i) sentinel::Emit(nevr_quest::LogLevel::kInfo, "wall clock stepped back");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 1);
+  g_fakeNow += sentinel::kOpenRetryMs + 1;  // the interval clock moves on: one retry
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "wall clock window passed");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 2);
+  sentinel::SetWallClockForTest(nullptr);
+  CHECK(::mkdir(Dir().c_str(), 0755) == 0);
+  ClearLogs();
+}
+
+// What the header documents (#238): a symlink or a directory at the log path fails the open and is
+// retried after the window; only a path that opens as a non-regular file is never retried.
+void UnopenablePathsAreRetriedAfterTheWindow() {
+  ClearLogs();
+  g_fakeNow = 600000;
+  const std::string target = Dir() + "/symlink-target-never-created";
+  CHECK(::symlink(target.c_str(), LogPath().c_str()) == 0);
+  unsigned before = sentinel::OpenAttemptsForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "symlink first");
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "symlink inside window");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 1);
+  g_fakeNow += sentinel::kOpenRetryMs + 1;
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "symlink after window");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 2);
+  CHECK(::access(target.c_str(), F_OK) != 0);
+  ::unlink(LogPath().c_str());
+  sentinel::CloseDiskLog();
+
+  CHECK(::mkdir(LogPath().c_str(), 0755) == 0);
+  g_fakeNow += sentinel::kOpenRetryMs + 1;
+  before = sentinel::OpenAttemptsForTest();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "directory first");
+  g_fakeNow += sentinel::kOpenRetryMs + 1;
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "directory after window");
+  CHECK(sentinel::OpenAttemptsForTest() == before + 2);
+  ::rmdir(LogPath().c_str());
+  ClearLogs();
+}
+
+
 }  // namespace
 
 extern "C" {
@@ -558,6 +654,9 @@ int main() {
   EachDiskFailureClassIsReportedOnce();
   RegularLogFileIsBlockingAfterOpen();
   HostileLogPathsAreRetriedRarelyOrNever();
+  RotationFailureIsThrottled();
+  RetryIntervalIgnoresTheWallClock();
+  UnopenablePathsAreRetriedAfterTheWindow();
   ::rmdir(Dir().c_str());
   CHECK(Leaks().empty());
   for (const std::string& leak : Leaks()) std::fprintf(stderr, "a log line carried a configured value: %s\n", leak.c_str());

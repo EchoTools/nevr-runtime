@@ -102,7 +102,13 @@ verbose-build-android: configure-android
 
 # Fail when the Quest sentinel gains a load-time initializer beyond its one ELF constructor
 check-android-static-init: build-android
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $(find build/android-arm64 -name '*.o' \( -path '*/ovrplatformloader.dir/*' -o -path '*/nevr_quest_config.dir/*' -o -path '*/nevr_quest_got_hook.dir/*' -o -path '*/nevr_quest_hwdump_hooks.dir/*' -o -path '*/nevr_quest_hwdump.dir/*' \) | sort)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The object list is what the linker was given (build.ninja's link statement and the in-tree
+    # archives it links), not what `find` sees: tools/quest_link_objects.py. A failure there stops
+    # the recipe (the assignment is the command), so an empty list can never pass the check.
+    objects=$(python3 tools/quest_link_objects.py build/android-arm64 sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $objects
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
@@ -888,7 +894,7 @@ test-quest-integration:
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
         src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
-        src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
     # 2. the hook translation units and the counter budget
@@ -898,6 +904,7 @@ test-quest-integration:
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
     "${off[@]}" -c src/quest/auth/prompt_board.cpp -o "$out/prompt_board.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
@@ -919,17 +926,18 @@ test-quest-integration:
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/prompt_board.o" \
+        "$out/login_prompt_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
-    # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
+    # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
+    # builds when none is injected)
     "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
-        src/quest/tests/integrated_bridge_test.cpp src/quest/integration/integrated_bridge.cpp \
-        src/quest/integration/tapped_transports.cpp src/quest/integration/frame_tap.cpp \
+        src/quest/tests/session_bridge_test.cpp src/quest/net/session_bridge.cpp src/quest/net/frame_tap.cpp \
+        src/quest/net/curl_ws_connector.cpp src/quest/auth/ca_bundle.cpp \
         src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/runtime/server/serverdb_uri.cpp \
-        -o "$out/integrated_bridge_test" $(pkg-config --libs libcurl)
-    timeout 300 "$out/integrated_bridge_test"
+        -o "$out/session_bridge_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    timeout 300 "$out/session_bridge_test"
     echo "test-quest-integration: all integration tests pass on the host"
 
 # The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
@@ -978,7 +986,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_standin_testonly -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —

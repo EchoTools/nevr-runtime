@@ -16,6 +16,7 @@
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/social_shim.h"
+#include "quest/login/login_hook.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/tests/test_check.h"
 
@@ -118,9 +119,9 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // single StartReporter. Every registration must be accepted (a refused one would leave its hook out), and
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
 // names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 10,
-// dlopen 1, social 19, login prompt 14 (#239, login_prompt_hook.h kCounterCount); the login hook and the
-// login prerequisites register none.
-constexpr int kSentinelCounters = 2 + 10 + 1 + 19 + 14;
+// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 16 (#338:
+// one calls counter per hook), social 19, login prompt 14 (#239, login_prompt_hook.h kCounterCount).
+constexpr int kSentinelCounters = 2 + 10 + 1 + 2 + 16 + 19 + 14;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -136,6 +137,7 @@ struct RealCounterSteps final : Steps {
   }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
+  bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::login_prompt::RegisterCounters(); }
   // The reporter is started after the budget is measured (below), so a refused registration shows here.
@@ -158,7 +160,8 @@ void TestCounterBudget() {
   steps.config.effective.login = steps.config.effective.social = true;
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
-                    StepId::kRegisterSocialCounters, StepId::kRegisterLoginPromptCounters}) {
+                    StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,
+                    StepId::kRegisterLoginPromptCounters}) {
     QCHECK(r.at(id).state == StepState::kOk);
   }
   // No hook was left out for want of a counter slot.

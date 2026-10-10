@@ -1323,13 +1323,13 @@ void ReporterStartStopRace() {
   QCHECK(!ReporterRunning());
 }
 
-// The counter table holds kMaxReportCounters (48) across the whole program; the next one is refused
+// The counter table holds kMaxReportCounters (96) across the whole program; the next one is refused
 // and logged, and so is any registration after the reporter has started.
 void ReporterCounterTableBound() {
-  static_assert(kMaxReportCounters == 48, "the reporter's capacity changed: update this test and ADR 0003");
+  static_assert(kMaxReportCounters == 96, "the reporter's capacity changed: update this test and ADR 0003");
   Prepare();
   constexpr unsigned kTotal = kMaxReportCounters + 1;
-  static char names[kTotal][16];  // "c00".."c48": must outlive the reporter, like a literal
+  static char names[kTotal][16];  // "c00".."c96": must outlive the reporter, like a literal
   for (unsigned i = 0; i < kTotal; ++i) std::snprintf(names[i], sizeof(names[i]), "c%02u", i);
   static std::atomic<std::uint64_t> values[kTotal];
   unsigned accepted = 0;
@@ -1337,7 +1337,7 @@ void ReporterCounterTableBound() {
   QCHECK(accepted == kMaxReportCounters);
   QCHECK(Errors() == 0);
   QCHECK(!RegisterReportCounter(names[kMaxReportCounters], &values[kMaxReportCounters]));
-  QCHECK(Count(LogLevel::kError, "\"status\":\"register_refused\",\"counter\":\"c48\"") == 1);
+  QCHECK(Count(LogLevel::kError, "\"status\":\"register_refused\",\"counter\":\"c96\"") == 1);
   SetLogSink(&SilentSink);
   QCHECK(StartReporter(10, 20, 50));
   QCHECK(!RegisterReportCounter("after_start", &values[0]));  // registration order contract

@@ -73,7 +73,7 @@ GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
 // count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
 // events dropped, sends failed, joins deferred, requests timed out, four callback delivery classes, JSON failures,
-// frames ignored) and the invite gate's two (social_invite_gate.h): 19 of the reporter's 48.
+// frames ignored) and the invite gate's two (social_invite_gate.h): 19 of the reporter's 96.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 
