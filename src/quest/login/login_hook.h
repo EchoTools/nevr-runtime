@@ -62,7 +62,8 @@ enum class InstallState {
 
 const char* InstallStateName(InstallState state);
 
-// Registers the login thunk's call and fault counters with the reporter (2 counters). Before
+// Registers the login thunk's call and fault counters and the 16 login-prerequisite thunks' call
+// counters with the reporter (18 counters). Before
 // sentinel::StartReporter: the reporter refuses a later registration. False if one was refused.
 bool RegisterLoginHookCounters() noexcept;
 
