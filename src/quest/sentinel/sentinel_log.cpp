@@ -31,12 +31,17 @@ bool g_openFailureReported = false;
 bool g_nonRegularReported = false;
 bool g_writeFailureReported = false;
 bool g_tornLine = false;
-bool g_diskDisabled = false;     // the path is not a regular file: never retried
+bool g_diskDisabled = false;     // the path opened but is not a regular file: never retried
 bool g_openFailed = false;       // the last open failed; retried after kOpenRetryMs
 long long g_lastOpenFailMs = 0;
 long long g_logBytes = 0;        // size of the open log: its size at open plus what this run wrote
+bool g_rotateFailed = false;     // the last rename failed; retried after kOpenRetryMs
+bool g_rotationFailureReported = false;
+long long g_lastRotateFailMs = 0;
 unsigned g_openAttempts = 0;
-NowFn g_now = nullptr;
+NowFn g_now = nullptr;           // test clock for both clocks
+NowFn g_wallNow = nullptr;       // test wall clock only
+RenameFn g_rename = nullptr;
 
 class Lock {
  public:
@@ -62,36 +67,67 @@ void ReportDiskFailure(const char* what, int err, bool* reported) {
                       std::strerror(err));
 }
 
+// Wall clock: record timestamps and rotated names only.
 long long NowMs() {
+  if (g_wallNow != nullptr) return g_wallNow();
   if (g_now != nullptr) return g_now();
   struct timespec ts {};
   ::clock_gettime(CLOCK_REALTIME, &ts);
   return static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000L;
 }
 
+// Every retry interval is measured here: a wall-clock step (NTP, a user setting the time) must not
+// move a throttle window.
+long long MonotonicMs() {
+  if (g_now != nullptr) return g_now();
+  struct timespec ts {};
+  ::clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000L;
+}
+
+// True while a failed rename is inside its retry window.
+bool RotationBlocked() {
+  if (!g_rotateFailed) return false;
+  const long long now = MonotonicMs();
+  return now >= g_lastRotateFailMs && now - g_lastRotateFailMs < kOpenRetryMs;
+}
+
+// A failed rotation is logged once until one succeeds, and not attempted again for kOpenRetryMs.
+void RotationFailed(const char* what, int err) {
+  g_rotateFailed = true;
+  g_lastRotateFailMs = MonotonicMs();
+  if (g_rotationFailureReported) return;
+  g_rotationFailureReported = true;
+  __android_log_print(ANDROID_LOG_WARN, NEVR_TAG, "on-disk log rotation %s errno=%d (%s)", what, err,
+                      std::strerror(err));
+}
+
 // Renames a log that has reached the size bound to a name that does not exist yet; nothing is
-// ever deleted or replaced. Best effort: on failure the log keeps growing and the next open
-// tries again.
+// ever deleted or replaced. Best effort: on failure the log keeps growing, the failure is
+// logged once, and the next attempt is a retry interval later.
 void RotateIfLarge(const std::string& path) {
   struct stat st {};
   if (::lstat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < kMaxDiskLogBytes) return;
+  if (RotationBlocked()) return;
   const std::string base = std::string(FilesDir()) + "/nevr-sentinel." + std::to_string(NowMs());
   for (int n = 0; n < 1000; ++n) {
     const std::string rotated = base + (n == 0 ? "" : "." + std::to_string(n)) + ".log";
     struct stat taken {};
     if (::lstat(rotated.c_str(), &taken) == 0) continue;
-    if (::rename(path.c_str(), rotated.c_str()) != 0) {
-      __android_log_print(ANDROID_LOG_WARN, NEVR_TAG, "on-disk log rotation failed errno=%d (%s)", errno,
-                          std::strerror(errno));
+    if ((g_rename != nullptr ? g_rename : &::rename)(path.c_str(), rotated.c_str()) != 0) {
+      RotationFailed("failed", errno);
+    } else {
+      g_rotateFailed = false;
+      g_rotationFailureReported = false;
     }
     return;
   }
-  __android_log_write(ANDROID_LOG_WARN, NEVR_TAG, "on-disk log rotation skipped: no free name");
+  RotationFailed("skipped: no free name", 0);
 }
 
 void FailOpen(int err, const char* what) {
   g_openFailed = true;
-  g_lastOpenFailMs = NowMs();
+  g_lastOpenFailMs = MonotonicMs();
   ReportDiskFailure(what, err, &g_openFailureReported);
 }
 
@@ -143,6 +179,8 @@ bool OpenDiskLog() {
 const char* FilesDir() { return NEVR_QUEST_FILES_DIR; }
 
 void SetClockForTest(NowFn now) { g_now = now; }
+void SetWallClockForTest(NowFn now) { g_wallNow = now; }
+void SetRenameForTest(RenameFn rename) { g_rename = rename; }
 unsigned OpenAttemptsForTest() { return g_openAttempts; }
 
 void EmitFixed(nevr_quest::LogLevel level, const char* literal) noexcept {
@@ -155,6 +193,8 @@ void CloseDiskLog() {
   g_fd = -1;
   g_diskDisabled = false;
   g_openFailed = false;
+  g_rotateFailed = false;
+  g_rotationFailureReported = false;
   g_tornLine = false;
 }
 
@@ -203,7 +243,7 @@ void Emit(nevr_quest::LogLevel level, const std::string& message) {
   if (g_diskDisabled) return;
   if (g_fd < 0) {
     if (g_openFailed) {
-      const long long now = NowMs();
+      const long long now = MonotonicMs();
       if (now >= g_lastOpenFailMs && now - g_lastOpenFailMs < kOpenRetryMs) return;
     }
     if (!OpenDiskLog()) return;
@@ -215,8 +255,9 @@ void Emit(nevr_quest::LogLevel level, const std::string& message) {
     return;
   }
   g_logBytes += static_cast<long long>(line.size());
-  if (g_logBytes >= kMaxDiskLogBytes) {
-    // Close so the next record opens, rotates and starts a fresh file.
+  if (g_logBytes >= kMaxDiskLogBytes && !RotationBlocked()) {
+    // Close so the next record opens, rotates and starts a fresh file. While a failed rotation is
+    // inside its retry window the file stays open: reopening every record would only fail again.
     ::close(g_fd);
     g_fd = -1;
   }
