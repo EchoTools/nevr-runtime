@@ -420,12 +420,13 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   // #408: with no apiservice_host / loginservice_host / api_host configured the game's own API host
   // (https://api.readyatdawn.com, a dead service) was left alone, so every REST call (the service status
   // request among them) went there. It goes to nevr_http_uri instead.
-  if (uri == gameUri) {
-    uri = const_cast<CHAR*>(nevr::lifecycle::DecideUnconfiguredApiRedirect(
-        s_serviceRedirectsArmed.load(std::memory_order_acquire), uri,
+  {
+    const char* const configured = uri;
+    uri = const_cast<CHAR*>(nevr::lifecycle::DecideHttpConnectUri(
+        s_serviceRedirectsArmed.load(std::memory_order_acquire), gameUri, configured,
         [] { return NevrCfgGetFlat("nevr_http_uri"); },
         [](const char* url, const char* httpTarget) { return NevrCfgRedirect(url, httpTarget, 0, 0); }));
-    if (uri != gameUri) {
+    if (uri != configured) {
       const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
           "[NEVR.PATCH] HTTP(S) connection redirected: ", gameUri, " → ", uri);
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
