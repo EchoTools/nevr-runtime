@@ -66,8 +66,8 @@ inline constexpr std::size_t kMaxValueBytes = 512;
 // passes to TString for each match type). Exact, case-sensitive, allocation-free.
 bool IsServiceHostKey(const char* key) noexcept;
 
-// The game's REST API base URLs: "https://api.readyatdawn.com" and the per-environment
-// "https://api-<env>.readyatdawn.com" it passes to CSysHttp::CreateConnection (libr15 0x126c274,
+// The game's REST API base URLs: "https://api." and "https://api-" exactly, i.e. "https://api.readyatdawn.com"
+// and the per-environment "https://api-<env>.readyatdawn.com" it passes to CSysHttp::CreateConnection (libr15 0x126c274,
 // 0x126c25c, 0x128958c). Those are not read through CJson::TString, so IsServiceHostKey does not see them.
 bool IsApiBaseUrl(const char* url) noexcept;
 
