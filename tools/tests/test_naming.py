@@ -3,6 +3,7 @@ grow, and a non-canonical spelling of the project name does not appear in any fi
 not already carry it. Both sets are written out below on purpose: changing one is a visible edit here."""
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
@@ -31,18 +32,13 @@ FROZEN_NVR = frozenset({
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
     "NvrTestPluginGetKeptInfo",
 })
-# Namespaces that were renamed to nevr_<area> (#131): the old name is not used as a namespace again. The map
-# grows by one area at a time; a PascalCase namespace not listed here is still on the rename list
+# Namespaces that were renamed to nevr_<area> (#131), one JSON file per area under
+# tools/tests/renamed_namespaces/ so area PRs do not edit the same lines. The old name is not used as a
+# namespace again; a PascalCase namespace in no file is still on the rename list
 # (`python3 tools/naming_inventory.py --category pascal-namespaces`).
-RENAMED_NAMESPACES = {
-    "DllLoadHook": "nevr_dll_load_hook",
-    "HookGuard": "nevr_hook_guard",
-    "HookLiveness": "nevr_hook_liveness",
-    "PatchAddresses": "nevr_patch_addresses",
-    "ExportTrace": "nevr_export_trace",
-    "ExportTracer": "nevr_export_tracer",
-    "ExportTracePolicy": "nevr_export_trace_policy",
-}
+RENAMED_NAMESPACES = {}
+for _area_file in sorted((REPO / "tools/tests/renamed_namespaces").glob("*.json")):
+    RENAMED_NAMESPACES.update(json.loads(_area_file.read_text(encoding="utf-8")))
 # Existing non-canonical spellings, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
     "certs/code-signing.conf": {"nEVR"},
