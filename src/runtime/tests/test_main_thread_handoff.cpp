@@ -15,7 +15,7 @@
 #include <stdexcept>
 #include <thread>
 
-using GameServer::MainThreadHandoff;
+using nevr_game_server::MainThreadHandoff;
 using namespace std::chrono_literals;
 
 namespace {
@@ -179,9 +179,9 @@ TEST(MainThreadHandoff, IsReusableAfterARequestCompletes) {
 }
 
 TEST(MainThreadHandoff, OutcomeNamesAreStableLogTokens) {
-  EXPECT_STREQ(GameServer::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kRan), "ran");
-  EXPECT_STREQ(GameServer::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kTaskThrew), "task_threw");
-  EXPECT_STREQ(GameServer::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kTimedOut), "timed_out");
-  EXPECT_STREQ(GameServer::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kCancelled), "cancelled");
-  EXPECT_STREQ(GameServer::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kBusy), "busy");
+  EXPECT_STREQ(nevr_game_server::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kRan), "ran");
+  EXPECT_STREQ(nevr_game_server::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kTaskThrew), "task_threw");
+  EXPECT_STREQ(nevr_game_server::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kTimedOut), "timed_out");
+  EXPECT_STREQ(nevr_game_server::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kCancelled), "cancelled");
+  EXPECT_STREQ(nevr_game_server::MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome::kBusy), "busy");
 }

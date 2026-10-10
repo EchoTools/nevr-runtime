@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace GameServer {
+namespace nevr_game_server {
 
 // CallbackRegistry implementation
 void CallbackRegistry::Clear() {
@@ -286,4 +286,4 @@ CallbackRegistry& ServerContext::GetCallbackRegistry() {
 
 const CallbackRegistry& ServerContext::GetCallbackRegistry() const { return m_callbacks; }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

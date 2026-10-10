@@ -343,7 +343,7 @@ TEST(MessagesEncoding, InvalidSessionSuccessDoesNotMutateStateOrDispatch) {
     std::string state = "previous-session";
     size_t dispatchCount = 0;
     size_t commitCount = 0;
-    EXPECT_FALSE(GameServer::ApplyLobbySessionSuccess(
+    EXPECT_FALSE(nevr_game_server::ApplyLobbySessionSuccess(
         message, state, [&commitCount]() { ++commitCount; },
         [&dispatchCount](const EncodedMessage&) { ++dispatchCount; }));
     EXPECT_EQ(state, "previous-session");
@@ -352,7 +352,7 @@ TEST(MessagesEncoding, InvalidSessionSuccessDoesNotMutateStateOrDispatch) {
 
     std::string noBroadcasterState = "previous-session";
     commitCount = 0;
-    EXPECT_FALSE(GameServer::ApplyLobbySessionSuccess(message, noBroadcasterState,
+    EXPECT_FALSE(nevr_game_server::ApplyLobbySessionSuccess(message, noBroadcasterState,
                                                        [&commitCount]() { ++commitCount; }, {}));
     EXPECT_EQ(noBroadcasterState, "previous-session");
     EXPECT_EQ(commitCount, 0U);
@@ -382,7 +382,7 @@ TEST(MessagesEncoding, ValidSessionSuccessCommitsStateAndDispatchesDecodableByte
   bool committedBeforeDispatch = false;
   size_t dispatchCount = 0;
   std::vector<uint8_t> dispatched;
-  ASSERT_TRUE(GameServer::ApplyLobbySessionSuccess(
+  ASSERT_TRUE(nevr_game_server::ApplyLobbySessionSuccess(
       message, state, [&state, &committedBeforeDispatch]() {
         EXPECT_EQ(state, kLobbyId);
         committedBeforeDispatch = true;

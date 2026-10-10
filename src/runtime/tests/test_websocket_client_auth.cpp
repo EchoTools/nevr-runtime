@@ -529,7 +529,7 @@ TEST(SerializedMint, ConcurrentMintsNeverOverlap) {
   };
   std::vector<std::thread> threads;
   for (int i = 0; i < 4; ++i) {
-    threads.emplace_back([&]() { EXPECT_EQ(ServerDbAuth::RunSerializedMint(mint), "tok"); });
+    threads.emplace_back([&]() { EXPECT_EQ(nevr_serverdb_auth::RunSerializedMint(mint), "tok"); });
   }
   for (auto& t : threads) t.join();
   EXPECT_EQ(maxActive.load(), 1);

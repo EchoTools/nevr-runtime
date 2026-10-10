@@ -43,7 +43,7 @@
 
 #include "core/logging.h"
 
-using namespace GameServer;
+using namespace nevr_game_server;
 
 // ServerDB socket: server authentication, token acquisition, registration and unregistration (#47).
 
@@ -118,18 +118,18 @@ static std::string AuthenticateServer(std::string& reason) {
         const std::string diagnostic =
             LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
-        reason = FailureDetail::PasswordAuthRequestFailed(httpUri, curl_easy_strerror(res), static_cast<int>(res));
+        reason = nevr_failure_detail::PasswordAuthRequestFailed(httpUri, curl_easy_strerror(res), static_cast<int>(res));
         return "";
     }
 
     if (http_code != 200) {
         LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
                                                "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
-        reason = FailureDetail::PasswordAuthHttpStatus(httpUri, http_code);
+        reason = nevr_failure_detail::PasswordAuthHttpStatus(httpUri, http_code);
         return "";
     }
 
-    std::string token = FailureDetail::ExtractAuthToken(response, reason);
+    std::string token = nevr_failure_detail::ExtractAuthToken(response, reason);
     if (token.empty()) {
         Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Server auth response carried no usable token");
     } else {
@@ -146,11 +146,11 @@ static std::string AuthenticateServer(std::string& reason) {
 // also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken)
 // without a lock, and three callers can mint at once (this function on the game
 // thread, the ServerDB socket's 401 refresher, the telemetry socket's), so the
-// whole mint runs under ServerDbAuth::RunSerializedMint.
+// whole mint runs under nevr_serverdb_auth::RunSerializedMint.
 static std::string AcquireServerDbTokenUnserialized(std::string& reason);
 
 std::string AcquireServerDbToken(std::string& reason) {
-    return ServerDbAuth::RunSerializedMint([&reason]() { return AcquireServerDbTokenUnserialized(reason); });
+    return nevr_serverdb_auth::RunSerializedMint([&reason]() { return AcquireServerDbTokenUnserialized(reason); });
 }
 
 static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
@@ -229,7 +229,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Continuing produces a server that logs connection failures forever
   // instead of exiting with a cause.
   if (wsToken.empty()) {
-    const std::string message = FailureDetail::WithCause(
+    const std::string message = nevr_failure_detail::WithCause(
         "Server authentication failed — no valid token for ServerDB connection", tokenFailureReason);
     ServerFatal("%s", message.c_str());
   }
@@ -255,7 +255,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // (docs/adr/0001-serverdb-token-auth.md).
       // Issue #41: query values are percent-encoded by ServerDbUri, not snprintf.
       std::optional<std::string> built =
-          ServerDbUri::BuildTokenRouteUri(tokenUri, orEmpty(guilds), orEmpty(regions));
+          nevr_serverdb_uri::BuildTokenRouteUri(tokenUri, orEmpty(guilds), orEmpty(regions));
       if (!built) {
         Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the token-route serverdb URI");
         ServerFatal("Could not build the ServerDB URI (token route)");
@@ -275,7 +275,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
         // Issue #41: every value is percent-encoded, so a password containing
         // '&', '=', '#', '%', '+' or whitespace can no longer rewrite the query.
-        std::optional<std::string> built = ServerDbUri::BuildLegacyUri(
+        std::optional<std::string> built = nevr_serverdb_uri::BuildLegacyUri(
             socketUri, discordId, orEmpty(password), orEmpty(guilds), orEmpty(regions));
         if (!built) {
           Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the legacy serverdb URI");
@@ -361,7 +361,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Build protobuf registration request
   const nevr_build_identity::Info& buildId = nevr_build_identity::Get();  // N112: commit hash and build type in the version
-  GameServer::RegistrationParams params;
+  nevr_game_server::RegistrationParams params;
   params.loginSessionId = GuidToUuidString(nevr_login_session::Get());
   params.serverId = static_cast<uint64_t>(serverId);
   params.externalIp = externalIp;  // public-facing IP
@@ -369,8 +369,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   params.regionId = regionId;
   params.versionLock = versionLock;
   params.timeStepUsecs = state.defaultTimeStepUsecs;
-  params.version = GameServer::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
-  const gameservice::v1::Envelope envelope = GameServer::BuildRegistrationEnvelope(params);
+  params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
 
   if (!SendProtobufEnvelope(this, envelope)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for initial registration");
@@ -402,16 +402,16 @@ void GameServerLib::ShutdownUnregisterOffGameThread() {
 
 void GameServerLib::UnregisterFromServerDb(bool touchCallbackRegistry) {
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
-    return GameServer::SendProtobufEnvelope(*m_wsClient, envelope);
+    return nevr_game_server::SendProtobufEnvelope(*m_wsClient, envelope);
   };
-  GameServer::ServerLifecycleAction unregisterCallbacks;
+  nevr_game_server::ServerLifecycleAction unregisterCallbacks;
   if (touchCallbackRegistry) unregisterCallbacks = [this]() { UnregisterAllCallbacks(); };
-  const auto endResult = GameServer::UnregisterRegisteredServer(
+  const auto endResult = nevr_game_server::UnregisterRegisteredServer(
       *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); }, unregisterCallbacks,
       [this]() { m_wsClient->Disconnect(); });
-  if (endResult.attempted && endResult.sendResult == GameServer::ProtobufSendResult::TransportRejected) {
+  if (endResult.attempted && endResult.sendResult == nevr_game_server::ProtobufSendResult::TransportRejected) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] CODE_ENDED transport rejected during unregister");
-  } else if (endResult.sendResult == GameServer::ProtobufSendResult::AcceptedQueued) {
+  } else if (endResult.sendResult == nevr_game_server::ProtobufSendResult::AcceptedQueued) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.SERVER] CODE_ENDED was queued; ServerDB delivery is unconfirmed");
   }
 
