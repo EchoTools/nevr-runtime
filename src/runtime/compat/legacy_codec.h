@@ -1,19 +1,18 @@
 #pragma once
-// The legacy <-> current EVR message translator for the Summer 2019 / Halloween 2018 builds.
+// Translator between the message family a legacy game client speaks (the b2 lobby builds: Summer 2019 and
+// Halloween 2018) and the current family the game service speaks.
 //
-// A legacy client talks the message family its build shipped with; the game service (nakama) only ever
-// sees the current build's family. This file rewrites one message at a time between the two, so the
-// ws_bridge can sit between them without nakama changing (nevr-runtime #417).
+// The game service only ever sees current messages. The ws_bridge sits between it and a legacy game client
+// and rewrites one message at a time through this file (nevr-runtime #417).
 //
-// Platform neutral by construction, like evr_codec.h: no Windows headers, no Winsock, no logging, no game
-// state. Everything a legacy message lacks (the login session, the channel, the build's symbol tables) comes
-// in through Context and BuildTables, so a translation is a pure function of its arguments.
+// Like evr_codec.h it is platform neutral: no Windows headers, no sockets, no logging, no game state. What a
+// legacy message does not carry (the login session, the channel, the build's symbol tables) is passed in
+// through Context and BuildTables, so every translation is a pure function of its arguments.
 //
-// Layouts: the legacy side follows the build's own message layouts; the current side follows the decode
-// order of the game service's codec. Each row's layout source is cited in docs/reference/legacy-translator.md.
-// Rows whose layout is not established are not translated; they come back as Outcome::Unsupported.
+// Layout sources are listed per row in docs/reference/legacy-translator.md. A row whose layout is not
+// established is not translated; it comes back as Outcome::Unsupported.
 //
-// Integers are little endian. A GUID is 16 raw bytes and is the same on both sides.
+// Integers are little endian. A GUID is 16 raw bytes and is the same in both families.
 
 #include <array>
 #include <cstddef>
@@ -30,9 +29,8 @@ namespace nevr_legacy_codec {
 using Guid = std::array<uint8_t, 16>;
 using nevr_evr_codec::UserId;
 
-// ---- legacy symbols (named as the game names them; each equals CSymbol64 of its name)
-// ------------------------------------------------------------------------- The symbols the legacy builds put on the
-// wire. The current symbols are in evr_codec.h.
+// ---- legacy symbols ---------------------------------------------------------------------------
+// Named as the game names them; each constant is the CSymbol64 of its name (checked in the tests).
 inline constexpr uint64_t kSNSLoginRequest = 0xa5add1bb1b0cce40ULL;
 inline constexpr uint64_t kSNSLoginProfileResult = 0x236ccbefa38074c0ULL;
 inline constexpr uint64_t kSNSLoginClientSettings = 0x208da2538a66a18dULL;
@@ -64,16 +62,17 @@ inline constexpr uint64_t kSNSReconcileIAPResult = 0x0dabc24265508a82ULL;
 inline constexpr uint64_t kSNSLobbyMatchmakerStatus = 0x8f28cf33dabfbecbULL;
 inline constexpr uint64_t kSNSLobbyPlayerSessionsSuccessv3 = 0xa1b9cae1f8588969ULL;
 
-// The profile result code the legacy client treats as a successful login.
-inline constexpr uint8_t kProfileResultSuccess = 0x0B;
-inline constexpr uint8_t kProfileResultInvalid = 0;
-inline constexpr uint8_t kProfileResultAuthFailed = 7;
-inline constexpr uint8_t kProfileResultRestricted = 8;
+// The result byte of the legacy login reply (SNSLoginProfileResult). Values learned from reading EchoRelay's
+// message documentation; unverified against a binary.
+inline constexpr uint8_t kLoginAccepted = 0x0B;
+inline constexpr uint8_t kLoginBadRequest = 0;
+inline constexpr uint8_t kLoginCredentialsRejected = 7;
+inline constexpr uint8_t kLoginBlocked = 8;
 
 // ---- what the caller knows --------------------------------------------------------------------
 
-// What one build ships: the symbols that differ between the Summer and Halloween 2018 families and the
-// build's own symbol dictionary. The package carries the table; the codec never infers a build.
+// The symbols that differ between the two generations of the b2 lobby message set, plus the build's own
+// symbol dictionary. The package carries its table; the codec never works out which build it is talking to.
 struct BuildTables {
   uint64_t loginSettingsSymbol = nevr_evr_codec::kSymLoginSettings;  // SNSLoginSettings or SNSLoginClientSettings
   uint64_t profileRequestSymbol = kSNSProfileRequestv2;
@@ -86,26 +85,27 @@ struct BuildTables {
   std::vector<std::pair<uint64_t, uint64_t>> platforms;
 };
 
-// The Summer 2019 and Halloween 2018 symbol families (everything but the per-build dictionaries).
-BuildTables Summer2019Tables();
-BuildTables Halloween2018Tables();
+// The b2 lobby message set whose profile messages carry the v2 symbols, and the one that carries the original
+// (v1) profile symbols. Neither includes a per-build dictionary.
+BuildTables LobbyB2ProfileV2Tables();
+BuildTables LobbyB2ProfileV1Tables();
 
-// What a legacy message lacks and the bridge holds.
+// What a legacy message does not carry and the bridge already knows.
 struct Context {
   Guid loginSession{};  // from LoginSuccess; zero before it
   UserId self;          // the logged-in account
   Guid channel{};       // the channel of the last find/create, for the reply direction
-  // The current build's encoder flag layout in SessionSuccess: false = the PC layout the legacy client
-  // reads; true = the Quest layout, which is converted.
+  // Which encoder-flag layout the game service writes in SessionSuccess: false = the PC layout a legacy game
+  // client reads; true = the Quest layout, which is converted.
   bool currentUsesQuestFlags = false;
-  // When non-empty, replaces the legacy LoginRequest's JSON (the bridge's own profile, which names the
-  // client version). Empty keeps the game's JSON as sent.
+  // When non-empty, replaces the JSON of the legacy login request with the bridge's own profile (which is
+  // where the game client's version is reported). Empty keeps the JSON the game sent.
   std::string loginProfileJson;
-  // The request JSON the current profile requests carry; the game service reads field names from it.
+  // The request JSON carried by the current-family profile requests; it names the fields the game service returns.
   std::string profileRequestJson = "{}";
 };
 
-// Which legacy reply a current profile answer becomes. The bridge knows which request is outstanding.
+// Which legacy reply a current-family profile answer becomes. The bridge knows which request is outstanding.
 enum class ProfileReply {
   LoginProfileResult,    // answers the login
   RefreshProfileResult,  // answers SNSRefreshProfile
@@ -120,47 +120,47 @@ struct OutMessage {
 };
 
 enum class Outcome {
-  Translated,   // the messages in toService / toGame replace the input
-  Passthrough,  // same symbol and layout both sides; the output is the input
-  Dropped,      // consumed; nothing is sent (forwarding it would make the service drop its whole packet)
-  Local,        // the bridge answers itself: the reply is in toGame
+  Translated,   // the messages in toGameService / toGameClient replace the input
+  Passthrough,  // same symbol and layout in both families; forward the input unchanged
+  Dropped,      // consumed; forwarding it would make the game service discard the rest of its packet
+  Local,        // the bridge answers the game client itself; the reply is in toGameClient
   Unsupported,  // the symbol is not a row of this translator
   Malformed,    // the symbol is a row but the payload does not parse as its layout
 };
 
 struct Translation {
   Outcome outcome = Outcome::Unsupported;
-  std::vector<OutMessage> toService;  // to the game service (current family)
-  std::vector<OutMessage> toGame;     // to the game (legacy family)
+  std::vector<OutMessage> toGameService;  // to the game service (current family)
+  std::vector<OutMessage> toGameClient;   // to the legacy game client (legacy family)
 };
 
-// One message from the legacy game, to the game service.
+// One message from a legacy game client, headed for the game service.
 Translation LegacyToCurrent(uint64_t symbol, std::string_view payload, const Context& ctx, const BuildTables& tables);
 
-// One message from the game service, to the legacy game. `reply` picks the legacy profile reply for the
-// current profile answers; it is ignored for every other symbol.
+// One message from the game service, headed for a legacy game client. `reply` chooses which legacy profile
+// reply a current-family profile answer becomes; it is ignored for every other symbol.
 Translation CurrentToLegacy(uint64_t symbol, std::string_view payload, const Context& ctx, const BuildTables& tables,
                             ProfileReply reply = ProfileReply::LoginProfileResult);
 
-// The LoggedInUserProfileRequest the bridge sends after LoginSuccess (the legacy client never asks).
+// The LoggedInUserProfileRequest the bridge sends once the login succeeds; a legacy game client never asks.
 OutMessage BuildLoggedInUserProfileRequest(const Context& ctx);
 
 // ---- whole frames -----------------------------------------------------------------------------
 
 struct FrameTranslation {
-  std::string toService;  // frame for the service; empty when nothing remains
-  std::string toGame;     // frame for the game; empty when nothing remains
+  std::string toGameService;  // frame for the game service; empty when nothing remains
+  std::string toGameClient;   // frame for the legacy game client; empty when nothing remains
   std::size_t translated = 0;
   std::size_t passed = 0;
   std::size_t dropped = 0;      // Dropped rows
-  std::size_t unsupported = 0;  // not forwarded either way
+  std::size_t unsupported = 0;  // not forwarded in either direction
   std::size_t malformed = 0;
 };
 
-// Translates every message of a WebSocket binary frame. A message that is Unsupported or Malformed is
-// not forwarded, because the service stops reading a packet at the first symbol it does not know.
-FrameTranslation TranslateFrameFromGame(const std::string& frame, const Context& ctx, const BuildTables& tables);
-FrameTranslation TranslateFrameFromService(const std::string& frame, const Context& ctx, const BuildTables& tables,
-                                           ProfileReply reply);
+// Translates every message of a WebSocket binary frame. An Unsupported or Malformed message is not
+// forwarded: the game service stops reading a packet at the first symbol it does not know.
+FrameTranslation TranslateFrameFromGameClient(const std::string& frame, const Context& ctx, const BuildTables& tables);
+FrameTranslation TranslateFrameFromGameService(const std::string& frame, const Context& ctx, const BuildTables& tables,
+                                               ProfileReply reply);
 
 }  // namespace nevr_legacy_codec

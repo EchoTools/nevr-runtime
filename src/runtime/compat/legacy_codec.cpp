@@ -15,21 +15,22 @@ using nevr_evr_codec::AppendLE64;
 using nevr_evr_codec::ReadLE64;
 using nlohmann::json;
 
-// A decompressed profile is a few tens of KiB; this bounds what a hostile length field can make us allocate.
+// Cap on what a declared decompressed length may make us allocate.
 constexpr std::size_t kMaxInflatedBytes = 16u * 1024u * 1024u;
 constexpr std::size_t kMaxEntrants = 16;
 constexpr std::size_t kGuidSize = 16;
 constexpr std::size_t kUserSize = 16;
 
-// SessionSuccess: [mode(8)][lobby(16)][group(16), current only][endpoint(10)][team(2)][flags(1)][pad(3)]
-// [server encoder flags(8)][client encoder flags(8)][server seq(8)][server keys][client seq(8)][client keys]
+// SessionSuccess, current family: mode(8), lobby(16), group(16; absent from the legacy form), endpoint(10),
+// team(2), session flags(1), pad(3), two encoder-flag words (8 each), then a sequence number(8) and keys
+// for each direction.
 constexpr std::size_t kSuccessLobbyEnd = 8 + kGuidSize;
 constexpr std::size_t kSuccessEndpointAndFlagsSize = 10 + 2 + 1 + 3;
-// SessionFailure (current): [mode(8)][channel(16)][code(4)][unk(4)][message(64)][expiry(8)]
+// SessionFailure, current family: mode(8), channel(16), code(4), an unknown word(4), message(64), expiry(8).
 constexpr std::size_t kFailureMessageSize = 64;
 constexpr std::size_t kFailureCurrentSize = 8 + kGuidSize + 4 + 4 + kFailureMessageSize + 8;
 
-// Profile result codes the legacy client maps from the service's HTTP-style login failure status.
+// Login failure statuses (HTTP numbering, as the game service writes them).
 constexpr uint64_t kStatusBadRequest = 400;
 constexpr uint64_t kStatusUnauthorized = 401;
 constexpr uint64_t kStatusForbidden = 403;
@@ -191,8 +192,8 @@ std::optional<json> ParseJson(std::string_view text) {
 
 std::string DumpJson(const json& doc) { return doc.dump(-1, ' ', false, json::error_handler_t::replace); }
 
-// A current profile body: u32 length of the JSON including its NUL, then a zstd frame of JSON + NUL.
-// The service's StreamJson appends the NUL; it is stripped here and put back by PackCurrentJson.
+// A current-family profile body is a u32 length (the JSON plus its terminating NUL) followed by a zstd frame
+// of that text. The NUL is stripped on the way in and restored by PackCurrentJson.
 std::optional<json> UnpackCurrentJson(Reader& r) {
   const uint32_t length = r.U32();
   const std::string frame = r.Rest();
@@ -222,15 +223,15 @@ Translation Make(Outcome outcome) {
   return t;
 }
 
-Translation ToService(uint64_t symbol, std::string payload) {
+Translation SendToGameService(uint64_t symbol, std::string payload) {
   Translation t = Make(Outcome::Translated);
-  t.toService.push_back({symbol, std::move(payload)});
+  t.toGameService.push_back({symbol, std::move(payload)});
   return t;
 }
 
-Translation ToGame(uint64_t symbol, std::string payload) {
+Translation SendToGameClient(uint64_t symbol, std::string payload) {
   Translation t = Make(Outcome::Translated);
-  t.toGame.push_back({symbol, std::move(payload)});
+  t.toGameClient.push_back({symbol, std::move(payload)});
   return t;
 }
 
@@ -252,7 +253,7 @@ Translation LoginRequestToCurrent(std::string_view payload, const Context& ctx) 
   PutGuid(out, session);
   PutUser(out, user);
   PutCString(out, profile);
-  return ToService(nevr_evr_codec::kSymLoginRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymLoginRequest, std::move(out));
 }
 
 Translation LoginRequestToLegacy(std::string_view payload) {
@@ -267,22 +268,22 @@ Translation LoginRequestToLegacy(std::string_view payload) {
   out.append("en");
   PutZeros(out, 6);  // the locale field is 8 bytes
   PutCString(out, profile);
-  return ToGame(kSNSLoginRequest, std::move(out));
+  return SendToGameClient(kSNSLoginRequest, std::move(out));
 }
 
 uint8_t ResultCodeForStatus(uint64_t status) {
-  if (status == kStatusUnauthorized) return kProfileResultAuthFailed;
-  if (status == kStatusForbidden) return kProfileResultRestricted;
-  return kProfileResultInvalid;
+  if (status == kStatusUnauthorized) return kLoginCredentialsRejected;
+  if (status == kStatusForbidden) return kLoginBlocked;
+  return kLoginBadRequest;
 }
 
 uint64_t StatusForResultCode(uint8_t code) {
-  if (code == kProfileResultAuthFailed) return kStatusUnauthorized;
-  if (code == kProfileResultRestricted) return kStatusForbidden;
+  if (code == kLoginCredentialsRejected) return kStatusUnauthorized;
+  if (code == kLoginBlocked) return kStatusForbidden;
   return kStatusBadRequest;
 }
 
-// The 0x30-byte header the client requires even on a failure: it drops anything shorter.
+// A failed login reply is still a full 0x30-byte header with no profile after it.
 std::string ProfileResultFailure(const Guid& session, const UserId& user, uint8_t code) {
   std::string out;
   PutGuid(out, session);
@@ -299,7 +300,8 @@ Translation LoginFailureToLegacy(std::string_view payload, const Context& ctx) {
   const UserId user = r.User();
   const uint64_t status = r.U64();
   if (!r.ok()) return Bad();
-  return ToGame(kSNSLoginProfileResult, ProfileResultFailure(ctx.loginSession, user, ResultCodeForStatus(status)));
+  return SendToGameClient(kSNSLoginProfileResult,
+                          ProfileResultFailure(ctx.loginSession, user, ResultCodeForStatus(status)));
 }
 
 std::optional<std::string> ProfileResultSuccess(const Context& ctx, const UserId& user, const json& client,
@@ -313,7 +315,7 @@ std::optional<std::string> ProfileResultSuccess(const Context& ctx, const UserId
   PutGuid(out, ctx.loginSession);
   PutUser(out, user);
   PutU32(out, 0);
-  PutU8(out, kProfileResultSuccess);
+  PutU8(out, kLoginAccepted);
   PutZeros(out, 3);
   PutU64(out, raw.size());
   out.append(*z);
@@ -328,12 +330,12 @@ json Member(const json& doc, const char* key) {
   return json::object();
 }
 
-// The legacy reply header shared by RefreshProfileResult: user | u32 | u8 result | 3 pad | JSON NUL.
+// SNSRefreshProfileResult body: user id, u32, result byte, 3 pad bytes, then the profile JSON and its NUL.
 std::string RefreshResult(const UserId& user, const json& profile) {
   std::string out;
   PutUser(out, user);
   PutU32(out, 0);
-  PutU8(out, kProfileResultSuccess);
+  PutU8(out, kLoginAccepted);
   PutZeros(out, 3);
   PutCString(out, DumpJson(profile));
   return out;
@@ -358,12 +360,12 @@ Translation LoggedInProfileSuccessToLegacy(std::string_view payload, const Conte
     case ProfileReply::LoginProfileResult: {
       std::optional<std::string> out = ProfileResultSuccess(ctx, user, client, server);
       if (!out) return Bad();
-      return ToGame(kSNSLoginProfileResult, std::move(*out));
+      return SendToGameClient(kSNSLoginProfileResult, std::move(*out));
     }
     case ProfileReply::RefreshProfileResult:
-      return ToGame(kSNSRefreshProfileResult, RefreshResult(user, server));
+      return SendToGameClient(kSNSRefreshProfileResult, RefreshResult(user, server));
     case ProfileReply::ProfileResponse:
-      return ToGame(tables.profileResponseSymbol, ProfileResponse(user, server));
+      return SendToGameClient(tables.profileResponseSymbol, ProfileResponse(user, server));
   }
   return Make(Outcome::Unsupported);
 }
@@ -375,11 +377,11 @@ Translation OtherProfileSuccessToLegacy(std::string_view payload, const BuildTab
   if (!r.ok() || !profile) return Bad();
   switch (reply) {
     case ProfileReply::ProfileResponse:
-      return ToGame(tables.profileResponseSymbol, ProfileResponse(user, *profile));
+      return SendToGameClient(tables.profileResponseSymbol, ProfileResponse(user, *profile));
     case ProfileReply::RefreshProfileResult:
-      return ToGame(kSNSRefreshProfileResult, RefreshResult(user, *profile));
+      return SendToGameClient(kSNSRefreshProfileResult, RefreshResult(user, *profile));
     case ProfileReply::LoginProfileResult:
-      break;  // an OtherUser answer never answers the login
+      break;  // an other-user answer is never the reply to a login
   }
   return Make(Outcome::Unsupported);
 }
@@ -387,19 +389,19 @@ Translation OtherProfileSuccessToLegacy(std::string_view payload, const BuildTab
 Translation ProfileResultToCurrent(std::string_view payload, const Context& ctx) {
   (void)ctx;
   Reader r(payload);
-  r.ReadGuid();  // the legacy session: the service has none to keep
+  r.ReadGuid();  // the legacy session id: the game service keeps its own
   const UserId user = r.User();
   r.U32();
   const uint8_t result = r.U8();
   r.Bytes(3);
   const uint64_t length = r.U64();
   if (!r.ok()) return Bad();
-  if (result != kProfileResultSuccess) {
+  if (result != kLoginAccepted) {
     std::string out;
     PutUser(out, user);
     PutU64(out, StatusForResultCode(result));
     PutCString(out, "");
-    return ToService(nevr_evr_codec::kSymLoginFailure, std::move(out));
+    return SendToGameService(nevr_evr_codec::kSymLoginFailure, std::move(out));
   }
   const std::optional<std::string> raw = ZlibInflate(r.Rest(), length);
   if (!raw) return Bad();
@@ -418,11 +420,11 @@ Translation ProfileResultToCurrent(std::string_view payload, const Context& ctx)
   std::string out;
   PutUser(out, user);
   if (!PackCurrentJson(out, json{{"client", *client}, {"server", *server}})) return Bad();
-  return ToService(nevr_evr_codec::kSymLoggedInUserProfileSuccess, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymLoggedInUserProfileSuccess, std::move(out));
 }
 
-// RefreshProfileResult and ProfileResponse(v2): the user id then a profile JSON (after a 8-byte header for
-// the former). Both become OtherUserProfileSuccess.
+// The two legacy profile answers (the refresh result, which has an 8-byte header after the user id, and
+// the profile response, which has none) both become OtherUserProfileSuccess.
 Translation LegacyProfileBodyToCurrent(std::string_view payload, bool refreshHeader) {
   Reader r(payload);
   const UserId user = r.User();
@@ -438,13 +440,13 @@ Translation LegacyProfileBodyToCurrent(std::string_view payload, bool refreshHea
   std::string out;
   PutUser(out, user);
   if (!PackCurrentJson(out, *profile)) return Bad();
-  return ToService(nevr_evr_codec::kSymOtherUserProfileSuccess, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymOtherUserProfileSuccess, std::move(out));
 }
 
 Translation SettingsToCurrent(std::string_view payload, const BuildTables& tables, uint64_t symbol) {
   (void)tables;
   if (symbol == nevr_evr_codec::kSymLoginSettings) return Make(Outcome::Passthrough);
-  return ToService(nevr_evr_codec::kSymLoginSettings, std::string(payload));
+  return SendToGameService(nevr_evr_codec::kSymLoginSettings, std::string(payload));
 }
 
 std::string CurrentProfileRequestJson(const Context& ctx) {
@@ -455,17 +457,17 @@ Translation RefreshProfileToCurrent(std::string_view payload, const Context& ctx
   Reader r(payload);
   const Guid session = r.ReadGuid();
   const UserId user = r.User();
-  if (!r.ok()) return Bad();  // the trailing u64 flags are optional and carry nothing the service needs
+  if (!r.ok()) return Bad();  // a trailing u64 of flags may follow; the game service needs none of it
   std::string out;
   if (user.platformCode == ctx.self.platformCode && user.accountId == ctx.self.accountId) {
     PutGuid(out, session);
     PutUser(out, user);
     PutCString(out, CurrentProfileRequestJson(ctx));
-    return ToService(nevr_evr_codec::kSymLoggedInUserProfileRequest, std::move(out));
+    return SendToGameService(nevr_evr_codec::kSymLoggedInUserProfileRequest, std::move(out));
   }
   PutUser(out, user);
   PutCString(out, CurrentProfileRequestJson(ctx));
-  return ToService(nevr_evr_codec::kSymOtherUserProfileRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymOtherUserProfileRequest, std::move(out));
 }
 
 Translation ProfileRequestToCurrent(std::string_view payload, const Context& ctx) {
@@ -476,7 +478,7 @@ Translation ProfileRequestToCurrent(std::string_view payload, const Context& ctx
   std::string out;
   PutUser(out, user);
   PutCString(out, CurrentProfileRequestJson(ctx));
-  return ToService(nevr_evr_codec::kSymOtherUserProfileRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymOtherUserProfileRequest, std::move(out));
 }
 
 Translation LoggedInProfileRequestToLegacy(std::string_view payload) {
@@ -487,8 +489,8 @@ Translation LoggedInProfileRequestToLegacy(std::string_view payload) {
   std::string out;
   PutGuid(out, session);
   PutUser(out, user);
-  PutU64(out, 1);  // the clients' flag
-  return ToGame(kSNSRefreshProfile, std::move(out));
+  PutU64(out, 1);  // request flag: 1 for a game client's own refresh
+  return SendToGameClient(kSNSRefreshProfile, std::move(out));
 }
 
 Translation OtherProfileRequestToLegacy(std::string_view payload, const BuildTables& tables) {
@@ -498,7 +500,7 @@ Translation OtherProfileRequestToLegacy(std::string_view payload, const BuildTab
   std::string out;
   PutU64(out, 0);
   PutUser(out, user);
-  return ToGame(tables.profileRequestSymbol, std::move(out));
+  return SendToGameClient(tables.profileRequestSymbol, std::move(out));
 }
 
 Translation LeaderboardAnswer(std::string_view payload) {
@@ -513,7 +515,7 @@ Translation LeaderboardAnswer(std::string_view payload) {
   PutU64(out, raw.size());
   out.append(*z);
   Translation t = Make(Outcome::Local);
-  t.toGame.push_back({kSNSLeaderboardResponse, std::move(out)});
+  t.toGameClient.push_back({kSNSLeaderboardResponse, std::move(out)});
   return t;
 }
 
@@ -521,8 +523,8 @@ Translation LeaderboardAnswer(std::string_view payload) {
 
 constexpr uint8_t kRequestFlagsNone = 0;
 
-// The tail the current requests end with: the legacy i16 team index, which the game service reads as the
-// entrant's role. A legacy request that ends at the user id has no team: -1.
+// What a current-family request ends with: the legacy i16 team index, which the game service reads as the
+// entrant's role. A legacy request that stops at the user id has no team, i.e. -1.
 void PutTeamTail(std::string& out, int16_t team) { PutI16(out, team); }
 
 int16_t TeamFromTail(std::string_view tail) {
@@ -557,7 +559,7 @@ Translation FindToCurrent(std::string_view payload, const Context& ctx, const Bu
   PutGuid(out, channel);
   PutCString(out, settings);
   PutUser(out, user);
-  return ToService(nevr_evr_codec::kSymFindSessionRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymFindSessionRequest, std::move(out));
 }
 
 Translation FindToLegacy(std::string_view payload, const Context& ctx, const BuildTables& tables) {
@@ -591,7 +593,7 @@ Translation FindToLegacy(std::string_view payload, const Context& ctx, const Bui
   PutGuid(out, group);
   PutCString(out, settings);
   PutUser(out, user);
-  return ToGame(kSNSLobbyFindSessionRequestv8, std::move(out));
+  return SendToGameClient(kSNSLobbyFindSessionRequestv8, std::move(out));
 }
 
 Translation JoinToCurrent(std::string_view payload, const Context& ctx, const BuildTables& tables) {
@@ -616,7 +618,7 @@ Translation JoinToCurrent(std::string_view payload, const Context& ctx, const Bu
   PutCString(out, settings);
   PutUser(out, user);
   PutTeamTail(out, team);
-  return ToService(nevr_evr_codec::kSymJoinSessionRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymJoinSessionRequest, std::move(out));
 }
 
 Translation JoinToLegacy(std::string_view payload, const Context& ctx, const BuildTables& tables) {
@@ -647,13 +649,13 @@ Translation JoinToLegacy(std::string_view payload, const Context& ctx, const Bui
   PutCString(out, settings);
   PutUser(out, user);
   PutI16(out, team);
-  return ToGame(kSNSLobbyJoinSessionRequestv6, std::move(out));
+  return SendToGameClient(kSNSLobbyJoinSessionRequestv6, std::move(out));
 }
 
-// The legacy create request: five u64, lobby type, then bytes whose meaning is not established, the channel,
-// the settings JSON, the user id and the team. The unmapped run's length is not fixed in the captures we
-// have, so the JSON is located from the end: it is followed by exactly a user id (and optionally a team),
-// and the channel is the 16 bytes before it.
+// A legacy create request: five u64 (region, lock, mode, level, platform), the lobby type byte, a run of bytes
+// we have not identified, the channel GUID, the settings JSON with its NUL, the user id and an optional team.
+// Nothing we have fixes the run's length, so the JSON is found by looking for a '{' that begins parseable
+// JSON and is followed by exactly a user id (plus an optional team); the channel is the 16 bytes before it.
 struct CreateV7 {
   uint64_t region = 0;
   uint64_t versionLock = 0;
@@ -685,7 +687,7 @@ std::optional<CreateV7> ParseCreateV7(std::string_view payload) {
     if (nul == std::string::npos) return std::nullopt;
     const std::size_t after = rest.size() - (nul + 1);
     if (after != kUserSize && after != kUserSize + 2) continue;
-    if (!ParseJson(std::string_view(rest).substr(brace, nul - brace))) continue;  // a 0x7b inside the channel
+    if (!ParseJson(std::string_view(rest).substr(brace, nul - brace))) continue;  // a 0x7b byte inside the channel GUID
     m.lobbyType = static_cast<uint8_t>(rest[0]);
     m.unmapped = rest.substr(1, brace - kGuidSize - 1);
     std::memcpy(m.channel.data(), rest.data() + brace - kGuidSize, kGuidSize);
@@ -717,7 +719,7 @@ Translation CreateToCurrent(std::string_view payload, const Context& ctx, const 
   PutCString(out, m->settings);
   PutUser(out, m->user);
   PutTeamTail(out, m->team);
-  return ToService(nevr_evr_codec::kSymCreateSessionRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymCreateSessionRequest, std::move(out));
 }
 
 Translation CreateToLegacy(std::string_view payload, const Context& ctx, const BuildTables& tables) {
@@ -755,7 +757,7 @@ Translation CreateToLegacy(std::string_view payload, const Context& ctx, const B
   PutCString(out, settings);
   PutUser(out, user);
   PutI16(out, team);
-  return ToGame(kSNSLobbyCreateSessionRequestv7, std::move(out));
+  return SendToGameClient(kSNSLobbyCreateSessionRequestv7, std::move(out));
 }
 
 Translation PlayerSessionsToCurrent(std::string_view payload, const Context& ctx, const BuildTables& tables) {
@@ -774,7 +776,7 @@ Translation PlayerSessionsToCurrent(std::string_view payload, const Context& ctx
   PutU64(out, ToCurrent(tables.platforms, platform));
   PutU64(out, count);
   for (const UserId& id : ids) PutUser(out, id);
-  return ToService(nevr_evr_codec::kSymPlayerSessionsRequest, std::move(out));
+  return SendToGameService(nevr_evr_codec::kSymPlayerSessionsRequest, std::move(out));
 }
 
 Translation PlayerSessionsToLegacy(std::string_view payload, const BuildTables& tables) {
@@ -793,7 +795,7 @@ Translation PlayerSessionsToLegacy(std::string_view payload, const BuildTables& 
   PutU64(out, ToLegacy(tables.platforms, platform));
   PutU64(out, count);
   for (const UserId& id : ids) PutUser(out, id);
-  return ToGame(kSNSLobbyPlayerSessionsRequestv3, std::move(out));
+  return SendToGameClient(kSNSLobbyPlayerSessionsRequestv3, std::move(out));
 }
 
 // ---- session success ------------------------------------------------------------------------------
@@ -807,7 +809,7 @@ std::size_t KeyBytesOf(uint64_t pcFlags) {
                                   ((pcFlags >> 50) & kEncoderSizeMask));
 }
 
-// The Quest layout is the PC layout shifted up one bit with bit 0 set ("initialized").
+// The Quest flag layout is the PC layout shifted up one bit, with bit 0 set.
 uint64_t QuestToPcFlags(uint64_t flags) { return flags >> 1; }
 uint64_t PcToQuestFlags(uint64_t flags) { return (flags << 1) | 1; }
 
@@ -816,21 +818,22 @@ uint64_t PcToQuestFlags(uint64_t flags) { return (flags << 1) | 1; }
 std::optional<std::string> ConvertSuccessTail(std::string_view tail, bool fromQuest, bool toQuest) {
   if (tail.size() < kSuccessEndpointAndFlagsSize + 16) return std::nullopt;
   const uint8_t* bytes = reinterpret_cast<const uint8_t*>(tail.data());
-  uint64_t server = ReadLE64(bytes + kSuccessEndpointAndFlagsSize);
-  uint64_t client = ReadLE64(bytes + kSuccessEndpointAndFlagsSize + 8);
+  uint64_t gameServerFlags = ReadLE64(bytes + kSuccessEndpointAndFlagsSize);
+  uint64_t gameClientFlags = ReadLE64(bytes + kSuccessEndpointAndFlagsSize + 8);
   if (fromQuest) {
-    server = QuestToPcFlags(server);
-    client = QuestToPcFlags(client);
+    gameServerFlags = QuestToPcFlags(gameServerFlags);
+    gameClientFlags = QuestToPcFlags(gameClientFlags);
   }
-  const std::size_t expected = kSuccessEndpointAndFlagsSize + 16 + 8 + KeyBytesOf(server) + 8 + KeyBytesOf(client);
+  const std::size_t expected =
+      kSuccessEndpointAndFlagsSize + 16 + 8 + KeyBytesOf(gameServerFlags) + 8 + KeyBytesOf(gameClientFlags);
   if (tail.size() != expected) return std::nullopt;
   if (toQuest) {
-    server = PcToQuestFlags(server);
-    client = PcToQuestFlags(client);
+    gameServerFlags = PcToQuestFlags(gameServerFlags);
+    gameClientFlags = PcToQuestFlags(gameClientFlags);
   }
   std::string out(tail.substr(0, kSuccessEndpointAndFlagsSize));
-  PutU64(out, server);
-  PutU64(out, client);
+  PutU64(out, gameServerFlags);
+  PutU64(out, gameClientFlags);
   out.append(tail.substr(kSuccessEndpointAndFlagsSize + 16));
   return out;
 }
@@ -842,7 +845,7 @@ Translation SuccessV5ToLegacy(std::string_view payload, const Context& ctx) {
   if (!tail) return Bad();
   std::string out(payload.substr(0, kSuccessLobbyEnd));
   out.append(*tail);
-  return ToGame(kSNSLobbySessionSuccessv4, std::move(out));
+  return SendToGameClient(kSNSLobbySessionSuccessv4, std::move(out));
 }
 
 Translation SuccessV4ToCurrent(std::string_view payload, const Context& ctx) {
@@ -853,7 +856,7 @@ Translation SuccessV4ToCurrent(std::string_view payload, const Context& ctx) {
   std::string out(payload.substr(0, kSuccessLobbyEnd));
   PutGuid(out, ctx.channel);
   out.append(*tail);
-  return ToService(kSNSLobbySessionSuccessv5, std::move(out));
+  return SendToGameService(kSNSLobbySessionSuccessv5, std::move(out));
 }
 
 Translation FailureToLegacy(std::string_view payload, const BuildTables& tables) {
@@ -867,13 +870,13 @@ Translation FailureToLegacy(std::string_view payload, const BuildTables& tables)
   if (tables.sessionFailureSymbol == kSNSLobbySessionFailurev2) {
     PutGuid(out, channel);
     PutU32(out, code);
-    return ToGame(kSNSLobbySessionFailurev2, std::move(out));
+    return SendToGameClient(kSNSLobbySessionFailurev2, std::move(out));
   }
   PutU64(out, ToLegacy(tables.modes, mode));
   PutGuid(out, channel);
   PutU32(out, code);
   PutU32(out, unk);
-  return ToGame(kSNSLobbySessionFailurev3, std::move(out));
+  return SendToGameClient(kSNSLobbySessionFailurev3, std::move(out));
 }
 
 Translation FailureToCurrent(std::string_view payload, uint64_t symbol, const BuildTables& tables) {
@@ -892,7 +895,7 @@ Translation FailureToCurrent(std::string_view payload, uint64_t symbol, const Bu
   PutU32(out, unk);
   PutZeros(out, kFailureMessageSize);
   PutU64(out, 0);
-  return ToService(kSNSLobbySessionFailurev4, std::move(out));
+  return SendToGameService(kSNSLobbySessionFailurev4, std::move(out));
 }
 
 // ---- one frame's messages -------------------------------------------------------------------------
@@ -918,9 +921,9 @@ bool IsPassthrough(uint64_t symbol) {
 
 }  // namespace
 
-BuildTables Summer2019Tables() { return BuildTables{}; }
+BuildTables LobbyB2ProfileV2Tables() { return BuildTables{}; }
 
-BuildTables Halloween2018Tables() {
+BuildTables LobbyB2ProfileV1Tables() {
   BuildTables t;
   t.loginSettingsSymbol = kSNSLoginClientSettings;
   t.profileRequestSymbol = kSNSProfileRequest;
@@ -967,7 +970,7 @@ Translation LegacyToCurrent(uint64_t symbol, std::string_view payload, const Con
       return PlayerSessionsToCurrent(payload, ctx, tables);
     case kSNSLobbyPendingSessionCancel: {
       if (payload.empty()) return Bad();
-      return ToService(nevr_evr_codec::kSymPendingSessionCancel, GuidBytes(ctx.loginSession));
+      return SendToGameService(nevr_evr_codec::kSymPendingSessionCancel, GuidBytes(ctx.loginSession));
     }
     case kSNSLobbySessionSuccessv4:
       return SuccessV4ToCurrent(payload, ctx);
@@ -985,7 +988,7 @@ Translation CurrentToLegacy(uint64_t symbol, std::string_view payload, const Con
   switch (symbol) {
     case nevr_evr_codec::kSymLoginSettings:
       if (tables.loginSettingsSymbol == symbol) return Make(Outcome::Passthrough);
-      return ToGame(tables.loginSettingsSymbol, std::string(payload));
+      return SendToGameClient(tables.loginSettingsSymbol, std::string(payload));
     case nevr_evr_codec::kSymLoginRequest:
       return LoginRequestToLegacy(payload);
     case nevr_evr_codec::kSymLoginFailure:
@@ -1008,7 +1011,7 @@ Translation CurrentToLegacy(uint64_t symbol, std::string_view payload, const Con
       return PlayerSessionsToLegacy(payload, tables);
     case nevr_evr_codec::kSymPendingSessionCancel: {
       if (payload.size() < kGuidSize) return Bad();
-      return ToGame(kSNSLobbyPendingSessionCancel, std::string(1, '\0'));
+      return SendToGameClient(kSNSLobbyPendingSessionCancel, std::string(1, '\0'));
     }
     case kSNSLobbySessionSuccessv5:
       return SuccessV5ToLegacy(payload, ctx);
@@ -1033,7 +1036,7 @@ namespace {
 template <typename Translate>
 FrameTranslation WalkFrame(const std::string& frame, bool fromGame, Translate translate) {
   FrameTranslation result;
-  std::string& same = fromGame ? result.toService : result.toGame;  // where a passthrough goes
+  std::string& same = fromGame ? result.toGameService : result.toGameClient;  // where a passthrough goes
   std::size_t offset = 0;
   for (;;) {
     nevr_evr_codec::Message message;
@@ -1065,8 +1068,10 @@ FrameTranslation WalkFrame(const std::string& frame, bool fromGame, Translate tr
         ++result.malformed;
         break;
     }
-    for (const OutMessage& m : t.toService) result.toService.append(nevr_evr_codec::BuildMessage(m.symbol, m.payload));
-    for (const OutMessage& m : t.toGame) result.toGame.append(nevr_evr_codec::BuildMessage(m.symbol, m.payload));
+    for (const OutMessage& m : t.toGameService)
+      result.toGameService.append(nevr_evr_codec::BuildMessage(m.symbol, m.payload));
+    for (const OutMessage& m : t.toGameClient)
+      result.toGameClient.append(nevr_evr_codec::BuildMessage(m.symbol, m.payload));
     offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
   }
   return result;
@@ -1074,14 +1079,14 @@ FrameTranslation WalkFrame(const std::string& frame, bool fromGame, Translate tr
 
 }  // namespace
 
-FrameTranslation TranslateFrameFromGame(const std::string& frame, const Context& ctx, const BuildTables& tables) {
+FrameTranslation TranslateFrameFromGameClient(const std::string& frame, const Context& ctx, const BuildTables& tables) {
   return WalkFrame(frame, true, [&](uint64_t symbol, std::string_view payload) {
     return LegacyToCurrent(symbol, payload, ctx, tables);
   });
 }
 
-FrameTranslation TranslateFrameFromService(const std::string& frame, const Context& ctx, const BuildTables& tables,
-                                           ProfileReply reply) {
+FrameTranslation TranslateFrameFromGameService(const std::string& frame, const Context& ctx, const BuildTables& tables,
+                                               ProfileReply reply) {
   return WalkFrame(frame, false, [&](uint64_t symbol, std::string_view payload) {
     return CurrentToLegacy(symbol, payload, ctx, tables, reply);
   });
