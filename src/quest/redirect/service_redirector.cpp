@@ -52,7 +52,9 @@ bool IsServiceHostKey(const char* key) noexcept {
 }
 
 bool IsApiBaseUrl(const char* url) noexcept {
-  return url != nullptr && std::strncmp(url, "https://api", 11) == 0;
+  // "https://api." and "https://api-", the two real hosts: a bare "https://api" prefix would also take
+  // "https://apiary.example" (#413 tightened the PC hook the same way).
+  return url != nullptr && (std::strncmp(url, "https://api.", 12) == 0 || std::strncmp(url, "https://api-", 12) == 0);
 }
 
 ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, InternFn intern,

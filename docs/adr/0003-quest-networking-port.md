@@ -1054,6 +1054,15 @@ calls `BeginLogIn`); nothing was shown to re-enter login on its own. In both smo
 stayed alive for over a minute after the failure. The player restarts the game after signing in, and
 a cached token makes `Ready` true at the next startup; an automatic in-process retry is not claimed.
 
+The entitlement request is answered without Meta. `RadPluginMain` (`0x20671c`) logs "Checking OVR
+entitlement..." and calls `ovr_Entitlement_GetIsViewerEntitled` (PLT `0x1afc70`, call sites `0x206824` and
+`0x206ae4`) unless the plugin config key `skipentitlement` is nonzero, and discards the request id. Nothing
+waits for the answer; its only reader is the message pump (`Update`, `0x207534`), which calls `CSysOS::HardExit(1)`
+on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (`kEntitlementRequest`,
+`OnEntitlementRequest`) and the handler returns request id 0 without calling the SDK, so no request leaves and
+no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
+and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
+
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request

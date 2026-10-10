@@ -80,6 +80,34 @@ layout of all of them is taken from EchoRelay's documentation and is unverified.
 | `SNSLobbySessionFailurev3` / `v2` | `SNSLobbySessionFailurev4` | EchoRelay docs (v3, v2); game service decode (v4); all three names in our corpus | v3 drops the message and expiry; v2 also drops the mode and an unknown word |
 | `SNSLobbyMatchmakerStatusRequest`, `SNSLobbyMatchmakerStatus`, `SNSLobbyPlayerSessionsSuccessv3` | same | game service decode; names in our corpus | Passthrough |
 
+## The per-login session
+
+`src/runtime/compat/legacy_session.{h,cpp}` (`LegacySession`) turns the frames a legacy game client sends into
+frames for the game service, and the frames the game service sends into frames for the game client, keeping
+what a single message cannot say. It is platform neutral like `session_router.h` and has no consumer in
+`BugSplat64.dll` yet.
+
+| State | Learned from | Used for |
+|---|---|---|
+| login session id, own user id | the game service's `SNSLogInSuccess` | `Context` for every later translation |
+| "profile asked for" | the first `SNSLogInSuccess` of a session | one injected `SNSLoggedInUserProfileRequest`; a legacy game client never asks for its own profile |
+| two FIFOs of owed legacy replies | the profile requests the game client sends | choosing `SNSLoginProfileResult`, `SNSRefreshProfileResult` or `SNSProfileResponse*` for each current answer |
+
+Rules it applies, none verified against a legacy game client:
+
+- The game's own `SNSLoginRequest` is translated in place with the bridge's profile JSON, as the Quest wiring
+  does; the session builds no login of its own. A new legacy login clears everything outstanding.
+- Answers to one kind of profile request arrive in the order the requests were made.
+- A profile failure consumes its outstanding request and forwards nothing; the legacy form of a failed refresh
+  or profile result is not established.
+- An unsupported or malformed message is not forwarded and is counted in `Stats`.
+
+Seam for the wiring (design, not built): translate game frames in `Router::OnGameFrame` before the first-frame
+classification, because routing and the require-count bookkeeping work in current symbols; translate remote
+frames at delivery in `Router::OnRemoteFrame`, after routing has chosen the connection. Role classification of
+the first legacy frame (`SNSLoginRequest`, the lobby requests) happens after translation, so it needs no new
+case.
+
 ## Not translated
 
 - the create request's bytes of unknown purpose, and any create request that does not end in the documented

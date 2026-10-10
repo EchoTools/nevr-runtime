@@ -717,6 +717,28 @@ TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsRe
   }
 }
 
+// #394: a 4-character dashless code (nakama server/evr_device_auth.go) goes through the whole PC flow as
+// issued: the browser URL, the dialog, the masked log.
+TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
+  FakeDeviceAuthFlow fake;
+  fake.code = "K7RX";
+  fake.browser_result = 33;
+  fake.poll_response = VerifiedPollResponse();
+  const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_TRUE(flow.success);
+  EXPECT_EQ(fake.browser_url, "https://echovrce.com/login/device?code=K7RX");
+  ASSERT_EQ(fake.issued.size(), 1U);
+  EXPECT_EQ(fake.issued[0].first, "K7RX");
+  EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "<4 chars masked>"));
+  for (const auto& [level, message] : fake.logs) {
+    (void)level;
+    EXPECT_EQ(message.find("K7RX"), std::string::npos) << message;
+  }
+  const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "K7RX");
+  EXPECT_EQ(shown.code, "K7RX");
+  EXPECT_NE(shown.instruction.find("echovrce.com/login/device"), std::string::npos);
+}
+
 TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
   FakeDeviceAuthFlow noCode;
   noCode.code.clear();
