@@ -311,7 +311,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -410,6 +410,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_hooking.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_dll_load_hook.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1472,17 +1478,15 @@ verify:
         echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
         exit 1
     fi
-    if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
-        echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+    # #361: the block is a DllLoadHook filter. A second detour on LoadLibraryW/ExW fails with
+    # MH_ERROR_ALREADY_CREATED (DllLoadHook owns those targets), which is how N127 went unnoticed.
+    if grep -qE 'PatchDetour\(&Original_LoadLibrary' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK installs its own LoadLibrary detour again." >&2
+        echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
-        exit 1
-    fi
-    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
+    if ! grep -qE 'DllLoadHook::AddLoadFilter\(' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
 

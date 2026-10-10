@@ -639,6 +639,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
+    # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
+    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
+    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_dll_load_hook PRIVATE USE_MINHOOK)
+    target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
+
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
     # required/target carry), ArgsToJson (the v4 args_json contract), and
