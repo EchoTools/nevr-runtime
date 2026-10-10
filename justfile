@@ -480,6 +480,21 @@ test-quest-shared:
         src/quest/tests/quest_config_test.cpp \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
+    # never-omitted fields, and the record table (also under ThreadSanitizer: the libr15 hooks write it from
+    # game threads while the dump thread reads it).
+    hwdump_core=(src/quest/diag/hwdump_field.cpp src/quest/diag/hwdump_fs.cpp src/quest/diag/hwdump_os.cpp \
+        src/quest/diag/hwdump_records.cpp src/quest/diag/hwdump_report.cpp src/quest/tests/hwdump_core_test.cpp)
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${hwdump_core[@]}" -pthread -o "$out/hwdump_core_test"
+    timeout -k 5 120 "$out/hwdump_core_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -fsanitize=thread -g -O1 "${hwdump_core[@]}" \
+        -pthread -o "$out/hwdump_core_test_tsan"
+    timeout -k 5 300 "$out/hwdump_core_test_tsan"
+    # The libr15 hook handlers, built like the sentinel's copy (-fno-exceptions): arguments pass through bit
+    # for bit, results come back unchanged, nothing is read past the game's buffers.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc src/quest/diag/hwdump_records.cpp \
+        src/quest/diag/hwdump_handlers.cpp src/quest/tests/hwdump_handlers_test.cpp -o "$out/hwdump_handlers_test"
+    timeout -k 5 120 "$out/hwdump_handlers_test"
     # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
@@ -497,7 +512,7 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
@@ -507,7 +522,7 @@ test-quest-shared:
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
+        src/quest/auth/session.cpp src/quest/auth/atomic_write.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
@@ -675,6 +690,7 @@ test-quest-hooks:
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
     "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    # The patterns below are GCC's wording, which is why the recipe pins g++ (clang words the same errors differently).
     # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
     # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
     for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
@@ -682,8 +698,14 @@ test-quest-hooks:
         if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
             echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
         fi
+        # Fail closed: a diagnostics file that is missing or empty (the redirect failed, so the compiler never
+        # ran) or counts that are not numbers must not read as "no unrelated errors".
+        [ -s "$out/$name.err" ] || { echo "test-quest-hooks: $snip/$name.cpp left no diagnostics in $out/$name.err; the gate did not run" >&2; exit 1; }
         total=$(grep -c 'error:' "$out/$name.err" || true)
         matched=$(grep 'error:' "$out/$name.err" | grep -c "$want" || true)
+        case "$total$matched" in
+            ''|*[!0-9]*) echo "test-quest-hooks: $snip/$name.cpp: could not count diagnostics (total='$total' matched='$matched')" >&2; exit 1;;
+        esac
         if [ "$total" -lt 1 ] || [ "$total" -ne "$matched" ]; then
             echo "test-quest-hooks: $snip/$name.cpp: $total error line(s), $matched match '$want'; every error must be the rule's own:" >&2
             cat "$out/$name.err" >&2; exit 1
