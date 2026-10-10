@@ -142,7 +142,8 @@ inline constexpr std::uint64_t kLoggingInPage = 0xee753e35461e0ef4ULL;          
 // agrees), "majority" (most agree; the others give a different name), "single" (one named binding). A name
 // that several ids would share carries "@" and the first four hex digits of its id. An id whose only name is
 // one a parent container's script gives it, while its own script binds other things (05ce113632359ce3, the
-// home page content; 68db70ece7c24901, the in-game menu), and an id no binding names (202763036b7f6f23, the
+// home page content; 68db70ece7c24901, the in-game menu; 9733f27f738d9595, the store, whose own
+// script binds store_page, purchase_page and customize_page), and an id no binding names (202763036b7f6f23, the
 // boot page; 0xffffffffffffffff, no actor) stay "unknown" with name_basis "none".
 struct PageName {
   std::uint64_t id;
@@ -158,7 +159,6 @@ inline constexpr PageName kPageNames[] = {
     {0x80d0b99e73cf486aULL, "home_page@80d0", "majority"},
     {0x8c94450216e31162ULL, "home_page@8c94", "majority"},
     {0x9143e219cb923869ULL, "store_empty_intermediate_page", "single"},
-    {0x9733f27f738d9595ULL, "home_page@9733", "single"},
     {0xb245345073f0d3b3ULL, "connecting_page", "all"},
     {0xc615ef51fe8c7e5bULL, "initial_popups_page", "majority"},
     {0xd436ecc9f7f9164dULL, "page_quit_confirm", "majority"},

@@ -2,6 +2,7 @@
 # row: target id, level resource, owner actor, script, variable slot, CSymbol64 hash of the variable's name, name ('-': no string known for that hash).
 # The test checks CSymbol64(name) == hash on every named row and derives each id's name and basis from the rows (all: every named
 # binding agrees; majority: most agree; single: one named binding), then compares kPageNames with the result.
+# 'unknown' rows (last lines) are a reviewer's judgment, from what the id's own script binds: the test applies them but does not check them against the rows.
 05ce113632359ce3	f927772b9e2aefb1	8c94450216e31162	6c96d7f9423b0ed3	16	9d305a3963c3caa9	home_page
 1a92c34885065c11	05361c73bb73db19	62f06b79ba8e4b72	e8e8ec9847c8fd35	32	726465916bd5565b	empty_page
 1a92c34885065c11	05361c73bb73db19	cef2c0edfb933c57	e7757cb4cb8f0e1f	32	726465916bd5565b	empty_page
@@ -87,3 +88,4 @@ fbc6a43d068f418d	f927772b9e2aefb1	1f5bccac7f496edd	e3f9720efbc9e1c3	152	48b5a1fe
 fbc6a43d068f418d	f927772b9e2aefb1	dadda9a8c9c49f8d	a23ce981a93fcdcb	168	48b5a1fef44c674f	transition_to_game_page
 unknown	05ce113632359ce3	its own script binds begin_multiplayer_page, settings_page, join_page: the one name "home_page" comes from its parent container's script
 unknown	68db70ece7c24901	its own script binds quit_btn, main_menu_btn, page_quit_confirm: the in-game menu; the one name "home_page" comes from its parent container's script
+unknown	9733f27f738d9595	its own script binds store_page, purchase_page, customize_page, bp_page: nothing supports "home_page", the one name comes from another actor's script

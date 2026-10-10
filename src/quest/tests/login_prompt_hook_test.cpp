@@ -1055,8 +1055,8 @@ void PageEnterLinesNameTheSmokePagesFromTheEvidenceRows() {
     QCHECK(Enabled(id));
     QCHECK(CountLines(want) == 1);
   }
-  QCHECK(named == 13);  // 13 of the 17 ids; 05ce, 68db, the boot page and the no-actor id stay unknown
-  QCHECK(CountLines("\"name\":\"unknown\",\"name_basis\":\"none\"") == 4);
+  QCHECK(named == 12);  // 12 of the 17 ids; 05ce, 68db, 9733, the boot page and the no-actor id stay unknown
+  QCHECK(CountLines("\"name\":\"unknown\",\"name_basis\":\"none\"") == 5);
   lp::ResetPageLogForTest();
   lp::SetClockForTest(nullptr);
 }
