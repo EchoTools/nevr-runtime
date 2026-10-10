@@ -591,6 +591,21 @@ TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
   EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, self.data(), 16), 0);
 }
 
+TEST(SocialParty, TheFriendsTabRefreshIsRateLimited) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const std::uint64_t window = SocialParty::State::kFriendRefreshMinSeconds;
+  const std::uint64_t t0 = 1000;
+  ASSERT_EQ(state.RefreshFriendsOnTabOpen(t0).size(), 1u) << "the first open asks";
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0).empty()) << "the same second asks nothing";
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0 + window - 1).empty()) << "inside the window asks nothing";
+  const auto again = state.RefreshFriendsOnTabOpen(t0 + window);
+  ASSERT_EQ(again.size(), 1u) << "at the window's end it asks again";
+  EXPECT_EQ(again[0].symbol, SocialParty::kFriendListRefreshRequest);
+  EXPECT_TRUE(state.RefreshFriendsOnTabOpen(t0 + window + 1).empty()) << "the window restarts at each request";
+  EXPECT_EQ(state.RefreshFriends().size(), 1u) << "the server-driven re-request is not limited";
+}
+
 TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   SocialParty::Global().SetSelf(77, "Me");
   void* object = SocialFacade::Object();

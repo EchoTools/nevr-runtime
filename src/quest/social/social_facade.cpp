@@ -434,7 +434,7 @@ void SlotDismissInvite(void* self, std::uint32_t index) {
 
 void SlotRefreshFriends(void* self) {
   Impl& impl = *OwnerOf(self);
-  SendParty(impl, "refresh friends", Party(impl).RefreshFriends());
+  SendParty(impl, "refresh friends", Party(impl).RefreshFriendsOnTabOpen(Now(impl)));
 }
 
 // OpenFriendRequestUI(LocalUserID, UserAccountID): pnsovr opened the Oculus friend-request overlay; the

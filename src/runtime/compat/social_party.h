@@ -631,11 +631,33 @@ class State {
     return out;
   }
 
-  /// The friends tab was opened: ask the server for a fresh friend list (it answers with a
-  /// FriendListResponse and one FriendStatusNotify per friend, which refill the roster).
+  /// Ask the server for a fresh friend list (it answers with a FriendListResponse and one
+  /// FriendStatusNotify per friend, which refill the roster). Unconditional: the server-driven
+  /// re-request after a friend change uses it.
   std::vector<Message> RefreshFriends() {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
+    out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
+    return out;
+  }
+
+  /// Seconds between two friends-tab refreshes that are sent (the server answers in well under a
+  /// second; a tab opened again inside the window shows the list that answer filled).
+  static constexpr std::uint64_t kFriendRefreshMinSeconds = 5;
+
+  /// Slot 45 RefreshFriends, called by the game each time the friends tab opens: a friend added
+  /// elsewhere (the web site) appears without a restart. At most one request per
+  /// kFriendRefreshMinSeconds; a call inside the window sends nothing. `nowSeconds` is a monotonic
+  /// clock the caller owns.
+  std::vector<Message> RefreshFriendsOnTabOpen(std::uint64_t nowSeconds) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (friendRefreshSent_ && nowSeconds >= lastFriendRefresh_ &&
+        nowSeconds - lastFriendRefresh_ < kFriendRefreshMinSeconds) {
+      return out;
+    }
+    friendRefreshSent_ = true;
+    lastFriendRefresh_ = nowSeconds;
     out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
     return out;
   }
@@ -991,6 +1013,8 @@ class State {
   bool locked_ = false;
   std::uint32_t joinPolicy_ = kJoinPolicyEveryone;  // slot 16, kept across parties as pnsovr kept +0x2B4
   std::int8_t lockRequested_ = -1;  // the lock state last asked of the server, -1 none
+  bool friendRefreshSent_ = false;           // a friends-tab refresh went out
+  std::uint64_t lastFriendRefresh_ = 0;      // when, in the caller's monotonic seconds
   std::vector<Member> members_;
   std::vector<Invite> invites_;
   std::vector<Invite> joinStash_;  // the invites the join in flight consumed (restored if it is abandoned)

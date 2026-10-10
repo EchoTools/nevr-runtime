@@ -327,8 +327,15 @@ void TestFriendRoster() {
   int profileRequests = 0;
   for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
   QCHECK(profileRequests == 0);  // no profile decoder is registered, so no reply could be read: none asked for
-  // The friend tab refresh sends the refresh request.
+  // The friend tab refresh sends the refresh request, once per rate-limit window: the tab opened again
+  // inside it sends nothing, and after it asks again (#57).
   g_sent.clear();
+  SlotFn<Void0>(obj, kRefreshFriends)(obj);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  g_sent.clear();
+  SlotFn<Void0>(obj, kRefreshFriends)(obj);
+  QCHECK(g_sent.empty());
+  g_now += SocialParty::State::kFriendRefreshMinSeconds;
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
   QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
   // A friend change from the server asks for the list again.

@@ -494,8 +494,12 @@ void AcceptInvite(void* self, std::int32_t index) {
 }
 
 // The game calls this when the friends tab opens. The roster is otherwise filled only once, at
-// login, so a friend added since (for example on the web site) never showed until a restart.
-void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().RefreshFriends()); }
+// login, so a friend added since (for example on the web site) never showed until a restart. Rate
+// limited in the model (SocialParty::kFriendRefreshMinSeconds).
+std::uint64_t NowSeconds();
+void RefreshFriends(void*) {
+  SendParty("refresh friends", SocialParty::Global().RefreshFriendsOnTabOpen(NowSeconds()));
+}
 // Slot 37 OpenFriendRequestUI: the game's add-friend node (R15NetAddFriendNode, run 0x140dd90f0 ->
 // 0x1401870f0) calls it with (0, target account) after its provider checks. pnsovr opened the
 // Oculus friend-request overlay; here it is the friend request itself.
