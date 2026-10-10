@@ -10,9 +10,21 @@ login callbacks can reach is listed here and compared with the set the sentinel 
 Pure Python (no objdump): AArch64 ELF64, `.plt` stubs resolved through their GOT slot and `.rela.plt`.
 Only direct `bl` / `b` edges are followed; the delegate table behind `CNSOVRMailbox::FulfillRequest`
 is indirect, so the delegate proxies are roots as well.
+
+What the walk cannot follow: `blr` / `br` (virtual calls, function pointers, the delegate table itself), and a
+`bl` into one of the library's own exported functions through its PLT stub (such a call is a PLT stub whose GOT
+slot resolves inside this library, not an import, so it is not followed). A path that leaves the graph through
+one of those is invisible here; the call-site check below does not depend on the walk.
+
+`--sites` (#431) lists every direct call to the four user-request imports with the exported function that holds
+it and compares that with `tools/pinned_ovr_sites.txt`: `ovr_User_GetOrgScopedID` is also called by
+CNSOVRSocial for friends and room members, and only the login's own call sites may be answered locally. With
+`--header` the `login` return addresses are compared with `kOrgRequestLoginReturns` in the sentinel's
+`login_prerequisite_targets.h`, so the two cannot drift.
 """
 
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
@@ -77,6 +89,13 @@ class Elf:
             if got in self.got_to_symbol:
                 out[addr] = self.got_to_symbol[got]
         return out
+
+    def enclosing_function(self, address: int) -> str:
+        best = ("?", 0)
+        for name, value, size in self.dynsyms:
+            if value and value <= address and (size == 0 or address < value + size) and value >= best[1]:
+                best = (name, value)
+        return best[0]
 
     def symbol_address(self, name: str) -> int:
         for n, value, _ in self.dynsyms:
@@ -147,6 +166,91 @@ ROOTS = {
 FULFILL = "_ZN10NRadEngine13CNSOVRMailbox14FulfillRequestEmP10ovrMessage"
 
 
+REQUEST_IMPORTS = (
+    "ovr_User_GetOrgScopedID",
+    "ovr_User_GetLoggedInUser",
+    "ovr_User_GetAccessToken",
+    "ovr_User_GetUserProof",
+)
+
+
+def request_call_sites(elf: Elf) -> list:
+    """[(import, site address, enclosing exported function)] for every direct bl to a request import."""
+    text = elf.sections[".text"]
+    lo, hi = text["addr"], text["addr"] + text["size"]
+    wanted = {addr: name for addr, name in elf.plt_symbols.items() if name in REQUEST_IMPORTS}
+    sites = []
+    for a in range(lo, hi, 4):
+        w = elf.word(a)
+        if (w & 0xFC000000) != 0x94000000:  # bl
+            continue
+        imm = w & 0x3FFFFFF
+        if imm & 0x2000000:
+            imm -= 1 << 26
+        target = a + imm * 4
+        if target in wanted:
+            sites.append((wanted[target], a, elf.enclosing_function(a)))
+    return sorted(sites, key=lambda site: (site[0], site[1]))
+
+
+def check_sites(path: Path, expect: Path, header: Path) -> int:
+    elf = Elf(path.read_bytes())
+    found = request_call_sites(elf)
+    expected = {}
+    for line in expect.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            name, site, klass = line.split()
+            expected[(name, int(site, 16))] = klass
+    bad = 0
+    seen = set()
+    for name, site, function in found:
+        seen.add((name, site))
+        klass = expected.get((name, site))
+        if klass is None:
+            print(f"UNCLASSIFIED: {name} is called at {site:#x} in {function}: say in {expect} whether it is the "
+                  f"login's (answered locally) or another caller's (forwarded)", file=sys.stderr)
+            bad += 1
+        elif klass == "login" and not function.startswith(LOGIN_FUNCTION_PREFIXES):
+            print(f"MISCLASSIFIED: {name} at {site:#x} is in {function}, which is not a login function but is listed "
+                  f"as login", file=sys.stderr)
+            bad += 1
+        elif klass == "social" and name != "ovr_User_GetOrgScopedID":
+            print(f"MISCLASSIFIED: only ovr_User_GetOrgScopedID may have a forwarded caller, {name} at {site:#x} is "
+                  f"listed as social: the sentinel answers the other three unconditionally", file=sys.stderr)
+            bad += 1
+    for key in sorted(set(expected) - seen):
+        print(f"STALE: {key[0]} at {key[1]:#x} is listed in {expect} but is not a call site in {path}", file=sys.stderr)
+        bad += 1
+    if header is not None:
+        text = header.read_text(encoding="utf-8")
+        marker = text.index("kOrgRequestLoginReturns")
+        body = text[text.index("{", marker) + 1:text.index("}", marker)]
+        in_header = sorted(int(v, 16) for v in re.findall(r"0x[0-9a-fA-F]+", body))
+        in_list = sorted(site + 4 for (name, site), klass in expected.items()
+                         if name == "ovr_User_GetOrgScopedID" and klass == "login")
+        if in_header != in_list:
+            print(f"DRIFT: kOrgRequestLoginReturns in {header} is {[hex(v) for v in in_header]} but the login "
+                  f"GetOrgScopedID call sites in {expect} (+4) are {[hex(v) for v in in_list]}", file=sys.stderr)
+            bad += 1
+    if bad:
+        return 1
+    login = sum(1 for k in expected.values() if k == "login")
+    print(f"pinned_ovr_import_walk: {len(found)} request call sites ({login} login, {len(found) - login} forwarded), "
+          f"all classified")
+    return 0
+
+
+# Functions of the library that make the login's requests (exported C++ names are Itanium-mangled).
+LOGIN_FUNCTION_PREFIXES = (
+    "_ZN10NRadEngine10CNSOVRUser13LogInInternal",
+    "_ZN10NRadEngine10CNSOVRUser14UpdateInternal",
+    "_ZN10NRadEngine10CNSOVRUser14GotUserProofCB",
+    "_ZN10NRadEngine10SCallbacks",
+    "RadPluginMain",
+)
+
+
 def reachable_ovr_imports(path: Path) -> dict:
     elf = Elf(path.read_bytes())
     roots = dict(ROOTS)
@@ -162,7 +266,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("library", type=Path)
     parser.add_argument("--expect", type=Path, help="file of `import  # how the sentinel treats it` lines")
+    parser.add_argument("--sites", type=Path, help="file of `import site login|social` lines: check the call sites")
+    parser.add_argument("--header", type=Path, help="login_prerequisite_targets.h (with --sites)")
     args = parser.parse_args()
+    if args.sites is not None:
+        return check_sites(args.library, args.sites, args.header)
     found = reachable_ovr_imports(args.library)
     if args.expect is None:
         for name in sorted(found):

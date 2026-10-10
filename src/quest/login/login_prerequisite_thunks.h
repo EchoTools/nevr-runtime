@@ -47,9 +47,13 @@ using UserProofGetNonceThunk = sentinel::CallbackThunk<UserProofGetNonceTag, con
 // Requests: ovr_User_GetOrgScopedID takes the user id in x0 (0x2069b4-0x2069bc, 0x1ec990-0x1ec99c); the other
 // three take nothing. All four return the 64-bit request id the game keys the callback by (0x1ec9b0,
 // 0x1eca90, 0x1ecce0, 0x1ece20).
+// ovr_User_GetOrgScopedID is also called by CNSOVRSocial for friends and room members, so its handler
+// receives the caller's return address (kCaller) and answers locally only for the login's own call sites
+// (login_prerequisite_targets.h, kOrgRequestLoginReturns). The other three have no Social caller.
 template <Prerequisite P>
 struct RequestTag {};
-using OrgRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::OrgScopedId>, std::uint64_t(std::uint64_t)>;
+using OrgRequestThunk =
+    sentinel::CallbackThunk<RequestTag<Prerequisite::OrgScopedId>, std::uint64_t(std::uint64_t), true>;
 using UserRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::LoggedInUser>, std::uint64_t()>;
 using TokenRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::AccessToken>, std::uint64_t()>;
 using ProofRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::UserProof>, std::uint64_t()>;
@@ -65,6 +69,12 @@ using PopMessageThunk = sentinel::CallbackThunk<PopMessageTag, const void*()>;
 using MessageGetTypeThunk = sentinel::CallbackThunk<MessageGetTypeTag, int(const void*)>;
 using MessageGetRequestIdThunk = sentinel::CallbackThunk<MessageGetRequestIdTag, std::uint64_t(const void*)>;
 using FreeMessageThunk = sentinel::CallbackThunk<FreeMessageTag, void(void*)>;
+
+// The org-id request's handler: answers locally for the login's own call sites (while local answers are on) and
+// forwards every other caller to `original`. Never logs. SetPnsovrBase gives it libpnsovr's load bias
+// (the install does this; tests set a fabricated one).
+std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* caller, std::uint64_t user) noexcept;
+void SetPnsovrBase(std::uintptr_t base) noexcept;
 
 // The entitlement request (#411): takes nothing, returns the request id (0x206824, 0x206ae4 discard it).
 struct EntitlementRequestTag {};

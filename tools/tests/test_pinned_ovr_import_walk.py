@@ -32,15 +32,20 @@ def stub(index: int) -> list:
             0xF9400211 | (((index * 8) >> 3) << 10), 0x91000210, 0xD61F0220]
 
 
-def build(names: list, text_words: list) -> bytes:
-    """A minimal ELF64: .plt (PLT0 + one stub per name), .text, .rela.plt, .dynsym, .dynstr, .shstrtab."""
-    dynstr = b"\0" + b"".join(n.encode() + b"\0" for n in names)
+def build(names: list, text_words: list, functions: tuple = ()) -> bytes:
+    """A minimal ELF64: .plt (PLT0 + one stub per name), .text, .rela.plt, .dynsym, .dynstr, .shstrtab.
+
+    `functions` are (name, address, size) exported symbols after the imports, for the call-site check."""
+    all_names = list(names) + [f[0] for f in functions]
+    dynstr = b"\0" + b"".join(n.encode() + b"\0" for n in all_names)
     str_offsets = []
     pos = 1
-    for n in names:
+    for n in all_names:
         str_offsets.append(pos)
         pos += len(n) + 1
-    dynsym = b"\0" * 24 + b"".join(struct.pack("<IBBHQQ", o, 0x12, 0, 0, 0, 0) for o in str_offsets)
+    dynsym = b"\0" * 24 + b"".join(struct.pack("<IBBHQQ", o, 0x12, 0, 0, 0, 0) for o in str_offsets[:len(names)])
+    dynsym += b"".join(struct.pack("<IBBHQQ", o, 0x12, 0, 1, f[1], f[2])
+                       for o, f in zip(str_offsets[len(names):], functions))
     rela = b"".join(struct.pack("<QQq", GOT + i * 8, (i + 1) << 32 | 1026, 0) for i in range(len(names)))
     plt = b"\0" * 32 + b"".join(struct.pack("<4I", *stub(i)) for i in range(len(names)))
     text = struct.pack(f"<{len(text_words)}I", *text_words)
@@ -67,12 +72,28 @@ def build(names: list, text_words: list) -> bytes:
 
 
 class WalkTest(unittest.TestCase):
-    def write(self, names, words) -> Path:
+    def write(self, names, words, functions=()) -> Path:
         directory = Path(tempfile.mkdtemp(prefix="pinned-walk-"))
         self.addCleanup(lambda: [p.unlink() for p in directory.iterdir()] or directory.rmdir())
         path = directory / "lib.so"
-        path.write_bytes(build(names, words))
+        path.write_bytes(build(names, words, functions))
         return path
+
+    def sites_fixture(self, listed: str, header_values: str = "0x2004, 0x200c"):
+        """A library with a login function and a Social function calling ovr_User_GetOrgScopedID, and the files."""
+        # login (0x2000): bl GetOrgScopedID @0x2000; ret @0x2004... the return address is site + 4.
+        # social (0x2010): bl GetOrgScopedID @0x2010.
+        login, social = TEXT, TEXT + 0x10
+        words = [bl(login, self.stub_address(0)), RET, RET, RET, bl(social, self.stub_address(0)), RET]
+        path = self.write(["ovr_User_GetOrgScopedID"], words,
+                          (("_ZN10NRadEngine10CNSOVRUser13LogInInternalERKNS_5CJsonE", login, 8),
+                           ("_ZN10NRadEngine12CNSOVRSocial8JoinedCBEP10ovrMessage", social, 8)))
+        sites = path.parent / "sites.txt"
+        sites.write_text(listed, encoding="utf-8")
+        header = path.parent / "targets.h"
+        header.write_text("inline constexpr std::uint64_t kOrgRequestLoginReturns[] = {%s};\n" % header_values,
+                          encoding="utf-8")
+        return path, sites, header
 
     def stub_address(self, index: int) -> int:
         return PLT + 32 + index * 16
@@ -126,6 +147,61 @@ class WalkTest(unittest.TestCase):
         # The CLI uses the real roots, which point outside this tiny text section: nothing is reached.
         result = subprocess.run([sys.executable, str(TOOL), str(path)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def run_sites(self, path, sites, header):
+        return subprocess.run([sys.executable, "-I", str(TOOL), str(path), "--sites", str(sites), "--header", str(header)],
+                              capture_output=True, text=True)
+
+    def test_sites_accepts_a_fully_classified_library_and_a_matching_header(self):
+        path, sites, header = self.sites_fixture(
+            "ovr_User_GetOrgScopedID 0x2000 login\novr_User_GetOrgScopedID 0x2010 social\n", "0x2004")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2 request call sites (1 login, 1 forwarded)", result.stdout)
+
+    def test_sites_flags_a_new_caller_nobody_classified(self):
+        path, sites, header = self.sites_fixture("ovr_User_GetOrgScopedID 0x2000 login\n", "0x2004")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("UNCLASSIFIED: ovr_User_GetOrgScopedID is called at 0x2010 in "
+                      "_ZN10NRadEngine12CNSOVRSocial8JoinedCB", result.stderr)
+
+    def test_sites_flags_a_social_caller_listed_as_login(self):
+        path, sites, header = self.sites_fixture(
+            "ovr_User_GetOrgScopedID 0x2000 login\novr_User_GetOrgScopedID 0x2010 login\n", "0x2004, 0x2014")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("MISCLASSIFIED: ovr_User_GetOrgScopedID at 0x2010", result.stderr)
+
+    def test_sites_flags_a_stale_entry(self):
+        path, sites, header = self.sites_fixture(
+            "ovr_User_GetOrgScopedID 0x2000 login\novr_User_GetOrgScopedID 0x2010 social\n"
+            "ovr_User_GetOrgScopedID 0x2020 social\n", "0x2004")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("STALE: ovr_User_GetOrgScopedID at 0x2020", result.stderr)
+
+    def test_sites_flags_a_header_that_drifted_from_the_login_sites(self):
+        path, sites, header = self.sites_fixture(
+            "ovr_User_GetOrgScopedID 0x2000 login\novr_User_GetOrgScopedID 0x2010 social\n", "0x2004, 0x2014")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("DRIFT: kOrgRequestLoginReturns", result.stderr)
+
+    def test_the_committed_sites_file_matches_the_committed_header(self):
+        listed = []
+        for line in (REPO / "tools" / "pinned_ovr_sites.txt").read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                name, site, klass = line.split()
+                self.assertIn(klass, ("login", "social"))
+                if name == "ovr_User_GetOrgScopedID" and klass == "login":
+                    listed.append(int(site, 16) + 4)
+        header = (REPO / "src" / "quest" / "login" / "login_prerequisite_targets.h").read_text(encoding="utf-8")
+        marker = header.index("kOrgRequestLoginReturns")
+        body = header[header.index("{", marker) + 1:header.index("}", marker)]
+        import re
+        self.assertEqual(sorted(listed), sorted(int(v, 16) for v in re.findall(r"0x[0-9a-fA-F]+", body)))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/login/login_prerequisite_targets.h"
 #include "quest/login/login_prerequisites.h"
 #include "quest/login/login_standin.h"
 #include "quest/sentinel/hook_log.h"
@@ -651,14 +652,38 @@ void TestLocalRequestsGetIdsTheSdkNeverProduces() {
   const std::uint64_t b = local::Request(Prerequisite::LoggedInUser);
   QCHECK(a >= local::kRequestIdBase && b > a);
   QCHECK(local::Requested() == 2);
-  // The table is bounded: past kSlots outstanding requests the answer is 0 and it is counted.
-  for (std::size_t i = 2; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) != 0);
-  QCHECK(local::Request(Prerequisite::UserProof) == 0);
+  // The table is bounded, and a full table never sends the request to Meta: the id is still a local one, nothing
+  // is queued behind it, and it is counted.
+  for (std::size_t i = 2; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) >= local::kRequestIdBase);
+  QCHECK(local::Dropped() == 0);
+  const std::uint64_t overflow = local::Request(Prerequisite::UserProof);
+  QCHECK(overflow > b && overflow >= local::kRequestIdBase);
   QCHECK(local::Dropped() == 1);
+  QCHECK(local::Requested() == local::kSlots);  // the overflow id was not queued
   QCHECK(!local::IsSynthetic(nullptr));
   QCHECK(!local::IsSynthetic(&g_real_message));
   local::ResetForTest();
   QCHECK(!local::Enabled() && local::Requested() == 0);
+}
+
+void TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally() {
+  namespace T = nevr_quest_login::PrerequisiteTargets;
+  const std::uintptr_t base = 0x7000000000;
+  const auto at = [&](std::uint64_t returnVa) { return reinterpret_cast<const void*>(base + returnVa); };
+  // The login's three call sites (return address = the instruction after the bl).
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x1ec9a0), base));  // LogInInternal
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x1ecf84), base));  // GotLoggedInUserOrgIdCb re-request
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x2069c0), base));  // RadPluginMain
+  // CNSOVRSocial's nine: SUserList::Add, JoinedCB, SyncRoom x2, GotRemoteOrgIdCB, AddInvitableUser,
+  // GotInvitableUserOrgIdCB, GotFriendOrgIdCB, GotRecentlyMetUserOrgIdCB.
+  const std::uint64_t social[] = {0x1f22f4, 0x1f4974, 0x1f8770, 0x1f8b98, 0x1f9030, 0x1f9990, 0x1fa0fc, 0x1fcb90, 0x1fd2a0};
+  for (const std::uint64_t va : social) QCHECK(!T::IsLoginOrgRequestCaller(at(va), base));
+  // The call instruction itself, the neighbours, an address below the image, no caller, no base.
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec99c), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec9a4), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(reinterpret_cast<const void*>(base - 0x10), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(nullptr, base));
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec9a0), 0));
 }
 
 void TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder() {
@@ -694,6 +719,20 @@ void TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder() {
   // The freed slot is reusable.
   local::OnFreeMessage(&FakeFree, const_cast<void*>(two));
   for (std::size_t i = 0; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) != 0);
+  // A request refused for lack of a slot is never delivered: kSlots queued answers pop, the next pop is the real one.
+  const std::uint64_t refused = local::Request(Prerequisite::OrgScopedId);
+  QCHECK(refused >= local::kRequestIdBase && local::Dropped() == 1);
+  std::size_t popped = 0;
+  for (std::size_t i = 0; i < local::kSlots + 2; ++i) {
+    g_pop_original_called = false;
+    const void* m = local::OnPopMessage(&FakePop);
+    if (local::IsSynthetic(m)) {
+      ++popped;
+      QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, m) != refused);
+      local::OnFreeMessage(&FakeFree, const_cast<void*>(m));
+    }
+  }
+  QCHECK(popped == local::kSlots);
 }
 
 void TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk() {
@@ -749,6 +788,7 @@ void TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady() {
 int main() {
   sentinel::SetLogSink(&Capture);
   TestLocalRequestsGetIdsTheSdkNeverProduces();
+  TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally();
   TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder();
   TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk();
   TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady();

@@ -33,7 +33,8 @@ bool RegisterLoginHookCounters() noexcept {
   ok = sentinel::RegisterReportCounter("prereq_token_request_calls", &TokenRequestThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_proof_request_calls", &ProofRequestThunk::CallCounter()) && ok;
   // Local answers (#411): the pump's pops (hot: once per game-loop iteration), synthetic deliveries, and
-  // requests refused because the table was full (a fault: the game would wait for an answer).
+  // requests given a local id with nothing queued because the table was full (a fault: that callback never runs;
+  // the request still does not reach Meta).
   ok = sentinel::RegisterReportCounter("prereq_pop_message_calls", &PopMessageThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_local_delivered", &local::DeliveredCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_local_dropped", &local::DroppedCounter(),

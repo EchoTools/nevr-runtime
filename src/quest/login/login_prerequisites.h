@@ -190,7 +190,10 @@ void SetPrerequisiteClockForTest(MonotonicMsFn clock) noexcept;  // nullptr: the
 // waits for the sign-in code and a login that sign-in would complete is never failed.
 namespace local {
 
-inline constexpr std::size_t kSlots = 8;
+// The login asks for at most seven answers per LogIn call (RadPluginMain three, LogInInternal four) and the game
+// may call LogIn again while the sign-in wait holds them, so the table is generous; a full table still never
+// reaches Meta (Request).
+inline constexpr std::size_t kSlots = 32;
 // Request ids no SDK produces ("NEVR" in the high word); the game keys its delegate by them.
 inline constexpr std::uint64_t kRequestIdBase = 0x4E45565200000000ULL;
 // A message type no listener of the mailbox handles and that is not the entitlement answer's.
@@ -198,7 +201,9 @@ inline constexpr int kMessageType = 0x4E4C4F43;
 
 // Whether `message` is one of this module's handles (by address).
 bool IsSynthetic(const void* message) noexcept;
-// Queues an answer for `which`; returns its request id, or 0 when the table is full (counted).
+// Queues an answer for `which` and returns its request id, always a local one. When the table is full the id
+// is still local but nothing is queued behind it (counted as dropped): the game's callback for it never runs,
+// which is the sign-in wait it is already in, and the request does not go to Meta.
 std::uint64_t Request(Prerequisite which) noexcept;
 // Local answers are used only when everything they need is installed (SetEnabled); until then the
 // request hooks pass through to the SDK as before.
@@ -213,7 +218,7 @@ void OnFreeMessage(void (*original)(void*), void* message) noexcept;
 
 std::uint64_t Requested() noexcept;   // local request ids handed out
 std::uint64_t Delivered() noexcept;   // synthetic messages popped
-std::uint64_t Dropped() noexcept;     // requests refused because the table was full
+std::uint64_t Dropped() noexcept;     // requests given an id with nothing queued because the table was full
 // The same two as registered reporter counters.
 const std::atomic<std::uint64_t>& DeliveredCounter() noexcept;
 const std::atomic<std::uint64_t>& DroppedCounter() noexcept;

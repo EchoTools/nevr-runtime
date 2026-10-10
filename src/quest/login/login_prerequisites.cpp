@@ -601,8 +601,10 @@ std::uint64_t Request(Prerequisite which) noexcept {
     g_local_requested.fetch_add(1, std::memory_order_relaxed);
     return id;
   }
+  // Full: hand out a local id anyway. Forwarding to the SDK would send a request to Meta that this mode exists to
+  // prevent; the answer for this id is never delivered (counted, reported as a fault).
   g_local_dropped.fetch_add(1, std::memory_order_relaxed);
-  return 0;
+  return kRequestIdBase | (g_next_id.fetch_add(1, std::memory_order_relaxed) + 1);
 }
 
 const void* OnPopMessage(const void* (*original)()) noexcept {

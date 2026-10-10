@@ -41,25 +41,15 @@ NEVR_HOOK_RECORD(kGetUserProofHook, GetUserProofThunk, &OnMessageGetUserProof);
 NEVR_HOOK_RECORD(kUserProofGetNonceHook, UserProofGetNonceThunk, &OnUserProofGetNonce);
 
 // ---- requests --------------------------------------------------------------------------------
-std::uint64_t HandleOrgRequest(OrgRequestThunk::Fn original, std::uint64_t user) noexcept {
-  if (local::Enabled()) {
-    const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
-    if (id != 0) {
-      NoteRequest(Prerequisite::OrgScopedId, id);
-      return id;
-    }
-  }
-  const std::uint64_t request = original(user);
-  NoteRequest(Prerequisite::OrgScopedId, request);
-  return request;
-}
+// libpnsovr's load bias, written before any hook is installed (InstallLoginPrerequisites, SetPnsovrBase): the
+// org-id handler classifies its caller by return address - base.
+std::atomic<std::uintptr_t> g_pnsovr_base{0};
+
 std::uint64_t HandleUserRequest(UserRequestThunk::Fn original) noexcept {
   if (local::Enabled()) {
     const std::uint64_t id = local::Request(Prerequisite::LoggedInUser);
-    if (id != 0) {
-      NoteRequest(Prerequisite::LoggedInUser, id);
-      return id;
-    }
+    NoteRequest(Prerequisite::LoggedInUser, id);
+    return id;
   }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::LoggedInUser, request);
@@ -68,10 +58,8 @@ std::uint64_t HandleUserRequest(UserRequestThunk::Fn original) noexcept {
 std::uint64_t HandleTokenRequest(TokenRequestThunk::Fn original) noexcept {
   if (local::Enabled()) {
     const std::uint64_t id = local::Request(Prerequisite::AccessToken);
-    if (id != 0) {
-      NoteRequest(Prerequisite::AccessToken, id);
-      return id;
-    }
+    NoteRequest(Prerequisite::AccessToken, id);
+    return id;
   }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::AccessToken, request);
@@ -80,10 +68,8 @@ std::uint64_t HandleTokenRequest(TokenRequestThunk::Fn original) noexcept {
 std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
   if (local::Enabled()) {
     const std::uint64_t id = local::Request(Prerequisite::UserProof);
-    if (id != 0) {
-      NoteRequest(Prerequisite::UserProof, id);
-      return id;
-    }
+    NoteRequest(Prerequisite::UserProof, id);
+    return id;
   }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::UserProof, request);
@@ -94,7 +80,7 @@ NEVR_HOOK_RECORD(kPopMessageHook, PopMessageThunk, &local::OnPopMessage);
 NEVR_HOOK_RECORD(kMessageGetTypeHook, MessageGetTypeThunk, &local::OnMessageGetType);
 NEVR_HOOK_RECORD(kMessageGetRequestIdHook, MessageGetRequestIdThunk, &local::OnMessageGetRequestId);
 NEVR_HOOK_RECORD(kFreeMessageHook, FreeMessageThunk, &local::OnFreeMessage);
-NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &HandleOrgRequest);
+NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &OnOrgScopedIdRequest);
 NEVR_HOOK_RECORD(kUserRequestHook, UserRequestThunk, &HandleUserRequest);
 NEVR_HOOK_RECORD(kTokenRequestHook, TokenRequestThunk, &HandleTokenRequest);
 NEVR_HOOK_RECORD(kProofRequestHook, ProofRequestThunk, &HandleProofRequest);
@@ -141,6 +127,22 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 
 }  // namespace
 
+// ovr_User_GetOrgScopedID has twelve call sites: three are the login's, nine are CNSOVRSocial's (friends, room
+// members, invitable users) and ask about other users. Only the login's are answered locally; every other caller,
+// and any caller this build does not know, goes to the SDK exactly as it did before local answers.
+std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* caller, std::uint64_t user) noexcept {
+  if (local::Enabled() &&
+      T::IsLoginOrgRequestCaller(caller, g_pnsovr_base.load(std::memory_order_relaxed))) {
+    const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
+    NoteRequest(Prerequisite::OrgScopedId, id);
+    return id;
+  }
+  const std::uint64_t request = original(user);
+  NoteRequest(Prerequisite::OrgScopedId, request);
+  return request;
+}
+void SetPnsovrBase(std::uintptr_t base) noexcept { g_pnsovr_base.store(base, std::memory_order_relaxed); }
+
 // RadPluginMain discards the id and nothing waits for an answer; the only reader is the message pump, which
 // has no message to read, so no entitlement request reaches Meta and no hard exit can follow from its answer.
 std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcept {
@@ -152,6 +154,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   const std::lock_guard<std::mutex> lock(InstallMutex());
   if (g_installed.load(std::memory_order_acquire)) return g_result_storage;
   const std::uintptr_t base = image.base;
+  SetPnsovrBase(base);
   Hooks& hooks = H();
   PrerequisiteInstall result;
 

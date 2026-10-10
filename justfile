@@ -822,6 +822,10 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
     # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
     python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
+    # #431: ovr_User_GetOrgScopedID has nine Social callers besides the login's three; only the login's are
+    # answered locally, and the list the sentinel gates on equals what the library has.
+    python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
+        --header src/quest/login/login_prerequisite_targets.h
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback

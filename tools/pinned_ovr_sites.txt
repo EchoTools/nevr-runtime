@@ -1,0 +1,29 @@
+# Every direct call to the four user-request imports in the pinned libpnsovr.so (build id ca47bb8d..., sha256 26e9a216...),
+# and who answers it. `login`: the call belongs to the login (it registers one of GotLoggedInUserCb, GotLoggedInUserOrgIdCb,
+# GotLoggedInUserAccessTokenCb, GotUserProofCB under the returned request id) and is answered locally by the sentinel.
+# `social`: CNSOVRSocial asking about another user with its own callback; forwarded to the SDK. Only
+# ovr_User_GetOrgScopedID has such callers, so only it is gated by call site (kOrgRequestLoginReturns, return address
+# = site + 4 in login_prerequisite_targets.h). Checked against the real library by `just test-quest-hooks-pinned`.
+#
+# import                      site       class
+ovr_User_GetLoggedInUser     0x1eca7c   login    # LogInInternal -> GotLoggedInUserCb (GOT 0x6e48a8)
+ovr_User_GetLoggedInUser     0x1ed088   login    # GotLoggedInUserCb re-request, same delegate
+ovr_User_GetLoggedInUser     0x206960   login    # RadPluginMain
+ovr_User_GetOrgScopedID      0x1ec99c   login    # LogInInternal -> GotLoggedInUserOrgIdCb (GOT 0x6e2f10)
+ovr_User_GetOrgScopedID      0x1ecf80   login    # GotLoggedInUserOrgIdCb re-request, same delegate
+ovr_User_GetOrgScopedID      0x2069bc   login    # RadPluginMain, user id = the logged-in user
+ovr_User_GetOrgScopedID      0x1f22f0   social   # CNSOVRSocial::SUserList::Add
+ovr_User_GetOrgScopedID      0x1f4970   social   # CNSOVRSocial::JoinedCB
+ovr_User_GetOrgScopedID      0x1f876c   social   # CNSOVRSocial::SyncRoom
+ovr_User_GetOrgScopedID      0x1f8b94   social   # CNSOVRSocial::SyncRoom
+ovr_User_GetOrgScopedID      0x1f902c   social   # CNSOVRSocial::GotRemoteOrgIdCB
+ovr_User_GetOrgScopedID      0x1f998c   social   # CNSOVRSocial::AddInvitableUser
+ovr_User_GetOrgScopedID      0x1fa0f8   social   # CNSOVRSocial::GotInvitableUserOrgIdCB
+ovr_User_GetOrgScopedID      0x1fcb8c   social   # CNSOVRSocial::GotFriendOrgIdCB
+ovr_User_GetOrgScopedID      0x1fd29c   social   # CNSOVRSocial::GotRecentlyMetUserOrgIdCB
+ovr_User_GetAccessToken      0x1ecccc   login    # LogInInternal -> GotLoggedInUserAccessTokenCb (GOT 0x6e43f0)
+ovr_User_GetAccessToken      0x1ed520   login    # GotLoggedInUserAccessTokenCb re-request, same delegate
+ovr_User_GetAccessToken      0x206a00   login    # RadPluginMain
+ovr_User_GetUserProof        0x1ece10   login    # LogInInternal (one branch) -> GotUserProofCB (GOT 0x6e4340)
+ovr_User_GetUserProof        0x1ed834   login    # GotUserProofCB re-request, same delegate
+ovr_User_GetUserProof        0x1edca0   login    # UpdateInternal (the other branch: flag [this+368] cleared first)
