@@ -19,6 +19,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
+#include <string>
 #include <vector>
 #include <algorithm>
 
@@ -35,6 +37,12 @@ struct Registration {
 };
 
 static std::vector<Registration> g_registrations;
+
+struct Filter {
+    char name[48];
+    LoadFilter predicate;
+};
+static std::vector<Filter> g_filters;
 
 #ifdef _WIN32
 
@@ -79,6 +87,35 @@ static void ExtractLowerFilenameW(const wchar_t* path, char* out, size_t out_siz
     out[i] = '\0';
 }
 
+/* Lowercased wide copy of an ANSI path (ASCII fold, like the other extractors here). */
+static std::wstring LowerWide(const char* path) {
+    std::wstring out;
+    for (const char* p = path; p && *p; ++p) {
+        char c = *p;
+        out.push_back(static_cast<wchar_t>((c >= 'A' && c <= 'Z') ? c + 32 : c));
+    }
+    return out;
+}
+
+static std::wstring LowerWide(const wchar_t* path) {
+    std::wstring out;
+    for (const wchar_t* p = path; p && *p; ++p) {
+        wchar_t c = *p;
+        out.push_back((c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c);
+    }
+    return out;
+}
+
+/* Returns true (and sets ERROR_MOD_NOT_FOUND) when a filter refuses this load. */
+static bool RefuseLoad(const std::wstring& lower) {
+    const char* by = nullptr;
+    if (!IsLoadBlocked(lower.c_str(), &by)) return false;
+    fprintf(stderr, "[NEVR.DLLHOOK] load refused by filter '%s': %ls\n", by ? by : "?", lower.c_str());
+    fflush(stderr);
+    SetLastError(ERROR_MOD_NOT_FOUND);
+    return true;
+}
+
 /* Fire registered callbacks for a loaded DLL (each fires at most once) */
 static void FireCallbacks(const char* lower_name, HMODULE module) {
     for (auto& reg : g_registrations) {
@@ -94,6 +131,7 @@ static void FireCallbacks(const char* lower_name, HMODULE module) {
 
 /* Hook implementations */
 static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
+    if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryA(lpFileName);
     if (result && lpFileName) {
         char lower[64];
@@ -104,6 +142,7 @@ static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
 }
 
 static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
+    if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryW(lpFileName);
     if (result && lpFileName) {
         char lower[64];
@@ -114,6 +153,7 @@ static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
 }
 
 static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
+    if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryExA(lpFileName, hFile, dwFlags);
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
@@ -124,6 +164,7 @@ static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWOR
 }
 
 static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
+    if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryExW(lpFileName, hFile, dwFlags);
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
@@ -134,6 +175,34 @@ static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWO
 }
 
 #endif // _WIN32
+
+void AddLoadFilter(const char* name, LoadFilter filter) {
+    if (!filter) return;
+    Filter f{};
+    snprintf(f.name, sizeof(f.name), "%s", name ? name : "?");
+    f.predicate = filter;
+    g_filters.push_back(f);
+}
+
+bool IsOculusPlatformPath(const wchar_t* lower_path) {
+    if (!lower_path) return false;
+    const wchar_t* leaf = lower_path;
+    for (const wchar_t* p = lower_path; *p; ++p) {
+        if (*p == L'\\' || *p == L'/') leaf = p + 1;
+    }
+    return std::wcsstr(leaf, L"ovrplatform") != nullptr;
+}
+
+bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
+    if (!lower_path) return false;
+    for (const auto& f : g_filters) {
+        if (f.predicate(lower_path)) {
+            if (blocked_by) *blocked_by = f.name;
+            return true;
+        }
+    }
+    return false;
+}
 
 void Install() {
 #ifdef _WIN32
@@ -183,6 +252,7 @@ void Shutdown() {
     if (g_origLoadLibraryExW) MH_DisableHook((void*)&LoadLibraryExW);
 #endif
     g_registrations.clear();
+    g_filters.clear();
 }
 
 void OnLoad(const char* dll_name, PatchCallback callback) {

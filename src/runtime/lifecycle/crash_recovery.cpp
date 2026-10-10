@@ -6,6 +6,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/console_ctrl_policy.h"
+#include "runtime/lifecycle/veh_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
@@ -1001,16 +1002,17 @@ void InstallCrashFilterInstrumentation() {
   }
 }
 
-void InstallVEH() {
+bool InstallVEH() {
   // Wine's own first-chance stack-overflow handling is active during client
   // startup. A first-priority foreign VEH changes that handler ordering even
   // when it returns CONTINUE_SEARCH, so keep this server-only recovery hook
   // out of Wine client processes.
   HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-  if (!g_isServer && ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr) {
+  const bool isWineClient = ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+  if (!VehPolicy::ShouldInstall(g_isServer, isWineClient)) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CRASH] VEH disabled for Wine client; native exception handling retained");
-    return;
+    return false;
   }
 
   // N70: snapshot the module table now, while the loader lock is safe to take.
@@ -1028,6 +1030,7 @@ void InstallVEH() {
       "[NEVR.PATCH] veh installed handler=BreakpointVEH priority=1 modules_cached=%ld "
       "stack_reserve_bytes=%lu",
       g_moduleCacheCount, static_cast<unsigned long>(kCrashHandlerStackReserve));
+  return true;
 }
 
 // POSIX signal handler — initiates shutdown DIRECTLY.

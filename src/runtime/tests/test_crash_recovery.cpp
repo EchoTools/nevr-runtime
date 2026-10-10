@@ -8,6 +8,7 @@
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
+#include "runtime/lifecycle/veh_policy.h"
 
 TEST(CrashRecoveryN71Sites, TableIsCompleteAndWellFormed) {
   EXPECT_EQ(CrashRecovery::kKnownNullDerefSites.size(), 30U);
@@ -112,4 +113,23 @@ TEST(ConsoleCtrlPolicy, NoDeferReasonNamesTheMissingPrecondition) {
   EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(true, false),
                "GameServerLib never started, so the game teardown cannot reach Terminate");
   EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(false, true), "no game console handler behind ours");
+}
+
+// #339: the boot line states what InstallVEH did, per platform. The Wine client skips the handler
+// and must not log "veh installed".
+TEST(VehPolicy, InstallsOnServersAndNativeClientsOnly) {
+  EXPECT_TRUE(VehPolicy::ShouldInstall(/*isServer=*/true, /*isWineClient=*/false));
+  EXPECT_TRUE(VehPolicy::ShouldInstall(/*isServer=*/true, /*isWineClient=*/true));
+  EXPECT_TRUE(VehPolicy::ShouldInstall(/*isServer=*/false, /*isWineClient=*/false));
+  EXPECT_FALSE(VehPolicy::ShouldInstall(/*isServer=*/false, /*isWineClient=*/true));
+}
+
+TEST(VehPolicy, BootLineSaysInstalledOnlyWhenInstalled) {
+  EXPECT_STREQ(VehPolicy::BootLine(true), "[NEVR.CRASH] veh installed\n");
+  EXPECT_STREQ(VehPolicy::BootLine(false), "[NEVR.CRASH] veh skipped reason=wine_client\n");
+}
+
+TEST(VehPolicy, WineClientBootLineNeverClaimsInstalled) {
+  const bool installed = VehPolicy::ShouldInstall(/*isServer=*/false, /*isWineClient=*/true);
+  EXPECT_EQ(std::string(VehPolicy::BootLine(installed)).find("veh installed"), std::string::npos);
 }

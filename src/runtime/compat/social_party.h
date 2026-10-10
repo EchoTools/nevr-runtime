@@ -631,13 +631,57 @@ class State {
     return out;
   }
 
-  /// The friends tab was opened: ask the server for a fresh friend list (it answers with a
-  /// FriendListResponse and one FriendStatusNotify per friend, which refill the roster).
+  /// Ask the server for a fresh friend list (it answers with a FriendListResponse and one
+  /// FriendStatusNotify per friend, which refill the roster). Unconditional: the server-driven
+  /// re-request after a friend change uses it.
   std::vector<Message> RefreshFriends() {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
     out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
     return out;
+  }
+
+  /// Seconds between two friends-tab refreshes that are sent (the server answers in well under a
+  /// second; a tab opened again inside the window shows the list that answer filled).
+  static constexpr std::uint64_t kFriendRefreshMinSeconds = 5;
+
+  /// Slot 45 RefreshFriends, called by the game each time the friends tab opens: a friend added
+  /// elsewhere (the web site) appears without a restart. At most one request per
+  /// kFriendRefreshMinSeconds; a call inside the window sends nothing. `nowSeconds` is a monotonic
+  /// clock the caller owns.
+  std::vector<Message> RefreshFriendsOnTabOpen(std::uint64_t nowSeconds) {
+    NoteFriendsViewed(nowSeconds);
+    std::lock_guard<std::mutex> guard(mutex_);
+    return RefreshFriendsLimitedLocked(nowSeconds);
+  }
+
+  /// Seconds between the refreshes sent while the friends tab stays open (#57: a friend added on the web
+  /// site appears without reopening the tab), and how long without a friend-list read the tab counts as
+  /// closed. The poll goes through the same limiter as a tab open, so it is never faster than
+  /// kFriendRefreshMinSeconds.
+  static constexpr std::uint64_t kFriendPollSeconds = 30;
+  static constexpr std::uint64_t kFriendTabIdleSeconds = 10;
+
+  /// The game read the friend list (count, id, name or status) or asked to refresh it: the friends tab is
+  /// open. Lock-free: it runs on every read the tab makes.
+  void NoteFriendsViewed(std::uint64_t nowSeconds) {
+    friendViewedAt_.store(nowSeconds + 1, std::memory_order_relaxed);  // 0 means never
+  }
+
+  /// Called once per facade Update. While the tab is open (a friend-list read within
+  /// kFriendTabIdleSeconds) and the last refresh is kFriendPollSeconds old, returns the refresh request;
+  /// otherwise nothing. A tab that is closed (no read for kFriendTabIdleSeconds) sends nothing.
+  std::vector<Message> PollFriendsWhileOpen(std::uint64_t nowSeconds) {
+    const std::uint64_t seen = friendViewedAt_.load(std::memory_order_relaxed);
+    if (seen == 0) return {};
+    const std::uint64_t viewedAt = seen - 1;
+    if (nowSeconds < viewedAt || nowSeconds - viewedAt > kFriendTabIdleSeconds) return {};
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!friendRefreshSent_ || nowSeconds < lastFriendRefresh_ ||
+        nowSeconds - lastFriendRefresh_ < kFriendPollSeconds) {
+      return {};
+    }
+    return RefreshFriendsLimitedLocked(nowSeconds);
   }
 
   /// Slot 57 RefreshRecentlyMetUsers: ask the server for the recently-met list.
@@ -989,8 +1033,24 @@ class State {
   std::uint64_t joinInviteParty_ = 0;  // a join that came from an invite, and who sent it
   std::uint64_t joinInviter_ = 0;
   bool locked_ = false;
+  /// mutex_ held. At most one request per kFriendRefreshMinSeconds.
+  std::vector<Message> RefreshFriendsLimitedLocked(std::uint64_t nowSeconds) {
+    std::vector<Message> out;
+    if (friendRefreshSent_ && nowSeconds >= lastFriendRefresh_ &&
+        nowSeconds - lastFriendRefresh_ < kFriendRefreshMinSeconds) {
+      return out;
+    }
+    friendRefreshSent_ = true;
+    lastFriendRefresh_ = nowSeconds;
+    out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
+    return out;
+  }
+
   std::uint32_t joinPolicy_ = kJoinPolicyEveryone;  // slot 16, kept across parties as pnsovr kept +0x2B4
   std::int8_t lockRequested_ = -1;  // the lock state last asked of the server, -1 none
+  std::atomic<std::uint64_t> friendViewedAt_{0};  // the last friend-list read, as seconds + 1; 0 never
+  bool friendRefreshSent_ = false;           // a friends refresh went out
+  std::uint64_t lastFriendRefresh_ = 0;      // when, in the caller's monotonic seconds
   std::vector<Member> members_;
   std::vector<Invite> invites_;
   std::vector<Invite> joinStash_;  // the invites the join in flight consumed (restored if it is abandoned)
