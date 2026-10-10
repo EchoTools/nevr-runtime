@@ -1,6 +1,6 @@
-#include "device_poll_response.h"
+#include "core/device_poll_response.h"
 
-#include "core/auth_token.h"
+#include "core/auth_token_model.h"
 
 #include <nlohmann/json.hpp>
 

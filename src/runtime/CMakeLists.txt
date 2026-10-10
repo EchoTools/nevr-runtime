@@ -32,6 +32,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
+    "compat/evr_codec.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -112,6 +113,7 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -184,7 +186,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
@@ -586,6 +588,19 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
+    # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
+    # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
+    add_executable(test_evr_codec
+      tests/test_evr_codec.cpp
+      compat/evr_codec.cpp
+      compat/login_profile.cpp)
+    set_source_files_properties(tests/test_evr_codec.cpp compat/evr_codec.cpp compat/login_profile.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_evr_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_evr_codec PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_social_facade
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
@@ -677,6 +692,7 @@ if(BUILD_TESTING)
       log/boot_log_tee.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
+      compat/evr_codec.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -705,6 +721,7 @@ if(BUILD_TESTING)
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
+      compat/evr_codec.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
