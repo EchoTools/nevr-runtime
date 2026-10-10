@@ -10,9 +10,11 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
   try {
     const nlohmann::json json = nlohmann::json::parse(response);
     DevicePollResponse result;
+    result.answered = true;
     if (json.contains("error")) return result;
 
     const std::string status = json.value("status", "");
+    result.server_status = status;
     if (status == "expired") {
       result.status = DevicePollStatus::Expired;
       return result;
@@ -43,6 +45,32 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
   } catch (const nlohmann::json::exception&) {
     return DevicePollResponse{};
   }
+}
+
+bool IsKnownPollStatus(std::string_view status) {
+  return status == "authorization_pending" || status == "pending" || status == "expired" || status == "verified";
+}
+
+std::string PollBodyPrefix(std::string_view body, std::string_view code, std::size_t max_chars) {
+  // A body that holds tokens is never echoed; neither is one that merely contains a token-shaped field.
+  for (const char* secret : {"access_token", "refresh_token", "\"token\""}) {
+    if (body.find(secret) != std::string_view::npos) {
+      return "<" + std::to_string(body.size()) + " bytes, token fields not logged>";
+    }
+  }
+  std::string out;
+  out.reserve(max_chars);
+  for (std::size_t i = 0; i < body.size() && out.size() < max_chars;) {
+    if (!code.empty() && body.compare(i, code.size(), code) == 0) {
+      out += "<code>";
+      i += code.size();
+      continue;
+    }
+    const unsigned char c = static_cast<unsigned char>(body[i]);
+    out += (c < 0x20 || c == 0x7f) ? '.' : static_cast<char>(c);
+    ++i;
+  }
+  return out;
 }
 
 uint64_t ResolveAccessTokenExpiry(uint64_t now, const std::string& access_token,

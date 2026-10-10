@@ -51,6 +51,18 @@ bool IsServiceHostKey(const char* key) noexcept {
   return IsFormattedKey(key, "matchmaker_", "_host") || IsFormattedKey(key, "matchingservice_", "_host");
 }
 
+bool IsApiBaseUrl(const char* url) noexcept {
+  // "https://api." and "https://api-", the two real hosts: a bare "https://api" prefix would also take
+  // "https://apiary.example" (#413 tightened the PC hook the same way).
+  return url != nullptr && (std::strncmp(url, "https://api.", 12) == 0 || std::strncmp(url, "https://api-", 12) == 0);
+}
+
+bool IsGraphBaseUrl(const char* url) noexcept {
+  constexpr char kGraph[] = "https://graph.oculus.com";
+  constexpr std::size_t kLength = sizeof(kGraph) - 1;
+  return url != nullptr && std::strncmp(url, kGraph, kLength) == 0 && (url[kLength] == '\0' || url[kLength] == '/');
+}
+
 ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, InternFn intern,
                                      BridgeProbe bridge)
     : config_(config),
@@ -59,7 +71,7 @@ ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, I
       active_(intern != nullptr && config.effective.redirect) {}
 
 const char* ServiceRedirector::Resolve(const char* result, std::size_t length, BridgeState bridge,
-                                       Outcome* outcome) {
+                                       Outcome* outcome, bool graphRule) {
   Entry* slot = nullptr;
   for (Entry& e : cache_) {
     if (!e.used) {
@@ -67,7 +79,8 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
       continue;
     }
     const bool sameBridge = e.bridgeReady == bridge.ready && e.bridgePort == bridge.port;
-    if (sameBridge && e.length == length && std::memcmp(e.original.data(), result, length) == 0) {
+    if (sameBridge && e.graphRule == graphRule && e.length == length &&
+        std::memcmp(e.original.data(), result, length) == 0) {
       if (e.redirected == nullptr) {
         *outcome = Outcome::kPassThrough;
         return result;
@@ -80,8 +93,15 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
   }
 
   GlobalCounters().policyRuns.fetch_add(1, std::memory_order_relaxed);
-  const std::optional<std::string> replacement = nevr_quest::ResolveQuestRedirect(
-      config_, std::string(result, length), bridge.ready, bridge.port);
+  // The matchmaker queue's graph host is not a readyatdawn.com value the shared policy knows: it goes to
+  // nevr_http_uri when the redirect is effective and one is configured (only reachable through ApplyUrl).
+  std::optional<std::string> replacement;
+  if (graphRule && IsGraphBaseUrl(result) && config_.effective.redirect &&
+      config_.httpUri.source != nevr_quest::Source::kAbsent && !config_.httpUri.text.empty()) {
+    replacement = config_.httpUri.text;
+  } else {
+    replacement = nevr_quest::ResolveQuestRedirect(config_, std::string(result, length), bridge.ready, bridge.port);
+  }
 
   const char* published = nullptr;  // null: leave the original
   if (replacement && *replacement != std::string_view(result, length)) {
@@ -98,6 +118,7 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
     slot->used = true;
     slot->bridgeReady = bridge.ready;
     slot->bridgePort = bridge.port;
+    slot->graphRule = graphRule;
     slot->length = length;
     std::memcpy(slot->original.data(), result, length);
     slot->redirected = published;
@@ -113,6 +134,15 @@ const char* ServiceRedirector::Resolve(const char* result, std::size_t length, B
 
 const char* ServiceRedirector::Apply(const char* key, const char* result) noexcept {
   if (!active_ || key == nullptr || result == nullptr || !IsServiceHostKey(key)) return result;
+  return ApplyChecked(result);
+}
+
+const char* ServiceRedirector::ApplyUrl(const char* url) noexcept {
+  if (!active_ || (!IsApiBaseUrl(url) && !IsGraphBaseUrl(url))) return url;
+  return ApplyChecked(url, /*graphRule=*/true);
+}
+
+const char* ServiceRedirector::ApplyChecked(const char* result, bool graphRule) noexcept {
   RedirectCounters& counters = GlobalCounters();
   counters.reads.fetch_add(1, std::memory_order_relaxed);
 
@@ -128,7 +158,7 @@ const char* ServiceRedirector::Apply(const char* key, const char* result) noexce
     BridgeState bridge;
     if (bridge_ != nullptr) bridge = bridge_();
     const std::lock_guard<std::mutex> lock(mutex_);
-    chosen = Resolve(result, length, bridge, &outcome);
+    chosen = Resolve(result, length, bridge, &outcome, graphRule);
   } catch (const std::exception&) {
     counters.exceptions.fetch_add(1, std::memory_order_relaxed);
     return result;

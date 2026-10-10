@@ -32,6 +32,7 @@ inline constexpr const char* kMatchmakingBuildId = "8c4fddc079eae65909530132a56c
 
 inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
+inline constexpr const char* kCreateConnectionSymbol = "_ZN10NRadEngine8CSysHttp16CreateConnectionERmPKc";
 inline constexpr const char* kConfigRequestSendSymbol =
     "_ZN10NRadEngine18SNSConfigRequestv24SendERNS_15CTcpBroadcasterEPKcS4_";
 inline constexpr const char* kSetDelimitedErrorMessageSymbol =
@@ -60,6 +61,17 @@ struct LibR15TStringTag {};
 struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
+
+// NRadEngine::CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 at 0xf96c08 and
+// called through libr15's own PLT (JUMP_SLOT 0x36e8028): `handle` (x0, the `unsigned long&`) receives the
+// connection handle and `url` (x1) is the base URL, e.g. the literal "https://api.readyatdawn.com"
+// (0x2baa029) that CR15NetStoreTransactions::InitializeHttp (0x126c1bc) passes at 0x126c274, or the
+// "https://api-%s.readyatdawn.com" it builds at 0x126c25c (the other literal site is 0x128958c). The
+// connection is made synchronously from `url`; the return value (w0, 0 on success: InitializeHttp's
+// `cbnz w0` at 0x126c260/0x126c278) is passed through untouched. The URL is borrowed for the call.
+using CreateConnectionSig = int(unsigned long* handle, const char* url);
+struct LibR15CreateConnectionTag {};
+using LibR15CreateConnectionThunk = CallbackThunk<LibR15CreateConnectionTag, CreateConnectionSig>;
 
 // NRadEngine::NRadGame::CR15NetGame::SetDelimitedErrorMessage(char const*), defined in libr15 at
 // 0x125f768 (member: `this` in x0, the message in x1, no return value). It splits the message on
@@ -127,6 +139,46 @@ inline constexpr std::size_t kEnablePageNodeOffset = 0x20;
 inline constexpr std::uint64_t kErrorDisplayPage = 0x4b8a0630361f3ac5ULL;       // error_display_page
 inline constexpr std::uint64_t kFatalErrorDisplayPage = 0xe26415a8c369eb2eULL;  // fatal_error_display_page
 inline constexpr std::uint64_t kLoggingInPage = 0xee753e35461e0ef4ULL;          // logging_in_page
+
+// Page actor ids seen in ui_page_enter lines, with the name the level scripts give each and how sure that
+// name is. A page's id is a level actor id, not CSymbol64 of its name, so the names come from the pinned
+// build's data: each script component of the three levels that hold UIPage2 components (resource type
+// f31aed40bf478d4e; levels f927772b9e2aefb1 main menu, 05361c73bb73db19, e962a897e2cb8f07) binds script
+// variables to actors in its array at record +0x228 ({key, 0xffffffffffffffff, target actor id, 0}), and the
+// script library's script_set_variable lists, per slot, the CSymbol64 hash of each variable's name followed
+// by the key. Every binding that targets one of these ids is a row of tests/data/ui_page_names.tsv, and
+// login_prompt_hook_test derives this table from those rows.
+//
+// A script names a page relative to itself, so the name is how the scripts that reference the page call it,
+// not a name the page carries. name_basis says how the rows support the name: "all" (every named binding
+// agrees), "majority" (most agree; the others give a different name), "single" (one named binding). A name
+// that several ids would share carries "@" and the first four hex digits of its id. An id whose only name is
+// one a parent container's script gives it, while its own script binds other things (05ce113632359ce3, the
+// home page content; 68db70ece7c24901, the in-game menu; 9733f27f738d9595, the store, whose own
+// script binds store_page, purchase_page and customize_page), and an id no binding names (202763036b7f6f23, the
+// boot page; 0xffffffffffffffff, no actor) stay "unknown" with name_basis "none".
+struct PageName {
+  std::uint64_t id;
+  const char* name;
+  const char* basis;
+};
+inline constexpr PageName kPageNames[] = {
+    {0x1a92c34885065c11ULL, "empty_page", "all"},
+    {0x1f5bccac7f496eddULL, "loading_page", "all"},
+    {0x25cbdc13a0ccdf42ULL, "empty_select_page", "majority"},
+    {0x2fe7102931d1c4e0ULL, "begin_multiplayer_page", "all"},  // 4 of its 6 bindings are named
+    {kErrorDisplayPage, "error_display_page", "all"},
+    {0x80d0b99e73cf486aULL, "home_page@80d0", "majority"},
+    {0x8c94450216e31162ULL, "home_page@8c94", "majority"},
+    {0x9143e219cb923869ULL, "store_empty_intermediate_page", "single"},
+    {0xb245345073f0d3b3ULL, "connecting_page", "all"},
+    {0xc615ef51fe8c7e5bULL, "initial_popups_page", "majority"},
+    {0xd436ecc9f7f9164dULL, "page_quit_confirm", "majority"},
+    {0xdadda9a8c9c49f8dULL, "group_popups_page", "all"},
+    {kFatalErrorDisplayPage, "fatal_error_display_page", "single"},
+    {kLoggingInPage, "logging_in_page", "all"},
+    {0xfbc6a43d068f418dULL, "transition_to_game_page", "all"},
+};
 }  // namespace ui_layout
 
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
@@ -183,6 +235,12 @@ inline GotTarget LibR15ClockGettime() {
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
   return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ebe08ULL};
+}
+
+// libr15.so's slot for CSysHttp::CreateConnection(unsigned long&, char const*), defined in libr15 itself
+// (JUMP_SLOT 0x36e8028, readelf -rW on the pinned image).
+inline GotTarget LibR15CreateConnection() {
+  return {kLibR15, kCreateConnectionSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e8028ULL};
 }
 
 // libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself

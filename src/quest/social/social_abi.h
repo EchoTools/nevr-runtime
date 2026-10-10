@@ -33,6 +33,49 @@ inline constexpr std::uint64_t kSocialSlotVaddr = 0x36ef528ULL;
 // replaced when its first word equals libpnsovr's load bias plus this value.
 inline constexpr std::uint64_t kOvrSocialVptrVaddr = 0x6a1478ULL;
 
+// libr15.so imports CNSProvider::RichPresence(unsigned long) through its own PLT too: JUMP_SLOT at 0x36d2710
+// (readelf -rW; the call site is CR15NetGame::Initialize, once per run). The object pnsovr's exported RichPresence()
+// returns is a CNSOVRRichPresence: its constructor (libpnsovr 0x1f1a04) stores the address point of
+// _ZTVN10NRadEngine18CNSOVRRichPresenceE (symbol 0x6a13d0, size 0x98): 0x6a13d0 + 0x10 = 0x6a13e0, followed by
+// 17 slots (readelf -rW over 0x6a13e0..0x6a1460: ShareData 0x1f044c, Initialize, Shutdown, two destructors,
+// CNSIRichPresence::Update, then the five below, Refreshing/RefreshDestinations, HasGroupPresence(V2), Ready, Set,
+// Clear). The game's SyncRichPresence (libr15 0x1260424) calls slot 9 (Destination, +0x48) and slot 8
+// (DestinationName, +0x40); CNSIRichPresence::Set reaches slot 15 (Set(CJson const&), libpnsovr 0x1f1ccc, which only
+// copies the document to +0xf0 and sets bit 0 of +0x30).
+inline constexpr const char* kRichPresenceSymbol = "_ZN10NRadEngine11CNSProvider12RichPresenceEm";
+inline constexpr std::uint64_t kRichPresenceSlotVaddr = 0x36d2710ULL;
+inline constexpr std::uint64_t kOvrRichPresenceVptrVaddr = 0x6a13e0ULL;
+inline constexpr std::size_t kOvrRichPresenceSlotCount = 17;
+inline constexpr std::size_t kRichPresenceSlotDestinationCount = 6;  // unsigned DestinationCount() const, 0x1f1b74
+inline constexpr std::size_t kRichPresenceSlotDestinationName = 8;   // const char* DestinationName(unsigned) const, 0x1f1b88
+inline constexpr std::size_t kRichPresenceSlotDestination = 9;       // int Destination() const, 0x1f1b94: -1 when none
+inline constexpr std::size_t kRichPresenceSlotSet = 15;              // void Set(CJson const&), 0x1f1ccc
+// SyncRichPresence turns the index into a name only when it is not -1; every non -1 value reaches slot 8 unchanged.
+// A table-answered destination is reported as kPresenceNameBase + its table position, far above any list size.
+inline constexpr int kPresenceNameBase = 0x4e455652;
+// The three slots that talk to Meta's platform service (#396), by the pinned libpnsovr's own relocation table
+// (readelf -rW over 0x6a13e0..0x6a1468; the file's sha256 is 26e9a216...): slot 0 ShareData 0x1f044c (sends
+// group_presence set; CNSIRichPresence::Update 0x369a2c calls it while the dirty bit is set and Ready()), slot 11
+// RefreshDestinations 0x1f1c2c (sends group_presence get_destinations unless RefreshingDestinations() is true:
+// *(this+0xe8) != 0) and slot 16 Clear 0x1f1cf0 (sends group_presence clear and sets bit 2 until its result arrives).
+inline constexpr std::size_t kRichPresenceSlotShareData = 0;
+inline constexpr std::size_t kRichPresenceSlotRefreshDestinations = 11;
+inline constexpr std::size_t kRichPresenceSlotClear = 16;
+inline constexpr std::uint64_t kOvrRichPresenceShareDataVaddr = 0x1f044cULL;
+inline constexpr std::uint64_t kOvrRichPresenceRefreshDestinationsVaddr = 0x1f1c2cULL;
+inline constexpr std::uint64_t kOvrRichPresenceClearVaddr = 0x1f1cf0ULL;
+// The object's state word (uint32 at this+0x30), from Set 0x1f1ccc (|= 1), ShareData (gated on (flags & 6) == 0,
+// ends with (flags & ~3) | 2), SetUserPresenceCB 0x1f0b80 (&= ~2) and Clear (|= 4).
+inline constexpr std::size_t kRichPresenceFlagsOffset = 0x30;
+inline constexpr std::uint32_t kRichPresenceFlagDirty = 0x1;     // Set stored a document not yet shared
+inline constexpr std::uint32_t kRichPresenceFlagInFlight = 0x2;  // ShareData sent a request, its callback is pending
+inline constexpr std::uint32_t kRichPresenceFlagClearing = 0x4;  // a Clear request is in flight (its callback clears it)
+// The link-time addresses those slots hold in the pinned libpnsovr (social_pinned_test checks them).
+inline constexpr std::uint64_t kOvrRichPresenceDestinationCountVaddr = 0x1f1b74ULL;
+inline constexpr std::uint64_t kOvrRichPresenceDestinationNameVaddr = 0x1f1b88ULL;
+inline constexpr std::uint64_t kOvrRichPresenceDestinationVaddr = 0x1f1b94ULL;
+inline constexpr std::uint64_t kOvrRichPresenceSetVaddr = 0x1f1cccULL;
+
 // NRadEngine::CJson::Reset() (libr15 export _ZN10NRadEngine5CJson5ResetEv, 36 bytes at 0xfa227c): drops
 // the tree a CJson owns (CJson::ResetCache, then CJson::Clear with an empty path) and is a no-op on a
 // zeroed CJson. CNSISocial::Reset calls it on +0x1f0 (libpnsovr 0x36a92c, libr15 0x19197cc). Returns void;

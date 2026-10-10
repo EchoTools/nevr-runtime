@@ -12,12 +12,16 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "abi/symbol_hash.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
@@ -938,6 +942,125 @@ void EveryPageEnableIsLoggedOncePerSymbolPerSecond() {
   lp::SetClockForTest(nullptr);
 }
 
+// #391: the page ids smoke #5 run 2 logged as "unknown". Each id's name and name_basis are derived here from
+// the evidence rows in tests/data/ui_page_names.tsv (one row per level-script binding that targets the id),
+// and every named row's hash is checked to be CSymbol64 of its name; ui::kPageNames and the logged lines
+// must match what the rows say, so editing the table without the evidence fails.
+struct PageEvidence {
+  std::vector<std::string> names;  // one per named binding
+  bool excluded = false;           // an "unknown" row: the evidence is kept, the name is not used
+};
+
+std::map<std::uint64_t, PageEvidence> LoadPageEvidence() {
+  std::map<std::uint64_t, PageEvidence> evidence;
+  std::ifstream in("src/quest/tests/data/ui_page_names.tsv");
+  QCHECK(in.is_open());
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::vector<std::string> f;
+    std::size_t start = 0;
+    for (std::size_t tab; (tab = line.find('\t', start)) != std::string::npos; start = tab + 1) {
+      f.push_back(line.substr(start, tab - start));
+    }
+    f.push_back(line.substr(start));
+    if (f[0] == "unknown") {
+      QCHECK(f.size() == 3);
+      evidence[std::strtoull(f[1].c_str(), nullptr, 16)].excluded = true;
+      continue;
+    }
+    QCHECK(f.size() == 7);
+    PageEvidence& page = evidence[std::strtoull(f[0].c_str(), nullptr, 16)];
+    if (f[6] != "-") {
+      QCHECK(EchoVR::CSymbol64Hash(f[6].c_str()) == std::strtoull(f[5].c_str(), nullptr, 16));
+      page.names.push_back(f[6]);
+    }
+  }
+  return evidence;
+}
+
+struct DerivedName {
+  std::string name = "unknown";
+  std::string basis = "none";
+};
+
+std::map<std::uint64_t, DerivedName> DeriveNames(const std::map<std::uint64_t, PageEvidence>& evidence) {
+  std::map<std::uint64_t, DerivedName> derived;
+  std::map<std::string, int> idsPerName;
+  for (const auto& [id, page] : evidence) {
+    if (page.excluded || page.names.empty()) continue;
+    std::map<std::string, int> counts;
+    for (const std::string& n : page.names) ++counts[n];
+    std::string top;
+    int best = 0;
+    bool tie = false;
+    for (const auto& [n, c] : counts) {
+      if (c > best) { top = n; best = c; tie = false; }
+      else if (c == best) tie = true;
+    }
+    if (tie) continue;
+    DerivedName d;
+    d.name = top;
+    d.basis = counts.size() == 1 ? (page.names.size() == 1 ? "single" : "all") : "majority";
+    derived[id] = d;
+    ++idsPerName[top];
+  }
+  for (auto& [id, d] : derived) {
+    if (idsPerName[d.name] > 1) {
+      char tag[8];
+      std::snprintf(tag, sizeof(tag), "@%04llx", static_cast<unsigned long long>(id >> 48));
+      d.name += tag;
+    }
+  }
+  return derived;
+}
+
+void PageEnterLinesNameTheSmokePagesFromTheEvidenceRows() {
+  const auto evidence = LoadPageEvidence();
+  const auto derived = DeriveNames(evidence);
+  // The table says what the rows say, no more and no less.
+  for (const ui::PageName& known : ui::kPageNames) {
+    const auto it = derived.find(known.id);
+    QCHECK(it != derived.end());
+    if (it != derived.end()) {
+      QCHECK(it->second.name == known.name);
+      QCHECK(it->second.basis == known.basis);
+    }
+  }
+  std::size_t tableSize = 0;
+  for (const ui::PageName& known : ui::kPageNames) { (void)known; ++tableSize; }
+  QCHECK(tableSize == derived.size());
+
+  // The ids smoke #5 run 2 logged (smoke5/run2-ui_page_enter.txt), checked through the log line itself.
+  const std::uint64_t smoke[] = {
+      0x9733f27f738d9595ULL, 0xfbc6a43d068f418dULL, 0xdadda9a8c9c49f8dULL, 0x9143e219cb923869ULL,
+      0x25cbdc13a0ccdf42ULL, 0x1a92c34885065c11ULL, 0x80d0b99e73cf486aULL, 0x1f5bccac7f496eddULL,
+      0xffffffffffffffffULL, 0xd436ecc9f7f9164dULL, 0x68db70ece7c24901ULL, 0xb245345073f0d3b3ULL,
+      0x2fe7102931d1c4e0ULL, 0x05ce113632359ce3ULL, 0x8c94450216e31162ULL, 0xc615ef51fe8c7e5bULL,
+      0x202763036b7f6f23ULL,
+  };
+  lp::ResetLatchForTest();
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(&FakeClock);
+  g_now = 3'000'000'000;
+  g_lines.clear();
+  int named = 0;
+  for (const std::uint64_t id : smoke) {
+    const auto it = derived.find(id);
+    const DerivedName d = it != derived.end() ? it->second : DerivedName{};
+    named += it != derived.end() ? 1 : 0;
+    char want[160];
+    std::snprintf(want, sizeof(want), "\"page\":\"0x%016llx\",\"name\":\"%s\",\"name_basis\":\"%s\"",
+                  static_cast<unsigned long long>(id), d.name.c_str(), d.basis.c_str());
+    QCHECK(Enabled(id));
+    QCHECK(CountLines(want) == 1);
+  }
+  QCHECK(named == 12);  // 12 of the 17 ids; 05ce, 68db, 9733, the boot page and the no-actor id stay unknown
+  QCHECK(CountLines("\"name\":\"unknown\",\"name_basis\":\"none\"") == 5);
+  lp::ResetPageLogForTest();
+  lp::SetClockForTest(nullptr);
+}
+
 // The volume: one hot page enabled 60 times a second for ten minutes, and a handful of others, stay at
 // one line per symbol per second at most, and the latch state is carried.
 void PageEnterLogVolumeIsBounded() {
@@ -1014,6 +1137,7 @@ int main() {
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   EveryPageEnableIsLoggedOncePerSymbolPerSecond();
+  PageEnterLinesNameTheSmokePagesFromTheEvidenceRows();
   PageEnterLogVolumeIsBounded();
   APageTableThatIsFullStillPassesEveryEnable();
   AWithdrawnBoardKeepsNoCode();

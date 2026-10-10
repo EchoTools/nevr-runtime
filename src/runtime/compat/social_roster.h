@@ -304,9 +304,18 @@ inline bool ParseRecentlyMetResponse(const std::uint8_t* payload, std::size_t le
 /// refresh (slot 57) until its answer is in (0x180091200); the game's refresh node polls it until it
 /// is 0. A server that does not know the request never answers, so a refresh also ends after
 /// kRefreshSeconds with the list it had.
+///
+/// Incoming friend requests (#405). The game has no incoming-request prompt of its own (the Oculus
+/// platform showed them), and the server describes pending requests only as counts and one
+/// SNSFriendInviteNotify. The recently-met list is the game's list of people with an Add Friend action
+/// and a status string, so a request is listed there: first, online, with kRequestText under the
+/// name. Adding that person back is the existing friend request, which the server turns into an
+/// accept (its mutual add). The overlay survives the server's lists (SetList keeps it) and ends with
+/// the accept, a remove, a withdrawal or a rejection (ApplyFriendMessage).
 class RecentList {
  public:
   static constexpr std::uint64_t kRefreshSeconds = 5;
+  static constexpr const char* kRequestText = "Sent you a friend request";
 
   /// Starts a refresh unless one is in flight; true when the caller should send the request.
   bool BeginRefresh(std::uint64_t now) {
@@ -335,20 +344,73 @@ class RecentList {
     return busy;
   }
 
-  /// The server's answer: the list as sent (online first), and the refresh is over.
+  /// The server's answer: the list as sent (online first), and the refresh is over. The pending
+  /// friend requests stay first.
   void SetList(std::vector<Entry> entries) {
     std::lock_guard<std::mutex> guard(mutex_);
     refreshing_ = false;
-    auto next = std::make_shared<Snapshot>();
-    std::stable_partition(entries.begin(), entries.end(), [](const Entry& e) { return e.online; });
-    next->online = static_cast<std::uint32_t>(
-        std::count_if(entries.begin(), entries.end(), [](const Entry& e) { return e.online; }));
-    next->entries = std::move(entries);
-    if (current_) {
-      retired_[retiredNext_] = current_;
-      retiredNext_ = (retiredNext_ + 1) % retired_.size();
+    server_ = std::move(entries);
+    PublishLocked();
+  }
+
+  /// A friend request arrived from `id` (idempotent). Returns the number of pending requests.
+  std::size_t AddRequest(std::uint64_t id) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    for (const Entry& e : requests_) {
+      if (e.id == id) return requests_.size();
     }
-    current_ = std::move(next);
+    Entry entry;
+    entry.id = id;
+    entry.name = std::to_string(id);  // until the profile reply names it (SetRequestName)
+    entry.online = true;
+    entry.presence.text = kRequestText;
+    requests_.push_back(std::move(entry));
+    PublishLocked();
+    return requests_.size();
+  }
+
+  /// The request is over (accepted, removed, withdrawn, rejected). True when `id` was pending.
+  bool RemoveRequest(std::uint64_t id) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto it = std::find_if(requests_.begin(), requests_.end(), [id](const Entry& e) { return e.id == id; });
+    if (it == requests_.end()) return false;
+    requests_.erase(it);
+    PublishLocked();
+    return true;
+  }
+
+  /// The requester's display name, once known. True when `id` is pending and the name changed.
+  bool SetRequestName(std::uint64_t id, const std::string& name) {
+    if (name.empty()) return false;
+    std::lock_guard<std::mutex> guard(mutex_);
+    for (Entry& e : requests_) {
+      if (e.id != id || e.name == name) continue;
+      e.name = name;
+      PublishLocked();
+      return true;
+    }
+    return false;
+  }
+
+  /// A new session (a login, which a reconnect or an account change also is): the pending requests of the
+  /// last one are not this player's. The server replays the ones that are, after the friend-list subscribe.
+  /// Returns how many were pending.
+  std::size_t ClearRequests() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::size_t pending = requests_.size();
+    if (pending == 0) return 0;
+    requests_.clear();
+    PublishLocked();
+    return pending;
+  }
+
+  bool IsRequest(std::uint64_t id) const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return std::any_of(requests_.begin(), requests_.end(), [id](const Entry& e) { return e.id == id; });
+  }
+  std::size_t RequestCount() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return requests_.size();
   }
 
   std::uint32_t Count() const { return static_cast<std::uint32_t>(Snap()->entries.size()); }
@@ -383,6 +445,26 @@ class RecentList {
  private:
   bool BusyLocked(std::uint64_t now) const { return refreshing_ && now - started_ < kRefreshSeconds; }
 
+  // The list the game reads: the pending requests, then the server's list without those ids, online
+  // first. Called with mutex_ held.
+  void PublishLocked() {
+    std::vector<Entry> all = requests_;
+    for (const Entry& e : server_) {
+      const bool asked = std::any_of(requests_.begin(), requests_.end(), [&](const Entry& r) { return r.id == e.id; });
+      if (!asked) all.push_back(e);
+    }
+    auto next = std::make_shared<Snapshot>();
+    std::stable_partition(all.begin(), all.end(), [](const Entry& e) { return e.online; });
+    next->online = static_cast<std::uint32_t>(
+        std::count_if(all.begin(), all.end(), [](const Entry& e) { return e.online; }));
+    next->entries = std::move(all);
+    if (current_) {
+      retired_[retiredNext_] = current_;
+      retiredNext_ = (retiredNext_ + 1) % retired_.size();
+    }
+    current_ = std::move(next);
+  }
+
   std::shared_ptr<const Snapshot> Snap() const {
     std::lock_guard<std::mutex> guard(mutex_);
     if (current_) return current_;
@@ -393,6 +475,8 @@ class RecentList {
   mutable std::mutex mutex_;
   bool refreshing_ = false;
   std::uint64_t started_ = 0;
+  std::vector<Entry> server_;    // the last list the server sent
+  std::vector<Entry> requests_;  // pending incoming friend requests, oldest first
   std::shared_ptr<const Snapshot> current_;
   std::array<std::shared_ptr<const Snapshot>, 8> retired_{};
   std::size_t retiredNext_ = 0;
@@ -427,6 +511,54 @@ inline bool IsFriendChangeSymbol(std::uint64_t symbol) {
     default:
       return false;
   }
+}
+
+/// What one server message did to the pending friend requests.
+enum class RequestChange { kNone, kAdded, kCleared };
+struct RequestEvent {
+  RequestChange change = RequestChange::kNone;
+  std::uint64_t account = 0;
+  std::size_t pending = 0;     // requests pending after the change
+  const char* reason = "";     // for kCleared: the message that ended it
+};
+
+/// Applies one server->game message to `recent`'s pending friend requests. Every friend message below
+/// carries the other account first (Header(8) + FriendID(8) + ...): SNSFriendInviteNotify adds the
+/// requester; the accept (ours or theirs), a remove, a withdrawal and a rejection end the request.
+/// The roster's own refresh (IsFriendChangeSymbol) is the caller's.
+inline RequestEvent ApplyFriendMessage(RecentList& recent, std::uint64_t symbol, const std::uint8_t* payload,
+                                       std::size_t len) {
+  RequestEvent event;
+  const char* ends = nullptr;
+  bool adds = false;
+  switch (symbol) {
+    case 0xca09b0b36bd981b7ULL: adds = true; break;                       // SNSFriendInviteNotify
+    case 0x1bbda7fa06af4627ULL: ends = "FriendAcceptSuccess"; break;
+    case 0xc237c84c31d3ae05ULL: ends = "FriendAcceptNotify"; break;
+    case 0xe06972f49cd72265ULL: ends = "FriendRemoveNotify"; break;
+    case 0xc2bf83a08ea3a955ULL: ends = "FriendRemoveResponse"; break;
+    case 0x191aa30801ec6d03ULL: ends = "FriendWithdrawnNotify"; break;
+    case 0xb9b86c0ce8e8d0c1ULL: ends = "FriendRejectNotify"; break;
+    default: return event;
+  }
+  if (payload == nullptr || len < 16) return event;
+  std::uint64_t id = 0;
+  for (int i = 7; i >= 0; --i) id = (id << 8) | payload[8 + i];
+  if (id == 0) return event;
+  if (adds) {
+    const bool known = recent.IsRequest(id);
+    event.pending = recent.AddRequest(id);
+    event.account = id;
+    event.change = known ? RequestChange::kNone : RequestChange::kAdded;
+    return event;
+  }
+  if (recent.RemoveRequest(id)) {
+    event.change = RequestChange::kCleared;
+    event.account = id;
+    event.reason = ends;
+    event.pending = recent.RequestCount();
+  }
+  return event;
 }
 
 inline bool IsFriendChange(const char* name) {

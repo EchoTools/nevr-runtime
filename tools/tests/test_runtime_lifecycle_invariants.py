@@ -419,10 +419,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # that OnDllLoaded does not guard it lives here.
         source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
         body = extract_braced_function(source, "static void CALLBACK OnDllLoaded(")
-        start = body.index('"pnsradmatchmaking.dll"')
-        branch = body[start:body.index("PatchMatchmakingHost(", start)]
+        start = body.index("IsMatchmakingModule(")
+        branch = body[start:body.index("OnModuleNotification(", start)]
         self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
                             "a guard around the matchmaking host patch leaves a reloaded image unpatched")
+        # The decision itself (which notification, which module) is the header's OnModuleNotification: it
+        # holds no state either, so every load notification reaches Apply().
+        header = strip_comments((ROOT / "src/runtime/patch/matchmaker_host_patch.h").read_text())
+        decision = extract_braced_function(header, "std::optional<Result> OnModuleNotification(")
+        self.assertNotRegex(decision, r"\bstatic\b|\bonce\b|\bdone\b|\bPatched\b",
+                            "OnModuleNotification must stay stateless: a reloaded image is a new image")
+        self.assertIn("Apply(", decision)
 
     def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
         # Issue #58: the ServerDB CODE_ENDED path calls nevr_return_to_lobby::Request (not the game function

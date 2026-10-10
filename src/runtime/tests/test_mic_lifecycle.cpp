@@ -1,6 +1,7 @@
 #include "core/mic_lifecycle.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_dsp.h"
+#include "core/mic_endpoint_loss.h"
 #include "runtime/patch/mic_policy.h"
 
 #include <gtest/gtest.h>
@@ -22,6 +23,9 @@ struct FakeAudio {
   bool failedWorkerExists = false;
   bool signalOk = true;
   bool stopOk = true;
+  bool clientInvalidated = false;  // AUDCLNT_E_DEVICE_INVALIDATED: Start fails until the client is re-acquired
+  bool recoverOk = true;
+  uint32_t recoverCalls = 0;
   MicWorkerWaitResult waitResult = MicWorkerWaitResult::Signaled;
   uint32_t createCalls = 0;
   uint32_t startCalls = 0;
@@ -54,6 +58,7 @@ bool CreateResources(void* context) {
 bool StartAudio(void* context) {
   auto& fake = *static_cast<FakeAudio*>(context);
   ++fake.startCalls;
+  if (fake.clientInvalidated) return false;
   if (fake.reenterStart && fake.lifecycle != nullptr) {
     fake.reentrantStartResult = fake.lifecycle->Start(fake.ownerThread, Ops(fake));
   }
@@ -99,9 +104,16 @@ void ReleaseResources(void* context) { ++static_cast<FakeAudio*>(context)->relea
 
 void ResetStream(void* context) { ++static_cast<FakeAudio*>(context)->resetCalls; }
 
+bool RecoverAudio(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.recoverCalls;
+  if (fake.recoverOk) fake.clientInvalidated = false;
+  return fake.recoverOk;
+}
+
 MicLifecycleOperations Ops(FakeAudio& fake) {
   return {&fake, CreateResources, StartAudio, CreateWorker, RequestStop, WaitWorker,
-          CloseWorker, StopAudio, ReleaseResources, ResetStream};
+          CloseWorker, StopAudio, ReleaseResources, ResetStream, RecoverAudio};
 }
 
 struct FakeDrain {
@@ -342,6 +354,89 @@ MicLifecycleOperations RingOps(RingStream& stream) {
 }
 }  // namespace
 
+// #399: the capture device was invalidated (0x88890004); the dead IAudioClient can never Start again, so the
+// restart re-acquires the default endpoint and capture resumes.
+TEST_F(MicCaptureLifecycleTest, StartOnAnInvalidatedClientReacquiresTheEndpointAndRuns) {
+  ASSERT_TRUE(Create());
+  fake_.clientInvalidated = true;
+  EXPECT_TRUE(Start());
+  EXPECT_EQ(fake_.recoverCalls, 1u);
+  EXPECT_EQ(fake_.startCalls, 2u);
+  EXPECT_EQ(fake_.workerCreateCalls, 1u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+}
+
+TEST_F(MicCaptureLifecycleTest, StartThatCannotReacquireStaysReadyAndTheNextStartTriesAgain) {
+  ASSERT_TRUE(Create());
+  fake_.clientInvalidated = true;
+  fake_.recoverOk = false;
+  EXPECT_FALSE(Start());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_EQ(fake_.workerCreateCalls, 0u);
+  fake_.recoverOk = true;  // a capture device is plugged in again
+  EXPECT_TRUE(Start());
+  EXPECT_EQ(fake_.recoverCalls, 2u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+}
+
+TEST_F(MicCaptureLifecycleTest, RecoverWhileRunningJoinsTheWorkerReacquiresAndStartsANewOne) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.clientInvalidated = true;  // the device went away under the running worker
+  const uint32_t stopsBefore = fake_.stopCalls;
+  EXPECT_TRUE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));
+  EXPECT_EQ(fake_.closeCalls, 1u);                // the old worker was joined and closed
+  EXPECT_EQ(fake_.stopCalls, stopsBefore);        // the dead client is not stopped, it is replaced
+  EXPECT_EQ(fake_.recoverCalls, 1u);
+  EXPECT_EQ(fake_.workerCreateCalls, 2u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+  EXPECT_TRUE(Stop());                            // and the new capture stops normally
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+}
+
+// Recover re-acquires the endpoint itself: with a client whose Start would succeed, Start's own fallback
+// never runs, so only Recover can account for the recoverAudio call.
+TEST_F(MicCaptureLifecycleTest, RecoverReacquiresTheEndpointItselfBeforeStarting) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  ASSERT_EQ(fake_.recoverCalls, 0u);
+  fake_.clientInvalidated = false;  // startAudio succeeds on any call
+  const uint32_t startsBefore = fake_.startCalls;
+  EXPECT_TRUE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));
+  EXPECT_EQ(fake_.recoverCalls, 1u);
+  EXPECT_EQ(fake_.startCalls, startsBefore + 1);  // started once, after the re-acquisition
+  EXPECT_EQ(fake_.workerCreateCalls, 2u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+}
+
+TEST_F(MicCaptureLifecycleTest, FailedRecoverLeavesTheProviderReadyForTheGamesNextStart) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.clientInvalidated = true;
+  fake_.recoverOk = false;
+  EXPECT_FALSE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_TRUE(Stop());  // the game's Stop is harmless, and its Start re-acquires
+  fake_.recoverOk = true;
+  EXPECT_TRUE(Start());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+}
+
+TEST_F(MicCaptureLifecycleTest, RecoverIsRefusedUnlessRunningAndFromTheOwnerThread) {
+  EXPECT_FALSE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));  // closed
+  ASSERT_TRUE(Create());
+  EXPECT_FALSE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));  // ready: the game has not started it
+  ASSERT_TRUE(Start());
+  EXPECT_FALSE(lifecycle_.Recover(kOwnerThread + 1, Ops(fake_), 2000));
+  EXPECT_EQ(fake_.recoverCalls, 0u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+  ASSERT_TRUE(Stop());
+  EXPECT_FALSE(lifecycle_.Recover(kOwnerThread, Ops(fake_), 2000));  // stopped by the game: not restarted
+  EXPECT_EQ(fake_.recoverCalls, 0u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+}
+
 TEST(MicCaptureLifecycleStream, ReaderCallWhileStoppedDoesNotSkipTheNextCapturesBacklogDrop) {
   RingStream stream;
   MicCaptureLifecycle lifecycle;
@@ -467,4 +562,21 @@ TEST(MicProviderPolicy, InstalledUnderWineAndNotOnNativeWindows) {
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
   EXPECT_STREQ(nevr_mic_policy::BootLine(true), "[NEVR.MIC] provider installed: Wine\n");
   EXPECT_STREQ(nevr_mic_policy::BootLine(false), "[NEVR.MIC] provider not installed: native Windows\n");
+}
+
+// The results that mean the capture endpoint is lost (#399): the device was invalidated, or the stream's
+// resources were (a suspended or disconnected stream). Anything else is an ordinary capture error.
+TEST(MicEndpointLoss, DeviceInvalidatedAndResourcesInvalidatedAreLostEndpoints) {
+  EXPECT_TRUE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890004u)));  // AUDCLNT_E_DEVICE_INVALIDATED
+  EXPECT_TRUE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890026u)));  // AUDCLNT_E_RESOURCES_INVALIDATED
+  EXPECT_EQ(kMicDeviceInvalidated, static_cast<int32_t>(0x88890004u));
+  EXPECT_EQ(kMicResourcesInvalidated, static_cast<int32_t>(0x88890026u));
+}
+
+TEST(MicEndpointLoss, OtherResultsAreOrdinaryCaptureErrors) {
+  EXPECT_FALSE(MicHresultMeansEndpointLost(0));                                  // S_OK
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x80004005u)));  // E_FAIL
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890001u)));  // AUDCLNT_E_NOT_INITIALIZED
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890003u)));  // AUDCLNT_E_WRONG_ENDPOINT_TYPE
+  EXPECT_FALSE(MicHresultMeansEndpointLost(static_cast<int32_t>(0x88890008u)));  // AUDCLNT_E_UNSUPPORTED_FORMAT
 }

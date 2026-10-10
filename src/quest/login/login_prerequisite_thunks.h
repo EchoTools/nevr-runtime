@@ -54,4 +54,12 @@ using UserRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::Logged
 using TokenRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::AccessToken>, std::uint64_t()>;
 using ProofRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::UserProof>, std::uint64_t()>;
 
+// The entitlement request (#411): takes nothing, returns the request id (0x206824, 0x206ae4 discard it).
+struct EntitlementRequestTag {};
+using EntitlementRequestThunk = sentinel::CallbackThunk<EntitlementRequestTag, std::uint64_t()>;
+
+// Its handler: answers with request id 0 and never calls `original`, so the request never reaches the
+// Platform SDK and no answer is ever queued. Never logs (a hook on the game's call path).
+std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcept;
+
 }  // namespace nevr_quest_login
