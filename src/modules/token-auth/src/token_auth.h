@@ -14,7 +14,7 @@
 struct CachedAuthToken;
 #endif  // NEVR_TEST_HOOKS
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 void Init(uintptr_t base_addr, bool is_server);
 void Shutdown();
 
@@ -39,7 +39,7 @@ std::shared_ptr<const AuthSnapshot> GetAuthSnapshot();
 // In-memory DeviceAuth observations for the token-auth unit test target.  These
 // hooks intentionally construct a short-lived DeviceAuth instance: they do not
 // consult the credential cache, start the refresh thread, or issue HTTP calls.
-namespace TestHook {
+namespace test_hook {
 struct DeviceAuthState {
     bool authenticated = false;
     std::string token;
@@ -85,6 +85,6 @@ DeviceAuthState InspectDeviceAuthFromCache();
 // so the two sources can be made to disagree and it is observable which one the
 // guard consults. Returns the guard's decision: true = refresh now.
 bool InspectRefreshDecision(const ::CachedAuthToken& live, uint64_t now);
-}  // namespace TestHook
+}  // namespace test_hook
 #endif  // NEVR_TEST_HOOKS
 }

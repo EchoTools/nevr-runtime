@@ -45,7 +45,7 @@ VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
 
 namespace {
 
-namespace Policy = ExportTracePolicy;
+namespace Policy = nevr_export_trace_policy;
 
 // ---- functions to trace -------------------------------------------------------------------------
 
@@ -85,14 +85,14 @@ extern "C" __attribute__((noinline)) std::uint64_t Outer(std::uint64_t a, std::u
 std::vector<nevr::CallRecord> DrainAll() {
   std::vector<nevr::CallRecord> out;
   nevr::CallRecord r;
-  while (ExportTrace::Pop(&r)) out.push_back(r);
+  while (nevr_export_trace::Pop(&r)) out.push_back(r);
   return out;
 }
 
 class ExportTraceTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    ExportTrace::Reset();
+    nevr_export_trace::Reset();
     LogLines().clear();
   }
 };
@@ -148,7 +148,7 @@ TEST(CallRing, KeepsOrderAndCountsDropsWhenFull) {
 // ---- the thunk ----------------------------------------------------------------------------------
 
 TEST_F(ExportTraceTest, ForwardsRegisterAndStackArgumentsAndTheResult) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&SevenArgs), 7);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&SevenArgs), 7);
   ASSERT_NE(thunk, nullptr);
   const std::uint64_t direct = SevenArgs(1, 2, 3, 4, 5, 6, 7);
   const std::uint64_t traced = reinterpret_cast<SevenFn>(thunk)(1, 2, 3, 4, 5, 6, 7);
@@ -166,7 +166,7 @@ TEST_F(ExportTraceTest, ForwardsRegisterAndStackArgumentsAndTheResult) {
 }
 
 TEST_F(ExportTraceTest, KeepsFloatArgumentsAndAFloatResult) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&MixFloat), 1);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&MixFloat), 1);
   ASSERT_NE(thunk, nullptr);
   const double traced = reinterpret_cast<MixFn>(thunk)(1.5, 4, 0.25);
   EXPECT_DOUBLE_EQ(traced, 6.25);
@@ -183,7 +183,7 @@ extern "C" __attribute__((noinline)) __m128 VectorResult(std::uint64_t k) {
 }
 
 TEST_F(ExportTraceTest, HandsBackAllOf128BitsOfAVectorResult) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&VectorResult), 3);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&VectorResult), 3);
   ASSERT_NE(thunk, nullptr);
   const __m128 got = reinterpret_cast<__m128 (*)(std::uint64_t)>(thunk)(9);
   alignas(16) float lanes[4];
@@ -195,7 +195,7 @@ TEST_F(ExportTraceTest, HandsBackAllOf128BitsOfAVectorResult) {
 }
 
 TEST_F(ExportTraceTest, ForwardsAVoidCall) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&VoidCall), 2);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&VoidCall), 2);
   ASSERT_NE(thunk, nullptr);
   g_voidSeen.store(0);
   reinterpret_cast<VoidFn>(thunk)(0xABCD);
@@ -205,8 +205,8 @@ TEST_F(ExportTraceTest, ForwardsAVoidCall) {
 
 TEST_F(ExportTraceTest, OneBodyBehindTwoNamesGivesTwoIds) {
   // Identical-code folding: two exports, one address. The game asks for them by name, so each gets a thunk.
-  void* const a = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 10);
-  void* const b = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 11);
+  void* const a = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), 10);
+  void* const b = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), 11);
   ASSERT_NE(a, nullptr);
   ASSERT_NE(b, nullptr);
   EXPECT_NE(a, b);
@@ -219,8 +219,8 @@ TEST_F(ExportTraceTest, OneBodyBehindTwoNamesGivesTwoIds) {
 }
 
 TEST_F(ExportTraceTest, NestedTracedCallsRecordInnerFirst) {
-  void* const inner = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 20);
-  void* const outer = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Outer), 21);
+  void* const inner = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), 20);
+  void* const outer = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Outer), 21);
   ASSERT_NE(inner, nullptr);
   ASSERT_NE(outer, nullptr);
   g_nestedInner = reinterpret_cast<AddFn>(inner);
@@ -234,7 +234,7 @@ TEST_F(ExportTraceTest, NestedTracedCallsRecordInnerFirst) {
 }
 
 TEST_F(ExportTraceTest, AnExceptionUnwindsThroughTheThunk) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Throws), 30);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Throws), 30);
   ASSERT_NE(thunk, nullptr);
   bool caught = false;
   try {
@@ -248,7 +248,7 @@ TEST_F(ExportTraceTest, AnExceptionUnwindsThroughTheThunk) {
 }
 
 TEST_F(ExportTraceTest, ManyThreadsEveryCallIsAccountedFor) {
-  void* const thunk = ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 40);
+  void* const thunk = nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), 40);
   ASSERT_NE(thunk, nullptr);
   constexpr int kThreads = 6;
   constexpr int kCalls = 3000;
@@ -269,21 +269,21 @@ TEST_F(ExportTraceTest, ManyThreadsEveryCallIsAccountedFor) {
   std::uint64_t popped = 0;
   nevr::CallRecord r;
   while (running.load() > 0) {
-    while (ExportTrace::Pop(&r)) ++popped;
+    while (nevr_export_trace::Pop(&r)) ++popped;
   }
   for (auto& th : threads) th.join();
-  while (ExportTrace::Pop(&r)) ++popped;
+  while (nevr_export_trace::Pop(&r)) ++popped;
   EXPECT_FALSE(wrong.load());
-  EXPECT_EQ(popped, ExportTrace::Pushed());
-  EXPECT_EQ(ExportTrace::Pushed() + ExportTrace::Dropped(), static_cast<std::uint64_t>(kThreads) * kCalls)
+  EXPECT_EQ(popped, nevr_export_trace::Pushed());
+  EXPECT_EQ(nevr_export_trace::Pushed() + nevr_export_trace::Dropped(), static_cast<std::uint64_t>(kThreads) * kCalls)
       << "a call is recorded or counted as dropped, never lost";
 }
 
 TEST_F(ExportTraceTest, ATableThatIsFullHandsBackNull) {
-  for (std::uint32_t i = 0; i < ExportTrace::kMaxThunks; ++i) {
-    ASSERT_NE(ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), i), nullptr);
+  for (std::uint32_t i = 0; i < nevr_export_trace::kMaxThunks; ++i) {
+    ASSERT_NE(nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), i), nullptr);
   }
-  EXPECT_EQ(ExportTrace::MakeThunk(reinterpret_cast<void*>(&Add), 999), nullptr);
+  EXPECT_EQ(nevr_export_trace::MakeThunk(reinterpret_cast<void*>(&Add), 999), nullptr);
 }
 
 // ---- the command line, code or data, and the whole path against a real module ------------------
@@ -309,11 +309,11 @@ TEST(ExportTracePolicy, ReadsTheFlagValueFromACommandLine) {
 
 TEST(ExportTracer, OnlyCodeIsAThunkTarget) {
   static int data = 5;
-  EXPECT_TRUE(ExportTracer::PointsToCode(reinterpret_cast<const void*>(&Add)));
-  EXPECT_FALSE(ExportTracer::PointsToCode(&data));
+  EXPECT_TRUE(nevr_export_tracer::PointsToCode(reinterpret_cast<const void*>(&Add)));
+  EXPECT_FALSE(nevr_export_tracer::PointsToCode(&data));
   int onStack = 0;
-  EXPECT_FALSE(ExportTracer::PointsToCode(&onStack));
-  EXPECT_FALSE(ExportTracer::PointsToCode(nullptr));
+  EXPECT_FALSE(nevr_export_tracer::PointsToCode(&onStack));
+  EXPECT_FALSE(nevr_export_tracer::PointsToCode(nullptr));
 }
 
 bool LogHas(const char* needle) {
@@ -348,25 +348,25 @@ TEST(ExportTracer, EndToEndAgainstAModuleNamedPnsrad) {
   ASSERT_NE(data, nullptr);
 
   // Off until configured: the pointer is what the module exports, whatever the module.
-  EXPECT_FALSE(ExportTracer::Enabled());
-  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureCode", code), code);
+  EXPECT_FALSE(nevr_export_tracer::Enabled());
+  EXPECT_EQ(nevr_export_tracer::WrapSymbol(module, "FixtureCode", code), code);
 
   // A lookup before the flag is known must not decide anything: the flag is read from the command line,
   // which was complete from process start.
-  ExportTracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -TraceExports pnsrad -noconsole");
-  ASSERT_TRUE(ExportTracer::Enabled());
+  nevr_export_tracer::ConfigureFromCommandLineText(L"echovr.exe -windowed -TraceExports pnsrad -noconsole");
+  ASSERT_TRUE(nevr_export_tracer::Enabled());
 
-  void* const wrapped = ExportTracer::WrapSymbol(module, "FixtureCode", code);
+  void* const wrapped = nevr_export_tracer::WrapSymbol(module, "FixtureCode", code);
   ASSERT_NE(wrapped, code) << "a code export of a selected module is a thunk";
-  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureCode", code), wrapped) << "one thunk per name";
+  EXPECT_EQ(nevr_export_tracer::WrapSymbol(module, "FixtureCode", code), wrapped) << "one thunk per name";
   EXPECT_EQ(reinterpret_cast<int (*)(int)>(wrapped)(41), 42);
 
   // A data export is handed back as it is: the game reads a value through that pointer.
-  EXPECT_EQ(ExportTracer::WrapSymbol(module, "FixtureData", data), data);
+  EXPECT_EQ(nevr_export_tracer::WrapSymbol(module, "FixtureData", data), data);
   EXPECT_EQ(*static_cast<int*>(data), 1234);
 
   // A module that is not selected is left alone (the test process's own functions are not pnsrad).
-  EXPECT_EQ(ExportTracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), "Sleep", reinterpret_cast<void*>(&Sleep)),
+  EXPECT_EQ(nevr_export_tracer::WrapSymbol(GetModuleHandleA("kernel32.dll"), "Sleep", reinterpret_cast<void*>(&Sleep)),
             reinterpret_cast<void*>(&Sleep));
 
   EXPECT_TRUE(WaitForLog("[NEVR.TRACE] call #1 module=pnsrad export=FixtureCode"));
@@ -374,9 +374,9 @@ TEST(ExportTracer, EndToEndAgainstAModuleNamedPnsrad) {
   EXPECT_TRUE(LogHas("[NEVR.TRACE] skip module=pnsrad export=FixtureData"));
 
   // Shutdown makes a last pass and the summary, and returns.
-  ExportTracer::Shutdown();
+  nevr_export_tracer::Shutdown();
   EXPECT_TRUE(LogHas("[NEVR.TRACE] summary module=pnsrad export=FixtureCode calls=1"));
-  ExportTracer::Shutdown();  // twice is harmless
+  nevr_export_tracer::Shutdown();  // twice is harmless
 }
 
 }  // namespace

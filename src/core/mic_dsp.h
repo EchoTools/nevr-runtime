@@ -19,8 +19,19 @@ class MicRingBuffer {
   void Reset();
   uint32_t capacity() const { return capacity_; }
 
+  /// Called by the game's MicRead before it pops. The first call after the stream (re)started that
+  /// finds audio waiting drops that backlog, so the first read gets only fresh audio (#95), and
+  /// returns how many samples that was. A call that finds the ring empty changes nothing. Later calls
+  /// return 0 until Reset(). It does not make the game a consumer by itself (see ReaderActive).
+  uint32_t NoteReaderActive();
+  /// True once a Pop has returned audio since the last Reset(): the game is demonstrably consuming.
+  /// Before that a full ring is the normal state, not a game that stopped draining.
+  bool ReaderActive() const;
+
  private:
   mutable std::mutex mutex_;
+  bool backlogDropped_ = false;
+  bool consumerSeen_ = false;
   uint32_t capacity_;
   std::vector<int16_t> data_;
   uint32_t head_ = 0;

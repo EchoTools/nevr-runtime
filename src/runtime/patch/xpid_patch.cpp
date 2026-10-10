@@ -46,7 +46,7 @@ static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expe
 }
 
 VOID PatchDscProvider() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   const CHAR* base = EchoVR::g_GameBaseAddress;
 
   // Validate all four sites before patching any.
@@ -122,11 +122,11 @@ static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
   // LobbyPlayerSessions, three Send() paths, and 7 more callers — all carry
   // the same prefix without touching any string table or CNSUser nibble.
   // GetUserIDString's callers are not affected.
-  return EchoVR::g_GameBaseAddress + PatchAddresses::PROVIDER_STRING_OVR_ORG;
+  return EchoVR::g_GameBaseAddress + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG;
 }
 
 VOID PatchProviderPrefixOvrOrg() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   void* target = EchoVR::g_GameBaseAddress + GET_PROVIDER_PREFIX;
   MH_STATUS st = MH_CreateHook(target, (void*)GetProviderPrefixHook,
                                 (void**)&g_RealGetProviderPrefix);

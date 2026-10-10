@@ -121,7 +121,7 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
 
     // JSON-escape the message
     char escaped[4096];
-    JsonEscape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
+    nevr_json_escape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
 
     // Build the JSONL line (boot_lines.h). N80: the run ID is what lets these lines be joined to
     // the runtime log and, because this file is opened in append mode across runs, what lets one

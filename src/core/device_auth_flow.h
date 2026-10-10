@@ -32,7 +32,7 @@ struct DeviceFlowOps {
   std::function<intptr_t(const std::string&)> open_browser;  // arg: login URL carrying the code
   // Called when open_browser reports failure; returns 0 to abort the flow.
   std::function<int(const std::string&, const std::string&, intptr_t)> show_open_failure;
-  std::function<TokenAuth::DevicePollResponse(const std::string&)> poll;
+  std::function<nevr_token_auth::DevicePollResponse(const std::string&)> poll;
   std::function<void(Clock::duration)> sleep;
   std::function<void(LogLevel, const std::string&)> log;
   // Optional: true once the flow should stop (the game is closing while it waits, #37).
@@ -47,7 +47,7 @@ struct DeviceFlowOps {
 
 struct DeviceFlowResult {
   bool verified = false;
-  TokenAuth::DevicePollResponse response;  // meaningful only when verified
+  nevr_token_auth::DevicePollResponse response;  // meaningful only when verified
 };
 
 // `login_url` is the page the player opens, without the code ("?code=<code>" is

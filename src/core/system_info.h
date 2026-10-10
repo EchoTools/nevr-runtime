@@ -15,7 +15,7 @@
 /// Every field here is either measured or explicitly empty. A value this code
 /// cannot determine is left empty/zero and the caller decides what to send; it
 /// is never filled with a plausible-looking guess.
-namespace SystemInfo {
+namespace nevr_system_info {
 
 struct Host {
   /// Physical/logical CPU counts. 0 means "could not determine".
@@ -49,4 +49,4 @@ struct Host {
 /// are not free enough to want on a hot path.
 const Host& Get();
 
-}  // namespace SystemInfo
+}  // namespace nevr_system_info

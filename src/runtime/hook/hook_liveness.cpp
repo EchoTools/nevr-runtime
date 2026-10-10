@@ -17,7 +17,7 @@ struct Entry {
   bool guaranteedAbsentOnServer;
 };
 
-// Order MUST match HookLiveness::Id.
+// Order MUST match nevr_hook_liveness::Id.
 const Entry kEntries[] = {
     {"GetTimeMicroseconds", "all modes", false},
     {"CTimer_GetMilliSeconds", "all modes", false},
@@ -35,11 +35,11 @@ const Entry kEntries[] = {
 // exactly the N65 "EXPECT_EQ(5,5)" defect. Written this way the two sides are
 // independent facts, so adding an Id without a row is a COMPILE error rather
 // than a runtime out-of-bounds read that prints "name=(null)" (measured).
-static_assert(sizeof(kEntries) / sizeof(kEntries[0]) == HookLiveness::kCount,
-              "kEntries must have exactly one row per HookLiveness::Id — add the "
+static_assert(sizeof(kEntries) / sizeof(kEntries[0]) == nevr_hook_liveness::kCount,
+              "kEntries must have exactly one row per nevr_hook_liveness::Id — add the "
               "row when you add the id");
 
-volatile LONG g_counts[HookLiveness::kCount] = {0};
+volatile LONG g_counts[nevr_hook_liveness::kCount] = {0};
 
 // Edge-triggered reporting state. A hook's line only prints when its entry
 // count (and therefore its entered/not-entered status) has actually changed
@@ -47,8 +47,8 @@ volatile LONG g_counts[HookLiveness::kCount] = {0};
 // array, no heap, no lock: Report() runs from a single caller (tick.cpp's
 // per-frame dispatcher), so plain statics are enough — no InterlockedXxx
 // needed here (unlike g_counts, which Mark() touches from many hook threads).
-bool g_everReported[HookLiveness::kCount] = {false};
-LONG g_lastReportedCount[HookLiveness::kCount] = {0};
+bool g_everReported[nevr_hook_liveness::kCount] = {false};
+LONG g_lastReportedCount[nevr_hook_liveness::kCount] = {0};
 
 // kPrecisionSleepWait server-mode notice: logged once, the first time
 // Report() runs on a server, instead of re-checking a structural invariant
@@ -57,7 +57,7 @@ bool g_serverAbsenceNoticeLogged = false;
 
 }  // namespace
 
-namespace HookLiveness {
+namespace nevr_hook_liveness {
 
 void Mark(Id id) {
   if (id < 0 || id >= kCount) return;
@@ -113,4 +113,4 @@ void Report(const char* context) {
   }
 }
 
-}  // namespace HookLiveness
+}  // namespace nevr_hook_liveness

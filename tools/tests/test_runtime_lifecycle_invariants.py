@@ -227,6 +227,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from VehPolicy::BootLine")
 
+    def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
+        # #95: the ring fills before the game's first read of a stream. The first MicRead drops that
+        # backlog (MicAvailable polls do not), the overflow warning is for a game that read and then
+        # stopped, and the ring is capped at 200 ms.
+        source = strip_comments((ROOT / "src/runtime/patch/mic_provider.cpp").read_text())
+        read = extract_braced_function(source, "uint64_t MicProvider::MicRead(")
+        self.assertRegex(read, r"\bNoteGameReader\s*\(\s*\)", "MicRead must drop the backlog")
+        # MicAvailable is a poll the game makes from the moment capture starts; it must not drop or latch.
+        avail = extract_braced_function(source, "uint64_t MicProvider::MicAvailable(")
+        self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
+        self.assertRegex(source, r"result\.ringOverflow\s*&&\s*g_ring\.ReaderActive\(\)")
+        cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
+        self.assertIsNotNone(cap)
+        self.assertLessEqual(int(cap.group(1)), 9600)
+
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
         # RadPluginShutdown guard has to be inside that hook; a second detour on the
@@ -302,18 +317,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
-        # duplicated HookLiveness::Report for the same two hooks. HookLiveness is the one instrument.
+        # duplicated nevr_hook_liveness::Report for the same two hooks. HookLiveness is the one instrument.
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
         for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
             self.assertNotIn(gone, patches)
         for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
-            self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
+            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", extract_braced_function(patches, hook))
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
-        self.assertIn('HookLiveness::Report("periodic")', tick)
+        self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -458,7 +473,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("BootReplay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
         self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
-        self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
+        self.assertEqual(len(re.findall(r"nevr_json_escape::AppendTo\(line, (ts|lvl)", record)), 2,
                          "ts and level come from the parsed boot file and are escaped like the message")
         # The tee stays open until initialize() closes it; the lines it writes after the main log
         # opened are replayed once more, under the file lock, just before the tee closes.

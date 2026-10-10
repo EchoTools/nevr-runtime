@@ -790,9 +790,9 @@ void GameServerLib::RegisterTcpCallbacks() {
     }
     if (externalIp.empty()) externalIp = internalIp;
 
-    const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
+    const nevr_build_identity::Info& buildId = nevr_build_identity::Get();  // N112: commit hash and build type in the version
     nevr_game_server::RegistrationParams params;
-    params.loginSessionId = GuidToUuidString(LoginSession::Get());
+    params.loginSessionId = GuidToUuidString(nevr_login_session::Get());
     params.serverId = static_cast<uint64_t>(state.serverId);
     params.externalIp = externalIp;
     params.port = static_cast<uint32_t>(broadcasterPort);
