@@ -1,6 +1,6 @@
 # The toolchain image the CI jobs (build.yml, vcpkg-cache.yml, defender-scan.yml) run in, so a run
 # does not reinstall it. It holds what those jobs installed per run before: the pacman packages
-# (Arch's MinGW-w64 GCC, the same toolchain development uses), osslsigncode 2.14, buf 1.47.2 and
+# (Arch's MinGW-w64 GCC, the same toolchain development uses), osslsigncode 2.14, buf 1.73.0 and
 # the case-folded libCrypt32.a that the pinned ixwebsocket port links.
 #
 # The image tag is the first 12 hex digits of this file's sha256 (`sha256sum .github/builder/Dockerfile | cut -c1-12`), and the three
@@ -34,6 +34,6 @@ RUN set -eux; \
 
 # Buf takes about a minute to compile from source.
 RUN set -eux; \
-    GOBIN=/usr/local/bin go install github.com/bufbuild/buf/cmd/buf@v1.47.2; \
+    GOBIN=/usr/local/bin go install github.com/bufbuild/buf/cmd/buf@v1.73.0; \
     go clean -cache -modcache; \
     rm -rf /root/go /root/.cache

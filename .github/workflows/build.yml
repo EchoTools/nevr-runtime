@@ -26,7 +26,7 @@ jobs:
     # model), plus osslsigncode, buf and the libCrypt32.a link. The tag is the Dockerfile's hash; the
     # "Toolchain versions" step records what built each run.
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      image: ghcr.io/echotools/nevr-runtime-builder:7185b0b03ae6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
