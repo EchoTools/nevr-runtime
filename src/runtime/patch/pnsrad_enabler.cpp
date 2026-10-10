@@ -190,35 +190,12 @@ static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
 static uintptr_t s_pnsradModuleBase = 0;
 
-/* Case-insensitive ASCII wide-string compare, same folding convention as
- * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
- * chars, hence the /sizeof(WCHAR) below at each call site. */
-static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* ascii) {
-    size_t asciiLen = std::strlen(ascii);
-    if (nameLen != asciiLen) return false;
-    for (size_t i = 0; i < asciiLen; i++) {
-        WCHAR c = name[i];
-        if (c >= L'A' && c <= L'Z') c = static_cast<WCHAR>(c - L'A' + L'a');
-        char e = ascii[i];
-        if (e >= 'A' && e <= 'Z') e = static_cast<char>(e - 'A' + 'a');
-        if (c != static_cast<WCHAR>(e)) return false;
-    }
-    return true;
-}
-
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
  * matchmaker connection reaches our own listener instead of the dead
  * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
  * the full measurement (RVA, file offset, slot size, exact original bytes). */
-static void PatchMatchmakingHost(uintptr_t base) {
-    // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
-    // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
-    // ordering is observed, not enforced; a zero port is reported below instead of patched in.
-    const uint16_t port = GetMatchmakerBridgePort();
-    auto* image = reinterpret_cast<uint8_t*>(base);
-    DWORD err = 0;
-    const nevr_matchmaker_host_patch::Result result = nevr_matchmaker_host_patch::Apply(
-        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+static void ReportMatchmakingHostResult(nevr_matchmaker_host_patch::Result result, const uint8_t* image,
+                                        uint16_t port, DWORD err) {
     switch (result) {
     case nevr_matchmaker_host_patch::Result::Patched:
         Log(EchoVR::LogLevel::Info,
@@ -393,7 +370,8 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
 }
 
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
-    if (reason != 1 || !data || !data->BaseDllName) return;
+    // Only loads act (an unload leaves nothing to undo: the image and its patch are gone together).
+    if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName) return;
     const UNICODE_STRING* name = data->BaseDllName;
 
     // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
@@ -405,11 +383,19 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
     // (unpatched) bytes, so a one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
     // uses, since that DLL does not reload) would leave the reloaded copy unpatched and the
     // matchmaker on the dead readyatdawn.com default. No guard: patch on every load.
-    // PatchMatchmakingHost's own memcmp against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a
-    // Warning log) if this exact base was already patched.
-    if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
-                             "pnsradmatchmaking.dll")) {
-        PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
+    // OnModuleNotification's Apply memcmps the slot against PNSRADMATCHMAKING_HOST_EXPECTED, so a second
+    // notification for an image that is already patched no-ops (with a Warning log).
+    if (nevr_matchmaker_host_patch::IsMatchmakingModule(name->Buffer, name->Length / sizeof(WCHAR))) {
+        // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
+        // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
+        // ordering is observed, not enforced; a zero port is reported instead of patched in.
+        const uint16_t port = GetMatchmakerBridgePort();
+        auto* image = reinterpret_cast<uint8_t*>(data->DllBase);
+        DWORD err = 0;
+        const auto result = nevr_matchmaker_host_patch::OnModuleNotification(
+            reason, name->Buffer, name->Length / sizeof(WCHAR), image, port,
+            [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+        if (result) ReportMatchmakingHostResult(*result, image, port, err);
     }
 
     if (s_pnsradPatched) return;
