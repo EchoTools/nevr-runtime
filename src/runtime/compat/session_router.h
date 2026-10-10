@@ -20,6 +20,12 @@
 //     own count wraps otherwise; see TakeUnrequireLocked); one with nothing to lower is dropped.
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
+//   * login replay (Options::replayLoginOnReconnect, Quest): the game sends its own login and, when the
+//     login session ends under it (a remote failure), its login socket reconnects WITHOUT a new login (an
+//     established socket closed with nothing outstanding raises no Lost event, so the game stays "logged in").
+//     The router keeps the last LoginRequest the game sent on its login connection and, on the next login
+//     session, sends it as the first frame before anything the game queued, once per lost session, unless the
+//     game's own first frame on that connection is already a LoginRequest. The frame never reaches a log.
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
 //   * remote end (close or error): every game socket on that session is closed and the session is
 //     forgotten, so the game's next connection is a new login rather than a matchmaker.
@@ -153,6 +159,9 @@ struct Options {
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
   LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
+  // true: replay the game's own last LoginRequest on the login session that follows a lost one (Quest: the
+  // game does not re-login on a silent reconnect). Independent of buildLogin; off on PC.
+  bool replayLoginOnReconnect = false;
   LogSink log;                        // null: logging off
 };
 
@@ -165,6 +174,7 @@ struct Stats {
   int nextConnIdx = 0;
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
+  uint64_t loginsReplayed = 0;     // the game's last LoginRequest sent on a new login session (replayLoginOnReconnect)
   uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
@@ -255,6 +265,7 @@ class Router {
   std::size_t LiveMatchmakersLocked() const;
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
   void Log(Effects& fx, LogLevel level, std::string line);
+  void ForgetLoginFrameLocked();
 
   void Run(Effects& fx);  // executes recorded work with the mutex released
   void DrainRemote(RemoteId remote);
@@ -276,6 +287,11 @@ class Router {
   // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
   std::deque<GameId> owedUnrequires_;
   uint64_t droppedUnrequires_ = 0;
+  uint64_t loginsReplayed_ = 0;
+  // The game's last LoginRequest on its login connection, and whether the session it belonged to was lost
+  // (a replay is due on the next login session). replayLoginOnReconnect only.
+  std::string lastLoginFrame_;
+  bool replayPending_ = false;
   uint64_t unmatchedEmbeddedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;

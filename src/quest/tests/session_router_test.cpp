@@ -1289,6 +1289,176 @@ void TestOnlyTheLoginConnectionIsIdleExempt() {
 
 }  // namespace
 
+// ---- login replay after a lost session (#320) ---------------------------------------------------------
+// On Quest the game sends its own login. When the remote session ends, the router closes the game's sockets
+// and the game reconnects its login socket WITHOUT a new login (a count-0 close raises no Lost event), so the
+// new session would sit unauthenticated. With replayLoginOnReconnect the router sends the game's last
+// LoginRequest first on that session.
+
+const std::string kGameLogin = Msg(nevr_evr_codec::kSymLoginRequest, "GAME-LOGIN-" + kSecret);
+
+Options ReplayOptions() {
+  Options o;
+  o.replayLoginOnReconnect = true;  // no buildLogin: the game's own login is the only login
+  return o;
+}
+
+// Config (1), login (2) and matchmaker (3) connections, the login session open, the game's own login sent
+// and answered. Returns the open requests so a test can address the remotes.
+std::vector<RemoteOpenRequest> EstablishedSession(Rig& rig, const std::string& login = kGameLogin) {
+  OpenThree(rig);
+  const auto opens = rig.remotes.Opens();
+  rig.router->OnRemoteOpen(opens[0].remote);
+  rig.router->OnRemoteOpen(opens[1].remote);
+  rig.router->OnGameFrame(2, login, true);
+  rig.router->OnRemoteFrame(opens[1].remote, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
+  return opens;
+}
+
+// The session fails under the game; its sockets close and the game's login socket comes back as game 4.
+// Returns the remote opened for it.
+RemoteId LoseSessionAndReconnect(Rig& rig, RemoteId failed) {
+  rig.router->OnRemoteError(failed, 0, "network error");
+  rig.router->OnGameClose(2);
+  rig.router->OnGameClose(3);
+  const std::size_t before = rig.remotes.Opens().size();
+  rig.router->OnGameOpen(4);
+  const auto opens = rig.remotes.Opens();
+  return opens.size() == before + 1 ? opens.back().remote : kNoRemote;
+}
+
+std::vector<std::string> SentOn(Rig& rig, RemoteId remote) {
+  std::vector<std::string> out;
+  for (const SentFrame& f : rig.remotes.Sent()) {
+    if (f.id == remote) out.push_back(f.data);
+  }
+  return out;
+}
+
+// Failure caught: the reconnected login socket staying on an unauthenticated session (every request then gets
+// a bare Unrequire). The replayed login is the first frame on the new session, before the game's request.
+void TestRemoteFailureThenReconnectReplaysTheLoginFirst() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  QCHECK(fresh != kNoRemote && fresh != opens[1].remote);
+  QCHECK(rig.logs.Has("the game's last LoginRequest is kept for replay"));
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "profile-request"), true);  // queued while the remote opens
+  rig.router->OnRemoteOpen(fresh);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 2);
+  if (sent.size() == 2) {
+    QCHECK(sent[0] == kGameLogin);  // the replay, byte for byte
+    QCHECK(sent[1] == Msg(kSymSomething, "profile-request"));  // the first request after the reconnect
+  }
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);
+  QCHECK(rig.logs.Has("login replayed"));
+  // The cached frame is a credential: it never reaches a log line.
+  QCHECK(!rig.logs.Has(kSecret));
+  // A request after the replay goes through the live session.
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "later"), true);
+  QCHECK(SentOn(rig, fresh).size() == 3);
+}
+
+// Failure caught: the replay turned on for a wiring that did not ask for it (the PC bridge injects its own).
+void TestNoReplayWhenTheOptionIsOff() {
+  Rig rig;  // default Options
+  const auto opens = EstablishedSession(rig);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  QCHECK(fresh != kNoRemote);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "profile-request"), true);
+  rig.router->OnRemoteOpen(fresh);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 1 && sent[0] == Msg(kSymSomething, "profile-request"));
+  QCHECK(rig.router->GetStats().loginsReplayed == 0);
+  QCHECK(!rig.logs.Has("login replayed"));
+}
+
+// Failure caught: a game that does log in again (the player pressed RETRY) getting a second login on the
+// session: its own LoginRequest is first and the replay stands down.
+void TestGameLoginFirstIsNotDuplicated() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  const std::string newLogin = Msg(nevr_evr_codec::kSymLoginRequest, "NEW-LOGIN-" + kSecret);
+  rig.router->OnGameFrame(4, newLogin, true);
+  rig.router->OnRemoteOpen(fresh);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 1 && sent[0] == newLogin);
+  QCHECK(rig.router->GetStats().loginsReplayed == 0);
+  QCHECK(rig.logs.Has("login replay skipped"));
+}
+
+// Failure caught: a refreshed token being replaced by the stale one: the newest LoginRequest is the one kept.
+void TestTheNewestLoginIsTheOneReplayed() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const std::string refreshed = Msg(nevr_evr_codec::kSymLoginRequest, "REFRESHED-" + kSecret);
+  rig.router->OnGameFrame(2, refreshed, true);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 1 && sent[0] == refreshed);
+}
+
+// Failure caught: the credential outliving the player's logout: nothing is replayed after a LogOut.
+void TestLogoutClearsTheReplay() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLogOut, "bye"), true);
+  const RemoteId fresh = LoseSessionAndReconnect(rig, opens[1].remote);
+  QCHECK(fresh != kNoRemote);
+  QCHECK(!rig.logs.Has("kept for replay"));
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "req"), true);
+  rig.router->OnRemoteOpen(fresh);
+  const auto sent = SentOn(rig, fresh);
+  QCHECK(sent.size() == 1 && sent[0] == Msg(kSymSomething, "req"));
+  QCHECK(rig.router->GetStats().loginsReplayed == 0);
+}
+
+// Failure caught: a replay due once per lost session being sent again on a session that is live (a second
+// login connection taking over), and a later loss not being replayed.
+void TestOneReplayPerLostSession() {
+  Rig rig(ReplayOptions());
+  const auto opens = EstablishedSession(rig);
+  const RemoteId second = LoseSessionAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(second);
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);
+  // The session is live: another login connection takes it over and nothing is replayed onto it.
+  rig.router->OnGameOpen(5);
+  QCHECK(rig.router->GetStats().loginsReplayed == 1);
+  // The second session is lost too: replayed again, from the same cached frame.
+  rig.router->OnRemoteError(second, 0, "network error again");
+  rig.router->OnGameClose(4);
+  rig.router->OnGameClose(5);
+  const std::size_t before = rig.remotes.Opens().size();
+  rig.router->OnGameOpen(6);
+  const auto opens2 = rig.remotes.Opens();
+  QCHECK(opens2.size() == before + 1);
+  const RemoteId third = opens2.back().remote;
+  rig.router->OnRemoteOpen(third);
+  const auto sent = SentOn(rig, third);
+  QCHECK(sent.size() == 1 && sent[0] == kGameLogin);
+  QCHECK(rig.router->GetStats().loginsReplayed == 2);
+}
+
+// Failure caught: a replay on a session that never had a login to replay (a game that never logged in).
+void TestNothingToReplayBeforeTheGameHasLoggedIn() {
+  Rig rig(ReplayOptions());
+  OpenThree(rig);
+  const auto opens = rig.remotes.Opens();
+  rig.router->OnRemoteOpen(opens[0].remote);
+  rig.router->OnRemoteOpen(opens[1].remote);
+  rig.router->OnRemoteError(opens[1].remote, 0, "network error");
+  rig.router->OnGameClose(2);
+  rig.router->OnGameClose(3);
+  rig.router->OnGameOpen(4);
+  const RemoteId fresh = rig.remotes.Opens().back().remote;
+  rig.router->OnRemoteOpen(fresh);
+  QCHECK(SentOn(rig, fresh).empty());
+  QCHECK(rig.router->GetStats().loginsReplayed == 0);
+}
+
 int main() {
   TestConnectionIdentity();
   TestConfigRemoteEndDoesNotEndTheLoginSession();
@@ -1316,6 +1486,13 @@ int main() {
   TestGameBackpressureOverflowClosesTheGame();
   TestConcurrentProducersKeepPerSourceOrder();
   TestQuestDefaultsInjectNothing();
+  TestRemoteFailureThenReconnectReplaysTheLoginFirst();
+  TestNoReplayWhenTheOptionIsOff();
+  TestGameLoginFirstIsNotDuplicated();
+  TestTheNewestLoginIsTheOneReplayed();
+  TestLogoutClearsTheReplay();
+  TestOneReplayPerLostSession();
+  TestNothingToReplayBeforeTheGameHasLoggedIn();
   TestMatchmakerConnectionsAreCapped();
   TestExtraConnectionNeverBecomesASecondLogin();
   TestShutdown();

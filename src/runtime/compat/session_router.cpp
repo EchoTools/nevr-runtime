@@ -194,6 +194,14 @@ Router::Router(GameTransport* games, RemoteTransport* remotes, Options options)
 
 Router::~Router() = default;
 
+// The cached LoginRequest carries the player's token: overwritten before it is released, and held in memory only.
+void Router::ForgetLoginFrameLocked() {
+  std::fill(lastLoginFrame_.begin(), lastLoginFrame_.end(), '\0');
+  lastLoginFrame_.clear();
+  lastLoginFrame_.shrink_to_fit();
+  replayPending_ = false;
+}
+
 void Router::Log(Effects& fx, LogLevel level, std::string line) {
   if (options_.log) fx.logs.emplace_back(level, std::move(line));
 }
@@ -269,10 +277,13 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     owedUnrequires_.clear();
     connectionCount_ = 1;  // the game's next connection is a login
   }
+  const bool replayDue = wasLogin && options_.replayLoginOnReconnect && !lastLoginFrame_.empty();
+  if (replayDue) replayPending_ = true;
   Log(fx, LogLevel::Warning,
-      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s",
+      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s%s",
           Ull(remote), ownerConn, static_cast<unsigned>(code), why, bound.size(),
-          wasLogin ? "; login session forgotten, next connection is a new login" : ""));
+          wasLogin ? "; login session forgotten, next connection is a new login" : "",
+          replayDue ? "; the game's last LoginRequest is kept for replay" : ""));
   remoteTable_.erase(rit);
   for (const GameId game : bound) {
     Game& g = gameTable_[game];
@@ -609,6 +620,14 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
       } else {
         Remote& r = rit->second;
         CountRequirementsLocked(git->second, frame);
+        if (options_.replayLoginOnReconnect && git->second.role == Role::Login) {
+          const uint64_t sym = nevr_evr_codec::FirstSymbol(frame);
+          if (sym == nevr_evr_codec::kSymLoginRequest) {
+            lastLoginFrame_ = frame;  // a refreshed token arrives as a new LoginRequest and replaces it
+          } else if (sym == nevr_evr_codec::kSymLogOut) {
+            ForgetLoginFrameLocked();  // the player logged out: nothing is replayed after it
+          }
+        }
         auto data = std::make_shared<const std::string>(std::move(frame));
         if (r.open) {
           PushToRemoteLocked(remoteId, r, std::move(data), binary, fx);
@@ -684,8 +703,27 @@ void Router::OnRemoteOpen(RemoteId remote) {
         // Frames the game sends from here until the login is queued stay in `pending`, behind it.
         r.loginPending = true;
       } else {
+        std::optional<std::string> replay;
+        if (options_.replayLoginOnReconnect && replayPending_ && remote == loginRemote_ &&
+            r.request.role == Role::Login && !r.loginSent) {
+          replayPending_ = false;
+          const bool gameLoginFirst =
+              !r.pending.empty() && nevr_evr_codec::FirstSymbol(*r.pending.front().data) == nevr_evr_codec::kSymLoginRequest;
+          if (gameLoginFirst) {
+            Log(fx, LogLevel::Info,
+                Fmt("[router] login replay skipped remote=%llu conn=%d: the game sent its own login first", Ull(remote),
+                    r.ownerConn));
+          } else if (!lastLoginFrame_.empty()) {
+            replay = lastLoginFrame_;
+            r.loginSent = true;
+            ++loginsReplayed_;
+            Log(fx, LogLevel::Info,
+                Fmt("[router] login replayed remote=%llu conn=%d size=%zu (the game reconnected without a login)",
+                    Ull(remote), r.ownerConn, replay->size()));
+          }
+        }
         Log(fx, LogLevel::Info, Fmt("[router] remote=%llu open", Ull(remote)));
-        FlushOpenLocked(remote, r, std::nullopt, fx);
+        FlushOpenLocked(remote, r, std::move(replay), fx);
       }
     }
     Run(fx);
@@ -869,6 +907,7 @@ void Router::Shutdown() {
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     owedUnrequires_.clear();
+    ForgetLoginFrameLocked();
     connectionCount_ = 0;
     Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
                                 fx.gameCloses.size()));
@@ -890,6 +929,7 @@ Stats Router::GetStats() const {
   stats.nextConnIdx = connectionCount_;
   stats.droppedGameFrames = droppedGameFrames_;
   stats.droppedRemoteFrames = droppedRemoteFrames_;
+  stats.loginsReplayed = loginsReplayed_;
   stats.droppedUnrequires = droppedUnrequires_;
   stats.unmatchedEmbeddedUnrequires = unmatchedEmbeddedUnrequires_;
   return stats;

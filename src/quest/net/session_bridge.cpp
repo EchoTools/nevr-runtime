@@ -114,7 +114,9 @@ SessionBridge::SessionBridge(Config config) : config_(std::move(config)), tap_(F
 
   nevr_session_router::Options options;
   options.limits = config_.limits;
-  // No buildLogin: the game sends its own login (see the header).
+  // No buildLogin: the game sends its own login (see the header). When its login session is lost the game
+  // reconnects the socket without logging in again (#320), so the router replays that login.
+  options.replayLoginOnReconnect = true;
   options.loginGate = config_.loginGate;
   options.subscribeFriendList = config_.subscribeFriendList;
   options.log = config_.log;

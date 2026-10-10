@@ -56,6 +56,14 @@ class FakeConnection : public WsConnection {
     cv.notify_all();
   }
   void SendClose(uint16_t) override {}
+  // The remote breaks under the session (a network error).
+  void Fail() {
+    std::lock_guard<std::mutex> lock(mutex);
+    RecvResult r;
+    r.status = RecvStatus::Error;
+    incoming.push_back(std::move(r));
+    cv.notify_all();
+  }
   void Push(std::string data) {
     std::lock_guard<std::mutex> lock(mutex);
     RecvResult r;
@@ -486,6 +494,71 @@ void TestSideChannelRefusesWhenNothingIsConnected() {
   bridge.Stop();
 }
 
+// #320: the remote session fails under a logged-in game; the game reconnects its login socket WITHOUT a new
+// login (an established count-0 socket raises no Lost event). The bridge replays the game's own last
+// LoginRequest as the first frame of the new session, so the game's next request is answered, not met with a
+// bare Unrequire. Everything real except the service: the loopback server, the router, the remote transport.
+void TestLoginSocketReconnectAfterRemoteFailureIsAuthenticatedAgain() {
+  FakeConnector connector;
+  Observed seen;
+  SessionBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(connector.WaitConnects(1));
+  QCHECK(login.Upgrade(path));
+  QCHECK(connector.WaitConnects(2));
+  const std::string gameLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-own-login-SECRET");
+  login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
+  FakeConnection* first = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    for (FakeConnection* c : connector.connections) {
+      if (!c->Sent().empty()) { first = c; return true; }
+    }
+    return false;
+  }));
+  if (first == nullptr) return;
+  QCHECK(first->Sent()[0] == gameLogin);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 5150);
+  first->Push(success);
+  const std::string successWire = BuildFrame(Opcode::Binary, success);
+  QCHECK(login.Read(successWire.size()) == successWire);
+
+  // The network drops the session. The router closes the game's sockets; the game reconnects its login socket.
+  const std::size_t connectsBefore = connector.Calls();
+  first->Fail();
+  bool eof = false;
+  login.Read(1u << 16, 3000, &eof);  // the router's close frame, then the end of the socket
+  QCHECK(eof);
+  Client reconnected(port);
+  QCHECK(reconnected.Upgrade(path));
+  QCHECK(connector.WaitConnects(connectsBefore + 1));
+  FakeConnection* second = nullptr;
+  QCHECK(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(connector.mutex);
+    if (connector.connections.size() <= connectsBefore) return false;
+    second = connector.connections.back();
+    return !second->Sent().empty();
+  }));
+  if (second == nullptr) return;
+  QCHECK(second->Sent()[0] == gameLogin);  // authenticated again with no frame from the game
+  QCHECK(WaitFor([&] {
+    return HasFrame(seen, /*s2g=*/false, gameLogin);
+  }));
+
+  // The game's first request after the reconnect follows the login on the new session.
+  const std::string request = nevr_evr_codec::BuildMessage(0x4321, "profile-request");
+  reconnected.Write(BuildMaskedFrame(Opcode::Binary, request, kMask));
+  QCHECK(second->WaitSent(2));
+  const auto sent = second->Sent();
+  QCHECK(sent.size() >= 2 && sent[0] == gameLogin && sent[1] == request);
+  bridge.Stop();
+}
+
 }  // namespace
 
 int main() {
@@ -496,6 +569,7 @@ int main() {
   TestHeldLoginIsClosedWhenSignInFails();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
+  TestLoginSocketReconnectAfterRemoteFailureIsAuthenticatedAgain();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_bridge_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
