@@ -69,8 +69,10 @@ separate namespace is an open ABI decision, issue #130.
   (`src/runtime/lifecycle/login_redirect_override.h`).
 - Exports without the `NEVR_` prefix: `TokenAuth_GetToken`, `token_auth_Init`, `platform_compat_Init`
   and their siblings (declared with `NEVR_MODULE_API`).
-- Library targets without `nevr_` (`platform_compat`, `token_auth`, `crash_handler`, `log_filter`),
-  flat config keys without it (`asset_cdn_url`, `telemetry_uri`, `upnp`), macros without `NEVR_`
+- Targets whose name is the name of a file users touch or of a third party, so `nevr_` is not applied:
+  `echovr_server` (the launcher), `LibOVRPlatform64_1` (the stub DLL), `ovrplatformloader` (the Quest
+  loader library) and `breakpad_client`.
+- Flat config keys without it (`asset_cdn_url`, `telemetry_uri`, `upnp`), macros without `NEVR_`
   (`PROJECT_VERSION`, `GIT_COMMIT_HASH`), log tags outside `[NEVR.<AREA>]` (`[TELEMETRY.DIAG]`,
   a bare `[NEVR]`), and the PascalCase namespaces (`GameServer`, `TokenAuth`).
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.

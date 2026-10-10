@@ -87,6 +87,22 @@ class NamingTest(unittest.TestCase):
                 offenders[path] = sorted(extra)
         self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
 
+    def test_cmake_targets_carry_the_prefix(self):
+        # A library or executable target is nevr_<name> (#131); the output file name is OUTPUT_NAME and does
+        # not move. These four are a file name users touch or a third party's name.
+        exceptions = {"echovr_server", "LibOVRPlatform64_1", "ovrplatformloader", "breakpad_client"}
+        add = re.compile(r"^\s*add_(?:library|executable)\(\s*([A-Za-z0-9_]+)", re.M)
+        stray = {}
+        for path, text in project_files():
+            if not (path.endswith("CMakeLists.txt") or path.endswith(".cmake")):
+                continue
+            names = {n for n in add.findall(text)
+                     if not n.startswith(("nevr", "test_")) and not n.endswith(("_test", "_probe", "_probe_", "_test_hooks"))}
+            names -= exceptions
+            if names:
+                stray[path] = sorted(names)
+        self.assertEqual(stray, {}, "CMake targets are nevr_<name> (docs/standards/naming.md)")
+
     def test_every_legacy_spelling_is_still_present(self):
         files = dict(project_files())
         gone = {p: sorted(tokens - noncanonical(files.get(p, ""))) for p, tokens in LEGACY_SPELLINGS.items()

@@ -183,7 +183,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -271,15 +271,15 @@ if(MINGW)
 endif()
 
 if(MINGW)
-  add_library(dbghelp_stubs_gp STATIC link/dbghelp_stubs.cpp)
-  target_compile_definitions(dbghelp_stubs_gp PRIVATE PROTOBUF_STATIC_LIB)
-  set_target_properties(dbghelp_stubs_gp PROPERTIES
+  add_library(nevr_dbghelp_stubs STATIC link/dbghelp_stubs.cpp)
+  target_compile_definitions(nevr_dbghelp_stubs PRIVATE PROTOBUF_STATIC_LIB)
+  set_target_properties(nevr_dbghelp_stubs PROPERTIES
     OUTPUT_NAME "dbghelp"
     PREFIX "lib"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
   )
   target_link_directories(nevr_runtime BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stubs")
-  add_dependencies(nevr_runtime dbghelp_stubs_gp)
+  add_dependencies(nevr_runtime nevr_dbghelp_stubs)
 endif()
 
 if(MINGW)
@@ -319,12 +319,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_export_trace PRIVATE GTest::gtest GTest::gtest_main)
     # A stand-in module the test loads: named pnsrad.dll (the tracer identifies a platform DLL by file name),
     # with a code export and a data export, in its own directory next to the test.
-    add_library(export_trace_fixture MODULE tests/export_trace_fixture.cpp)
-    set_target_properties(export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
+    add_library(nevr_export_trace_fixture MODULE tests/export_trace_fixture.cpp)
+    set_target_properties(nevr_export_trace_fixture PROPERTIES PREFIX "" OUTPUT_NAME "pnsrad"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture"
       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/export-trace-fixture")
     set_source_files_properties(tests/export_trace_fixture.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    add_dependencies(test_export_trace export_trace_fixture)
+    add_dependencies(test_export_trace nevr_export_trace_fixture)
     gtest_discover_tests(test_export_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_system_module_loader
@@ -845,7 +845,7 @@ if(BUILD_TESTING)
       ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/src/modules/token-auth/src)
     target_link_libraries(test_token_auth PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth_test_hooks)
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json nevr_token_auth_test_hooks)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_messages tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp)
