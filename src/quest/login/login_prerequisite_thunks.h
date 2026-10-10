@@ -54,6 +54,18 @@ using UserRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::Logged
 using TokenRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::AccessToken>, std::uint64_t()>;
 using ProofRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::UserProof>, std::uint64_t()>;
 
+// The message-level imports the local answers hook (#411). PopMessage returns the next message or null;
+// GetType / GetRequestID read a message; FreeMessage releases one. A synthetic handle is answered here and
+// never reaches the SDK (login_prerequisites.h, namespace local).
+struct PopMessageTag {};
+struct MessageGetTypeTag {};
+struct MessageGetRequestIdTag {};
+struct FreeMessageTag {};
+using PopMessageThunk = sentinel::CallbackThunk<PopMessageTag, const void*()>;
+using MessageGetTypeThunk = sentinel::CallbackThunk<MessageGetTypeTag, int(const void*)>;
+using MessageGetRequestIdThunk = sentinel::CallbackThunk<MessageGetRequestIdTag, std::uint64_t(const void*)>;
+using FreeMessageThunk = sentinel::CallbackThunk<FreeMessageTag, void(void*)>;
+
 // The entitlement request (#411): takes nothing, returns the request id (0x206824, 0x206ae4 discard it).
 struct EntitlementRequestTag {};
 using EntitlementRequestThunk = sentinel::CallbackThunk<EntitlementRequestTag, std::uint64_t()>;

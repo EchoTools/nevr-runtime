@@ -42,26 +42,58 @@ NEVR_HOOK_RECORD(kUserProofGetNonceHook, UserProofGetNonceThunk, &OnUserProofGet
 
 // ---- requests --------------------------------------------------------------------------------
 std::uint64_t HandleOrgRequest(OrgRequestThunk::Fn original, std::uint64_t user) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
+    if (id != 0) {
+      NoteRequest(Prerequisite::OrgScopedId, id);
+      return id;
+    }
+  }
   const std::uint64_t request = original(user);
   NoteRequest(Prerequisite::OrgScopedId, request);
   return request;
 }
 std::uint64_t HandleUserRequest(UserRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::LoggedInUser);
+    if (id != 0) {
+      NoteRequest(Prerequisite::LoggedInUser, id);
+      return id;
+    }
+  }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::LoggedInUser, request);
   return request;
 }
 std::uint64_t HandleTokenRequest(TokenRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::AccessToken);
+    if (id != 0) {
+      NoteRequest(Prerequisite::AccessToken, id);
+      return id;
+    }
+  }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::AccessToken, request);
   return request;
 }
 std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::UserProof);
+    if (id != 0) {
+      NoteRequest(Prerequisite::UserProof, id);
+      return id;
+    }
+  }
   const std::uint64_t request = original();
   NoteRequest(Prerequisite::UserProof, request);
   return request;
 }
 NEVR_HOOK_RECORD(kEntitlementRequestHook, EntitlementRequestThunk, &OnEntitlementRequest);
+NEVR_HOOK_RECORD(kPopMessageHook, PopMessageThunk, &local::OnPopMessage);
+NEVR_HOOK_RECORD(kMessageGetTypeHook, MessageGetTypeThunk, &local::OnMessageGetType);
+NEVR_HOOK_RECORD(kMessageGetRequestIdHook, MessageGetRequestIdThunk, &local::OnMessageGetRequestId);
+NEVR_HOOK_RECORD(kFreeMessageHook, FreeMessageThunk, &local::OnFreeMessage);
 NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &HandleOrgRequest);
 NEVR_HOOK_RECORD(kUserRequestHook, UserRequestThunk, &HandleUserRequest);
 NEVR_HOOK_RECORD(kTokenRequestHook, TokenRequestThunk, &HandleTokenRequest);
@@ -75,6 +107,7 @@ struct Hooks {
   sentinel::GotHook accessors[8];
   sentinel::GotHook requests[4];
   sentinel::GotHook entitlement;
+  sentinel::GotHook messages[4];
 };
 Hooks& H() {
   static Hooks* const hooks = new Hooks();
@@ -157,7 +190,19 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   // Answered locally: no entitlement request reaches Meta (#411). Independent of substitution: it needs no identity.
   result.entitlement += Install(hooks.entitlement, kEntitlementRequestHook, T::kEntitlementRequest, base) ? 1 : 0;
 
-  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4 && result.entitlement == 1;
+  // The message-level imports (#411). Local answers are switched on only when every hook they depend on is in
+  // (all eight accessors with is-error, the four callbacks, the four requests and these four): otherwise a
+  // synthetic handle could reach the SDK, so the request hooks keep forwarding to it.
+  result.messages += Install(hooks.messages[0], kPopMessageHook, T::kPopMessage, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[1], kMessageGetTypeHook, T::kMessageGetType, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[2], kMessageGetRequestIdHook, T::kMessageGetRequestId, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[3], kFreeMessageHook, T::kFreeMessage, base) ? 1 : 0;
+  result.local = result.substitute && result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
+                 result.messages == 4;
+  local::SetEnabled(result.local);
+
+  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
+                        result.entitlement == 1 && result.messages == 4;
   sentinel::LogFields(complete ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
                       "quest_login_prerequisites_install",
                       {{"status", complete ? "installed" : "partial"},
@@ -165,6 +210,8 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
                        {"accessors", result.accessors},
                        {"requests", result.requests},
                        {"entitlement_local", result.entitlement},
+                       {"messages", result.messages},
+                       {"local_answers", result.local ? "on" : "off"},
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});

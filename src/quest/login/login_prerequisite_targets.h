@@ -75,6 +75,13 @@ inline constexpr PinnedSlot kGetUserProof{"ovr_User_GetUserProof", RelocKind::kJ
 // hook answers locally with request id 0, so no request leaves and no message comes back.
 inline constexpr PinnedSlot kEntitlementRequest{"ovr_Entitlement_GetIsViewerEntitled", RelocKind::kJumpSlot, 0x6df638, 0};
 
+// The message-level imports the local answers hook (#411): the pump pops a message, reads its type and
+// request id, and frees it (Update 0x207534).
+inline constexpr PinnedSlot kPopMessage{"ovr_PopMessage", RelocKind::kJumpSlot, 0x6e02d0, 0};
+inline constexpr PinnedSlot kMessageGetType{"ovr_Message_GetType", RelocKind::kJumpSlot, 0x6de8a0, 0};
+inline constexpr PinnedSlot kMessageGetRequestId{"ovr_Message_GetRequestID", RelocKind::kJumpSlot, 0x6e0ce0, 0};
+inline constexpr PinnedSlot kFreeMessage{"ovr_FreeMessage", RelocKind::kJumpSlot, 0x6df448, 0};
+
 // Read, never hooked: what a callback handler uses to report the Oculus error code and to tell a
 // transient error from a permanent one (ovr_Error_GetMessage returns the JSON the game reads
 // "error|is_transient" from).
@@ -88,7 +95,8 @@ inline constexpr PinnedSlot kAll[] = {
     kMessageIsError,      kMessageGetString,     kMessageGetOrgScopedId, kOrgScopedIdGetId,
     kMessageGetUser,      kUserGetOculusId,      kMessageGetUserProof,  kUserProofGetNonce,
     kGetOrgScopedId,      kGetLoggedInUser,      kGetAccessToken,       kGetUserProof,
-    kEntitlementRequest,
+    kEntitlementRequest,  kPopMessage,           kMessageGetType,       kMessageGetRequestId,
+    kFreeMessage,
     kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,     kErrorGetMessage,
 };
 
