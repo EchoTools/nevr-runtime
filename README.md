@@ -41,7 +41,7 @@ says how to check each one and which log line proves it.
 - **Arena rules in `config.yaml`.** Round time, celebration time and mercy score can be set under `arena.*`. (PC)
 
 ### Voice
-- **Microphone on Wine and Proton.** A WASAPI capture provider feeds the game's own voice path, resampled to mono 48 kHz. (PC)
+- **Microphone on Wine and Proton.** A WASAPI capture provider feeds the game's own voice path, resampled to mono 48 kHz; it picks up the default capture device again after the device is invalidated. (PC)
 - **Native Windows keeps the game's own microphone.** The runtime installs its provider under Wine and Proton only. (PC)
 
 ### Crash and exit handling
@@ -73,8 +73,7 @@ The issue tracker is the source of truth: on Quest the main-menu FRIENDS LIST
 ([#392](https://github.com/EchoTools/nevr-runtime/issues/392)), the status text under your
 name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the party tab's
 Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
-yet; on PC the microphone does not recover from a changed audio device
-([#399](https://github.com/EchoTools/nevr-runtime/issues/399)), the party roster keeps a
+yet; on PC the party roster keeps a
 member who disconnected ([#403](https://github.com/EchoTools/nevr-runtime/issues/403)),
 party data sharing is refused ([#398](https://github.com/EchoTools/nevr-runtime/issues/398)),
 a friend request shows no prompt to the receiver
