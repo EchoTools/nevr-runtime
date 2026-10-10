@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "quest/login/login_prerequisite_targets.h"
+#include "quest/login/login_prerequisite_thunks.h"
 #include "quest/login/login_prerequisites.h"
 #include "quest/sentinel/callback_thunk.h"
 #include "quest/sentinel/got_hook.h"
@@ -18,49 +19,18 @@ namespace {
 
 namespace T = PrerequisiteTargets;
 
-// ---- callbacks: void (SCallbacks* / CNSOVRUser*, ovrMessage*) --------------------------------
-// The mailbox proxies (0x2089d0, 0x208be0) call the registered member pointer with the object in
-// x0 and the message in x1 (`add x0,x0,x8,asr #1; mov x1,x2; br x3`).
-template <Prerequisite P>
-struct CallbackTag {};
-template <Prerequisite P>
-using CallbackThunk = sentinel::CallbackThunk<CallbackTag<P>, void(void*, void*)>;
-
+// ---- callbacks (the thunk types are in login_prerequisite_thunks.h) ---------------------------
 template <Prerequisite P>
 void HandleCallback(typename CallbackThunk<P>::Fn original, void* self, void* message) noexcept {
   OnPrerequisiteCallback(P, original, self, message);
 }
 
-using OrgCallbackThunk = CallbackThunk<Prerequisite::OrgScopedId>;
-using UserCallbackThunk = CallbackThunk<Prerequisite::LoggedInUser>;
-using TokenCallbackThunk = CallbackThunk<Prerequisite::AccessToken>;
-using ProofCallbackThunk = CallbackThunk<Prerequisite::UserProof>;
 NEVR_HOOK_RECORD(kOrgCallbackHook, OrgCallbackThunk, &HandleCallback<Prerequisite::OrgScopedId>);
 NEVR_HOOK_RECORD(kUserCallbackHook, UserCallbackThunk, &HandleCallback<Prerequisite::LoggedInUser>);
 NEVR_HOOK_RECORD(kTokenCallbackHook, TokenCallbackThunk, &HandleCallback<Prerequisite::AccessToken>);
 NEVR_HOOK_RECORD(kProofCallbackHook, ProofCallbackThunk, &HandleCallback<Prerequisite::UserProof>);
 
-// ---- accessors ------------------------------------------------------------------------------
-// Types from the callers in libpnsovr: IsError is tested with `tbz w0,#0` (0x1ece7c); the handle
-// accessors feed x0 straight into the next accessor (0x1ecf08-0x1ecf0c, 0x1ed0f0-0x1ed0f4,
-// 0x1ed70c-0x1ed710); GetID's x0 is stored as a 64-bit id (0x1ecf18); the strings are read as
-// char const* (0x1ed330-0x1ed35c, 0x1ed0f4-0x1ed114, 0x1ed710-0x1ed91c).
-struct IsErrorTag {};
-struct GetStringTag {};
-struct GetOrgScopedIdTag {};
-struct OrgScopedIdGetIdTag {};
-struct GetUserTag {};
-struct UserGetOculusIdTag {};
-struct GetUserProofTag {};
-struct UserProofGetNonceTag {};
-using IsErrorThunk = sentinel::CallbackThunk<IsErrorTag, bool(const void*)>;
-using GetStringThunk = sentinel::CallbackThunk<GetStringTag, const char*(const void*)>;
-using GetOrgScopedIdThunk = sentinel::CallbackThunk<GetOrgScopedIdTag, const void*(const void*)>;
-using OrgScopedIdGetIdThunk = sentinel::CallbackThunk<OrgScopedIdGetIdTag, std::uint64_t(const void*)>;
-using GetUserThunk = sentinel::CallbackThunk<GetUserTag, const void*(const void*)>;
-using UserGetOculusIdThunk = sentinel::CallbackThunk<UserGetOculusIdTag, const char*(const void*)>;
-using GetUserProofThunk = sentinel::CallbackThunk<GetUserProofTag, const void*(const void*)>;
-using UserProofGetNonceThunk = sentinel::CallbackThunk<UserProofGetNonceTag, const char*(const void*)>;
+// ---- accessors -------------------------------------------------------------------------------
 NEVR_HOOK_RECORD(kIsErrorHook, IsErrorThunk, &OnMessageIsError);
 NEVR_HOOK_RECORD(kGetStringHook, GetStringThunk, &OnMessageGetString);
 NEVR_HOOK_RECORD(kGetOrgScopedIdHook, GetOrgScopedIdThunk, &OnMessageGetOrgScopedId);
@@ -70,17 +40,7 @@ NEVR_HOOK_RECORD(kUserGetOculusIdHook, UserGetOculusIdThunk, &OnUserGetOculusId)
 NEVR_HOOK_RECORD(kGetUserProofHook, GetUserProofThunk, &OnMessageGetUserProof);
 NEVR_HOOK_RECORD(kUserProofGetNonceHook, UserProofGetNonceThunk, &OnUserProofGetNonce);
 
-// ---- requests -------------------------------------------------------------------------------
-// ovr_User_GetOrgScopedID takes the user id in x0 (0x2069b4-0x2069bc, 0x1ec990-0x1ec99c); the
-// other three take nothing. All four return the 64-bit request id the game keys the callback by
-// (0x1ec9b0, 0x1eca90, 0x1ecce0, 0x1ece20).
-template <Prerequisite P>
-struct RequestTag {};
-using OrgRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::OrgScopedId>, std::uint64_t(std::uint64_t)>;
-using UserRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::LoggedInUser>, std::uint64_t()>;
-using TokenRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::AccessToken>, std::uint64_t()>;
-using ProofRequestThunk = sentinel::CallbackThunk<RequestTag<Prerequisite::UserProof>, std::uint64_t()>;
-
+// ---- requests --------------------------------------------------------------------------------
 std::uint64_t HandleOrgRequest(OrgRequestThunk::Fn original, std::uint64_t user) noexcept {
   const std::uint64_t request = original(user);
   NoteRequest(Prerequisite::OrgScopedId, request);

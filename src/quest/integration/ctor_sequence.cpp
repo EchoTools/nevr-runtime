@@ -21,6 +21,7 @@ const char* StepName(StepId id) {
     case StepId::kRegisterClockCounters: return "register_clock_counters";
     case StepId::kRegisterRedirectCounters: return "register_redirect_counters";
     case StepId::kRegisterDlopenCounters: return "register_dlopen_counters";
+    case StepId::kRegisterLoginCounters: return "register_login_counters";
     case StepId::kRegisterSocialCounters: return "register_social_counters";
     case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
     case StepId::kStartReporter: return "start_reporter";
@@ -100,7 +101,8 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // 3: every counter, before the one StartReporter. A refused registration turns off only the piece
     // whose counters those are.
     r.Run(StepId::kRegisterClockCounters, [&] { return steps.RegisterClockCounters(); });
-    bool redirectCounters = false, dlopenCounters = false, socialCounters = false, promptCounters = false;
+    bool redirectCounters = false, dlopenCounters = false, loginCounters = false, socialCounters = false,
+         promptCounters = false;
     if (wantRedirect) {
       redirectCounters = r.Run(StepId::kRegisterRedirectCounters, [&] { return steps.RegisterRedirectCounters(); });
     } else {
@@ -110,6 +112,11 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       dlopenCounters = r.Run(StepId::kRegisterDlopenCounters, [&] { return steps.RegisterDlopenCounters(); });
     } else {
       r.Skip(StepId::kRegisterDlopenCounters, "login_and_redirect_off");
+    }
+    if (wantLogin) {
+      loginCounters = r.Run(StepId::kRegisterLoginCounters, [&] { return steps.RegisterLoginCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterLoginCounters, "login_off");
     }
     if (wantSocial) {
       socialCounters = r.Run(StepId::kRegisterSocialCounters, [&] { return steps.RegisterSocialCounters(); });
@@ -188,7 +195,7 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
 
     // The post-load installs: the login hook needs the bridge (the rewrite targets the service the
     // bridge reaches) and token auth; the matchmaking redirect needs the redirect installed.
-    const bool loginWanted = wantLogin && bridgeOk && tokenOk;
+    const bool loginWanted = wantLogin && loginCounters && bridgeOk && tokenOk;
     const bool matchmakingWanted = redirectOk;
     if (!wantDlopen) {
       r.Skip(StepId::kInstallDlopenHook, "login_and_redirect_off");

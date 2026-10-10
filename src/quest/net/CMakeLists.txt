@@ -20,6 +20,7 @@ add_library(nevr_quest_net STATIC
   loopback_game_server.cpp
   remote_ws.cpp
   curl_ws_connector.cpp
+  frame_tap.cpp
   session_bridge.cpp
   "${NEVR_SRC_ROOT}/runtime/server/serverdb_uri.cpp")
 target_include_directories(nevr_quest_net PUBLIC "${NEVR_SRC_ROOT}")
@@ -27,7 +28,8 @@ target_include_directories(nevr_quest_net PUBLIC "${NEVR_SRC_ROOT}")
 target_link_libraries(nevr_quest_net PUBLIC nevr_quest_session_router nevr_quest_token_auth CURL::libcurl)
 target_compile_options(nevr_quest_net PRIVATE -Wall -Wextra -Werror)
 
-foreach(test_name session_router_test ws_wire_test loopback_game_server_test remote_ws_test curl_ws_tls_test)
+foreach(test_name session_router_test ws_wire_test loopback_game_server_test remote_ws_test curl_ws_tls_test
+                 session_bridge_test)
   add_executable(${test_name} "${CMAKE_CURRENT_SOURCE_DIR}/../tests/${test_name}.cpp")
   target_link_libraries(${test_name} PRIVATE nevr_quest_net)
   target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)

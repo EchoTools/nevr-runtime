@@ -1,7 +1,7 @@
 // The router drops an STcpConnectionUnrequireEvent on purpose when the connection it belongs to has nothing
 // outstanding (delivering it would wrap the game's 8-bit count). The count is Router Stats; production reports
 // it from the token-auth poll as one structured line each time it changed, so a dropped Unrequire is visible
-// without a line per frame. (The reporter's counter table is nearly full: 46 of 48.)
+// without a line per frame. (The reporter's counter table holds 96; the sentinel registers 64.)
 #pragma once
 
 #include <cstdint>

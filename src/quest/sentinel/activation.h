@@ -21,7 +21,9 @@ enum class ReadStatus { kRead, kAbsent, kNotRegularFile, kError };
 
 // Reads the config file without blocking: the open is non-blocking and the target must be a
 // regular file (a FIFO, directory or device at the path is kNotRegularFile and is never read).
-// At most kMaxConfigBytes + 1 bytes are read. `*err` is set for kAbsent and kError.
+// The file is read in 4096-byte chunks until it ends or more than kMaxConfigBytes have been read,
+// so `*out` holds at most kMaxConfigBytes + 4096 bytes; a caller rejects anything longer than
+// kMaxConfigBytes. `*err` is set for kAbsent and kError.
 ReadStatus ReadConfigFile(const std::string& path, std::string* out, int* err);
 
 // Reads `path`, resolves against the embedded defaults and logs every state. Not cached; this
