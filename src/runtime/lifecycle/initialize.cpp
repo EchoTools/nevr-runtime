@@ -454,7 +454,7 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
   const bool vehInstalled = InstallVEH();
   InstallCrashFilterInstrumentation();
-  BootLogTee::TeeFprintf("%s", VehPolicy::BootLine(vehInstalled));
+  BootLogTee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehInstalled));
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   BootLogTee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");
@@ -497,5 +497,5 @@ static void InitializeValidatedGameModule(HMODULE module) {
 }
 
 void InitializeGameModule(HMODULE module) {
-  GameImageGuard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
+  nevr_game_image_guard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
 }

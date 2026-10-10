@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <string>
 
-namespace ReturnToLobbyHold {
+namespace nevr_return_to_lobby_hold {
 
 enum class RequestVerdict {
   Proceed,  // issue the return to lobby now
@@ -108,4 +108,4 @@ PollVerdict PollIfActive(Policy& policy, uint64_t nowMs, CountEntrants countEntr
   return policy.Poll(nowMs, countEntrants(), shutdownPending());
 }
 
-}  // namespace ReturnToLobbyHold
+}  // namespace nevr_return_to_lobby_hold
