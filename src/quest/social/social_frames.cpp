@@ -10,6 +10,7 @@
 
 #include "hook_log.h"
 #include "quest/social/social_request_log.h"
+#include "runtime/compat/evr_codec.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -151,6 +152,15 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
 
   if (sym == nevr_social_party::kPartyDataNotify) consumed = ApplyPartyData(ports, payload, len, why) || consumed;
 
+  // A new session (first login, reconnect, another account): the friend requests that were pending belonged to
+  // the last one. The server replays this player's after the friend-list subscribe that follows.
+  if (sym == nevr_evr_codec::kSymLoginSuccess) {
+    const std::size_t cleared = ports.recent->ClearRequests();
+    if (cleared != 0) {
+      LogFields(LogLevel::kInfo, "social_friend_request",
+                {{"result", "cleared"}, {"reason", "login_success"}, {"removed", static_cast<long long>(cleared)}});
+    }
+  }
   // An incoming friend request is listed first in the recently-met list (the game has no prompt of its own,
   // #405), and its requester's profile is asked for like a friend's.
   {

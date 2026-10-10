@@ -571,6 +571,15 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             name, static_cast<unsigned long long>(len));
       }
     }
+    if (fromServer && sym == nevr_evr_codec::kSymLoginSuccess) {
+      // A new session (first login, reconnect or another account): the friend requests that were pending
+      // belonged to the last one. The server replays this player's after the subscribe that follows.
+      const size_t cleared = nevr_social_roster::RecentlyMet().ClearRequests();
+      if (cleared != 0) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend requests cleared: new session (login success) removed=%zu",
+            cleared);
+      }
+    }
     if (fromServer && sym == nevr_social_roster::kFriendPresenceNotify) {
       uint64_t friendId = 0;
       nevr_social_roster::Presence presence;

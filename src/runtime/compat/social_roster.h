@@ -392,6 +392,18 @@ class RecentList {
     return false;
   }
 
+  /// A new session (a login, which a reconnect or an account change also is): the pending requests of the
+  /// last one are not this player's. The server replays the ones that are, after the friend-list subscribe.
+  /// Returns how many were pending.
+  std::size_t ClearRequests() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const std::size_t pending = requests_.size();
+    if (pending == 0) return 0;
+    requests_.clear();
+    PublishLocked();
+    return pending;
+  }
+
   bool IsRequest(std::uint64_t id) const {
     std::lock_guard<std::mutex> guard(mutex_);
     return std::any_of(requests_.begin(), requests_.end(), [id](const Entry& e) { return e.id == id; });

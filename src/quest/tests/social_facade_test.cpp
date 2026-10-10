@@ -18,6 +18,7 @@
 #include "quest/social/social_frames.h"
 #include "quest/social/social_request_log.h"
 #include "quest/tests/test_check.h"
+#include "runtime/compat/evr_codec.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -738,6 +739,62 @@ void TestIncomingFriendRequestIsListedInRecentlyMet() {
   Feed(w, kSymInviteNotify, Le(0, 8));
   QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
   nevr_social_names::SetDecoder(nullptr);
+}
+
+// Every message that ends a request does so end to end, through the frame observer and the facade's slots:
+// the accept (ours came back, or theirs), a remove (notify and the response to our own), a withdrawal, and
+// a rejection. Each names its reason.
+void TestEveryMessageThatEndsARequestClearsIt() {
+  struct Path {
+    const char* reason;
+    std::uint64_t symbol;
+    std::uint32_t payloadBytes;  // after the header: id(8) [+ status(8) for the 0x18 messages]
+  };
+  const Path paths[] = {
+      {"FriendAcceptSuccess", 0x1bbda7fa06af4627ULL, 0x18},
+      {"FriendAcceptNotify", 0xc237c84c31d3ae05ULL, 0x18},
+      {"FriendRemoveNotify", 0xe06972f49cd72265ULL, 0x10},
+      {"FriendRemoveResponse", 0xc2bf83a08ea3a955ULL, 0x10},
+      {"FriendWithdrawnNotify", 0x191aa30801ec6d03ULL, 0x10},
+      {"FriendRejectNotify", 0xb9b86c0ce8e8d0c1ULL, 0x10},
+  };
+  for (const Path& path : paths) {
+    World w;
+    w.party.SetSelf(kSelf, "alice");
+    void* obj = w.Obj();
+    Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+    Feed(w, kSymInviteNotify, Le(0, 8) + Le(7007, 8));
+    QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+    g_lines.clear();
+    std::string payload = Le(0, 8) + Le(6006, 8);
+    if (path.payloadBytes == 0x18) payload += Le(0, 8);
+    Feed(w, path.symbol, payload);
+    QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);                       // only that one went
+    QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 7007);
+    QCHECK(CountLines((std::string("\"reason\":\"") + path.reason + "\",\"pending\":1").c_str()) == 1);
+  }
+}
+
+// A new session starts with no pending requests: a login (a reconnect or another account is one too) clears the
+// ones the last session had, and the server's replay after the subscribe puts this player's back.
+void TestANewSessionClearsPendingRequests() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  g_lines.clear();
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 0);
+  QCHECK(CountLines("\"result\":\"cleared\",\"reason\":\"login_success\",\"removed\":1") == 1);
+  // The replay re-fills it (once per request, as at the first login).
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  // A login with nothing pending says nothing.
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  g_lines.clear();
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  QCHECK(CountLines("\"reason\":\"login_success\"") == 0);
 }
 
 void TestFriendRequestAnswersAreLoggedForTheSender() {
@@ -1715,6 +1772,8 @@ int main() {
   TestLobbyFields();
   TestRecentlyMet();
   TestIncomingFriendRequestIsListedInRecentlyMet();
+  TestEveryMessageThatEndsARequestClearsIt();
+  TestANewSessionClearsPendingRequests();
   TestFriendRequestAnswersAreLoggedForTheSender();
   TestExceptionContainment();
   TestFrameWalker();
