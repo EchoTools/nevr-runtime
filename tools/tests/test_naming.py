@@ -87,6 +87,12 @@ class NamingTest(unittest.TestCase):
                 offenders[path] = sorted(extra)
         self.assertEqual(offenders, {}, "use NEVR, Nevr or nevr (docs/standards/naming.md)")
 
+    def test_one_spelling_of_the_lifecycle_namespace(self):
+        # The runtime's lifecycle code is in `nevr::lifecycle`; the two older spellings were unified (#131).
+        old = re.compile(r"nevr_runtime::lifecycle|Nevr::Lifecycle|nevr::Lifecycle")
+        found = {path: sorted(set(old.findall(text))) for path, text in project_files() if old.search(text)}
+        self.assertEqual(found, {}, "the lifecycle namespace is nevr::lifecycle (docs/standards/naming.md)")
+
     def test_project_macros_carry_the_prefix(self):
         # The build identity and the hook selector are NEVR_ macros (#131). CMake VARIABLES of the same name
         # (`${PROJECT_VERSION}`, `set(GIT_DESCRIBE ...)`) are CMake's own and stay. src/legacy is frozen and

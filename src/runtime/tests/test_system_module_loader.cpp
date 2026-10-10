@@ -38,17 +38,17 @@ void ConfigureDirectory(std::wstring directory, UINT reportedLength) {
 }
 TEST(SystemModuleLoader, RejectsZeroResultWithoutCallingLoadLibrary) {
   ConfigureDirectory(L"C:\\Windows\\System32", 0);
-  EXPECT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
+  EXPECT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
   EXPECT_EQ(g_loadCalls, 0U);
 }
 
 TEST(SystemModuleLoader, RejectsReturnedLengthAtOrBeyondBufferCapacity) {
   ConfigureDirectory(std::wstring(MAX_PATH, L'x'), MAX_PATH);
-  EXPECT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
+  EXPECT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
   EXPECT_EQ(g_loadCalls, 0U);
 
   ConfigureDirectory(std::wstring(MAX_PATH + 10, L'x'), MAX_PATH + 10);
-  EXPECT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
+  EXPECT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
   EXPECT_EQ(g_loadCalls, 0U);
 }
 
@@ -56,7 +56,7 @@ TEST(SystemModuleLoader, RejectsDirectoryWithoutTerminatorAtReportedLength) {
   constexpr auto directory = L"C:\\Windows\\System32";
   ConfigureDirectory(directory, static_cast<UINT>(std::wstring(directory).size()));
   g_writeTerminator = false;
-  EXPECT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
+  EXPECT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
   EXPECT_EQ(g_loadCalls, 0U);
 }
 
@@ -64,21 +64,21 @@ TEST(SystemModuleLoader, RejectsWhenSuffixAndTerminatorDoNotFit) {
   constexpr size_t suffixLength = sizeof(L"\\dbgcore.dll") / sizeof(wchar_t) - 1;
   const UINT directoryLength = static_cast<UINT>(MAX_PATH - suffixLength);
   ConfigureDirectory(std::wstring(directoryLength, L'd'), directoryLength);
-  EXPECT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
+  EXPECT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), nullptr);
   EXPECT_EQ(g_loadCalls, 0U);
 }
 
 TEST(SystemModuleLoader, LoadsValidatedSystemPathAndExactBoundaryThatFits) {
   constexpr auto directory = L"C:\\Windows\\System32";
   ConfigureDirectory(directory, static_cast<UINT>(std::wstring(directory).size()));
-  ASSERT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), g_loadedModule);
+  ASSERT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), g_loadedModule);
   EXPECT_EQ(g_loadCalls, 1U);
   EXPECT_EQ(g_loadedPath, L"C:\\Windows\\System32\\dbgcore.dll");
 
   constexpr size_t suffixLength = sizeof(L"\\dbgcore.dll") / sizeof(wchar_t) - 1;
   const UINT directoryLength = static_cast<UINT>(MAX_PATH - suffixLength - 1);
   ConfigureDirectory(std::wstring(directoryLength, L'd'), directoryLength);
-  ASSERT_EQ(Nevr::Lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), g_loadedModule);
+  ASSERT_EQ(nevr::lifecycle::LoadSystemDbgCore(FakeGetSystemDirectoryW, FakeLoadLibraryW), g_loadedModule);
   EXPECT_EQ(g_loadCalls, 1U);
   EXPECT_EQ(g_loadedPath.size(), static_cast<size_t>(MAX_PATH - 1));
 }

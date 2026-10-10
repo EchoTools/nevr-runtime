@@ -145,7 +145,7 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
 
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config, InternFn intern, BridgeProbe bridge) {
   return InstallRedirectHooksWith(config, {PinnedTargets(), sentinel::FindLoadedImage,
-                                           intern != nullptr ? intern : &nevr_runtime::lifecycle::InternStableCStr,
+                                           intern != nullptr ? intern : &nevr::lifecycle::InternStableCStr,
                                            bridge});
 }
 

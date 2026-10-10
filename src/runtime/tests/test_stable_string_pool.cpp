@@ -18,16 +18,16 @@
 
 namespace {
 
-using nevr_runtime::lifecycle::InternStatus;
+using nevr::lifecycle::InternStatus;
 
-static_assert(nevr_runtime::lifecycle::kStableStringMaxCount == 1024,
+static_assert(nevr::lifecycle::kStableStringMaxCount == 1024,
               "the documented limit of 1024 distinct strings");
-static_assert(nevr_runtime::lifecycle::kStableStringMaxPayloadBytes == 1024 * 1024,
+static_assert(nevr::lifecycle::kStableStringMaxPayloadBytes == 1024 * 1024,
               "the documented limit of 1 MiB per string");
-static_assert(nevr_runtime::lifecycle::kStablePoolMaxBytes == 16 * 1024 * 1024,
+static_assert(nevr::lifecycle::kStablePoolMaxBytes == 16 * 1024 * 1024,
               "the documented limit of 16 MiB for the whole pool");
-using nevr_runtime::lifecycle::StableStringPool;
-using nevr_runtime::lifecycle::StableStringPoolLimits;
+using nevr::lifecycle::StableStringPool;
+using nevr::lifecycle::StableStringPoolLimits;
 
 void InjectBadAllocation(void* context) {
   if (*static_cast<bool*>(context)) throw std::bad_alloc();
@@ -69,7 +69,7 @@ TEST(StableStringPool, SharedVectorsDeduplicateAndRemainStableAfterLaterInsertio
 }
 
 TEST(StableStringPool, GeneratedJsonEscapingFitsExactAndRejectsOverLimitPayload) {
-  constexpr std::size_t kLimit = nevr_runtime::lifecycle::kStableStringMaxPayloadBytes;
+  constexpr std::size_t kLimit = nevr::lifecycle::kStableStringMaxPayloadBytes;
   const std::string httpUri = "https://game.example:7350";
   const auto baseline = nevr_cfg::BuildGameNativeConfigJson(httpUri, "x");
   ASSERT_TRUE(baseline.has_value());
@@ -187,7 +187,7 @@ TEST(StableStringPool, ConcurrentSameValueReturnsOneStablePointer) {
 }
 
 TEST(StableStringPool, NoPoolOwnedBlockIsFreedWhenFixtureDllUnloads) {
-  using nevr_runtime::lifecycle::test::FixtureObservation;
+  using nevr::lifecycle::test::FixtureObservation;
   constexpr const char* kDllName = "test_stable_string_pool_fixture.dll";
   const std::string path = AdjacentDllPath(kDllName);
   ASSERT_FALSE(path.empty());

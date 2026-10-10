@@ -61,6 +61,10 @@ target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../se
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
+# The same test registers the #319 OBB-skip hook's counters through its real function (also without exceptions).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/obb_skip_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.
