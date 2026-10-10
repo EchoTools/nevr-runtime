@@ -91,6 +91,7 @@ struct FakeSteps final : Steps {
     dlopenArgsSeen = true;
     return Step("dlopen");
   }
+  bool StartHwDump() override { return Step("hwdump"); }
   void Note(const char*, const char*, const char*) override {}
 
   static FakeSteps With(bool redirect, bool bridge, bool login, bool socialOn) {
@@ -116,18 +117,44 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallDlopenHook).state == StepState::kSkipped);
+  // The hardware dump (#335) is off by default and its step says so.
+  QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallHwDump).reason, "hwdump_off") == 0);
 }
 
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.config.effective.hwdump = true;
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reporter",     "clock",
                                          "token",     "prompt",     "bridge",     "redirect",     "social",
-                                         "dlopen"};
+                                         "dlopen",    "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
+}
+
+// The hardware dump needs no other feature, and a failing or throwing dump step leaves every other step as
+// it was (#335).
+void TestHwDumpIsIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.config.effective.hwdump = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reporter", "clock", "hwdump"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.hwdump = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    for (int i = 0; i < static_cast<int>(StepId::kInstallHwDump); ++i) QCHECK(r.steps[i].state == StepState::kOk);
+    QCHECK(r.at(StepId::kInstallHwDump).state != StepState::kOk);
+    QCHECK(s.Ran("dlopen") && s.Ran("social"));
+  }
 }
 
 // Every counter is registered before the single StartReporter, and StartReporter runs once.
@@ -701,6 +728,7 @@ int main() {
   TestStepLogLevels();
   TestEverythingOffInstallsOnlyTheProofHook();
   TestFullStackOrder();
+  TestHwDumpIsIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();
