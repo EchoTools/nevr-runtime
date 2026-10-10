@@ -256,7 +256,8 @@ unsigned FakeCount(const void*) { return g_countAnswer; }
 const char* FakeName(const void*, unsigned) { return g_nameAnswer; }
 void FakeSet(void*, const void*) { ++g_setCalls; }
 // The functions that talk to Meta (#396): what the game's own versions leave in the state word is modelled
-// (ShareData: dirty and in-flight bits go, in-flight comes back; Clear: the cleared bit).
+// (ShareData: dirty and in-flight bits go, in-flight comes back; Clear: the clearing bit goes up, and its
+// callback, which a test fires by hand, takes it down again).
 int g_shareCalls = 0;
 int g_refreshCalls = 0;
 int g_clearCalls = 0;
@@ -277,7 +278,7 @@ void FakeRefresh(void*) { ++g_refreshCalls; }
 void FakeClear(void* self) {
   ++g_clearCalls;
   FakeObject* o = static_cast<FakeObject*>(self);
-  SetFlags(o, FlagsOf(*o) | kRichPresenceFlagCleared);
+  SetFlags(o, FlagsOf(*o) | kRichPresenceFlagClearing);
 }
 const char* g_encodeText = "{\"game_type\":\"Social_2.0\",\"joinable\":true}";
 bool g_encodeFails = false;
@@ -611,19 +612,23 @@ void TestPresenceLocalAnswersWithoutTheGamesFunctions() {
   call(kRichPresenceSlotRefreshDestinations);
   QCHECK(g_refreshCalls == 1 && C(counters.localRefresh) == 1);
 
-  // The same gate as the game's ShareData: a cleared object, or one with a request in flight, is left alone.
-  SetFlags(&object, kRichPresenceFlagDirty | kRichPresenceFlagCleared);
+  // The same gate as the game's ShareData: an object with a clear or a share in flight is left alone.
+  SetFlags(&object, kRichPresenceFlagDirty | kRichPresenceFlagClearing);
   call(kRichPresenceSlotShareData);
-  QCHECK(FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagCleared));
+  QCHECK(FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagClearing));
   SetFlags(&object, kRichPresenceFlagDirty | kRichPresenceFlagInFlight);
   call(kRichPresenceSlotShareData);
   QCHECK(FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagInFlight));
   QCHECK(g_shareCalls == 1 && C(counters.localShare) == 1);
 
-  // Clear: the cleared bit only, no request; the other bits are kept.
+  // Clear: no request, and no bit left behind (the game's Clear plus its callback net to the bit clear); the
+  // other bits are kept.
   SetFlags(&object, kRichPresenceFlagDirty);
   call(kRichPresenceSlotClear);
-  QCHECK(g_clearCalls == 0 && FlagsOf(object) == (kRichPresenceFlagDirty | kRichPresenceFlagCleared));
+  QCHECK(g_clearCalls == 0 && FlagsOf(object) == kRichPresenceFlagDirty);
+  // And a share goes through afterwards: the object is not gated for good.
+  call(kRichPresenceSlotShareData);
+  QCHECK(FlagsOf(object) == 0);
   QCHECK(C(counters.localClear) == 1);
 
   // One line per operation, the first time; none from the repeats.

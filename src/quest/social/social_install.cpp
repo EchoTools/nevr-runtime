@@ -319,7 +319,7 @@ void NoteLocal(const char* op, std::atomic<std::uint64_t>& counter) noexcept {
 
 // Slot 0: ShareData sends the document to Meta (group_presence set). Locally: what it leaves behind when it has
 // "sent" and the answer has come back, i.e. the dirty bit consumed and nothing in flight; the same gate as the
-// original ((flags & 6) == 0: not cleared, nothing in flight). The nakama server derives a friend's status
+// original ((flags & 6) == 0: no share and no clear in flight). The nakama server derives a friend's status
 // from the match they are in, so nothing needs publishing.
 void LocalShareData(void* self) noexcept {
   if (!g_presenceLocal.load(std::memory_order_relaxed)) {
@@ -327,7 +327,7 @@ void LocalShareData(void* self) noexcept {
     return;
   }
   const std::uint32_t flags = ReadFlags(self);
-  if ((flags & (kRichPresenceFlagInFlight | kRichPresenceFlagCleared)) != 0) return;
+  if ((flags & (kRichPresenceFlagInFlight | kRichPresenceFlagClearing)) != 0) return;
   WriteFlags(self, flags & ~(kRichPresenceFlagDirty | kRichPresenceFlagInFlight));
   NoteLocal("share", g_localShare);
 }
@@ -343,13 +343,15 @@ void LocalRefreshDestinations(void* self) noexcept {
   NoteLocal("refresh_destinations", g_localRefresh);
 }
 
-// Slot 16: Clear sends group_presence clear and sets the cleared bit. Locally: the bit only.
+// Slot 16: Clear sends group_presence clear and sets bit 2; ClearUserPresenceCB (0x1f1794) clears it when the
+// result arrives. Locally the request and its result are both skipped, so the net effect is the bit clear:
+// leaving it set would gate ShareData for good, since no callback would ever come.
 void LocalClear(void* self) noexcept {
   if (!g_presenceLocal.load(std::memory_order_relaxed)) {
     AsFn<VoidFn>(g_presenceOrigClear)(self);
     return;
   }
-  WriteFlags(self, ReadFlags(self) | kRichPresenceFlagCleared);
+  WriteFlags(self, ReadFlags(self) & ~kRichPresenceFlagClearing);
   NoteLocal("clear", g_localClear);
 }
 

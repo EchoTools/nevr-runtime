@@ -1603,8 +1603,9 @@ absent from the file. The only consumer is the install call above.
   to Meta's platform service are wrapped on the same pinned object as the trace: `ShareData` (slot 0, `0x1f044c`,
   `group_presence set`), `RefreshDestinations` (slot 11, `0x1f1c2c`, `get_destinations`) and `Clear` (slot 16,
   `0x1f1cf0`, `group_presence clear`). With the feature on they are answered locally and the object's state word
-  (`this+0x30`: bit 0 dirty, bit 1 request in flight, bit 2 cleared) is left as the game's own versions leave it
-  once the answer has come back, so the game sees a completed share and no request leaves. The status text
+  (`this+0x30`: bit 0 dirty, bit 1 share in flight, bit 2 clear in flight) is left as the game's own versions leave
+  it once the answer has come back (`Clear` sets bit 2 and `ClearUserPresenceCB` takes it down again, so locally it
+  stays down), so the game sees a completed share and no request leaves. The status text
   the player sees is the game's member JSON (destination names from the `presence_names` table); a friend's
   status is derived by the game service from the match they are in (nakama `server/evr_friend_presence.go`), so
   nothing is published from the client. Off by default; needs the social facade.

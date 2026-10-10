@@ -113,8 +113,8 @@ const char* PresenceDisplayName(const char* gameType) noexcept;
 void SetPresenceNames(bool enabled) noexcept;
 
 // Whether rich presence stops going to Meta (#396, config feature presence_local; off by default): the object's
-// ShareData, RefreshDestinations and Clear are answered locally (the state word is updated as the game's own
-// functions leave it) and no group_presence request is made. The server needs nothing from the client for
+// ShareData, RefreshDestinations and Clear are answered locally (the state word ends as the game's own functions
+// and their result callbacks leave it) and no group_presence request is made. The server needs nothing from the client for
 // this: a friend's status is derived from the match they are in (nakama server/evr_friend_presence.go).
 void SetPresenceLocal(bool enabled) noexcept;
 
