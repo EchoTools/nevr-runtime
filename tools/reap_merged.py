@@ -259,6 +259,7 @@ def remote_branch_tip(root, branch):
 def apply_one(wt, facts, root, ledger, log, protected=("main", "master")):
     path, branch, tip = wt["path"], wt["branch"], facts["tip"]
     rel = facts["worktree"]
+    remote_delete_error = None
     if wt["locked"] is not None:
         git("worktree", "unlock", path, cwd=root)
         log.write(action="unlock", **{k: facts[k] for k in ("worktree", "branch", "tip")})
@@ -285,10 +286,16 @@ def apply_one(wt, facts, root, ledger, log, protected=("main", "master")):
             elif not facts["pr_ours"]:
                 note.append(f"origin branch {remote} kept (not this worktree's branch)")
             elif rtip == facts["pr_head_oid"]:
-                p = git("push", "origin", f":refs/heads/{remote}", cwd=root)
+                p = git("push", "origin", f":refs/heads/{remote}", cwd=root, check=False)
                 print((p.stdout + p.stderr).strip())
-                log.write(action="branch-delete-origin", worktree=rel, branch=remote, tip=rtip, pr=facts["merged_pr"])
-                note.append(f"origin branch {remote} deleted")
+                if p.returncode == 0:
+                    log.write(action="branch-delete-origin", worktree=rel, branch=remote, tip=rtip, pr=facts["merged_pr"])
+                    note.append(f"origin branch {remote} deleted")
+                else:
+                    remote_delete_error = f"origin branch {remote} deletion failed: {p.stderr.strip()}"
+                    log.write(action="branch-delete-origin-failed", worktree=rel, branch=remote, tip=rtip,
+                              pr=facts["merged_pr"], error=p.stderr.strip())
+                    note.append(f"origin branch {remote} deletion failed (see action log)")
             else:
                 note.append(f"origin branch {remote} kept (origin has {rtip[:12]}, not the merged head "
                             f"{facts['pr_head_oid'][:12]})")
@@ -303,6 +310,8 @@ def apply_one(wt, facts, root, ledger, log, protected=("main", "master")):
     except OSError as e:
         raise RuntimeError(f"ledger row not written to {ledger}: {e}")
     log.write(action="ledger-row", worktree=rel, ledger=ledger)
+    if remote_delete_error is not None:
+        raise RuntimeError(remote_delete_error)
     return note
 
 
