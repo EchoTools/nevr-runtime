@@ -30,8 +30,6 @@
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
-#include "quest/login/login_prerequisites.h"
-#include "quest/social/social_install.h"
 #include "quest/net/curl_ws_connector.h"
 #include "quest/net/session_bridge.h"
 #include "quest/redirect/hook_adapter.h"
@@ -425,9 +423,6 @@ class ProductionSteps final : public Steps {
 
   bool InstallSocial() override {
     const char* detail = "unknown";
-    // CNSOVRSocial's org-id lookups are refused once the Social() hook has selected the facade (#411).
-    nevr_quest_login::local::SetSocialSelectedProbe(
-        []() noexcept { return quest_social::Counters().selected.load(std::memory_order_relaxed) > 0; });
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
                                                               sentinel::ActiveConfig().effective.presenceNames,
                                                               sentinel::ActiveConfig().effective.presenceLocal);
