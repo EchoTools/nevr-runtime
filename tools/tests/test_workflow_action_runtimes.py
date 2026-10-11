@@ -1,6 +1,8 @@
-"""No workflow uses an action major that still declares the retired Node 20 runtime (#330).
+"""Every external action is pinned by full commit SHA, and none is on a major that still declares the
+retired Node 20 runtime (#330).
 
-The minimums are the first major of each action whose action.yml says `runs.using: node24`."""
+The pin carries its major in a trailing `# vN` comment. The minimums are the first major of each action
+whose action.yml says `runs.using: node24`."""
 from __future__ import annotations
 
 import pathlib
@@ -22,12 +24,24 @@ MIN_MAJOR = {
 }
 
 
-def references():
-    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+USES = re.compile(r"\buses:\s*(?P<action>[\w./-]+)@(?P<ref>\S+)(?:\s+#\s*v(?P<major>\d+))?")
+
+
+def uses_lines():
+    """Every external `uses:` in a workflow or a composite action: (file, line number, action, ref, major)."""
+    files = sorted(WORKFLOWS.glob("*.yml")) + sorted((REPO / ".github/actions").glob("*/action.yml"))
+    for workflow in files:
         for number, line in enumerate(workflow.read_text().splitlines(), 1):
-            match = re.search(r"\buses:\s*([\w./-]+)@v(\d+)", line)
+            match = USES.search(line)
             if match:
-                yield workflow.name, number, match.group(1), int(match.group(2))
+                major = match.group("major")
+                yield workflow.name, number, match.group("action"), match.group("ref"), int(major) if major else None
+
+
+def references():
+    for name, number, action, _, major in uses_lines():
+        if major is not None:
+            yield name, number, action, major
 
 
 class WorkflowActionRuntimeTest(unittest.TestCase):
@@ -35,6 +49,14 @@ class WorkflowActionRuntimeTest(unittest.TestCase):
         seen = {action for _, _, action, _ in references()}
         self.assertIn("actions/checkout", seen)
         self.assertIn("actions/cache/restore", seen)
+
+    def test_every_external_action_is_pinned_by_full_commit_sha_with_its_major(self):
+        count = 0
+        for name, number, action, ref, major in uses_lines():
+            count += 1
+            self.assertRegex(ref, r"^[0-9a-f]{40}$", f"{name}:{number} {action}@{ref} is not a full commit SHA")
+            self.assertIsNotNone(major, f"{name}:{number} {action} has no `# vN` comment naming its major")
+        self.assertGreaterEqual(count, 30, "the sensor saw too few external uses")
 
     def test_no_action_is_on_a_node20_major(self):
         for name, number, action, major in references():

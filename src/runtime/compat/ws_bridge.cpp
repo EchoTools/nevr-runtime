@@ -39,6 +39,7 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/serverdb_uri.h"
+#include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
 #include "core/logging.h"
 #include <exception>
@@ -573,6 +574,9 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             name, static_cast<unsigned long long>(len));
       }
     }
+    // Self-check "party_data_share" (#398): the service's answer to a party data share, by its symbol.
+    if (fromServer) nevr_party_share_check::OnServerMessage(sym);
+    else nevr_party_share_check::OnClientMessage(sym, payload, static_cast<size_t>(len));
     if (fromServer && sym == nevr_evr_codec::kSymLoginSuccess) {
       // Self-checks may send from here on, as the user the service named (payload: session UUID, platform, account).
       if (len >= nevr_evr_codec::kUuidSize + 16) {

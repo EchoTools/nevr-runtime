@@ -22,7 +22,10 @@ It is READ-ONLY. The git commands it runs, and nothing else:
   git status --porcelain=v1 --untracked-files=all
   git for-each-ref refs/tags --format=...  (local tags and their peeled commits)
   git ls-remote origin                   (origin's refs: the only network call; it reads, it writes nothing here)
-  git cat-file -e <tip>^{commit}         git rev-list --count <tip>..HEAD   git rev-list --count HEAD..<tip>
+  git rev-parse --verify --quiet <tip>^{commit}   git rev-list --count <tip>..HEAD   git rev-list --count HEAD..<tip>
+  (the verify exits 1, silently, for an absent object: that alone means "not in this clone"; any other
+  non-zero exit of it, and any non-zero exit or non-numeric output of rev-list, is a problem line, never
+  "nothing to count".)
 There is no fetch, pull, push, tag, checkout, reset or remote update. A clone that is behind is told
 to `git fetch`; the script never does it for you.
 
@@ -171,13 +174,28 @@ def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
     if tip is None:
         problems.append(f"origin has no branch {base}")
     elif head != tip:
-        have = git("cat-file", "-e", f"{tip}^{{commit}}", cwd=root).returncode == 0
-        if not have:
+        # `git rev-parse --verify --quiet <tip>^{commit}` exits 1, silently, when the object is absent and
+        # 128 (or 127 for a missing git) when it could not run: only the first means "not in this clone".
+        # (`git cat-file -e` exits 128 for both, so it could not tell them apart.)
+        probe = git("rev-parse", "--verify", "--quiet", f"{tip}^{{commit}}", cwd=root)
+        if probe.returncode not in (0, 1):
+            problems.append(failure(probe, f"git rev-parse --verify {tip[:12]}^{{commit}}"))
+        elif probe.returncode == 1:
             problems.append(f"this clone is behind origin/{base}: origin's tip {tip[:12]} is not in this "
                             f"clone (git fetch, then re-run)")
         else:
-            ahead = int(git("rev-list", "--count", f"{tip}..HEAD", cwd=root).stdout.strip() or 0)
-            behind = int(git("rev-list", "--count", f"HEAD..{tip}", cwd=root).stdout.strip() or 0)
+            counts = []
+            for rev_range in (f"{tip}..HEAD", f"HEAD..{tip}"):
+                counted = git("rev-list", "--count", rev_range, cwd=root)
+                if counted.returncode != 0:
+                    problems.append(failure(counted, f"git rev-list --count {rev_range[:12]}.."))
+                    break
+                if not counted.stdout.strip().isdigit():
+                    problems.append(f"git rev-list --count {rev_range[:12]}.. printed "
+                                    f"'{counted.stdout.strip()[:40]}', not a number")
+                    break
+                counts.append(int(counted.stdout.strip()))
+            ahead, behind = counts if len(counts) == 2 else (0, 0)
             if ahead:
                 problems.append(f"HEAD {head[:12]} is not on origin/{base}: {plural(ahead, 'commit')} "
                                 f"not pushed")
@@ -205,6 +223,7 @@ def main(argv=None) -> int:
     record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
               "user": getpass.getuser(), "cwd": root, "head": facts.get("head"), "base": args.base,
               "origin_tip": facts.get("origin_tip"), "origin_url": facts.get("origin_url"),
+              "expect_origin": args.expect_origin,
               "result": "refused" if problems else "ok", "problems": problems}
     write_log(record)
     for problem in problems:

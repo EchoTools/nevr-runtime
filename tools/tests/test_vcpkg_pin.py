@@ -26,7 +26,9 @@ class VcpkgPinTest(unittest.TestCase):
             text = workflow.read_text()
             self.assertRegex(text, r'checkout --detach "\$\(cat "\$GITHUB_WORKSPACE/\.vcpkg-commit"\)"',
                              f"{workflow.name} does not check out the revision in .vcpkg-commit")
-            self.assertIsNone(re.search(r"\b[0-9a-f]{40}\b", text), f"{workflow.name} hard-codes a sha")
+            # An action pinned by its own commit SHA (`uses: owner/name@<sha> # vN`) is not the vcpkg pin.
+            without_action_pins = re.sub(r"\buses:\s*[\w./-]+@[0-9a-f]{40}\b", "uses:", text)
+            self.assertIsNone(re.search(r"\b[0-9a-f]{40}\b", without_action_pins), f"{workflow.name} hard-codes a sha")
 
     def test_the_workflows_that_clone_vcpkg_check_out_the_repository_first(self):
         for workflow in sorted(WORKFLOWS.glob("*.yml")):

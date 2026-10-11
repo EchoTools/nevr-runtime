@@ -81,6 +81,24 @@ class SelfCheckWiringGateTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("SetEnabled(false)", result.stderr)
 
+    def test_a_party_share_check_that_is_not_fed_fails_on_either_platform(self):
+        root = self.tree()
+        self.edit(root, "src/runtime/compat/ws_bridge.cpp",
+                  "if (fromServer) nevr_party_share_check::OnServerMessage(sym);", "")
+        self.assertEqual(run(root).returncode, 1)
+        root = self.tree()
+        self.edit(root, "src/runtime/compat/ws_bridge.cpp",
+                  "else nevr_party_share_check::OnClientMessage(sym, payload, static_cast<size_t>(len));", "")
+        self.assertEqual(run(root).returncode, 1)
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp",
+                  "ObserveForSelfChecks(serverToGame, data, len);", "")
+        self.assertEqual(run(root).returncode, 1)
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp",
+                  "ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());", "")
+        self.assertEqual(run(root).returncode, 1)
+
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp", "ApplySelfCheck(&config.tap,", "(void)(&config.tap,")
