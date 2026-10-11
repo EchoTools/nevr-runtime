@@ -239,6 +239,43 @@ void Prepare() {
   SubThunk::Reset();
 }
 
+void BuildIdNotesStayInsideLoadedSegments() {
+  alignas(Elf64_Nhdr) unsigned char bytes[128] = {};
+  Elf64_Phdr phdr[2] = {};
+  phdr[0].p_type = PT_LOAD;
+  phdr[0].p_memsz = sizeof(bytes);
+  phdr[1].p_type = PT_NOTE;
+  phdr[1].p_vaddr = 80;
+  phdr[1].p_memsz = 20;
+  ElfImage image;
+  image.base = reinterpret_cast<std::uintptr_t>(bytes);
+  image.phdr = phdr;
+  image.phnum = 2;
+  const Elf64_Nhdr buildId{4, 2, NT_GNU_BUILD_ID};
+  std::memcpy(bytes + 80, &buildId, sizeof(buildId));
+  std::memcpy(bytes + 80 + sizeof(buildId), "GNU", 4);
+  bytes[80 + sizeof(buildId) + 4] = 0x12;
+  bytes[80 + sizeof(buildId) + 5] = 0x34;
+  char out[16] = {};
+  QCHECK(ReadBuildId(image, out, sizeof(out)) && std::strcmp(out, "1234") == 0);
+
+  // The note's bytes exist in the test buffer, but the ELF load segment excludes them.
+  phdr[0].p_memsz = 64;
+  QCHECK(!ReadBuildId(image, out, sizeof(out)));
+
+  // A huge name length must not wrap to zero and turn a later fake note into a build ID.
+  phdr[0].p_memsz = sizeof(bytes);
+  phdr[1].p_vaddr = 16;
+  phdr[1].p_memsz = 32;
+  Elf64_Nhdr malformed{UINT32_MAX, 0, 0};
+  std::memcpy(bytes + 16, &malformed, sizeof(malformed));
+  std::memcpy(bytes + 16 + sizeof(malformed), &buildId, sizeof(buildId));
+  std::memcpy(bytes + 16 + sizeof(malformed) + sizeof(buildId), "GNU", 4);
+  bytes[16 + sizeof(malformed) + sizeof(buildId) + 4] = 0xab;
+  bytes[16 + sizeof(malformed) + sizeof(buildId) + 5] = 0xcd;
+  QCHECK(!ReadBuildId(image, out, sizeof(out)));
+}
+
 SlotResolution Resolve(const Module& m, const char* symbol, RelocKind kind) {
   ElfImage image;
   QCHECK(FindLoadedImage(m.soname.c_str(), &image));
@@ -1605,6 +1642,7 @@ int main(int argc, char** argv) {
   g_dir = argv[1];
   SetLogSink(&CaptureSink);
 
+  BuildIdNotesStayInsideLoadedSegments();
   JumpSlotRoundTrip("libgotfx_consumer_now.so", true);
   JumpSlotRoundTrip("libgotfx_consumer_norelro.so", false);
   GlobDatRoundTrip("libgotfx_consumer_now.so");

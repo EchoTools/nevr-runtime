@@ -27,6 +27,7 @@ class CurlWsConnector final : public WsConnector {
   struct Config {
     std::vector<std::string> caDirs = nevr::quest_auth::AndroidCaDirs();  // first directory with any cert wins
     long connectTimeoutSeconds = 15;
+    long handshakeTimeoutSeconds = 30;  // whole Connect attempt, including the HTTP upgrade
     std::size_t maxMessageBytes = 4u * 1024u * 1024u;
     nevr_session_router::LogSink log;
   };
