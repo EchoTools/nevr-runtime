@@ -30,6 +30,7 @@ class FakeVm final : public ScriptVm {
   const char* Name() const override { return "fake"; }
   bool Load(NevrOwner* owner, const std::string& chunk, const std::string& source, std::string* error) override {
     ++loads[owner->name];
+    generation_at_load[owner] = owner->generation.load();
     std::istringstream in(source);
     std::string line;
     int n = 0;
@@ -59,9 +60,17 @@ class FakeVm final : public ScriptVm {
     return true;
   }
   size_t MemoryBytes(const NevrOwner*) const override { return 0; }
-  void Unload(NevrOwner* owner) override { ++unloads[owner->name]; }
+  size_t TotalMemoryBytes() const override { return 0; }
+  // Freeing a state whose callbacks were not quiesced first is the use-after-free
+  // Registry::Quiesce exists to prevent: count it.
+  void Unload(NevrOwner* owner) override {
+    ++unloads[owner->name];
+    if (owner->generation.load() == generation_at_load[owner]) ++unquiesced_unloads;
+  }
 
   std::map<std::string, int> loads, unloads;
+  std::map<const NevrOwner*, uint64_t> generation_at_load;
+  int unquiesced_unloads = 0;
   std::map<std::string, NevrStatus> last_status;
 
  private:
@@ -172,6 +181,9 @@ TEST(manifest_refusals_name_file_and_line) {
       {Manifest("a", ", \"hooks\": [\"test.*\"]"), "is not a dotted name"},
       {"--[[nevr\n{\"name\": \"a\", \"version\": \"1.0.0\", \"api\": 1,\n \"description\": \"x]]y\"}\n]]\n",
        "mod.lua:3: manifest: \"]]\" inside the block"},
+      // F6 (review of #458): a repeated key must not silently take the last value.
+      {"--[[nevr\n{\"name\": \"a\", \"version\": \"1.0.0\", \"api\": 1, \"hooks\": [], \"hooks\": [\"test.add\"]}\n]]\n",
+       "key \"hooks\" appears twice"},
   };
   for (const Case& c : cases) {
     std::string error;
@@ -246,6 +258,8 @@ TEST(load_all_in_order_refusing_the_bad_ones) {
   CHECK(dup && Contains(dup->detail, "already used by a.lua"));
   const Captured* broken = env.Find("script_refused", "broken.lua");
   CHECK(broken && Contains(broken->detail, "broken.lua:5: failed on purpose"));
+  CHECK_EQ(env.vm.unloads["broken"], 1);
+  CHECK_EQ(env.vm.unquiesced_unloads, 0);
   int64_t v = 0;
   CHECK(!env.Effective("j", &v));  // a refused script leaves nothing behind
   CHECK(env.Effective("k", &v) && v == 1);  // mod_a loaded first and keeps k
@@ -277,6 +291,7 @@ TEST(reload_applies_a_changed_file_and_keeps_order) {
   CHECK(env.Effective("k", &v) && v == 42);
   CHECK_EQ(env.vm.unloads["mod_a"], 1);
   CHECK_EQ(env.vm.loads["mod_a"], 2);
+  CHECK_EQ(env.vm.unquiesced_unloads, 0);
   CHECK(env.Find("script_reloaded", "a.lua") != nullptr);
   CHECK_EQ(host.PollReload(), 0);  // once per change
 }
@@ -307,6 +322,7 @@ TEST(reload_whose_top_level_fails_leaves_the_script_inert) {
   CHECK(!env.Effective("k", &v));
   const Captured* c = env.Find("reload_failed", "a.lua");
   CHECK(c && Contains(c->detail, "a.lua:5: failed on purpose") && Contains(c->detail, "inert"));
+  CHECK_EQ(env.vm.unquiesced_unloads, 0);
 }
 
 TEST(no_reload_outside_dev_builds) {

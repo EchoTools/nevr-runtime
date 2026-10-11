@@ -88,8 +88,10 @@ bool ScriptHost::LoadOne(const std::string& path) {
   NevrOwner* owner = registry_.OpenOwner(manifest.name);
   registry_.Declare(owner, manifest.declaration);
   if (!vm_.Load(owner, chunkname, source, &error)) {
-    vm_.Unload(owner);
+    // Callbacks it added before failing may already be running on a game
+    // thread: drop them and wait them out before the VM frees their state.
     registry_.DisableOwner(owner, "its top level failed: " + error);
+    if (registry_.Quiesce(owner)) vm_.Unload(owner);
     registry_.Record(NEVR_LOG_ERROR, "script_refused", owner, chunkname.c_str(), error);
     return false;
   }
@@ -132,13 +134,19 @@ bool ScriptHost::Reload(Loaded& script) {
                          "; a rename needs a restart; the running version stays");
     return false;
   }
+  // Drop the old version's overrides and callbacks and wait out any still
+  // running before the VM frees the state they use.
+  if (!registry_.ResetOwner(script.owner)) {
+    registry_.Record(NEVR_LOG_ERROR, "reload_failed", script.owner, script.chunkname.c_str(),
+                     "its running callbacks did not finish; the old version is disabled and kept in memory");
+    return false;
+  }
   vm_.Unload(script.owner);
-  registry_.ResetOwner(script.owner);
   registry_.Declare(script.owner, manifest.declaration);
   script.manifest = std::move(manifest);
   if (!vm_.Load(script.owner, script.chunkname, source, &error)) {
-    vm_.Unload(script.owner);
-    registry_.ResetOwner(script.owner);
+    const bool quiet = registry_.ResetOwner(script.owner);
+    if (quiet) vm_.Unload(script.owner);
     registry_.Record(NEVR_LOG_ERROR, "reload_failed", script.owner, script.chunkname.c_str(),
                      error + "; the script is inert until its file changes");
     return false;

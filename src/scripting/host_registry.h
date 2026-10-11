@@ -6,14 +6,17 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "core/reader_gate.h"
 #include "extension/host_api.h"
 
 namespace nevr_script {
@@ -23,7 +26,7 @@ namespace nevr_script {
 struct LogRecord {
   NevrLogLevel level;
   const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
-                            // hook_unknown, override_unknown, undeclared, callback_failed, owner_disabled,
+                            // hook_unknown, override_unknown, undeclared, refused_disabled, quiesce_failed, callback_failed, owner_disabled,
                             // owner_reset, owner_log; script host (script_host.h): script_loaded,
                             // script_refused, script_reloaded, reload_failed
   const char* owner;        // "" when none
@@ -61,10 +64,14 @@ struct NevrOwner {
   nevr_script::Registry* registry;
   std::string name;
   uint32_t order;  // position in `plugins:` order; callbacks chain by it
-  std::atomic<bool> disabled{false};
-  std::string last_error;
+  std::atomic<bool> disabled{false};  // written under Registry::mu_
   bool declared = false;  // Registry::Declare was called: enforce `declaration`
   nevr_script::Declaration declaration;
+  // Callbacks carry the generation they were added under and run only while it
+  // is current; Registry::Quiesce bumps it, then waits on `gate` until every
+  // game thread that entered one of the owner's callbacks has left.
+  std::atomic<uint64_t> generation{0};
+  nevr::ReaderGate gate;
 };
 
 struct NevrHookCall {
@@ -85,6 +92,7 @@ class HookPoint {
     NevrOwner* owner;
     NevrHookFn fn;
     void* user;
+    uint64_t generation;  // the owner's generation when it was added
   };
   using Chain = std::vector<Callback>;
 
@@ -123,9 +131,16 @@ class Registry {
   // Stop the owner: its callbacks are skipped from now on and its overrides are
   // dropped. Safe to call from inside one of its own callbacks.
   void DisableOwner(NevrOwner* owner, const std::string& reason);
-  // Drop the owner's overrides and callbacks and enable it again, keeping its
-  // place in the order (hot reload).
-  void ResetOwner(NevrOwner* owner);
+  // After this returns true, none of the owner's callbacks added before the call
+  // is running or will run, on any thread, so a binding may free what they use
+  // (their `user` data, its VM state). Waits up to `timeout` for callbacks
+  // already running; false on timeout, and when called from one of the owner's
+  // own callbacks (it would wait on itself). Its overrides are untouched.
+  bool Quiesce(NevrOwner* owner, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
+  // Drop the owner's overrides and callbacks, Quiesce, and enable it again,
+  // keeping its place in the order (hot reload). False when Quiesce failed; the
+  // owner then stays disabled.
+  bool ResetOwner(NevrOwner* owner);
   // Limit the owner to what its manifest declares (see Declaration).
   void Declare(NevrOwner* owner, Declaration declaration);
   // Finds an open owner by name, or null.
@@ -142,6 +157,10 @@ class Registry {
   // Runtime side. Names are unique; a second registration of a name returns null.
   HookPoint* RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields);
   HookPoint* FindHookPoint(const char* name) const;
+  // What the runtime registered, sorted by name: the source the typed API stubs
+  // are generated from (script_stubs.h).
+  std::vector<std::pair<std::string, NevrValueType>> OverridePoints() const;
+  std::vector<const HookPoint*> HookPoints() const;
   // Runs the pre chain, the original (unless a pre callback asked to skip it),
   // then the post chain. `fields` holds one value per declared field, in order.
   void Invoke(const HookPoint* hook, NevrValue* fields, OriginalFn original, void* ctx);
@@ -161,6 +180,7 @@ class Registry {
   };
 
   NevrStatus Undeclared(NevrOwner* owner, const char* what, const char* name);
+  NevrStatus RefusedDisabled(NevrOwner* owner, const char* what, const char* name);
   void Emit(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* other,
             const char* target, const std::string& detail);
   NevrStatus Fail(NevrOwner* owner, NevrStatus status, std::string why);

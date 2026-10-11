@@ -29,7 +29,7 @@ set(NEVR_WARNINGS -Wall -Wextra -Werror)
 
 find_package(Threads REQUIRED)
 
-add_library(nevr_script_host STATIC host_registry.cpp script_manifest.cpp script_host.cpp)
+add_library(nevr_script_host STATIC host_registry.cpp script_manifest.cpp script_host.cpp script_stubs.cpp)
 target_include_directories(nevr_script_host PUBLIC "${NEVR_SRC_DIR}")
 target_include_directories(nevr_script_host SYSTEM PUBLIC "${NEVR_JSON_INCLUDE_DIR}")
 target_compile_options(nevr_script_host PRIVATE ${NEVR_WARNINGS})
@@ -58,6 +58,9 @@ target_link_libraries(nevr_script_registry_test PRIVATE nevr_script_host)
 
 nevr_script_test(nevr_script_host_test tests/script_host_test.cpp)
 target_link_libraries(nevr_script_host_test PRIVATE nevr_script_host)
+
+nevr_script_test(nevr_script_stubs_test tests/script_stubs_test.cpp)
+target_link_libraries(nevr_script_stubs_test PRIVATE nevr_script_host)
 
 nevr_script_test(nevr_script_conformance tests/conformance_test.cpp)
 target_link_libraries(nevr_script_conformance PRIVATE nevr_script_vm nevr_script_host)

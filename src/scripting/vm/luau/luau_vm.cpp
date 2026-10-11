@@ -12,9 +12,9 @@
 //   - a byte cap enforced by the lua_Alloc handed to lua_newstate.
 // A breach is sticky: it is recorded on the state and the interrupt raises an
 // error at every later safepoint, so a script's pcall cannot swallow it.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -27,12 +27,14 @@
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
+#include "scripting/memory_policy.h"
 #include "scripting/script_vm.h"
 
 namespace nevr_script {
 namespace {
 
 constexpr int kCallTag = 1;  // userdata tag of the call object `h`
+constexpr int64_t kExactIntLimit = int64_t{1} << 53;  // a double holds every integer below this
 
 struct State;
 
@@ -53,6 +55,10 @@ struct State {
   // Memory: bytes the allocator has handed out and not got back.
   std::atomic<size_t> used{0};
   std::atomic<bool> mem_failed{false};
+  bool memory_breach = false;  // `breach` was set because an allocation hit the cap
+  std::atomic<size_t> largest_refused{0};  // the biggest request CappedAlloc refused since the last check
+  int garbage_refusals = 0;  // calls in a row that hit the cap with mostly garbage
+  size_t live_after_gc = 0;  // bytes held right after the last full collection
 
   // Budget for the running top-level chunk or callback.
   bool active = false;
@@ -89,6 +95,7 @@ struct State {
     if (mem_failed.load(std::memory_order_relaxed)) {
       breach = "memory limit exceeded: the script's state may not hold more than " +
                std::to_string(limits.memory_bytes) + " bytes";
+      memory_breach = true;
       return;
     }
     if (++safepoints > limits.instructions_per_call) {
@@ -122,6 +129,9 @@ void* CappedAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
   }
   if (nsize > held && used - held + nsize > s->limits.memory_bytes) {
     s->mem_failed.store(true, std::memory_order_relaxed);
+    if (nsize > s->largest_refused.load(std::memory_order_relaxed)) {
+      s->largest_refused.store(nsize, std::memory_order_relaxed);
+    }
     return nullptr;
   }
   void* block = std::realloc(ptr, nsize);
@@ -138,6 +148,19 @@ void* CappedAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 void Interrupt(lua_State* L, int gc) {
   if (gc >= 0) return;  // a GC step, not a safepoint of the running code
   State* s = StateOf(L);
+  // Keep garbage off the cap within the call: past half the cap, once a quarter
+  // of the cap has been allocated since the last collection, collect here. The
+  // VM runs its own GC steps inside the same VM_PROTECT that wraps this call
+  // (lvmexecute.cpp VM_INTERRUPT, VM_PROTECT(luaC_checkGC(L))), and upstream's REPL
+  // runs a full collection from running code (CLI/src/Repl.cpp lua_collectgarbage).
+  // A large live set with no churn never pays for it, and its cost counts
+  // against this call's time budget.
+  const size_t cap = s->limits.memory_bytes;
+  const size_t used = s->used.load(std::memory_order_relaxed);
+  if (s->active && used > cap / 2 && used - std::min(used, s->live_after_gc) >= cap / 4) {
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    s->live_after_gc = s->used.load(std::memory_order_relaxed);
+  }
   s->CheckBudget();
   if (!s->breach.empty()) luaL_error(L, "%s", s->breach.c_str());
 }
@@ -286,7 +309,15 @@ int CallGet(lua_State* L) {
   }
   switch (v.type) {
     case NEVR_VALUE_BOOL: lua_pushboolean(L, v.as.b != 0); break;
-    case NEVR_VALUE_INT: lua_pushnumber(L, static_cast<double>(v.as.i)); break;
+    case NEVR_VALUE_INT:
+      // A script number is a double: past ±2^53 it would hand the script a
+      // nearby integer, and a get/set round trip would change the field.
+      if (v.as.i <= -kExactIntLimit || v.as.i >= kExactIntLimit) {
+        luaL_error(L, "NEVR_ERR_TYPE_MISMATCH: h:get('%s') on hook '%s': %lld does not fit a script number exactly",
+                   field, s->api->call_hook_name(call), static_cast<long long>(v.as.i));
+      }
+      lua_pushnumber(L, static_cast<double>(v.as.i));
+      break;
     case NEVR_VALUE_FLOAT: lua_pushnumber(L, v.as.f); break;
     case NEVR_VALUE_STRING: lua_pushstring(L, v.as.s); break;
     default: lua_pushnil(L); break;
@@ -298,35 +329,18 @@ int CallSet(lua_State* L) {
   State* s = StateOf(L);
   NevrHookCall* call = RequireCall(L, s);
   const char* field = luaL_checkstring(L, 2);
-  NevrValue current{};
-  NevrStatus status = s->api->call_get(call, field, &current);
-  if (status != NEVR_OK) {
-    luaL_error(L, "%s: h:set('%s') on hook '%s'", s->api->status_name(status), field,
-               s->api->call_hook_name(call));
-  }
   NevrValue v{};
   switch (lua_type(L, 3)) {
     case LUA_TBOOLEAN:
       v.type = NEVR_VALUE_BOOL;
       v.as.b = lua_toboolean(L, 3);
       break;
-    case LUA_TNUMBER: {
-      const double d = lua_tonumber(L, 3);
-      if (current.type == NEVR_VALUE_INT) {
-        // An INT field takes an integral number that fits in 64 bits.
-        if (!(std::floor(d) == d && d >= -9223372036854775808.0 && d < 9223372036854775808.0)) {
-          luaL_error(L, "NEVR_ERR_TYPE_MISMATCH: h:set('%s') on hook '%s': field is an integer, %f is not "
-                        "an integral number",
-                     field, s->api->call_hook_name(call), d);
-        }
-        v.type = NEVR_VALUE_INT;
-        v.as.i = static_cast<int64_t>(d);
-      } else {
-        v.type = NEVR_VALUE_FLOAT;
-        v.as.f = d;
-      }
+    case LUA_TNUMBER:
+      // The registry converts to the field's type and refuses a non-integral
+      // number, or one past ±2^53, for an INT field (host_registry.cpp CoerceTo).
+      v.type = NEVR_VALUE_FLOAT;
+      v.as.f = lua_tonumber(L, 3);
       break;
-    }
     case LUA_TSTRING:
       v.type = NEVR_VALUE_STRING;
       v.as.s = lua_tostring(L, 3);
@@ -334,7 +348,7 @@ int CallSet(lua_State* L) {
     default:
       luaL_typeerror(L, 3, "boolean, number or string");
   }
-  status = s->api->call_set(call, field, &v);
+  const NevrStatus status = s->api->call_set(call, field, &v);
   if (status != NEVR_OK) {
     luaL_error(L, "%s: h:set('%s') on hook '%s' (%s callback)", s->api->status_name(status), field,
                s->api->call_hook_name(call), s->phase == NEVR_HOOK_PRE ? "pre" : "post");
@@ -491,11 +505,41 @@ std::string PopError(lua_State* L) {
   return text;
 }
 
-// After a run: a crossed limit disables the owner, whatever the script did with the error.
+// After a run, outside the VM: a crossed limit disables the owner, whatever the
+// script did with the error.
+//
+// The cap counts what the allocator has handed out, garbage included, and Luau
+// has no emergency collection inside the allocator. So when an allocation hit
+// the cap, collect first and judge it with JudgeCapHit (memory_policy.h): the
+// call merely failed when the live set and every refused request are within
+// half the cap and the cap has not been reached on kCapHitsInARowLimit calls in
+// a row; otherwise the owner is disabled. The collection here is not timed
+// against the call's budget, which is why repeats count. The collector is tuned
+// and assisted within the call (Load, Interrupt), so a script that is not trying
+// should not get here at all.
 void ApplyBreach(State* s) {
-  if (s->breach.empty() && s->mem_failed.load()) {
-    s->breach = "memory limit exceeded: the script's state may not hold more than " +
-                std::to_string(s->limits.memory_bytes) + " bytes";
+  const size_t cap = s->limits.memory_bytes;
+  if (!s->mem_failed.load()) s->garbage_refusals = 0;
+  if (s->mem_failed.load() && (s->breach.empty() || s->memory_breach)) {
+    lua_gc(s->L, LUA_GCCOLLECT, 0);
+    const size_t live = s->used.load();
+    s->live_after_gc = live;
+    const size_t refused = s->largest_refused.exchange(0);
+    const int hits = ++s->garbage_refusals;
+    const CapVerdict verdict = JudgeCapHit(CapHit{live, refused, cap, hits});
+    if (verdict == CapVerdict::kGarbage) {
+      s->mem_failed.store(false);
+      s->breach.clear();
+      s->memory_breach = false;
+      const std::string note = "an allocation reached the memory cap of " + std::to_string(cap) +
+                               " bytes while most of it was garbage (" + std::to_string(live) +
+                               " bytes live after collection); that call failed, the script continues";
+      s->api->log(s->owner, NEVR_LOG_WARNING, note.c_str());
+      return;
+    }
+    s->breach = std::string("memory limit exceeded: ") + CapVerdictReason(verdict) + " (" + std::to_string(live) +
+                " bytes live after collection, largest refused request " + std::to_string(refused) + " bytes, " +
+                std::to_string(hits) + " call(s) in a row at the cap; the cap is " + std::to_string(cap) + " bytes)";
   }
   if (!s->breach.empty()) s->registry->DisableOwner(s->owner, s->breach);
 }
@@ -541,6 +585,13 @@ class LuauVm final : public ScriptVm {
     s->limits = limits_;
     s->L = lua_newstate(CappedAlloc, s);
     if (!s->L) return Fail(s, "cannot create a Luau state within the memory limit", error);
+    // Goal 150% and step multiplier 300%, the pair lua.h recommends for that
+    // goal (lua_GCOp, LUA_GCSETGOAL): the heap stays nearer the live set and
+    // the collector keeps up with large temporary allocations within one call,
+    // so garbage reaches the memory cap far less often than at the defaults
+    // (200%, 200%).
+    lua_gc(s->L, LUA_GCSETGOAL, 150);
+    lua_gc(s->L, LUA_GCSETSTEPMUL, 300);
     lua_Callbacks* cb = lua_callbacks(s->L);
     cb->userdata = s;
     cb->interrupt = Interrupt;
@@ -591,6 +642,13 @@ class LuauVm final : public ScriptVm {
     std::lock_guard<std::mutex> lock(map_mu_);
     const auto it = states_.find(owner);
     return it == states_.end() ? 0 : it->second->used.load();
+  }
+
+  size_t TotalMemoryBytes() const override {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    size_t total = 0;
+    for (const auto& entry : states_) total += entry.second->used.load();
+    return total;
   }
 
   void Unload(NevrOwner* owner) override {

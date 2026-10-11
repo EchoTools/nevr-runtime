@@ -1,5 +1,5 @@
 /*
- * host_api.h - the nEVR host API: data overrides and named hook points.
+ * host_api.h - the host API: data overrides and named hook points.
  *
  * A plain C ABI over named things. A native plugin and a script binding (Lua)
  * call the same function table, so the binding wraps it one to one (#440).
@@ -140,8 +140,9 @@ typedef struct NevrHostApi {
 
     /* A stable name for a status ("NEVR_ERR_CONFLICT"). */
     const char* (*status_name)(NevrStatus status);
-    /* Why the owner's last failed call failed, in words (names the other owner
-     * on a conflict). Valid until the owner's next call. Never null. */
+    /* Why the owner's last failed call on this thread failed, in words (names
+     * the other owner on a conflict). Per thread, like errno. Valid until the
+     * owner's next call on this thread. Never null. */
     const char* (*last_error)(NevrOwner* owner);
 } NevrHostApi;
 

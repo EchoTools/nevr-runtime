@@ -13,6 +13,7 @@ class NullVm final : public ScriptVm {
     return false;
   }
   size_t MemoryBytes(const NevrOwner*) const override { return 0; }
+  size_t TotalMemoryBytes() const override { return 0; }
   void Unload(NevrOwner*) override {}
 };
 

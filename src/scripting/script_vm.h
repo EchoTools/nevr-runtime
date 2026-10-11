@@ -19,16 +19,25 @@
 //   A callback receives a call object `h`:
 //   h:get(field)                 the field's value (boolean | number | string).
 //   h:set(field, value)          raises an error on any status but NEVR_OK. A
-//                                number on an INT field must be integral (the
-//                                registry converts it).
+//                                number on an INT field must be integral and
+//                                within ±2^53 (the registry converts it).
+//
+//   An INT outside ±2^53 is never handed to or taken from a VM whose numbers are
+//   doubles: h:get raises rather than return a nearby integer.
 //   h:skip()                     pre only: the original is not called.
 //
 // Limits: a script runs in its own VM state, under its own owner. Its top-level
 // chunk and every callback run under `instructions_per_call` and
 // `millis_per_call`; on a breach the binding stops the code, calls
 // Registry::DisableOwner with a reason that names the limit, and the call fails.
-// The state's allocations are capped at `memory_bytes`; an allocation past the
-// cap fails, and the binding disables the owner the same way. An error raised
+// The state's allocations are capped at `memory_bytes`, counting what the
+// allocator has handed out (garbage not yet collected included); an allocation
+// past the cap fails. A binding keeps garbage from reaching the cap (collecting
+// within the call), and after a refusal collects and disables the owner when its
+// live set is still over half the cap, when one refused request was over half
+// the cap, or after three calls in a row at the cap; otherwise only that call
+// failed and the script continues. Holding a large live set must not make every
+// call slower (t7_large_live_set_does_not_slow_every_call). An error raised
 // by a callback becomes NEVR_HOOK_FAILED with the message "<chunk>:<line>: <msg>"
 // as the reason; the owner stays enabled.
 //
@@ -67,8 +76,11 @@ class ScriptVm {
   // false and sets *error to "<chunk>:<line>: <message>" where there is a line.
   virtual bool Load(NevrOwner* owner, const std::string& chunkname, const std::string& source,
                     std::string* error) = 0;
-  // Bytes the owner's state holds now, as counted by the binding's allocator.
+  // Bytes the owner's script holds now, as counted by the binding's allocator.
   virtual size_t MemoryBytes(const NevrOwner* owner) const = 0;
+  // Bytes every loaded script holds together, including whatever the binding
+  // shares between them (a shared state's libraries).
+  virtual size_t TotalMemoryBytes() const = 0;
   // Closes the owner's state (hot reload, shutdown). The registry entries are
   // the caller's to reset.
   virtual void Unload(NevrOwner* owner) = 0;
