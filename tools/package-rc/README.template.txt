@@ -1,4 +1,4 @@
-nEVR runtime @VERSION@  (release candidate @RC@, commit @COMMIT@)
+nEVR runtime @VERSION@  (@KIND@, commit @COMMIT@)
 
 What this is
   The nEVR runtime for Echo VR on Windows: one file, BugSplat64.dll, that replaces the game's

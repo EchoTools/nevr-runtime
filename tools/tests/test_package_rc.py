@@ -1,4 +1,7 @@
-"""package_rc.py: the release-candidate gate and assembly, with fake artifacts; install.ps1/uninstall.ps1 under pwsh."""
+"""package_rc.py: the package gate and assembly, with fake artifacts; install.ps1/uninstall.ps1 under pwsh.
+
+A local build stamps -dev and is packaged as nevr-runtime-v4.0.0-dev-<sha>-*; only the CI stages (tree, seal,
+stamp) deal in -rc.<N>."""
 
 import hashlib
 import shutil
@@ -35,11 +38,14 @@ def build_info(version, features):
             f'inline constexpr const char* kDefaultFeatures = "{features}";\n')
 
 
-class PackageRcTest(unittest.TestCase):
+class PackageFixture(unittest.TestCase):
+    """Fake artifacts for the tool. VERSION is the stamp the fake binaries carry."""
+    VERSION = "4.0.0-dev+1172.3a35e0b9"
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="package-rc-test-"))
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
-        self.version = "4.0.0-rc.3+1172.3a35e0b9"
+        self.version = self.VERSION
         self.defaults = self.tmp / "public-defaults.env"
         self.defaults.write_text("".join(f"{k}={v}\n" for k, v in VALUES.items()))
         self.pc_header = self.tmp / "pc.h"
@@ -57,8 +63,9 @@ class PackageRcTest(unittest.TestCase):
             z.writestr("AndroidManifest.xml", b"<m/>")
         self.out = self.tmp / "out"
 
-    def run_tool(self, n=3, **overrides):
-        args = {"--n": str(n), "--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
+    def run_tool(self, **overrides):
+        """The local path (`just package-dev`): no --n, the binaries must carry -dev."""
+        args = {"--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
                 "--apk": str(self.apk), "--pc-header": str(self.pc_header),
                 "--quest-header": str(self.quest_header), "--quest-build-info": str(self.info),
                 "--defaults": str(self.defaults)}
@@ -66,11 +73,15 @@ class PackageRcTest(unittest.TestCase):
         flat = [x for kv in args.items() for x in kv]
         return subprocess.run([sys.executable, "-I", str(TOOL), *flat], capture_output=True, text=True)
 
-    def test_a_clean_candidate_is_assembled_with_checksums_and_notes(self):
+
+class PackageRcTest(PackageFixture):
+    """The local build: a dev stamp, dev-named files, never an -rc.<N> artifact."""
+
+    def test_a_clean_local_build_is_packaged_as_a_development_build_with_checksums_and_notes(self):
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
-        zip_path = self.out / "nevr-runtime-v4.0.0-rc.3-windows.zip"
-        apk_path = self.out / "nevr-runtime-v4.0.0-rc.3-quest.apk"
+        zip_path = self.out / "nevr-runtime-v4.0.0-dev-3a35e0b-windows.zip"
+        apk_path = self.out / "nevr-runtime-v4.0.0-dev-3a35e0b-quest.apk"
         self.assertTrue(zip_path.exists() and apk_path.exists())
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
@@ -86,9 +97,29 @@ class PackageRcTest(unittest.TestCase):
         self.assertIn(hashlib.sha256(zip_path.read_bytes()).hexdigest(), top)
         self.assertIn(hashlib.sha256(apk_path.read_bytes()).hexdigest(), top)
         notes = (self.out / "RELEASE-NOTES.md").read_text()
-        for needle in ("**UNSIGNED.**", "install.ps1", "uninstall.ps1", self.version, zip_path.name, apk_path.name):
+        for needle in ("**UNSIGNED.**", "install.ps1", "uninstall.ps1", self.version, zip_path.name, apk_path.name,
+                       "development build, NOT a release candidate"):
             self.assertIn(needle, notes)
         self.assertNotIn("SIGNED.**", notes.replace("UNSIGNED.**", ""))  # nothing is labelled signed
+        self.assertEqual([p.name for p in self.out.iterdir() if "-rc." in p.name], [])  # no rc-named artifact
+        with zipfile.ZipFile(zip_path) as z:
+            self.assertIn("development build, NOT a release candidate", z.read("README.txt").decode())
+
+    def test_a_local_run_refuses_a_binary_stamped_rc(self):
+        rc = "4.0.0-rc.3+1172.3a35e0b9"
+        blob = b"\0".join([v.encode() for v in VALUES.values()] + [rc.encode(), COMMIT[:8].encode()])
+        self.dll.write_bytes(b"MZ" + blob)
+        self.info.write_text(build_info(rc, "redirect,bridge,login,social"))
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("a local build is never a release candidate", result.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_a_local_run_has_no_n_option(self):
+        result = self.run_tool(**{"--n": "3"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrecognized arguments: --n", result.stderr)
+        self.assertFalse(self.out.exists())
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_and_nothing_is_written(self):
         self.dll.write_bytes(b"MZ" + self.version.encode() + COMMIT[:8].encode())
@@ -111,17 +142,12 @@ class PackageRcTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("quest: NEVR_HTTP_URI: not embedded in libovrplatformloader.so", result.stderr)
 
-    def test_a_binary_without_the_rc_label_or_the_commit_is_refused(self):
+    def test_a_binary_without_the_dev_stamp_or_the_commit_is_refused(self):
         blob = b"\0".join(v.encode() for v in VALUES.values())
         self.dll.write_bytes(b"MZ" + blob + b"\0" + b"4.0.0+1172.3a35e0b9")
         result = self.run_tool()
         self.assertEqual(result.returncode, 1)
-        self.assertIn("windows: no '-rc.3+' version string in the binary", result.stderr)
-
-    def test_the_label_must_match_n(self):
-        result = self.run_tool(n=4)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("-rc.4", result.stderr)
+        self.assertIn("windows: no '-dev+' version string in the binary", result.stderr)
 
     def test_an_existing_artifact_is_never_overwritten(self):
         self.assertEqual(self.run_tool().returncode, 0)
@@ -144,8 +170,9 @@ def fake_pe(certificate_size: int, payload: bytes) -> bytes:
     return bytes(image) + payload
 
 
-class SigningStagesTest(PackageRcTest):
+class SigningStagesTest(PackageFixture):
     """The CI release path: gate and write the tree, sign it (here: a stand-in), then seal."""
+    VERSION = "4.0.0-rc.3+1172.3a35e0b9"
 
     def run_stage(self, stage, *args):
         return subprocess.run([sys.executable, "-I", str(TOOL), stage, *args], capture_output=True, text=True)
@@ -238,11 +265,72 @@ class SigningStagesTest(PackageRcTest):
         self.assertEqual(apk.read_bytes(), self.apk.read_bytes())
         self.assertIn(f"{hashlib.sha256(apk.read_bytes()).hexdigest()}  {apk.name}", (sealed / "SHA256SUMS").read_text())
 
-    def test_seal_without_an_apk_says_nothing_about_one(self):
+    def test_seal_without_an_apk_makes_a_zip_only_candidate_and_says_so(self):
         tree = self.make_tree()
         sealed = self.tmp / "sealed"
         self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed)).returncode, 0)
         self.assertNotIn("quest.apk", (sealed / "SHA256SUMS").read_text())
+        self.assertEqual(sorted(p.name for p in sealed.iterdir()),
+                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v4.0.0-rc.3-windows.zip"])
+        notes = (sealed / "RELEASE-NOTES.md").read_text()
+        self.assertIn("No Quest APK in this candidate", notes)
+        self.assertNotIn("adb install", notes)
+        self.assertNotIn("Two artifacts", notes)
+        with zipfile.ZipFile(sealed / "nevr-runtime-v4.0.0-rc.3-windows.zip") as z:
+            signing = z.read("SIGNING.txt").decode()
+            self.assertTrue(signing.startswith("UNSIGNED\n"))
+            self.assertIn("No Quest APK in this candidate", signing)
+
+    def test_seal_with_an_apk_keeps_the_quest_text(self):
+        tree = self.make_tree()
+        sealed = self.tmp / "sealed"
+        self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed),
+                                        "--apk", str(self.apk)).returncode, 0)
+        notes = (sealed / "RELEASE-NOTES.md").read_text()
+        self.assertIn("adb install -r nevr-runtime-v4.0.0-rc.3-quest.apk", notes)
+        self.assertNotIn("No Quest APK in this candidate", notes)
+
+    def test_seal_refuses_an_attached_apk_that_is_not_stamped_with_this_candidate(self):
+        tree = self.make_tree()
+        for version in ("4.0.0-dev+1172.3a35e0b9", "4.0.0-rc.4+1172.3a35e0b9", "4.0.0+1172.3a35e0b9"):
+            with self.subTest(version=version):
+                apk = self.tmp / "tester.apk"
+                with zipfile.ZipFile(apk, "w") as z:
+                    z.writestr("lib/arm64-v8a/libovrplatformloader.so",
+                               b"\x7fELF" + version.encode() + b"\0" + COMMIT[:8].encode())
+                sealed = self.tmp / "sealed"
+                result = self.run_stage("seal", "--tree", str(tree), "--out", str(sealed), "--apk", str(apk))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("carries no '-rc.3+' version string", result.stderr)
+                self.assertFalse(sealed.exists())
+
+    def stamp(self, label, dll=None):
+        return self.run_stage("stamp", "--dll", str(dll or self.dll), "--label", label)
+
+    def test_stamp_accepts_the_label_the_build_was_asked_for(self):
+        result = self.stamp("rc.3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stamped version: 4.0.0-rc.3+1172.3a35e0b9", result.stdout)
+
+    def test_stamp_refuses_a_candidate_label_the_binary_does_not_carry(self):
+        for label in ("rc.4", "rc.03x", "dev"):
+            with self.subTest(label=label):
+                result = self.stamp(label)
+                self.assertEqual(result.returncode, 1)
+        self.dll.write_bytes(b"MZ" + b"4.0.0-dev+1172.3a35e0b9\0" + COMMIT[:8].encode())
+        result = self.stamp("rc.3")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("the tag build did not stamp the candidate", result.stderr)
+        self.assertIn("4.0.0-dev+1172.3a35e0b9", result.stderr)
+
+    def test_stamp_without_a_label_refuses_a_binary_carrying_rc(self):
+        result = self.stamp("")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no release-candidate label was computed", result.stderr)
+        self.dll.write_bytes(b"MZ" + b"4.0.0-dev+1172.3a35e0b9\0")
+        self.assertEqual(self.stamp("").returncode, 0)
+        self.dll.write_bytes(b"MZ" + b"4.0.0+1172.3a35e0b9\0")
+        self.assertEqual(self.stamp("").returncode, 0)
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
