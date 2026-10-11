@@ -339,8 +339,10 @@ if(BUILD_TESTING)
 
     add_executable(test_login_redirect_override
       tests/test_login_redirect_override.cpp
+      tests/test_bridge_role.cpp
       lifecycle/login_redirect_override.cpp)
-    set_source_files_properties(tests/test_login_redirect_override.cpp lifecycle/login_redirect_override.cpp
+    set_source_files_properties(tests/test_login_redirect_override.cpp tests/test_bridge_role.cpp
+      lifecycle/login_redirect_override.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_login_redirect_override PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_login_redirect_override PRIVATE GTest::gtest GTest::gtest_main)

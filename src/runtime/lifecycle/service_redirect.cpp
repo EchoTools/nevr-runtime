@@ -13,7 +13,8 @@ bool StartsWith(const std::string& value, const char* prefix) {
 std::optional<std::string> ResolveRedirect(const std::string& result,
                                            const std::optional<std::string>& socketTarget,
                                            const std::optional<std::string>& httpTarget,
-                                           bool bridgeActive, unsigned bridgePort) {
+                                           bool bridgeActive, unsigned bridgePort,
+                                           std::string_view bridgePath) {
   const bool isWebSocket = StartsWith(result, "wss://") || StartsWith(result, "ws://");
   const bool isReadyAtDawn = result.find("readyatdawn.com") != std::string::npos;
 
@@ -27,7 +28,7 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
   // ws/wss with the bridge up route through the in-process relay. https never
   // hits the bridge because the game's native TLS can reach the raw HTTP target.
   if (bridgeActive && isWebSocket) {
-    return std::string("ws://127.0.0.1:") + std::to_string(bridgePort);
+    return std::string("ws://127.0.0.1:") + std::to_string(bridgePort) + std::string(bridgePath);
   }
   return *target;
 }

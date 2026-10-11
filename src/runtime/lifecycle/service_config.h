@@ -34,13 +34,14 @@ const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource);
 /// Scheme redirect (RedirectServiceUrl core). `result` is the URL the game
 /// produced; `httpTargetJson` is nevr_http_uri read from the early game JSON by
 /// the caller (that key is NOT migrated in S3). Returns the interned replacement,
-/// or null to leave `result` unchanged. bridgeActive is 0/1.
+/// or null to leave `result` unchanged. bridgeActive is 0/1. `keyName`, the game's
+/// key, names the bridge URL's role path (nevr_bridge_role::PathForServiceKey, #513).
 const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int bridgeActive,
-                            unsigned bridgePort);
+                            unsigned bridgePort, const char* keyName = nullptr);
 
-/// Auto-relay target (AutoRelayThroughBridge): ws://127.0.0.1:<bridgePort> when
-/// nevr_socket_uri is configured, else null.
-const char* NevrCfgAutoRelay(unsigned bridgePort);
+/// Auto-relay target (AutoRelayThroughBridge): ws://127.0.0.1:<bridgePort>, with the
+/// role path for `keyName`, when nevr_socket_uri is configured, else null.
+const char* NevrCfgAutoRelay(unsigned bridgePort, const char* keyName = nullptr);
 
 /// Issue #21: the interned value NEVR supplies for a stock-engine JSON key that
 /// no config provided (nevr_cfg::GameNativeDefault), or null to leave the

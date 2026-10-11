@@ -332,6 +332,35 @@ TEST(DecideServiceRedirect, ABridgeRewritesTheSocketToLoopbackAndTheHttpTargetNe
   EXPECT_STREQ(http, "https://service.example:7350");
 }
 
+TEST(DecideServiceRedirect, TheConfigAndLoginServicesReachTheBridgeOnTheirOwnPath) {
+  // #513: the bridge tells the game's config and login sockets apart by these paths.
+  SetConfigInputs();
+  const char socketResult[] = "wss://login.readyatdawn.com/rad15";
+  const struct {
+    const char* key;
+    const char* expected;
+  } cases[] = {
+      {"config_host", "ws://127.0.0.1:53748/config"},
+      {"configservice_host", "ws://127.0.0.1:53748/config"},
+      {"login_host", "ws://127.0.0.1:53748/login"},
+      {"loginservice_host", "ws://127.0.0.1:53748/login"},
+      {"transaction_host", "ws://127.0.0.1:53748"},
+      {"matchingservice_host", "ws://127.0.0.1:53748"},
+  };
+  for (const auto& c : cases) {
+    const char* viaBridge = nevr::lifecycle::DecideServiceRedirect(
+        true, c.key, socketResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+        [&](const char* r, const char* t) { return NevrCfgRedirect(r, t, 1, 53748, c.key); });
+    EXPECT_STREQ(viaBridge, c.expected) << c.key;
+    EXPECT_STREQ(NevrCfgAutoRelay(53748, c.key), c.expected) << c.key;  // the config.json override's route
+  }
+  // The game asks for configservice_host with config_host's answer as the default: it stays on its path.
+  EXPECT_STREQ(NevrCfgRedirect("ws://127.0.0.1:53748/config", nullptr, 1, 53748, "configservice_host"),
+               "ws://127.0.0.1:53748/config");
+  // Without the bridge the socket target is used as it is.
+  EXPECT_STREQ(NevrCfgRedirect(socketResult, nullptr, 0, 0, "loginservice_host"), "ws://service.example:80/spr");
+}
+
 TEST(DecideUnconfiguredApiRedirect, TheGamesDefaultApiHostGoesToTheConfiguredHttpService) {
   SetConfigInputs();
   const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };

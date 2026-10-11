@@ -1,4 +1,5 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/bridge_role.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/login_profile.h"
@@ -165,7 +166,7 @@ struct ProxyPair {
   std::vector<std::string> pendingToRemote;
   bool remoteOpen = false;
   bool loginInjected = false;  // true after we inject LoginRequest on this connection
-  int connIdx = -1;  // 0=config, 1=login, >=2=matchmaker (see g_connectionCount)
+  int connIdx = -1;  // 0=config, 1=login, >=2=matchmaker (see nevr_bridge_role::ConnectionIndexFor)
 };
 
 // Human-readable label for connIdx, for log lines — this is the ONLY place
@@ -192,7 +193,9 @@ static const char* RemoteStateName(ix::ReadyState state) {
 }
 
 static std::mutex g_pairsMutex;
-static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
+// Connect order: the index of a socket whose path names no role, and past the config and login sockets
+// (nevr_bridge_role::ConnectionIndexFor, #513).
+static std::atomic<int> g_connectionCount{0};
 static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
 
 // Defined after the login-session globals below.
@@ -958,7 +961,11 @@ void InstallWebSocketBridge() {
          const ix::WebSocketMessagePtr& msg) {
         switch (msg->type) {
           case ix::WebSocketMessageType::Open: {
-            int connIdx = g_connectionCount++;
+            // #513: the role comes from the path the redirect gave the service (/config, /login): the game
+            // opens both sockets at once, so connect order alone swapped them now and then.
+            const std::string requestPath = msg->openInfo.uri;
+            int connIdx = nevr_bridge_role::ConnectionIndexFor(
+                nevr_bridge_role::RoleFromRequestPath(requestPath), g_loginRemoteWs != nullptr, g_connectionCount);
 
             // conn>=2 (matchmaker): reuse the login connection's remote WS.
             // The matchmaker needs the fully-authenticated session (login + profile
@@ -967,8 +974,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, path=%s, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx), requestPath.c_str(), static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -1442,8 +1449,8 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
-                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, path=%s, ws=%p)", connIdx,
+                ConnLabel(connIdx), requestPath.c_str(), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
                 nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
