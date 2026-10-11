@@ -411,6 +411,8 @@ jobs:
           dist/*.zip
           dist/*.tar.zst
           rc-dist/*.zip
+          rc-dist/SHA256SUMS
+          rc-dist/RELEASE-NOTES.md
 
     - name: Upload dist artifacts
       uses: softprops/action-gh-release@v3
