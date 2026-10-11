@@ -210,18 +210,25 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## ReVault — Reverse Engineering Data Warehouse
 
-ReVault is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+ReVault is the single source of truth for binary analysis. It indexes every binary of the game with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
 
-Available as an MCP server (`revault` in `.mcp.json`) and CLI:
+**Search the project, never one binary.** The echovr project is the whole game: `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that finds nothing says nothing about the game.
+
+1. `revault_projects`, then `revault_binaries(project)` for the full binary list.
+2. Run `revault_search_code` / `revault_search_strings` on **every** binary in the list. Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
+3. Report it as `searched N of N binaries in project <name>: hits in <binaries>`. A negative without "N of N" is not a finding.
+4. A hit in a script DLL is the game's own logic: read it (`revault_function`) before concluding anything.
+
+Available as an MCP server (`revault` in `.mcp.json`) and CLI. The CLI takes one `--binary` per call, so a search (`fn search`, `search code`) is repeated for every binary in the project; the commands that act on an address (`fn show`, `fn callers`, `fn callees`, `xref to`, `rename`) belong to the one binary the address is in:
 
 ```sh
 revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
-revault fn search <pattern> --binary pnsrad.dll  # Search function names + source
 revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
 revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
-revault search code <pattern> --binary pnsrad.dll  # Search decompiled source
 revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
 revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
+revault fn search <pattern> --binary <binary>      # Search function names + source: once per binary in the project
+revault search code <pattern> --binary <binary>    # Search decompiled source: once per binary in the project
 ```
 
 When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
