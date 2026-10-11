@@ -72,17 +72,19 @@ constexpr FakeHandle kFakeUserProof{'p'};
 
 std::size_t Index(Prerequisite which) { return static_cast<std::size_t>(which); }
 
-// ---- local answers: the synthetic message table ---------------------------------------------
-// One byte per slot; the address is the handle. State: 0 free, 1 filling, 2 queued, 3 delivered.
+// ---- local answers: the synthetic message handles ---------------------------------------------
+// A pending answer needs no storage: local ids are sequential, so the pending set is the id range
+// [g_next_deliver, g_issued]. Only a message the pump currently holds has a handle: one byte per slot,
+// the address is the handle. State: 0 free, 1 filling, 3 delivered (held by the pump until it frees it).
 constexpr std::uint8_t kFree = 0;
 constexpr std::uint8_t kFilling = 1;
-constexpr std::uint8_t kQueued = 2;
 constexpr std::uint8_t kDelivered = 3;
 
 unsigned char g_handles[local::kSlots] = {};
 std::atomic<std::uint8_t> g_slot_state[local::kSlots] = {};
 std::atomic<std::uint64_t> g_slot_id[local::kSlots] = {};
-std::atomic<std::uint64_t> g_next_id{0};
+std::atomic<std::uint64_t> g_issued{0};        // ids handed out: 1..g_issued
+std::atomic<std::uint64_t> g_next_deliver{1};  // the next id to hand the pump
 std::atomic<bool> g_local_enabled{false};
 std::atomic<local::SocialSelectedFn> g_social_selected{nullptr};
 std::atomic<std::uint64_t> g_local_refused{0};
@@ -91,7 +93,8 @@ constexpr std::size_t kRefusedSites = 16;                // distinct call sites 
 std::atomic<std::uint64_t> g_refused_site[kRefusedSites] = {};  // site + 1; 0 is a free entry
 std::atomic<std::uint64_t> g_local_requested{0};
 std::atomic<std::uint64_t> g_local_delivered{0};
-std::atomic<std::uint64_t> g_local_dropped{0};
+std::atomic<std::uint64_t> g_local_deferred{0};
+std::atomic<std::uint64_t> g_local_collisions{0};
 
 int SlotOf(const void* message) {
   const unsigned char* p = static_cast<const unsigned char*>(message);
@@ -597,40 +600,38 @@ bool Enabled() noexcept { return g_local_enabled.load(std::memory_order_acquire)
 
 std::uint64_t Request(Prerequisite which) noexcept {
   static_cast<void>(which);  // the callback the game registered under the id decides what it is
-  for (std::size_t i = 0; i < kSlots; ++i) {
-    std::uint8_t expected = kFree;
-    if (!g_slot_state[i].compare_exchange_strong(expected, kFilling, std::memory_order_acq_rel)) continue;
-    const std::uint64_t id = kRequestIdBase | (g_next_id.fetch_add(1, std::memory_order_relaxed) + 1);
-    g_slot_id[i].store(id, std::memory_order_release);
-    g_slot_state[i].store(kQueued, std::memory_order_release);
-    g_local_requested.fetch_add(1, std::memory_order_relaxed);
-    return id;
-  }
-  // Full: hand out a local id anyway. Forwarding to the SDK would send a request to Meta that this mode exists to
-  // prevent; the answer for this id is never delivered (counted, reported as a fault).
-  g_local_dropped.fetch_add(1, std::memory_order_relaxed);
-  return kRequestIdBase | (g_next_id.fetch_add(1, std::memory_order_relaxed) + 1);
+  // Cannot fail and never reaches the SDK: the answer is the id range [g_next_deliver, g_issued], not a slot.
+  const std::uint64_t n = g_issued.fetch_add(1, std::memory_order_acq_rel) + 1;
+  g_local_requested.fetch_add(1, std::memory_order_relaxed);
+  return kRequestIdBase | n;
 }
 
 const void* OnPopMessage(const void* (*original)()) noexcept {
   // Frequency: once per game-loop pump iteration. Atomics only, no logging.
   if (g_local_enabled.load(std::memory_order_acquire) && g_config.ready != nullptr && g_config.ready()) {
-    int best = -1;
-    std::uint64_t best_id = ~std::uint64_t{0};
-    for (std::size_t i = 0; i < kSlots; ++i) {
-      if (g_slot_state[i].load(std::memory_order_acquire) != kQueued) continue;
-      const std::uint64_t id = g_slot_id[i].load(std::memory_order_acquire);
-      if (id < best_id) {
-        best_id = id;
-        best = static_cast<int>(i);
+    for (;;) {
+      const std::uint64_t n = g_next_deliver.load(std::memory_order_acquire);
+      if (n > g_issued.load(std::memory_order_acquire)) break;  // nothing pending
+      int handle = -1;
+      for (std::size_t i = 0; i < kSlots && handle < 0; ++i) {
+        std::uint8_t expected = kFree;
+        if (g_slot_state[i].compare_exchange_strong(expected, kFilling, std::memory_order_acq_rel)) {
+          handle = static_cast<int>(i);
+        }
       }
-    }
-    if (best >= 0) {
-      std::uint8_t expected = kQueued;
-      if (g_slot_state[best].compare_exchange_strong(expected, kDelivered, std::memory_order_acq_rel)) {
-        g_local_delivered.fetch_add(1, std::memory_order_relaxed);
-        return &g_handles[best];
+      if (handle < 0) {  // every handle is still held by the game: the answer waits, nothing is lost
+        g_local_deferred.fetch_add(1, std::memory_order_relaxed);
+        break;
       }
+      std::uint64_t expected_next = n;
+      if (!g_next_deliver.compare_exchange_strong(expected_next, n + 1, std::memory_order_acq_rel)) {
+        g_slot_state[handle].store(kFree, std::memory_order_release);  // another pump took it
+        continue;
+      }
+      g_slot_id[handle].store(kRequestIdBase | n, std::memory_order_release);
+      g_slot_state[handle].store(kDelivered, std::memory_order_release);
+      g_local_delivered.fetch_add(1, std::memory_order_relaxed);
+      return &g_handles[handle];
     }
   }
   return original();
@@ -688,16 +689,28 @@ const std::atomic<std::uint64_t>& RefusedCounter() noexcept { return g_local_ref
 
 std::uint64_t Requested() noexcept { return g_local_requested.load(std::memory_order_relaxed); }
 std::uint64_t Delivered() noexcept { return g_local_delivered.load(std::memory_order_relaxed); }
-std::uint64_t Dropped() noexcept { return g_local_dropped.load(std::memory_order_relaxed); }
+std::uint64_t Deferred() noexcept { return g_local_deferred.load(std::memory_order_relaxed); }
+std::uint64_t Pending() noexcept {
+  const std::uint64_t issued = g_issued.load(std::memory_order_acquire);
+  const std::uint64_t next = g_next_deliver.load(std::memory_order_acquire);
+  return issued >= next ? issued - next + 1 : 0;
+}
+std::uint64_t Collisions() noexcept { return g_local_collisions.load(std::memory_order_relaxed); }
 const std::atomic<std::uint64_t>& DeliveredCounter() noexcept { return g_local_delivered; }
-const std::atomic<std::uint64_t>& DroppedCounter() noexcept { return g_local_dropped; }
+const std::atomic<std::uint64_t>& DeferredCounter() noexcept { return g_local_deferred; }
+const std::atomic<std::uint64_t>& CollisionCounter() noexcept { return g_local_collisions; }
+
+void NoteSdkRequestId(std::uint64_t id) noexcept {
+  if ((id >> 32) == (kRequestIdBase >> 32)) g_local_collisions.fetch_add(1, std::memory_order_relaxed);
+}
 
 void ResetForTest() noexcept {
   for (std::size_t i = 0; i < kSlots; ++i) {
     g_slot_state[i].store(kFree, std::memory_order_relaxed);
     g_slot_id[i].store(0, std::memory_order_relaxed);
   }
-  g_next_id.store(0, std::memory_order_relaxed);
+  g_issued.store(0, std::memory_order_relaxed);
+  g_next_deliver.store(1, std::memory_order_relaxed);
   g_local_enabled.store(false, std::memory_order_relaxed);
   g_social_selected.store(nullptr, std::memory_order_relaxed);
   g_local_refused.store(0, std::memory_order_relaxed);
@@ -705,7 +718,8 @@ void ResetForTest() noexcept {
   for (std::size_t i = 0; i < kRefusedSites; ++i) g_refused_site[i].store(0, std::memory_order_relaxed);
   g_local_requested.store(0, std::memory_order_relaxed);
   g_local_delivered.store(0, std::memory_order_relaxed);
-  g_local_dropped.store(0, std::memory_order_relaxed);
+  g_local_deferred.store(0, std::memory_order_relaxed);
+  g_local_collisions.store(0, std::memory_order_relaxed);
 }
 
 }  // namespace local

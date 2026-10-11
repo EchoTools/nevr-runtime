@@ -8,7 +8,7 @@ namespace nevr_quest_login {
 // A hook never logs on the game's call path; the reporter thread reads these (hook_report.h). Without
 // them a smoke test cannot tell from the reporter lines whether CNSUser::SendLogInRequest was reached.
 //
-// The login-prerequisite hooks (login_prerequisites.h) register one calls counter each, 20 in all: which
+// The login-prerequisite hooks (login_prerequisites.h) register one calls counter each, 21 in all: which
 // Oculus answer the game asked for and which callback ran says how far a login got. No fault counter:
 // like the dlopen hook's, a thunk GotHook installed has its original published, so it cannot move, and a
 // failed install is its own `quest_login_prerequisites_install` line.
@@ -32,12 +32,14 @@ bool RegisterLoginHookCounters() noexcept {
   ok = sentinel::RegisterReportCounter("prereq_user_request_calls", &UserRequestThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_token_request_calls", &TokenRequestThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_proof_request_calls", &ProofRequestThunk::CallCounter()) && ok;
-  // Local answers (#411): the pump's pops (hot: once per game-loop iteration), synthetic deliveries, and
-  // requests given a local id with nothing queued because the table was full (a fault: that callback never runs;
-  // the request still does not reach Meta).
+  // Local answers (#411): the pump's pops (hot: once per game-loop iteration), synthetic deliveries, pops that
+  // had an answer ready but found every handle held by the game (a fault: the answer waits), and SDK request ids
+  // that fell in the local id range (a fault: the "no SDK id lands there" assumption broke).
   ok = sentinel::RegisterReportCounter("prereq_pop_message_calls", &PopMessageThunk::CallCounter()) && ok;
   ok = sentinel::RegisterReportCounter("prereq_local_delivered", &local::DeliveredCounter()) && ok;
-  ok = sentinel::RegisterReportCounter("prereq_local_dropped", &local::DroppedCounter(),
+  ok = sentinel::RegisterReportCounter("prereq_local_deferred", &local::DeferredCounter(),
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("prereq_local_id_collisions", &local::CollisionCounter(),
                                        sentinel::ReportKind::kFaults) && ok;
   // Social org-id requests refused locally while the facade is selected (#411): nothing should run them, so any
   // count is a fault; the log names the call site.
