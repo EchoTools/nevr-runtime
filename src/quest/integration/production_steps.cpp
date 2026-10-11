@@ -381,14 +381,14 @@ class ProductionSteps final : public Steps {
     quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
-    if (cfg.effective.selfCheck) {
-      // Self-checks (#451): ask the game service for every remote log category, and report each run-card
-      // check's result on the login connection as the user the service names at LoginSuccess.
+    {
+      // Self-checks (#451) are on in every build: each run-card check's result goes out on the login connection
+      // as the user the service names at LoginSuccess. The runtime adds nothing to the connection for it.
       SelfCheckHooks hooks;
       hooks.sender = &SendSocialFrame;
       hooks.log = &SelfCheckLog;
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
-      ApplySelfCheck(&config.tap, &config.remoteDebugQuery, hooks);
+      ApplySelfCheck(&config.tap, hooks);
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
                                  &MatchmakingReloadProbe});

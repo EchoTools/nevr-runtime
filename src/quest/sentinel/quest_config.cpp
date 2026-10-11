@@ -40,7 +40,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 9> kFeatures = {{
+constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -49,7 +49,6 @@ constexpr std::array<FeatureSpec, 9> kFeatures = {{
     {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
-    {"self_check", Feature::kSelfCheck, &Features::selfCheck},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -294,11 +293,6 @@ void Derive(LoadResult& r) {
   if (c.effective.presenceLocal && !c.effective.social) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
-  }
-  // The results go out on the login connection, so the login has to be in place.
-  if (c.effective.selfCheck && !c.effective.login) {
-    c.effective.selfCheck = false;
-    force_off("self_check", "login_not_enabled");
   }
 }
 

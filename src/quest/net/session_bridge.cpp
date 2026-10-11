@@ -154,10 +154,6 @@ std::optional<ConnectRequest> SessionBridge::BuildRequest(const nevr_session_rou
       config_.log(LogLevel::Error, "[bridge] could not percent-encode URL credentials; not using them");
     }
   }
-  if (config_.remoteDebugQuery && request.role == nevr_session_router::Role::Login && !request.standaloneMatchmaker) {
-    std::optional<std::string> withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(out.url);
-    if (withDebug.has_value()) out.url = std::move(*withDebug);
-  }
   const std::string bearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, id.jwt, id.serverKey);
   if (bearer.empty()) {
     if (config_.log) {

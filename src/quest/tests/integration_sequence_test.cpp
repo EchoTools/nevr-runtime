@@ -499,7 +499,7 @@ void TestMatchmakingReloadProbeFailsWhenTheActionGaveUp() {
   QCHECK(seen.observed == "images=1 installs=0" && !seen.pass);
 }
 
-// The self_check feature's wiring: the debug query, the user the service names, the sender.
+// The self-check wiring: on in every build, the user the service names, the sender; no debug query anywhere.
 void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   static std::vector<std::string> sent;
   sent.clear();
@@ -507,13 +507,12 @@ void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   quest_net::FrameTapSinks sinks;
   int previousCalls = 0;
   sinks.onLoginUser = [&](std::uint64_t, std::uint64_t) { ++previousCalls; };
-  bool debugQuery = false;
   nevr_quest::integration::SelfCheckHooks hooks;
   hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
   hooks.log = [](const nevr_self_check::LogRecord&) {};
   hooks.build = "4.0.0-rc.1+abc";
-  nevr_quest::integration::ApplySelfCheck(&sinks, &debugQuery, hooks);
-  QCHECK(debugQuery);
+  QCHECK(!nevr_self_check::Enabled());  // off until the bridge is configured
+  nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
   QCHECK(nevr_self_check::Enabled());
   QCHECK(static_cast<bool>(sinks.onLoginUser));
 

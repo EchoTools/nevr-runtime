@@ -295,38 +295,6 @@ void TestLoginRelayTapAndSideChannel() {
   bridge.Stop();
 }
 
-// Self-checks (#451): with remoteDebugQuery the LOGIN connection's upgrade asks the game service for every
-// remote log category (debug=true); the config connection's does not, and without the option none does.
-void TestRemoteDebugQueryIsOnTheLoginConnectionOnly() {
-  for (const bool debug : {true, false}) {
-    FakeConnector connector;
-    Observed seen;
-    SessionBridge::Config config = MakeConfig(&connector, &seen, "JWT-A");
-    config.remoteDebugQuery = debug;
-    SessionBridge bridge(std::move(config));
-    const uint16_t port = bridge.Start();
-    QCHECK(port != 0);
-    Client configConn(port), login(port);
-    const std::string path = PathOf(bridge.LocalUri());
-    QCHECK(configConn.Upgrade(path));
-    QCHECK(connector.WaitConnects(1));
-    QCHECK(login.Upgrade(path));
-    QCHECK(connector.WaitConnects(2));
-    int withDebug = 0;
-    int plain = 0;
-    {
-      std::lock_guard<std::mutex> lock(connector.mutex);
-      for (const ConnectRequest& r : connector.requests) {
-        if (r.url == "wss://service.example/nevr?debug=true") ++withDebug;
-        else if (r.url == "wss://service.example/nevr") ++plain;
-      }
-    }
-    QCHECK(withDebug == (debug ? 1 : 0));
-    QCHECK(plain == (debug ? 1 : 2));
-    bridge.Stop();
-  }
-}
-
 // The listener is reachable by any local app; without the per-start token an upgrade is refused and
 // nothing reaches the service.
 void TestUpgradeWithoutTheTokenIsRefused() {
@@ -611,7 +579,6 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 int main() {
   TestLoginRelayTapAndSideChannel();
   TestUpgradeWithoutTheTokenIsRefused();
-  TestRemoteDebugQueryIsOnTheLoginConnectionOnly();
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
   TestHeldLoginSurvivesUntilSignInThenRoutesByRole();
   TestHeldLoginIsClosedWhenSignInFails();
