@@ -230,7 +230,7 @@ mingw-w64 under wine and NDK arm64 under qemu.
 | `nevr_script_host_test` | 12/12 |
 | `nevr_script_stubs_test` | 3/3 |
 | `nevr_script_conformance` | 28/28; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
-| `nevr_luau_memory_test` | 4/4 |
+| `nevr_luau_memory_test` | 5/5 |
 | `nevr_luau_shared_test` (shared state only) | 8/8: per-script globals, memory and runaway breaches, byte counts and caps stay with the script that caused them; the 256th script is refused; an unloaded script's category is reused |
 | `--pattern-dos` | stopped: the owner is disabled |
 | `--gc-dos` | returns; the finalizer never runs (Luau has no script finalizers) |

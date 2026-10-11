@@ -1,11 +1,16 @@
 // Luau-only memory tests: paths that depend on Luau having no emergency
 // collection in the allocator, which a VM with one never takes.
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include "quest/tests/mini_test.h"
 #include "scripting/host_registry.h"
 #include "scripting/memory_policy.h"
+#include "scripting/script_host.h"
 #include "scripting/script_vm.h"
 
 namespace nevr_script {
@@ -15,6 +20,7 @@ bool LuauTestThunksRefuseForeignArguments();  // luau_vm.cpp, NEVR_LUAU_TEST_HOO
 namespace {
 
 using namespace nevr_script;
+namespace fs = std::filesystem;
 
 struct Captured {
   std::string event, detail;
@@ -138,6 +144,78 @@ TEST(reentry_through_another_script_is_refused) {
 // thunks needs its own test.
 TEST(setup_thunks_refuse_arguments_the_binding_did_not_pass) {
   CHECK(LuauTestThunksRefuseForeignArguments());
+}
+
+// Dev reload of a breached script through the real binding (the condition for
+// the shared-state default): script_host_test covers ScriptHost on a fake VM;
+// this runs the Luau unload and load underneath it, in whichever mode the
+// binding was built. A runaway and a memory breach each disable the script; a
+// changed file brings it back in a dev build with its new value and none of the
+// old version's memory counted against it, and leaves it off otherwise. Each
+// kept string has its own length: Luau interns strings, so equal ones are one.
+TEST(breached_script_comes_back_on_dev_reload_through_the_binding) {
+  const char* base = std::getenv("NEVR_TEST_TMPDIR");
+  const fs::path dir = (base ? fs::path(base) : fs::temp_directory_path()) / "nevr_luau_breach_reload";
+  const std::string head = "--[[nevr\n{\"name\": \"breacher\", \"version\": \"1.0.0\", \"api\": 1, "
+                           "\"overrides\": [\"k\"], \"hooks\": [\"test.a\"]}\n]]\n";
+  struct Breach {
+    const char* name;
+    const char* source;
+    const char* reason;  // in the owner_disabled record
+  };
+  const Breach breaches[] = {
+      {"runaway", "nevr.hook('test.a', {pre = function(h) while true do end end})\n", "budget exceeded"},
+      {"memory", "kept = {}\n"
+                 "nevr.hook('test.a', {pre = function(h) kept[#kept + 1] = string.rep('m', 3 * 1024 * 1024 + #kept) end})\n",
+       "memory limit exceeded"}};
+  for (const Breach& breach : breaches) {
+    for (const bool dev : {true, false}) {
+      const int failures_before = mini_test::Failures();
+      fs::remove_all(dir);
+      fs::create_directories(dir);
+      const std::string path = (dir / "breacher.lua").string();
+      std::ofstream(path, std::ios::binary) << head << "nevr.override('k', 1)\n" << breach.source;
+      std::vector<Captured> log;
+      Registry reg([&log](const LogRecord& r) { log.push_back({r.event, r.detail}); });
+      HookPoint* point = reg.RegisterHookPoint("test.a", {{"a", NEVR_VALUE_INT, true, true}});
+      CHECK(reg.RegisterOverridePoint("k", NEVR_VALUE_INT));
+      std::unique_ptr<ScriptVm> vm = CreateScriptVm(reg, VmLimits());
+      ScriptHost host(reg, *vm, dev);
+      CHECK_EQ(host.LoadAll({path}), 1);
+      NevrOwner* owner = reg.FindOwner("breacher");
+      CHECK(owner != nullptr);
+      if (!owner) continue;
+      for (int i = 0; i < 10 && !owner->disabled.load(); ++i) {
+        NevrValue field{};
+        field.type = NEVR_VALUE_INT;
+        reg.Invoke(point, &field, Original, nullptr);
+      }
+      CHECK(owner->disabled.load());
+      bool reason = false;
+      for (const Captured& c : log) {
+        reason = reason || (c.event == "owner_disabled" && c.detail.find(breach.reason) != std::string::npos);
+      }
+      CHECK(reason);
+      std::ofstream(path, std::ios::binary) << head << "nevr.override('k', 22)\n";
+      host.PollReload();
+      NevrOwner* probe = reg.OpenOwner("probe");
+      NevrValue v{};
+      const bool effective = reg.Api()->override_get(probe, "k", &v) == NEVR_OK;
+      if (dev) {
+        CHECK(!owner->disabled.load());
+        CHECK(effective && v.as.i == 22);
+        CHECK(vm->MemoryBytes(owner) < (1u << 20));
+      } else {
+        CHECK(owner->disabled.load());
+        CHECK(!effective);
+      }
+      if (mini_test::Failures() > failures_before) {
+        std::fprintf(stderr, "  breach %s, dev %d; the registry's records:\n", breach.name, dev ? 1 : 0);
+        for (const Captured& c : log) std::fprintf(stderr, "    %s: %s\n", c.event.c_str(), c.detail.c_str());
+      }
+    }
+  }
+  fs::remove_all(dir);
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv, std::chrono::seconds(10)); }

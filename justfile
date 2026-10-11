@@ -1100,7 +1100,7 @@ test-scripting:
         run_suite "$out/nevr_script_host_test.exe" 12
         run_suite "$out/nevr_script_stubs_test.exe" 3
         run_suite "$out/nevr_script_conformance.exe" 28
-        run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 4
+        run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 5
         if [[ "$mode" == shared ]]; then
             run_suite "$out/nevr_luau_shared_test.exe" 8
         fi
