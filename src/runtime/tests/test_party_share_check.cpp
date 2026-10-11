@@ -132,6 +132,39 @@ TEST_F(PartyShareCheck, AJoinPolicyAnswerIsNotAShareAndTheNextRealShareFailureIs
   EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateFailure ok=0 failed=1");
 }
 
+// The game's own party metadata updates (nakama evr_pipeline_party.go snsPartyUpdateRequest /
+// snsPartyUpdateMemberRequest) are answered with the same symbols as a share. An update in flight when a share is
+// sent must not have its answer counted as the share's.
+TEST_F(PartyShareCheck, AGameMetadataUpdateInFlightDoesNotStealASharesAnswer) {
+  constexpr uint64_t kPartyUpdateRequest = 0xdee761a021a5278aULL;  // SNSPartyUpdateRequest
+  Send(kPartyUpdateRequest, 0);
+  ShareParty();
+  Answer("PartyUpdateSuccess");  // the update's
+  Answer("PartyUpdateFailure");  // the share's: a real failure that must not be hidden
+  nevr_self_check::Flush();
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["pass"], false);
+  EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateFailure ok=0 failed=1");
+  EXPECT_EQ(nevr_party_share_check::Counts().other, 1u);
+  EXPECT_EQ(nevr_party_share_check::Counts().unmatched, 0u);
+}
+
+TEST_F(PartyShareCheck, AGameMemberUpdateInFlightDoesNotStealAMemberSharesAnswer) {
+  constexpr uint64_t kPartyUpdateMemberRequest = 0x4edeeb8ddecc8736ULL;  // SNSPartyUpdateMemberRequest
+  Send(kPartyUpdateMemberRequest, 0);
+  ShareMember();
+  Answer("PartyUpdateMemberSuccess");  // the member update's
+  Answer("PartyUpdateMemberFailure");  // the share's
+  nevr_self_check::Flush();
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["pass"], false);
+  EXPECT_EQ(results[0]["observed"], "scope=member answer=PartyUpdateMemberFailure ok=0 failed=1");
+  EXPECT_EQ(nevr_party_share_check::Counts().other, 1u);
+  EXPECT_EQ(nevr_party_share_check::Counts().unmatched, 0u);
+}
+
 TEST_F(PartyShareCheck, AnswersAreMatchedInOrderPerFamily) {
   ShareParty();
   SetJoinPolicy();
