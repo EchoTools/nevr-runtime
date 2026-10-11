@@ -1,4 +1,4 @@
-# NEVR runtime release candidate: install.
+# NEVR runtime release: install.
 #
 # Puts this package's BugSplat64.dll into the Echo VR install and sets the old files aside. It never
 # deletes anything: the original BugSplat64.dll is copied to BugSplat64.dll.original-<timestamp>, and a
@@ -31,8 +31,8 @@ if ($Dir -eq '') {
              'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon')
   $found = @()
   foreach ($root in $roots) {
-    $candidate = Join-Path $root 'Software\Software\ready-at-dawn-echo-arena\bin\win10'
-    if (Test-Path -LiteralPath (Join-Path $candidate 'echovr.exe')) { $found += $candidate }
+    $location = Join-Path $root 'Software\Software\ready-at-dawn-echo-arena\bin\win10'
+    if (Test-Path -LiteralPath (Join-Path $location 'echovr.exe')) { $found += $location }
   }
   if ($found.Count -eq 0) { throw 'Echo VR was not found in the usual places; pass -Dir <...\bin\win10>' }
   if ($found.Count -gt 1) { throw ('more than one Echo VR install found; pass -Dir with one of: ' + ($found -join '; ')) }
@@ -43,7 +43,7 @@ if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { thr
 
 $target = Join-Path $Dir 'BugSplat64.dll'
 if (-not (Test-Path -LiteralPath $target)) { throw "no BugSplat64.dll in $Dir to back up" }
-$state = Join-Path $Dir 'nevr-rc-install.txt'
+$state = Join-Path $Dir 'nevr-install.txt'
 if (Test-Path -LiteralPath $state) { throw "already installed (see $state); run uninstall.ps1 first" }
 $originalSha = Get-Sha $target
 if ($originalSha -eq $ours) { throw 'the installed BugSplat64.dll is already this package; nothing to do' }

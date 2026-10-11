@@ -789,6 +789,7 @@ if(BUILD_TESTING)
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
       NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
       NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+      NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
       NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
     # Disable PCH — the test has its own stub headers and must not depend on

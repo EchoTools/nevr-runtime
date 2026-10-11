@@ -235,7 +235,9 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
         self.assertIn("          dist/*.zip", workflow)
-        self.assertIn("          dist/*.tar.zst", workflow)
+        # Zips only are release assets; the .tar.zst archives are kept as a workflow artifact.
+        self.assertNotIn("          dist/*.tar.zst", workflow)
+        self.assertIn("name: dist-tar-zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
 
     def test_distribution_signs_before_archiving_and_keeps_existing_outputs(self):

@@ -41,4 +41,14 @@ struct Info {
 /// the binary and never change during the process lifetime.
 const Info& Get();
 
+/// The ONE identity literal embedded in the binary, bound to the version and the full commit:
+///   NEVR-BUILD <version> <commit40>
+/// e.g. "NEVR-BUILD 5.0.0 3a35e0b945456dba8a9b56e8110df330178e7259". <version> is exactly
+/// NEVR_PROJECT_VERSION (the tag's X.Y.Z for a CI build on that tag, X.Y.(Z+1)-dev.N+sha otherwise),
+/// <commit40> the build's full commit. In the file it is bounded by NUL bytes on both sides, so a
+/// reader (the release signer, tools/package_release.py) finds it with
+///   (?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)
+/// and a binary contains exactly one. Returned without the leading NUL.
+const char* IdentityLiteral();
+
 }  // namespace nevr_build_identity

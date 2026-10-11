@@ -1,4 +1,4 @@
-nEVR runtime @VERSION@  (@KIND@, commit @COMMIT@)
+nEVR runtime @VERSION@  (commit @COMMIT@)
 
 What this is
   The nEVR runtime for Echo VR on Windows: one file, BugSplat64.dll, that replaces the game's
@@ -23,9 +23,9 @@ Uninstall
   This puts your original BugSplat64.dll and a legacy dbgcore.dll back. The backup files stay.
 
 Signing
-  SIGNING.txt in this package says whether the files are code-signed, and which. A file that is
-  not signed may be flagged by Windows Defender or SmartScreen. The SHA-256 of BugSplat64.dll is in
-  SHA256SUMS; compare it with the value you were given.
+  SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be
+  flagged by Windows Defender or SmartScreen. The SHA-256 of BugSplat64.dll is in SHA256SUMS; compare it with
+  the value you were given.
 
 Logs
   The runtime writes its log under %LOCALAPPDATA%\EchoVR\logs. When you report a problem, send the

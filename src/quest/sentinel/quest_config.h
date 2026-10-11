@@ -32,8 +32,8 @@ struct EmbeddedDefaults {
   const char* httpUri = "";
   const char* httpKey = "";
   const char* serverKey = "";
-  // Comma-separated feature names the build turns on when the file does not say otherwise (a release
-  // candidate: the APK logs in with no config file). Empty: every feature is off until the file turns it on.
+  // Comma-separated feature names the build turns on when the file does not say otherwise (a tester
+  // package: the APK logs in with no config file). Empty: every feature is off until the file turns it on.
   const char* features = "";
 };
 
