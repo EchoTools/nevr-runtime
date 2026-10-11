@@ -83,10 +83,17 @@ class RcStampTest(unittest.TestCase):
         env = dict(CI_TAG, GITHUB_REF_NAME="v4.0.0-rc.1")
         self.assertEqual(stamped(stamp("", **env)), BASE)
 
+    def test_the_dev_label_stamps_dev_everywhere_even_on_an_rc_tag(self):
+        self.assertEqual(stamped(stamp("dev")), "4.0.0-dev+1199.abc1234")
+        env = dict(CI_TAG, GITHUB_REF_NAME="v4.0.0-rc.1")
+        result = stamp("dev", **env)
+        self.assertEqual(stamped(result), "4.0.0-dev+1199.abc1234")
+        self.assertIn("not a release candidate", result.stdout + result.stderr)
+
     def test_a_malformed_label_is_still_refused(self):
         result = stamp("rc.x")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must look like rc.<N>", result.stdout + result.stderr)
+        self.assertIn("must be dev or look like rc.<N>", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

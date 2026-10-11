@@ -1,5 +1,6 @@
 # nevr_rc_label.cmake — release-candidate label for the version string of a build.
 #
+# NEVR_RC_LABEL=dev stamps the development version unconditionally (what `just package-dev` passes).
 # A build configured with -DNEVR_RC_LABEL=rc.<N> gets "-rc.<N>" in its version
 # ("4.0.0-rc.3+1172.3a35e0b9", the commit hash always in the string) ONLY when it runs in GitHub
 # Actions on a tag named v<x.y.z>-rc.<N> with the same N (GITHUB_ACTIONS, GITHUB_REF_TYPE,
@@ -30,11 +31,17 @@ endfunction()
 # Call after set_project_version_from_git(). Sets PROJECT_VERSION in the caller's scope.
 macro(nevr_apply_rc_label)
   if(NOT NEVR_RC_LABEL STREQUAL "")
-    if(NOT NEVR_RC_LABEL MATCHES "^rc\\.([0-9]+)$")
-      message(FATAL_ERROR "NEVR_RC_LABEL must look like rc.<N>, got '${NEVR_RC_LABEL}'")
+    set(_nevr_rc_requested TRUE)
+    if(NEVR_RC_LABEL STREQUAL "dev")
+      set(_nevr_rc_requested FALSE)
+      set(_nevr_rc_number "")
+      set(_nevr_rc_is_tag_build FALSE)
+    elseif(NEVR_RC_LABEL MATCHES "^rc\\.([0-9]+)$")
+      set(_nevr_rc_number "${CMAKE_MATCH_1}")
+      _nevr_rc_tag_build("${_nevr_rc_number}" _nevr_rc_is_tag_build)
+    else()
+      message(FATAL_ERROR "NEVR_RC_LABEL must be dev or look like rc.<N>, got '${NEVR_RC_LABEL}'")
     endif()
-    set(_nevr_rc_number "${CMAKE_MATCH_1}")
-    _nevr_rc_tag_build("${_nevr_rc_number}" _nevr_rc_is_tag_build)
     if(_nevr_rc_is_tag_build)
       set(_nevr_stamp "${NEVR_RC_LABEL}")
     else()
@@ -46,6 +53,8 @@ macro(nevr_apply_rc_label)
     endif()
     if(_nevr_rc_is_tag_build)
       message(STATUS "Release candidate ${NEVR_RC_LABEL}: version ${PROJECT_VERSION}")
+    elseif(NOT _nevr_rc_requested)
+      message(STATUS "Development build: version ${PROJECT_VERSION} (not a release candidate)")
     else()
       message(STATUS "NEVR_RC_LABEL ${NEVR_RC_LABEL} ignored: not a CI build on a v<x.y.z>-rc.${_nevr_rc_number} tag; "
                      "stamping a development version: ${PROJECT_VERSION}")
