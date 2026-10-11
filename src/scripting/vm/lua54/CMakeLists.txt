@@ -34,5 +34,9 @@ target_link_libraries(nevr_script_vm PUBLIC nevr_script_host PRIVATE nevr_lua54)
 target_compile_options(nevr_script_vm PRIVATE ${NEVR_WARNINGS} -fno-exceptions)
 
 # Extra tests for this binding (cases the shared conformance file does not reach).
-nevr_script_test(nevr_lua54_extra_test tests/lua54_extra_test.cpp)
-target_link_libraries(nevr_lua54_extra_test PRIVATE nevr_script_vm nevr_script_host)
+add_executable(nevr_lua54_extra_test tests/lua54_extra_test.cpp)
+target_include_directories(nevr_lua54_extra_test PRIVATE "${NEVR_SRC_DIR}")
+target_include_directories(nevr_lua54_extra_test SYSTEM PRIVATE "${NEVR_JSON_INCLUDE_DIR}")
+target_compile_options(nevr_lua54_extra_test PRIVATE ${NEVR_WARNINGS})
+target_link_libraries(nevr_lua54_extra_test PRIVATE nevr_script_vm nevr_script_host Threads::Threads)
+target_link_options(nevr_lua54_extra_test PRIVATE -static)

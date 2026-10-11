@@ -200,9 +200,14 @@ int L_override(lua_State* L) {
       v.type = NEVR_VALUE_BOOL;
       v.as.b = lua_toboolean(L, 2);
       break;
-    case LUA_TNUMBER:
-      v.type = NEVR_VALUE_FLOAT;
-      v.as.f = lua_tonumber(L, 2);
+    case LUA_TNUMBER:  // the registry converts to the override point's type
+      if (lua_isinteger(L, 2)) {
+        v.type = NEVR_VALUE_INT;
+        v.as.i = static_cast<int64_t>(lua_tointeger(L, 2));
+      } else {
+        v.type = NEVR_VALUE_FLOAT;
+        v.as.f = lua_tonumber(L, 2);
+      }
       break;
     case LUA_TSTRING:
       v.type = NEVR_VALUE_STRING;
@@ -289,6 +294,25 @@ int L_collectgarbage(lua_State* L) {
   return 1;
 }
 
+// setmetatable without __gc. Lua runs a finalizer with hooks off (extern/lua/lgc.c GCTM sets
+// L->allowhook = 0), so the instruction budget cannot stop one that loops. A finalizer is
+// only registered when the metatable has __gc at the moment of setmetatable
+// (lgc.c luaC_checkfinalizer, a raw lookup), so refusing it here closes the route.
+int L_setmetatable(lua_State* L) {
+  const int t = lua_type(L, 2);
+  luaL_checktype(L, 1, LUA_TTABLE);
+  if (t != LUA_TNIL && t != LUA_TTABLE) return luaL_typeerror(L, 2, "nil or table");
+  if (luaL_getmetafield(L, 1, "__metatable") != LUA_TNIL) return luaL_error(L, "cannot change a protected metatable");
+  if (t == LUA_TTABLE) {
+    lua_pushliteral(L, "__gc");
+    lua_rawget(L, 2);
+    if (!lua_isnil(L, -1)) return luaL_error(L, "__gc is not available to scripts");
+  }
+  lua_settop(L, 2);
+  lua_setmetatable(L, 1);
+  return 1;
+}
+
 int L_traceback(lua_State* L) {
   const char* msg = lua_tostring(L, 1);
   if (msg == nullptr && !lua_isnoneornil(L, 1)) {
@@ -327,22 +351,16 @@ int L_call_set(lua_State* L) {
   OwnerVm* vm = Self(L);
   NevrHookCall* call = RequireCall(L);
   const char* field = luaL_checkstring(L, 2);
-  NevrValue current{};
-  NevrStatus st = vm->api->call_get(call, field, &current);
-  if (st != NEVR_OK) return luaL_error(L, "h:set('%s'): %s", field, vm->api->status_name(st));
   NevrValue v{};
   switch (lua_type(L, 3)) {
     case LUA_TBOOLEAN:
       v.type = NEVR_VALUE_BOOL;
       v.as.b = lua_toboolean(L, 3);
       break;
-    case LUA_TNUMBER:
-      if (current.type == NEVR_VALUE_INT) {
-        int integral = 0;
-        const lua_Integer i = lua_tointegerx(L, 3, &integral);
-        if (!integral) return luaL_error(L, "h:set('%s'): an INT field needs an integral number", field);
+    case LUA_TNUMBER:  // the registry converts to the field's type, or answers TYPE_MISMATCH
+      if (lua_isinteger(L, 3)) {
         v.type = NEVR_VALUE_INT;
-        v.as.i = static_cast<int64_t>(i);
+        v.as.i = static_cast<int64_t>(lua_tointeger(L, 3));
       } else {
         v.type = NEVR_VALUE_FLOAT;
         v.as.f = lua_tonumber(L, 3);
@@ -354,7 +372,7 @@ int L_call_set(lua_State* L) {
       break;
     default: return luaL_argerror(L, 3, "boolean, number or string expected");
   }
-  st = vm->api->call_set(call, field, &v);
+  const NevrStatus st = vm->api->call_set(call, field, &v);
   if (st != NEVR_OK) return luaL_error(L, "h:set('%s'): %s", field, vm->api->status_name(st));
   return 0;
 }
@@ -406,7 +424,7 @@ void ClearTable(lua_State* L, int index) {
 int Setup(lua_State* L) {
   static const char* const kBase[] = {"assert", "error", "getmetatable", "ipairs", "next", "pairs",
                                       "pcall", "rawequal", "rawget", "rawlen", "rawset", "select",
-                                      "setmetatable", "tonumber", "tostring", "type", "xpcall",
+                                      "tonumber", "tostring", "type", "xpcall",
                                       "_VERSION", nullptr};
   static const char* const kString[] = {"byte", "char", "find", "format", "gmatch", "gsub", "len",
                                         "lower", "match", "pack", "packsize", "rep", "reverse", "sub",
@@ -453,6 +471,8 @@ int Setup(lua_State* L) {
   lua_setfield(L, -2, "__metatable");
   lua_pop(L, 2);
 
+  lua_pushcfunction(L, L_setmetatable);
+  lua_setfield(L, env, "setmetatable");
   lua_pushcfunction(L, L_print);
   lua_setfield(L, env, "print");
   lua_pushcfunction(L, L_collectgarbage);

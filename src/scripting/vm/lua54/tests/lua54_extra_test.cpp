@@ -34,7 +34,10 @@ struct Host {
                    {"b", NEVR_VALUE_INT, true, false},
                    {"result", NEVR_VALUE_INT, true, true}});
   std::unique_ptr<ScriptVm> vm;
-  explicit Host(VmLimits limits = VmLimits()) { vm = nevr_script::CreateScriptVm(reg, limits); }
+  explicit Host(VmLimits limits = VmLimits()) {
+    reg.RegisterOverridePoint("done", NEVR_VALUE_BOOL);
+    reg.RegisterOverridePoint("escape", NEVR_VALUE_BOOL);
+    vm = nevr_script::CreateScriptVm(reg, limits); }
   int64_t Add(int64_t a, int64_t b) {
     NevrValue fields[3] = {};
     for (NevrValue& v : fields) v.type = NEVR_VALUE_INT;
@@ -166,7 +169,7 @@ TEST(x8_int_field_needs_an_integral_number_and_h_expires) {
                   "                       post = function(h) h:set('result', 3.0 + kept:get('result') * 0) end})\n");
   CHECK_EQ(h.Add(2, 3), 3);  // pre failed (1.5), post set result 3.0 -> integral INT 3
   const Captured* c = h.Find("callback_failed");
-  CHECK(c && Contains(c->detail, "integral"));
+  CHECK(c && Contains(c->detail, "NEVR_ERR_TYPE_MISMATCH"));
 }
 
 TEST(x9_print_and_log_reach_the_registry) {
@@ -196,6 +199,21 @@ TEST(x10_concurrent_callbacks_on_one_state) {
   }
   for (std::thread& t : threads) t.join();
   CHECK_EQ(bad, 0);
+}
+
+TEST(x12_gc_finalizers_are_refused_and_setmetatable_still_works) {
+  Host h;
+  NevrOwner* a = h.Load("m.lua",
+                        "local ok, err = pcall(setmetatable, {}, {__gc = function() while true do end end})\n"
+                        "if ok then nevr.override('escape', true) end\n"
+                        "local t = setmetatable({}, {__index = function() return 7 end})\n"
+                        "if t.x ~= 7 then nevr.override('escape', true) end\n"
+                        "local p = setmetatable({}, {__metatable = 'p'})\n"
+                        "if pcall(setmetatable, p, {}) then nevr.override('escape', true) end\n"
+                        "if getmetatable(p) ~= 'p' then nevr.override('escape', true) end\n"
+                        "nevr.override('done', true)\n");
+  CHECK(!h.Has(a, "escape"));
+  CHECK(h.Has(a, "done"));
 }
 
 TEST(x11_unload_stops_the_callbacks) {
