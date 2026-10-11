@@ -1,4 +1,4 @@
-# NEVR runtime release candidate: uninstall.
+# NEVR runtime release: uninstall.
 #
 # Puts back what install.ps1 set aside: the original BugSplat64.dll and a legacy dbgcore.dll. It never
 # deletes anything: the backup stays where it is, and nothing is overwritten that was not put there by
@@ -12,14 +12,14 @@ Set-StrictMode -Version 2
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
 
 if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { throw 'echovr.exe is running; close the game first' }
-$state = Join-Path $Dir 'nevr-rc-install.txt'
-if (-not (Test-Path -LiteralPath $state)) { throw "no nevr-rc-install.txt in ${Dir}: nothing installed by install.ps1 to undo" }
+$state = Join-Path $Dir 'nevr-install.txt'
+if (-not (Test-Path -LiteralPath $state)) { throw "no nevr-install.txt in ${Dir}: nothing installed by install.ps1 to undo" }
 $values = @{}
 foreach ($line in Get-Content -LiteralPath $state) {
   if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
 }
 foreach ($key in 'backup', 'legacy', 'installed_sha256') {
-  if (-not $values.ContainsKey($key)) { throw "nevr-rc-install.txt has no $key" }
+  if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key" }
 }
 $backup = $values['backup']
 $legacyAside = $values['legacy']
@@ -40,4 +40,4 @@ if ($legacyAside -ne '') {
   Rename-Item -LiteralPath $legacyAside -NewName 'dbgcore.dll'
   Write-Output 'RESTORED dbgcore.dll'
 }
-Rename-Item -LiteralPath $state -NewName ('nevr-rc-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))
+Rename-Item -LiteralPath $state -NewName ('nevr-install.txt.undone-' + (Get-Date).ToString('yyyyMMdd-HHmmss'))

@@ -1974,6 +1974,22 @@ TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
     EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
 }
 
+// The one identity literal the release signer and the CI stamp check read out of the binary:
+// "NEVR-BUILD <version> <commit40>", version and commit from the same definitions as Info.
+TEST(BuildIdentity, IdentityLiteralBindsTheVersionAndTheFullCommit) {
+    const std::string literal = nevr_build_identity::IdentityLiteral();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
+    const std::string prefix = "NEVR-BUILD ";
+    ASSERT_EQ(literal.compare(0, prefix.size(), prefix), 0) << literal;
+    const size_t space = literal.rfind(' ');
+    ASSERT_GT(space, prefix.size());
+    EXPECT_EQ(literal.substr(prefix.size(), space - prefix.size()), id.project_version);
+    const std::string commit = literal.substr(space + 1);
+    EXPECT_EQ(commit.size(), 40u) << commit;
+    EXPECT_EQ(commit.find_first_not_of("0123456789abcdef"), std::string::npos) << commit;
+    EXPECT_EQ(commit.compare(0, id.git_commit.size(), id.git_commit), 0) << "the short commit is its prefix";
+}
+
 TEST(BuildIdentity, IsCachedNotRemeasured) {
     EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
 }
