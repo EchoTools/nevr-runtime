@@ -1003,6 +1003,78 @@ test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_
 
 # --- Verify (closed-loop gate) ---
 
+# docs/lua-scripting.md. Fail-close: a missing submodule or header, a build error, a failed check or
+# fewer tests than the floor exits nonzero. Part of `just verify`.
+# Build src/scripting for mingw and run its tests under wine, then the script type checker on the host.
+test-scripting:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset VCPKG_ROOT
+    json="$PWD/build/{{ preset }}/vcpkg_installed/x64-mingw-static/include"
+    if [[ ! -f "$json/nlohmann/json.hpp" ]]; then
+        echo "test-scripting: FAIL — $json/nlohmann/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    if [[ ! -f extern/luau/VM/src/lapi.cpp ]]; then
+        echo "test-scripting: FAIL — extern/luau is empty; run: git submodule update --init extern/luau" >&2
+        exit 1
+    fi
+    out="$PWD/build/scripting-mingw"
+    cmake -S src/scripting -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-mingw64.cmake" \
+        -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null
+    cmake --build "$out"
+    export NEVR_TEST_TMPDIR="$out/tmp"
+    mkdir -p "$NEVR_TEST_TMPDIR"
+    # One test executable under wine: it must exit 0, print "<n> tests, 0 failed checks" and run at least
+    # the floor, so a test that silently stops being registered fails the gate.
+    run_suite() { # $1 executable, $2 minimum number of tests
+        local log rc=0 summary n failed
+        log=$(WINEDEBUG=-all timeout -k 10 600 wine "$1" 2>&1) || rc=$?
+        log=${log//$'\r'/}  # wine's console writes CRLF
+        if ! summary=$(grep -E '^[0-9]+ tests, [0-9]+ failed checks$' <<<"$log"); then
+            printf '%s\n' "$log" >&2
+            echo "test-scripting: FAIL — $1 printed no test summary (exit $rc)" >&2
+            exit 1
+        fi
+        read -r n _ failed _ <<<"$(tail -n 1 <<<"$summary" | tr -d ',')"
+        if [[ "$rc" -ne 0 || "$failed" -ne 0 || "$n" -lt "$2" ]]; then
+            printf '%s\n' "$log" >&2
+            echo "test-scripting: FAIL — $1: exit $rc, $n tests (floor $2), $failed failed checks" >&2
+            exit 1
+        fi
+        echo "test-scripting: $(basename "$1"): $n tests, 0 failed checks"
+    }
+    run_suite "$out/nevr_script_registry_test.exe" 19
+    run_suite "$out/nevr_script_host_test.exe" 12
+    run_suite "$out/nevr_script_stubs_test.exe" 3
+    run_suite "$out/nevr_script_conformance.exe" 28
+    run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 2
+    # The two runaway probes report instead of asserting; each must end with the script stopped.
+    dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
+    dos=${dos//$'\r'/}
+    if ! grep -qE '^T5d pattern_dos: returned after .* owner disabled$' <<<"$dos"; then
+        printf '%s\n' "$dos" >&2
+        echo "test-scripting: FAIL — a runaway inside string.find was not stopped" >&2
+        exit 1
+    fi
+    dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --gc-dos 2>&1)
+    dos=${dos//$'\r'/}
+    if ! grep -qE '^T5e gc_dos: returned after ' <<<"$dos"; then
+        printf '%s\n' "$dos" >&2
+        echo "test-scripting: FAIL — a looping finalizer was not stopped" >&2
+        exit 1
+    fi
+    echo "test-scripting: --pattern-dos and --gc-dos stopped"
+    # The author-side checker: the definitions come from a host build of the stubs generator.
+    host="$PWD/build/scripting-host"
+    mkdir -p "$host"
+    g++ -std=c++17 -O1 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json" \
+        src/scripting/host_registry.cpp src/scripting/script_stubs.cpp src/scripting/tests/script_stubs_test.cpp \
+        -o "$host/script_stubs_test"
+    cmake -S src/scripting/check -B "$PWD/build/script-check" -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
+    cmake --build "$PWD/build/script-check"
+    src/scripting/check/check_test.sh "$host/script_stubs_test" "$PWD/build/script-check/nevr_script_check" "$host/check"
+
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
 # the hardened C++ GTest suite under Wine. Fail-close: exits nonzero on any failure.
 # Success derives from the real compiler/linker + test artifacts, not a proxy
@@ -1025,6 +1097,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
+    just test-scripting
     timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
