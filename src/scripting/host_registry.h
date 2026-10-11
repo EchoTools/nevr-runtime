@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -14,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "core/reader_gate.h"
 #include "extension/host_api.h"
 
 namespace nevr_script {
@@ -23,7 +25,7 @@ namespace nevr_script {
 struct LogRecord {
   NevrLogLevel level;
   const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
-                            // hook_unknown, override_unknown, undeclared, callback_failed, owner_disabled,
+                            // hook_unknown, override_unknown, undeclared, quiesce_failed, callback_failed, owner_disabled,
                             // owner_reset, owner_log; script host (script_host.h): script_loaded,
                             // script_refused, script_reloaded, reload_failed
   const char* owner;        // "" when none
@@ -65,6 +67,11 @@ struct NevrOwner {
   std::string last_error;
   bool declared = false;  // Registry::Declare was called: enforce `declaration`
   nevr_script::Declaration declaration;
+  // Callbacks carry the generation they were added under and run only while it
+  // is current; Registry::Quiesce bumps it, then waits on `gate` until every
+  // game thread that entered one of the owner's callbacks has left.
+  std::atomic<uint64_t> generation{0};
+  nevr::ReaderGate gate;
 };
 
 struct NevrHookCall {
@@ -85,6 +92,7 @@ class HookPoint {
     NevrOwner* owner;
     NevrHookFn fn;
     void* user;
+    uint64_t generation;  // the owner's generation when it was added
   };
   using Chain = std::vector<Callback>;
 
@@ -123,9 +131,16 @@ class Registry {
   // Stop the owner: its callbacks are skipped from now on and its overrides are
   // dropped. Safe to call from inside one of its own callbacks.
   void DisableOwner(NevrOwner* owner, const std::string& reason);
-  // Drop the owner's overrides and callbacks and enable it again, keeping its
-  // place in the order (hot reload).
-  void ResetOwner(NevrOwner* owner);
+  // After this returns true, none of the owner's callbacks added before the call
+  // is running or will run, on any thread, so a binding may free what they use
+  // (their `user` data, its VM state). Waits up to `timeout` for callbacks
+  // already running; false on timeout, and when called from one of the owner's
+  // own callbacks (it would wait on itself). Its overrides are untouched.
+  bool Quiesce(NevrOwner* owner, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
+  // Drop the owner's overrides and callbacks, Quiesce, and enable it again,
+  // keeping its place in the order (hot reload). False when Quiesce failed; the
+  // owner then stays disabled.
+  bool ResetOwner(NevrOwner* owner);
   // Limit the owner to what its manifest declares (see Declaration).
   void Declare(NevrOwner* owner, Declaration declaration);
   // Finds an open owner by name, or null.

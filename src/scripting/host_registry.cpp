@@ -7,6 +7,10 @@
 namespace nevr_script {
 namespace {
 
+// The owner whose callback this thread is running, so Quiesce can refuse to
+// wait on itself.
+thread_local const NevrOwner* t_running_owner = nullptr;
+
 const char* StatusName(NevrStatus status) {
   switch (status) {
     case NEVR_OK: return "NEVR_OK";
@@ -268,17 +272,39 @@ void Registry::DisableOwner(NevrOwner* owner, const std::string& reason) {
        reason + " (" + std::to_string(dropped) + " override(s) and callback(s) removed)");
 }
 
-void Registry::ResetOwner(NevrOwner* owner) {
-  if (!owner) return;
+bool Registry::Quiesce(NevrOwner* owner, std::chrono::milliseconds timeout) {
+  if (!owner) return false;
+  if (t_running_owner == owner) {
+    Emit(NEVR_LOG_ERROR, "quiesce_failed", owner, nullptr, nullptr,
+         "called from one of the owner's own callbacks; it would wait on itself");
+    return false;
+  }
+  // The ReaderGate handshake (core/reader_gate.h): bump, then wait; RunChain
+  // enters the gate, then reads the generation. All seq_cst.
+  owner->generation.fetch_add(1, std::memory_order_seq_cst);
+  if (owner->gate.WaitIdle(timeout)) return true;
+  Emit(NEVR_LOG_ERROR, "quiesce_failed", owner, nullptr, nullptr,
+       std::to_string(owner->gate.Readers()) + " callback(s) still running after " +
+           std::to_string(timeout.count()) + " ms; what they use must not be freed");
+  return false;
+}
+
+bool Registry::ResetOwner(NevrOwner* owner) {
+  if (!owner) return false;
   size_t dropped = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     dropped = DropOwnerLocked(owner);
   }
+  if (!Quiesce(owner)) {
+    owner->disabled.store(true);
+    return false;
+  }
   owner->disabled.store(false);
   owner->last_error.clear();
   Emit(NEVR_LOG_INFO, "owner_reset", owner, nullptr, nullptr,
        std::to_string(dropped) + " override(s) and callback(s) removed");
+  return true;
 }
 
 bool Registry::RegisterOverridePoint(const std::string& key, NevrValueType type) {
@@ -379,7 +405,7 @@ NevrStatus Registry::HookAdd(NevrOwner* owner, const char* hook, NevrHookPhase p
                                     [](uint32_t order, const HookPoint::Callback& c) {
                                       return order < c.owner->order;
                                     });
-  next->insert(pos, HookPoint::Callback{owner, fn, user});
+  next->insert(pos, HookPoint::Callback{owner, fn, user, owner->generation.load(std::memory_order_seq_cst)});
   std::atomic_store(&chain, std::shared_ptr<const HookPoint::Chain>(std::move(next)));
   Emit(NEVR_LOG_INFO, "hook_added", owner, nullptr, hook, phase == NEVR_HOOK_PRE ? "pre" : "post");
   return NEVR_OK;
@@ -392,9 +418,14 @@ void Registry::OwnerLog(NevrOwner* owner, NevrLogLevel level, const char* messag
 void Registry::RunChain(const HookPoint::Chain& chain, NevrHookCall& call) {
   for (const HookPoint::Callback& cb : chain) {
     if (cb.owner->disabled.load(std::memory_order_relaxed)) continue;
+    nevr::ReaderGate::Scope inside(cb.owner->gate);
+    if (cb.owner->generation.load(std::memory_order_seq_cst) != cb.generation) continue;  // retired
     call.current = cb.owner;
     call.fail_reason.clear();
+    const NevrOwner* outer = t_running_owner;
+    t_running_owner = cb.owner;
     const NevrHookResult result = cb.fn(&call, cb.user);
+    t_running_owner = outer;
     if (result == NEVR_HOOK_FAILED) {
       Emit(NEVR_LOG_ERROR, "callback_failed", cb.owner, nullptr, call.hook->Name().c_str(),
            std::string(call.phase == NEVR_HOOK_PRE ? "pre: " : "post: ") +

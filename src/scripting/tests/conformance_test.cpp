@@ -397,8 +397,8 @@ TEST(t8_reload_replaces_behaviour_and_keeps_order) {
   NevrOwner* a = h.Load("mod_a.lua", "nevr.hook('test.add', {post = function(h) h:set('result', h:get('result') * 10) end})\n");
   h.Load("mod_b.lua", "nevr.hook('test.add', {post = function(h) h:set('result', h:get('result') + 1) end})\n");
   CHECK_EQ(h.Add(2, 3), 51);
+  CHECK(h.reg.ResetOwner(a));  // drop and wait out its callbacks before the VM frees them
   h.vm->Unload(a);
-  h.reg.ResetOwner(a);
   std::string error;
   CHECK(h.vm->Load(a, "mod_a.lua",
                    "nevr.hook('test.add', {post = function(h) h:set('result', h:get('result') * 100) end})\n", &error));

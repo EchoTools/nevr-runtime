@@ -2,7 +2,10 @@
 // override and hook-point contract every plugin and script binding relies on.
 #include "scripting/host_registry.h"
 
+#include <atomic>
 #include <cstring>
+#include <memory>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -334,6 +337,107 @@ TEST(owner_log_is_attributed) {
   f.api->log(a, NEVR_LOG_INFO, "hello");
   const Captured* c = f.Find("owner_log");
   CHECK(c && c->owner == "mod_a" && c->detail == "hello");
+}
+
+namespace {
+// Stands in for a binding's per-callback data: freed after the owner is reset.
+struct Alive {
+  std::atomic<bool> alive{true};
+  std::atomic<int> used_after_free{0};
+  std::atomic<int> runs{0};
+};
+NevrHookResult SlowCallback(NevrHookCall*, void* user) {
+  Alive* a = static_cast<Alive*>(user);
+  a->runs.fetch_add(1);
+  for (int i = 0; i < 200; ++i) {
+    if (!a->alive.load()) a->used_after_free.fetch_add(1);
+    std::this_thread::yield();
+  }
+  return NEVR_HOOK_CONTINUE;
+}
+}  // namespace
+
+// A game thread may be inside an owner's callback, or hold the old chain, while
+// the owner is reset for a reload. Once ResetOwner returns, none of the owner's
+// earlier callbacks may run, so the binding can free what they use.
+TEST(reset_waits_out_callbacks_already_running) {
+  Fixture f;
+  NevrOwner* a = f.reg.OpenOwner("mod_a");
+  std::atomic<bool> stop{false};
+  std::vector<std::thread> game;
+  for (int t = 0; t < 4; ++t) {
+    game.emplace_back([&f, &stop] {
+      while (!stop.load()) f.Add(1, 1);
+    });
+  }
+  int total_runs = 0, violations = 0;
+  for (int round = 0; round < 200; ++round) {
+    auto data = std::make_unique<Alive>();
+    f.api->hook_add(a, "test.add", NEVR_HOOK_PRE, SlowCallback, data.get());
+    while (data->runs.load() == 0) std::this_thread::yield();  // a game thread is in it
+    CHECK(f.reg.ResetOwner(a));
+    data->alive.store(false);  // the binding frees its callback data now
+    for (int i = 0; i < 2000; ++i) std::this_thread::yield();
+    violations += data->used_after_free.load();
+    total_runs += data->runs.load();
+    // keep `data` allocated so a violation is counted, not a crash
+    static std::vector<std::unique_ptr<Alive>> graveyard;
+    graveyard.push_back(std::move(data));
+  }
+  stop.store(true);
+  for (std::thread& t : game) t.join();
+  CHECK_EQ(violations, 0);
+  CHECK(total_runs >= 200);
+}
+
+namespace {
+std::atomic<int> g_blocker_state{0};  // 0 idle, 1 inside and waiting, 2 released
+NevrHookResult Blocker(NevrHookCall*, void*) {
+  g_blocker_state.store(1);
+  while (g_blocker_state.load() != 2) std::this_thread::yield();
+  return NEVR_HOOK_CONTINUE;
+}
+}  // namespace
+
+// Deterministic form of the window the stress test above rarely hits: a game
+// thread holds the old chain, stalled in an earlier owner's callback, while a
+// later owner is reset and its data freed. When the thread walks on, it must
+// not call the later owner's retired callback.
+TEST(reset_owner_is_not_called_from_a_chain_loaded_before_the_reset) {
+  Fixture f;
+  NevrOwner* blocker = f.reg.OpenOwner("blocker");
+  NevrOwner* victim = f.reg.OpenOwner("victim");
+  g_blocker_state.store(0);
+  f.api->hook_add(blocker, "test.add", NEVR_HOOK_PRE, Blocker, nullptr);
+  auto data = std::make_unique<Alive>();
+  f.api->hook_add(victim, "test.add", NEVR_HOOK_PRE, SlowCallback, data.get());
+  std::thread game([&f] { f.Add(1, 1); });
+  while (g_blocker_state.load() != 1) std::this_thread::yield();
+  CHECK(f.reg.ResetOwner(victim));  // the game thread is not inside victim's gate yet
+  data->alive.store(false);         // freed
+  g_blocker_state.store(2);
+  game.join();
+  CHECK_EQ(data->runs.load(), 0);
+  CHECK_EQ(data->used_after_free.load(), 0);
+}
+
+namespace {
+bool g_quiesce_from_inside = true;
+NevrHookResult QuiescesItself(NevrHookCall* call, void*) {
+  g_quiesce_from_inside = g_reg->Quiesce(const_cast<NevrOwner*>(call->current), std::chrono::milliseconds(50));
+  return NEVR_HOOK_CONTINUE;
+}
+}  // namespace
+
+TEST(quiesce_from_the_owners_own_callback_is_refused) {
+  Fixture f;
+  g_reg = &f.reg;
+  NevrOwner* a = f.reg.OpenOwner("mod_a");
+  f.api->hook_add(a, "test.add", NEVR_HOOK_PRE, QuiescesItself, nullptr);
+  f.Add(1, 1);
+  CHECK(!g_quiesce_from_inside);
+  const Captured* c = f.Find("quiesce_failed");
+  CHECK(c && c->detail.find("wait on itself") != std::string::npos);
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
