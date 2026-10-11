@@ -69,8 +69,10 @@ gh workflow run build.yml --ref v<x.y.z>          # 2. builds, attests and attac
 `tools/release_draft.sh` decides: a tag with exactly one draft, no published release, and none of the five names on the draft is
 built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
 five names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
-which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `guard` job
-has `contents: write` only to list drafts, which a read-only token cannot see.
+which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
+(a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
+`guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while
+a dispatch is running makes that run upload to the published release.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`

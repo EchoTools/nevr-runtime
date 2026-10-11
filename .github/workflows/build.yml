@@ -17,7 +17,8 @@ name: Build
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
-# the same path as a dry run and publishes nothing.
+# the same path as a dry run and publishes nothing, unless the tag's release is a DRAFT carrying none of the
+# built files: then the five files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -28,19 +29,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The one job that LISTS the repository's releases to find a tag's draft. GitHub's REST docs ("List
+  # releases"): "Only users with push access will receive listings for draft releases", so a read token sees no
+  # draft and would read "none". So the write token is minted here, only for a dispatch on a tag, in a job
+  # with no checkout (no repository code runs with it, and checkout's persisted credentials do not exist)
+  # and one inline read call. The decision is made by tools/release_draft.sh in `guard`, which holds a
+  # read-only token. A release event never mints a write token before the build.
+  drafts:
+    if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      releases: ${{ steps.list.outputs.releases }}
+    steps:
+    - name: List the releases of this tag
+      id: list
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+          --jq '[.[] | select(.tag_name == env.TAG) | {draft, assets: [.assets[]?.name]}]' | jq -sc 'add // []')
+        echo "releases=$releases" >> "$GITHUB_OUTPUT"
+        echo "releases of $TAG: $releases"
+
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
   # NAMES (tools/release_already_built.sh: all five files of this version are there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
+    needs: drafts
+    # `drafts` is skipped for a release event. A failed listing fails the run, and with `guard` skipped every
+    # job below (their implied success() is false) is skipped too: nothing is built or uploaded.
+    if: ${{ always() && needs.drafts.result != 'failure' && needs.drafts.result != 'cancelled' }}
     runs-on: ubuntu-latest
-    # contents: write is only for LISTING draft releases: GitHub's REST docs ("List releases") say "Only users
-    # with push access will receive listings for draft releases", so with contents: read a draft is invisible
-    # and the lookup below would read "none". Nothing from the tree runs with this token except the
-    # tools/*.sh scripts of the checked-out ref, which only call `gh release view` / `gh api` (reads).
     permissions:
-      contents: write
+      contents: read
     outputs:
       built: ${{ steps.check.outputs.built }}
       draft: ${{ steps.draft.outputs.draft }}
@@ -76,10 +104,10 @@ jobs:
       if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
       shell: bash
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASES: ${{ needs.drafts.outputs.releases }}
       run: |
         set -euo pipefail
-        kind=$(tools/release_draft.sh "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY")
+        kind=$(printf '%s' "$RELEASES" | tools/release_draft.sh "$GITHUB_REF_NAME")
         if [ "$kind" = draft ]; then echo "draft=true" >> "$GITHUB_OUTPUT"; else echo "draft=false" >> "$GITHUB_OUTPUT"; fi
         echo "draft release of $GITHUB_REF_NAME: $kind"
 
@@ -370,8 +398,8 @@ jobs:
   # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (checked with
   # sha256sum -c), plus the top-level SHA256SUMS and RELEASE-NOTES.md. A release carries no Quest APK. The
   # texts state facts that hold before and after a signer has run, and nothing here reads the pre-release
-  # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag) ends here: the
-  # sealed files are a workflow artifact.
+  # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag with no draft)
+  # ends here: the sealed files are a workflow artifact.
   seal:
     needs: [build, sign]
     if: needs.build.outputs.version != ''
