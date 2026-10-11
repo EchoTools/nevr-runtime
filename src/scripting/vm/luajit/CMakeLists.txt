@@ -4,10 +4,12 @@
 # copy of the submodule under this build directory (the submodule stays clean).
 #
 #   NEVR_LUAJIT_JIT_OFF   luaJIT_setmode(..., LUAJIT_MODE_ENGINE|LUAJIT_MODE_OFF) in every state
+#   NEVR_LUAJIT_CHECKHOOK build LuaJIT with -DLUAJIT_ENABLE_CHECKHOOK, so compiled traces notice a count hook
 #   NEVR_LUAJIT_WATCHDOG  experiment: no permanent count hook; a watchdog thread installs one at
 #                         the deadline. Builds LuaJIT with -DLUAJIT_ENABLE_CHECKHOOK.
 #   NEVR_LUAJIT_BUILD_DIR where libluajit.a is built (share it between configurations)
 option(NEVR_LUAJIT_JIT_OFF "Turn the LuaJIT compiler off in every state" OFF)
+option(NEVR_LUAJIT_CHECKHOOK "Build LuaJIT with LUAJIT_ENABLE_CHECKHOOK" OFF)
 option(NEVR_LUAJIT_WATCHDOG "Enforce the budget with an asynchronous watchdog instead of a count hook" OFF)
 set(NEVR_LUAJIT_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/luajit" CACHE PATH "Where libluajit.a is built")
 
@@ -22,7 +24,7 @@ execute_process(COMMAND git -C "${LJ_SRC}" show -s --format=%ct HEAD
                 OUTPUT_VARIABLE LJ_RELVER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 
 set(LJ_XCFLAGS "")
-if(NEVR_LUAJIT_WATCHDOG)
+if(NEVR_LUAJIT_WATCHDOG OR NEVR_LUAJIT_CHECKHOOK)
   string(APPEND LJ_XCFLAGS " -DLUAJIT_ENABLE_CHECKHOOK")
 endif()
 string(STRIP "${LJ_XCFLAGS}" LJ_XCFLAGS)
