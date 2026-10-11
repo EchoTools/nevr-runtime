@@ -425,7 +425,8 @@ class ProductionSteps final : public Steps {
     const char* detail = "unknown";
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
                                                               sentinel::ActiveConfig().effective.presenceNames,
-                                                              sentinel::ActiveConfig().effective.presenceLocal);
+                                                              sentinel::ActiveConfig().effective.presenceLocal,
+                                                              sentinel::ActiveConfig().effective.uiEventProbe);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);

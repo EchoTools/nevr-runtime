@@ -73,6 +73,7 @@ struct World {
     g_sendThrows = false;
     g_now = 1000;
     SetGameJson(GameJson{});
+    SetGameEvents(GameEvents{});
     nevr_social_names::GlobalResolver().Reset();
     ResetFacadeCountersForTest();
     g_lines.clear();
@@ -583,6 +584,64 @@ void TestPartyTabInviteUiSlots() {
   g_sent.clear();
   SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
   QCHECK(g_sent.empty());
+}
+
+// The #318 probe: Invite Members (slot 40 with no target, slot 44 with the local user's own id) still sends no invite
+// and also posts the arm-computer "friends" script event through the game function, once per press, with the
+// CR15NetGame (the delegates' context) as its first argument; a user named by slot 44 posts nothing; without the
+// function (or the NetGame) the press is logged and nothing is called.
+struct PostedEvent {
+  void* netGame;
+  std::uint64_t symbol;
+};
+std::vector<PostedEvent> g_posted;
+void RecordPost(void* netGame, std::uint64_t symbol) { g_posted.push_back({netGame, symbol}); }
+
+void TestInviteMembersPostsTheFriendsEvent() {
+  World w;
+  static int netGameMarker = 0;
+  std::array<std::uint8_t, kCallbackBytes> callbacks = MakeCallbacks();
+  void* context = &netGameMarker;
+  std::memcpy(callbacks.data() + kCallbackStride * kCbCreated, &context, sizeof(context));
+  Init(w, callbacks);
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  using OpenUiTarget = void (*)(void*, std::uint32_t, std::uint64_t);
+  g_posted.clear();
+  g_sent.clear();
+  g_lines.clear();
+
+  // No function installed: logged, nothing called, nothing sent.
+  SlotFn<Void_U32>(obj, kOpenNewSendInviteUI)(obj, 0);
+  QCHECK(g_posted.empty() && g_sent.empty());
+  QCHECK(CountLines("\"event\":\"social_ui_event\"") == 1);
+  QCHECK(CountLines("\"result\":\"no_function\"") == 1);
+
+  GameEvents events;
+  events.send = &RecordPost;
+  SetGameEvents(events);
+  g_lines.clear();
+
+  SlotFn<Void_U32>(obj, kOpenNewSendInviteUI)(obj, 0);  // Invite Members, no target
+  QCHECK(g_posted.size() == 1 && g_posted[0].netGame == context && g_posted[0].symbol == kSymEvtArmComputerFriends);
+  QCHECK(g_sent.empty());
+  QCHECK(CountLines("\"event\":\"social_ui_event\",\"slot\":40,\"name\":\"evt_debug_arm_computer_friends\","
+                    "\"hash\":\"0x976edb4d0c250317\",\"result\":\"posted\"") == 1);
+
+  SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, kSelf);  // slot 44 with the local user's own id
+  QCHECK(g_posted.size() == 2 && g_posted[1].symbol == kSymEvtArmComputerFriends);
+  QCHECK(g_sent.empty());
+  QCHECK(CountLines("\"event\":\"social_party_ui\"") == 1);  // its own line is unchanged
+  QCHECK(CountLines("\"slot\":44,\"name\":\"evt_debug_arm_computer_friends\"") == 1);
+
+  SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);  // a user the game names: no post, no invite
+  QCHECK(g_posted.size() == 2 && g_sent.empty());
+
+  SlotFn<Void_U32>(obj, kOpenPartyUI)(obj, 0);  // the Party tab opens: no post
+  SlotFn<Void_U32>(obj, kOpenSendInviteUI)(obj, 0);  // the old no-target slot: unchanged
+  QCHECK(g_posted.size() == 2 && g_sent.empty());
+
+  SetGameEvents(GameEvents{});
 }
 
 void TestSendingFromSlots() {
@@ -1769,6 +1828,7 @@ int main() {
   TestFriendInvitable();
   TestSendingFromSlots();
   TestPartyTabInviteUiSlots();
+  TestInviteMembersPostsTheFriendsEvent();
   TestLobbyFields();
   TestRecentlyMet();
   TestIncomingFriendRequestIsListedInRecentlyMet();

@@ -40,7 +40,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 8> kFeatures = {{
+constexpr std::array<FeatureSpec, 9> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -49,6 +49,7 @@ constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
+    {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -253,7 +254,8 @@ void ApplyFile(LoadResult& r, const std::string& text) {
 bool Present(const Value& v) { return v.source != Source::kAbsent; }
 
 // Redirect needs a target, bridge needs redirect and a socket target, login needs the bridge and
-// both the socket target and the server key, social needs login. Each forced-off feature logs why.
+// both the socket target and the server key, social needs login, the UI event probe needs social. Each
+// forced-off feature logs why.
 void Derive(LoadResult& r) {
   ResolvedConfig& c = r.config;
   c.effective = c.requested;
@@ -293,6 +295,11 @@ void Derive(LoadResult& r) {
   if (c.effective.presenceLocal && !c.effective.social) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
+  }
+  // The probe works through the social facade's slots, so it follows social.
+  if (c.effective.uiEventProbe && !c.effective.social) {
+    c.effective.uiEventProbe = false;
+    force_off("ui_event_probe", "social_not_enabled");
   }
 }
 

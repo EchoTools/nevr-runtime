@@ -90,6 +90,22 @@ GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept {
   return json;
 }
 
+GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept {
+  GameEvents events;
+  sentinel::ElfImage image;
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return events;
+  char id[64] = {};
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return events;
+  const std::uintptr_t send = image.base + static_cast<std::uintptr_t>(kLibR15SendComponentEventVaddr);
+  static_assert(sizeof(events.send) == sizeof(send), "function pointer size");
+  std::memcpy(&events.send, &send, sizeof(events.send));
+  return events;
+}
+
+GameEvents SelectGameEvents(bool probe, sentinel::ImageLookup lookup) noexcept {
+  return probe ? ResolveGameEvents(lookup) : GameEvents{};
+}
+
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
@@ -529,7 +545,7 @@ bool RegisterSocialReportCounters() {
   return ok;
 }
 
-InstallResult InstallSocialHook(bool enabled) {
+InstallResult InstallSocialHook(bool enabled, bool uiEventProbe) {
   InstallResult result;
   if (!enabled) {
     LogFields(LogLevel::kInfo, "social_install", {{"status", "disabled"}});
@@ -543,8 +559,11 @@ InstallResult InstallSocialHook(bool enabled) {
   PublishFacadeObject();
   const GameJson gameJson = ResolveGameJson(&sentinel::FindLoadedImage);
   SetGameJson(gameJson);
+  const GameEvents events = SelectGameEvents(uiEventProbe, &sentinel::FindLoadedImage);
+  SetGameEvents(events);
   LogFields(gameJson.reset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
-            {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"}});
+            {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"},
+             {"ui_event_probe", !uiEventProbe ? "off" : events.send != nullptr ? "armed" : "unavailable"}});
   SocialThunk::Arm(kSocialHook);
   result.got = sentinel::InstallThunk<SocialThunk>(hook, LibR15Social());
   if (result.got != sentinel::GotStatus::kOk) {

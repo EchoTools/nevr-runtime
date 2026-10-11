@@ -47,7 +47,8 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames &&
+         !f.presenceLocal && !f.uiEventProbe;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -77,6 +78,10 @@ void DefaultsWithoutFile() {
   CHECK(!r.config.requested.obbSkip && !r.config.effective.obbSkip);
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
   CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
+  // The UI event probe (#318) is off until a file turns it on.
+  CHECK(!r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kUiEventProbe));
+  CHECK(EventsContain(r, "feature=ui_event_probe requested=off effective=off"));
   CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
   CHECK(!HasLevel(r, LogLevel::kError));
 }
@@ -504,6 +509,34 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
+// The UI event probe (#318) needs social (so login, bridge, redirect): without it the file's boolean is
+// forced off with a reason, and anything but a JSON true leaves it off.
+void UiEventProbeNeedsSocialAndIsOffByDefault() {
+  {
+    const LoadResult r = Load(
+        Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"ui_event_probe":true}})");
+    CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kUiEventProbe));
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  {
+    const LoadResult r = Load(Full(), R"({"features":{"ui_event_probe":true}})");
+    CHECK(r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe forced off reason=social_not_enabled"));
+  }
+  {
+    const LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+    CHECK(r.config.effective.social && !r.config.effective.uiEventProbe);
+  }
+  for (const char* text : {R"({"features":{"ui_event_probe":"true"}})", R"({"features":{"ui_event_probe":1}})",
+                           R"({"ui_event_probe":true})", R"({"features":{}})"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.uiEventProbe);
+  }
+  CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
+}
+
 int main() {
   DefaultsWithoutFile();
   NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
@@ -533,6 +566,7 @@ int main() {
   ObbSkipIsOnlyEverOnByAFileBoolean();
   PresenceNamesNeedSocialAndAreOffByDefault();
   PresenceLocalNeedsSocialAndIsOffByDefault();
+  UiEventProbeNeedsSocialAndIsOffByDefault();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
     return 1;

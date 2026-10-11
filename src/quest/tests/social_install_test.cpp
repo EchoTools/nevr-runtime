@@ -714,6 +714,18 @@ void TestResolveGameJson() {
   QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
 }
 
+// The script event post function is found only in libr15 of the pinned build, at its pinned address.
+void TestResolveGameEvents() {
+  for (const sentinel::ImageLookup lookup : {&NoImage, &EmptyImage, static_cast<sentinel::ImageLookup>(nullptr)}) {
+    QCHECK(ResolveGameEvents(lookup).send == nullptr);
+  }
+  // Probe off (the default): no post function, whatever the lookup finds.
+  QCHECK(SelectGameEvents(false, &NoImage).send == nullptr);
+  QCHECK(SelectGameEvents(true, &NoImage).send == nullptr);
+  QCHECK(kLibR15SendComponentEventVaddr == 0x1244758ULL);
+  QCHECK(kSymEvtArmComputerFriends == 0x976edb4d0c250317ULL);
+}
+
 void TestTarget() {
   const sentinel::GotTarget t = LibR15Social();
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
@@ -734,6 +746,7 @@ int main() {
   TestCounterRegistration();
   TestInstall();
   TestResolveGameJson();
+  TestResolveGameEvents();
   TestTarget();
   TestPresenceSelection();
   TestPresenceSlotCheckAcceptsTheRealAddresses();

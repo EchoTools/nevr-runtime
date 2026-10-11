@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal, kUiEventProbe };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -61,6 +61,9 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. Off until a headset run confirms it; needs the social facade.
   bool presenceLocal = false;
+  // The invite/party UI probe (#318): the Invite Members and Party slots post the friends script event instead
+  // of reaching Meta's panels. A measurement build only: off unless the file asks, and it needs social.
+  bool uiEventProbe = false;
 };
 
 struct LogEvent {
