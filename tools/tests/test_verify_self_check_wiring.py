@@ -87,8 +87,16 @@ class SelfCheckWiringGateTest(unittest.TestCase):
                   "if (fromServer) nevr_party_share_check::OnServerMessage(sym);", "")
         self.assertEqual(run(root).returncode, 1)
         root = self.tree()
+        self.edit(root, "src/runtime/compat/ws_bridge.cpp",
+                  "else nevr_party_share_check::OnClientMessage(sym, payload, static_cast<size_t>(len));", "")
+        self.assertEqual(run(root).returncode, 1)
+        root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp",
-                  "if (serverToGame) ObserveForSelfChecks(data, len);", "")
+                  "ObserveForSelfChecks(serverToGame, data, len);", "")
+        self.assertEqual(run(root).returncode, 1)
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp",
+                  "ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());", "")
         self.assertEqual(run(root).returncode, 1)
 
     def test_losing_the_quest_wiring_fails(self):

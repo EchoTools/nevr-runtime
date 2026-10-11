@@ -174,9 +174,16 @@ void PollTokenAuthState() {
 
 // --- bridge --------------------------------------------------------------------------------------
 
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len);  // below
+
 bool SendSocialFrame(const std::string& frame) {
   quest_net::SessionBridge* const bridge = R().bridge.load(std::memory_order_acquire);
-  return bridge != nullptr && bridge->SendToLogin(frame);
+  const bool sent = bridge != nullptr && bridge->SendToLogin(frame);
+  if (sent) {
+    // A request the facade sent is not shown to the frame tap; the party_data_share check pairs its answer with it.
+    ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());
+  }
+  return sent;
 }
 
 std::uint64_t SteadySeconds() {
@@ -259,16 +266,23 @@ void SelfCheckLog(const nevr_self_check::LogRecord& record) {
                        {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
 }
 
-// Self-check "party_data_share" (#398): hands each message symbol of a server-to-game frame to the check, which
-// picks out the service's answers to the facade's party data shares. Runs on the frame tap's thread.
-void ObserveForSelfChecks(const std::uint8_t* data, std::size_t len) {
+// Self-check "party_data_share" (#398): hands each message of a frame to the check, which pairs the service's
+// answers (server to game) with the requests that were sent (game to server, and the facade's own through
+// SendSocialFrame, which the frame tap does not show). Runs on the thread that carries the frame: the frame
+// tap's (the router's) for the tap, the facade's caller for a request. It reads a frame's bytes and calls no game
+// code; it is not reached from the redirector's hooked call.
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len) {
   if (!nevr_self_check::Enabled()) return;
   const std::string frame(reinterpret_cast<const char*>(data), len);  // ReadMessage takes a std::string
   std::size_t offset = 0;
   for (;;) {
     nevr_evr_codec::Message message;
     if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
-    nevr_party_share_check::OnServerMessage(message.symbol);
+    if (serverToGame) {
+      nevr_party_share_check::OnServerMessage(message.symbol);
+    } else {
+      nevr_party_share_check::OnClientMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+    }
     offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
   }
 }
@@ -420,7 +434,7 @@ class ProductionSteps final : public Steps {
     };
     if (rt.socialWanted) {
       config.tap.observe = [](bool serverToGame, const std::uint8_t* data, std::size_t len) {
-        if (serverToGame) ObserveForSelfChecks(data, len);
+        ObserveForSelfChecks(serverToGame, data, len);
         quest_social::ObserveFrames(quest_social::ProductionPorts(),
                                     serverToGame ? quest_social::Direction::kServerToGame
                                                  : quest_social::Direction::kGameToServer,

@@ -28,6 +28,8 @@ struct Pending {
   uint64_t seq = 0;
   int suppressedAfter = -1;  // >= 0 on the "capped" result
   int dropped = -1;          // >= 0 on the note that the queue lost results
+  bool hasUser = false;      // the user the result belongs to, when it was known as it happened
+  nevr_evr_codec::UserId user;
 };
 
 struct State {
@@ -40,6 +42,7 @@ struct State {
   std::string build;
   std::vector<Check> checks;
   std::deque<Pending> queue;      // oldest first
+  std::vector<SessionReset> resets;  // functions that clear a check's per-session state
   std::size_t dropped = 0;        // results the bounded queue lost since the last frame
   uint64_t seq = 0;
 };
@@ -65,8 +68,10 @@ std::string BuildResult(const Pending& p, bool loggedIn, const nevr_evr_codec::U
   nlohmann::json j;
   j["message"] = "nevr_self_check";
   j["message_type"] = "NEVR_SELF_CHECK";
-  if (loggedIn) {
-    j["userid"] = std::string(nevr_evr_codec::PlatformPrefix(user.platformCode)) + "-" + std::to_string(user.accountId);
+  // The user the result belonged to when it happened, else the user the service named by the time it is sent.
+  const nevr_evr_codec::UserId& who = p.hasUser ? p.user : user;
+  if (p.hasUser || loggedIn) {
+    j["userid"] = std::string(nevr_evr_codec::PlatformPrefix(who.platformCode)) + "-" + std::to_string(who.accountId);
   }
   j["check"] = p.check;
   j["pass"] = p.pass;
@@ -112,15 +117,30 @@ void SetBuild(std::string_view build) {
   s.build = Truncate(build);
 }
 
+void RegisterSessionReset(SessionReset reset) {
+  State& s = S();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  if (reset == nullptr) return;
+  for (SessionReset r : s.resets) {
+    if (r == reset) return;
+  }
+  s.resets.push_back(reset);
+}
+
 void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user) {
   State& s = S();
+  std::vector<SessionReset> resets;
+  {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    resets = s.resets;
+  }
+  // The ending session's own state is reported (and attributed) before the boundary moves.
+  for (SessionReset reset : resets) reset();
   std::lock_guard<std::mutex> lock(s.mutex);
   s.loggedIn = loggedIn;
   if (loggedIn) s.user = user;
-  if (!loggedIn) {
-    // A new session starts the per-check caps over; what is already queued stays queued.
-    for (Check& c : s.checks) c.reported = 0;
-  }
+  // A new session starts the per-check caps over; what is already queued stays queued.
+  for (Check& c : s.checks) c.reported = 0;
 }
 
 CheckId Register(const CheckSpec& spec) {
@@ -154,6 +174,10 @@ void Report(CheckId id, std::string_view observed, bool pass) {
     p.expected = Truncate(c.expected);
     p.pass = pass;
     p.seq = ++s.seq;
+    if (s.loggedIn) {
+      p.hasUser = true;
+      p.user = s.user;
+    }
     if (c.reported == kMaxResultsPerCheck) {
       ++c.reported;
       p.observed = "capped";
@@ -241,6 +265,7 @@ void ResetForTest() {
   s.sender = nullptr;
   s.logSink = nullptr;
   s.build.clear();
+  s.resets.clear();
   s.checks.clear();
   s.queue.clear();
   s.dropped = 0;

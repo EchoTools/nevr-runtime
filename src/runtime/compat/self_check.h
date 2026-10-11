@@ -85,8 +85,15 @@ void SetLogSink(LogSink sink);
 // The build string every result carries: the build's stamped version, which names the commit.
 void SetBuild(std::string_view build);
 // Set at LoginSuccess with the user the service named; false when the login session ends. Nothing is sent
-// while this is false (the service drops remote logs from a session that has not logged in).
+// while this is false (the service drops remote logs from a session that has not logged in). Every call is a
+// session boundary: the functions registered with RegisterSessionReset run first (so what they report is
+// attributed to the session that is ending), then the per-check caps start over.
 void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user = nevr_evr_codec::UserId());
+
+// A check that keeps per-session state registers a function that clears it. Called on every SetLoggedIn, outside
+// the unit's lock, on the thread that called it; a function is registered once.
+using SessionReset = void (*)();
+void RegisterSessionReset(SessionReset reset);
 
 // Idempotent by name: a second registration of a name returns the first one's id and changes nothing, so a
 // check may be looked up from the place that fires it without a shared variable.
