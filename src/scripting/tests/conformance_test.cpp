@@ -264,7 +264,7 @@ TEST(t3_non_finite_numbers_are_refused_with_the_script_line) {
   Host h;
   std::string error;
   h.Load("nan_key.lua", "local x = 1\nnevr.override('physics.gravity', 0/0)\n", false, &error);
-  CHECK(Contains(error, "nan_key.lua:2:"));
+  CHECK(Contains(error, "nan_key.lua:2:") && Contains(error, "finite"));
   h.Load("inf_key.lua", "nevr.override('physics.gravity', math.huge)\n", false, &error);
   CHECK(Contains(error, "inf_key.lua:1:"));
   h.Load("mod_a.lua", "nevr.hook('test.big', {pre = function(h)\n  h:set('f', -math.huge)\nend})\n");
@@ -273,6 +273,7 @@ TEST(t3_non_finite_numbers_are_refused_with_the_script_line) {
   CHECK(f == 1.5);  // unchanged
   const Captured* c = h.Find("callback_failed", "mod_a");
   CHECK(c && Contains(c->detail, "mod_a.lua:2:"));
+  CHECK(c && Contains(c->detail, "finite"));  // the binding's own check names the reason
 }
 
 // ---- T4 errors are contained ----------------------------------------------------------------
