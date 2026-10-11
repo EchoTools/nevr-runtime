@@ -10,6 +10,11 @@
 // entry of the family the answer belongs to and counts the answer only when that entry is a share. The member-scope
 // pair (PartyUpdateMemberSuccess / PartyUpdateMemberFailure) answers only a member-scope share.
 //
+// The game's own party metadata updates are answered with the same symbols (SNSPartyUpdateRequest ->
+// PartyUpdateSuccess/Failure, SNSPartyUpdateMemberRequest -> PartyUpdateMemberSuccess/Failure; nakama
+// evr_pipeline_party.go snsPartyUpdateRequest / snsPartyUpdateMemberRequest), so those two are recorded too, as
+// requests that are not shares.
+//
 // What is reported: the FIRST success of a session once, EVERY failure (the unit's per-check cap then emits
 // `capped`), each with the running counts; and a separate `party_data_share_totals` result when the number of
 // answers reaches 1, 2, 4, 8, ... and when a session ends, so the counts survive the cap. An answer with no
@@ -60,6 +65,10 @@ inline std::optional<Answer> AnswerOf(std::uint64_t symbol) {
 namespace detail {
 
 constexpr std::size_t kMaxPending = 64;       // requests remembered per family; the oldest is dropped
+// The game's metadata updates, answered with the same symbols as a share (CSymbol64 of the SNS names,
+// tools/gen_symbol_corpus.py csymbol64_hash).
+constexpr std::uint64_t kPartyUpdateRequest = 0xdee761a021a5278aULL;        // SNSPartyUpdateRequest
+constexpr std::uint64_t kPartyUpdateMemberRequest = 0x4edeeb8ddecc8736ULL;  // SNSPartyUpdateMemberRequest
 constexpr std::size_t kTargetParamOffset = 32;  // payload: 8 zero, self UUID(16), 8 zero, TargetParam(8)
 
 enum class Kind : std::uint8_t { kShare, kOther };
@@ -142,7 +151,8 @@ inline Totals Counts() {
 }
 
 /// One message the runtime (or the game) sent to the service, with its payload. Records the requests whose
-/// answer is a PartyUpdate* symbol: a party data share (scope in TargetParam) and the set-join-policy request.
+/// answer is a PartyUpdate* symbol: a party data share (scope in TargetParam), the set-join-policy request and
+/// the game's own party / member metadata updates.
 inline void OnClientMessage(std::uint64_t symbol, const std::uint8_t* payload, std::size_t length) {
   using detail::Kind;
   detail::State& s = detail::S();
@@ -153,10 +163,14 @@ inline void OnClientMessage(std::uint64_t symbol, const std::uint8_t* payload, s
     std::lock_guard<std::mutex> lock(s.mutex);
     if (scope == nevr_social_party::kPartyDataScopeParty) detail::Push(&s.party, Kind::kShare);
     else if (scope == nevr_social_party::kPartyDataScopeMember) detail::Push(&s.member, Kind::kShare);
-  } else if (symbol == nevr_social_party::kSetJoinPolicyRequest) {
+  } else if (symbol == nevr_social_party::kSetJoinPolicyRequest || symbol == detail::kPartyUpdateRequest) {
     detail::EnsureSessionResetRegistered();
     std::lock_guard<std::mutex> lock(s.mutex);
     detail::Push(&s.party, Kind::kOther);
+  } else if (symbol == detail::kPartyUpdateMemberRequest) {
+    detail::EnsureSessionResetRegistered();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    detail::Push(&s.member, Kind::kOther);
   }
 }
 
