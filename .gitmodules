@@ -7,3 +7,6 @@
 [submodule "extern/lss"]
 	path = extern/lss
 	url = https://chromium.googlesource.com/linux-syscall-support
+[submodule "luajit"]
+	path = extern/luajit
+	url = https://github.com/LuaJIT/LuaJIT.git
