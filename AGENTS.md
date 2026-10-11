@@ -36,6 +36,7 @@ just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just package-rc <N> <keystore>   # Release candidate from a clean tree: Windows zip + Quest APK in build/package-rc/rc.<N>/, no-config gate (never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing

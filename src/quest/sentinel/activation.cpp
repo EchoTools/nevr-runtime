@@ -2,6 +2,7 @@
 
 #include "sentinel_log.h"
 
+#include "generated/nevr_build_info.h"
 #include "generated/nevr_builtin_defaults.h"
 
 #include <cerrno>
@@ -85,7 +86,11 @@ nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
   defaults.httpUri = nevr_builtin::kHttpUri;
   defaults.httpKey = nevr_builtin::kPublicApiKey;
   defaults.serverKey = nevr_builtin::kPublicSocketKey;
+  defaults.features = nevr_build::kDefaultFeatures;
 
+  // Which build this is, so a log names its candidate and commit (neither is a configured value).
+  Emit(nevr_quest::LogLevel::kInfo,
+       std::string("build version=") + nevr_build::kVersion + " commit=" + nevr_build::kCommit);
   nevr_quest::LoadResult result =
       nevr_quest::ResolveConfig(defaults, status == ReadStatus::kRead ? &text : nullptr);
   for (const nevr_quest::LogEvent& e : result.events) Emit(e.level, e.message);
