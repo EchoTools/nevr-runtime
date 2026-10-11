@@ -1102,7 +1102,7 @@ test-scripting:
         run_suite "$out/nevr_script_conformance.exe" 28
         run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 4
         if [[ "$mode" == shared ]]; then
-            run_suite "$out/nevr_luau_shared_test.exe" 7
+            run_suite "$out/nevr_luau_shared_test.exe" 8
         fi
         # The two runaway probes report instead of asserting; each must end with the script stopped.
         dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)

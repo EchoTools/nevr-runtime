@@ -84,11 +84,12 @@ class ScriptVm {
   // Bytes the owner's script holds now, as the binding counts them: a state per
   // script counts what its allocator handed out; a shared state counts the bytes
   // of the objects charged to the script's memory category (the Luau binding's
-  // NEVR_LUAU_SHARED_STATE mode), which leaves out free space inside pages.
+  // default mode), which leaves out free space inside pages.
   // Not to be called from a script callback of a shared-state binding.
   virtual size_t MemoryBytes(const NevrOwner* owner) const = 0;
   // Bytes every loaded script holds together, including whatever the binding
-  // shares between them (a shared state's libraries), counted the same way.
+  // shares between them (a shared state's libraries): what the allocator holds,
+  // the same measure in every mode.
   virtual size_t TotalMemoryBytes() const = 0;
   // Closes the owner's state (hot reload, shutdown). The registry entries are
   // the caller's to reset.

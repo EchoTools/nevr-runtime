@@ -81,9 +81,12 @@ Luau, interpreter only (no CodeGen), one `lua_State` per script, upstream's `lua
 
 ## Consequences
 
-- About +1.1 MB on Windows and +0.9 MB on Quest, and about 370 KB per loaded script (one state each). Past about
-  20 scripts a shared state is required: one state, each script in its own `luaL_sandboxthread` with
-  `lua_setmemcat` accounting.
+- About +1.1 MB on Windows and +0.9 MB on Quest.
+- **The shared state is the default.** One state holds every script, each in its own `luaL_sandboxthread` with
+  its own memory category (`lua_setmemcat`).
+  - 20 scripts take 383,408 allocator bytes, against 7,340,960 with one state per script (about 367 KB each).
+  - The cost is about 20 ns more per callback in one wine run (281 against 260 ns for get + set).
+  - One state per script remains a build-time option for debugging.
 - The script surface has no `debug` library (introspection reached host internals; errors already carry
   chunk:line), `os` only has `clock`, `date` and `time`, and no NaN or infinity reaches a FLOAT game value.
 - Errors inside the VM are `longjmp` (`LUA_USE_LONGJMP=1`), so the VM and the binding build with

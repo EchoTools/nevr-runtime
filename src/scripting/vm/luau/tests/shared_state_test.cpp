@@ -145,6 +145,25 @@ TEST(shared_memory_breach_disables_only_that_script) {
 }
 
 // (c) One script's runaway loop is stopped and disables only that script.
+// The cap is per script: what another script holds, and the shared libraries,
+// are not charged to it. Under a 6 MiB cap, mod_a keeps about 3 MiB live (its peak
+// while building them is about 5 MiB); mod_b then does the same and must not be
+// refused for mod_a's bytes, although the two together are over 6 MiB.
+TEST(shared_one_scripts_memory_does_not_count_against_anothers_cap) {
+  Host h(MemoryOnly(6u << 20));
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "keep = {}\n"
+                        "for i = 1, 3 do keep[i] = string.rep('a', 1024 * 1024) .. i end\n");
+  NevrOwner* b = h.Load("mod_b.lua",
+                        "keep = {}\n"
+                        "for i = 1, 3 do keep[i] = string.rep('b', 1024 * 1024) .. i end\n");
+  std::printf("  mod_a: %zu bytes, mod_b: %zu bytes, total %zu\n", h.vm->MemoryBytes(a), h.vm->MemoryBytes(b),
+              h.vm->TotalMemoryBytes());
+  CHECK(!a->disabled.load());
+  CHECK(!b->disabled.load());
+  CHECK(h.vm->TotalMemoryBytes() > (6u << 20));  // both really hold their 3 MiB
+}
+
 TEST(shared_runaway_loop_disables_only_that_script) {
   Host h;
   NevrOwner* a = h.Load("mod_a.lua", "nevr.hook('test.add', {pre = function(h) while true do end end})\n");

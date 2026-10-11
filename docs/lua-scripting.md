@@ -87,27 +87,33 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
 
 `src/scripting/vm/luau/luau_vm.cpp`; Luau is the `extern/luau` submodule at tag `0.742`.
 
-- **Two modes.** The CMake option `NEVR_LUAU_SHARED_STATE` (default `OFF`) picks one at configure time; both pass
-  the same conformance tests. Everything below describes the default, one `lua_State` per script; the next item
-  describes `ON`.
-- **Shared state (`NEVR_LUAU_SHARED_STATE=ON`).** One `lua_State` per VM: libraries, removals and `luaL_sandbox`
-  exist once, in memory category 0.
-  - Each script runs in its own `luaL_sandboxthread` thread, with its own globals, and its callbacks run on a
-    second thread of the same script. A table in the script's category, anchored by one registry ref, keeps the
-    threads, the call object and the callbacks alive.
-  - Each script gets a Luau memory category 1 to 255 (`lua_setmemcat`; the thread that creates an object sets its
-    category, and a new thread inherits its creator's: `lstate.cpp` `luaE_newthread`, `lgc.h` `luaC_init`). The
-    256th script is refused with a Load error that names the limit. `MemoryBytes(owner)` is the category's
-    bytes (`lua_totalbytes(L, category)`); `TotalMemoryBytes()` is the whole state's.
-  - The per-script cap applies to the category. The allocator checks it when Luau asks for memory (a new page or a
-    large block); free space inside pages the state already holds is used without a check. An interned string
+- **Two modes, chosen at build time only.** No script and no config can switch them. Both pass the same
+  conformance tests, and `just test-scripting` builds and tests both.
+  - **Shared state (the default, `NEVR_LUAU_SHARED_STATE=ON`).**
+    - One `lua_State` per VM: the libraries, the removals and `luaL_sandbox` exist once, in memory category 0.
+    - Each script runs in its own `luaL_sandboxthread` thread, with its own globals. Its callbacks run on a
+      second thread of the same script.
+    - A table in the script's category, anchored by one registry ref, keeps the threads, the call object and the
+      callbacks alive.
+  - **One state per script (`NEVR_LUAU_SHARED_STATE=OFF`).** For debugging a script in isolation.
+  - **Memory.** 20 sample scripts take 383,408 bytes in the shared state and 7,340,960 with one state each,
+    counted the same way, by the allocator (`--bench` M3, `total_with_20_scripts`).
+- **Script memory in the shared state.**
+  - **Categories.** Each script gets a Luau memory category from 1 to 255 (`lua_setmemcat`). Luau tags an object
+    with the category of the thread that creates it, and a new thread inherits its creator's (Luau's lstate.cpp
+    `luaE_newthread`, lgc.h `luaC_init`). The 256th script is refused with a Load error that names the limit.
+  - **Counts.** `MemoryBytes(owner)` is the bytes of the objects in the script's category
+    (`lua_totalbytes(L, category)`). `TotalMemoryBytes()` is what the allocator holds for the whole state, the
+    same measure as the other mode.
+  - **The cap.** It applies to the category, and the allocator checks it when Luau asks for memory (a new page or
+    a large block). Free space inside pages the state already holds is used without a check. An interned string
     belongs to the script that created it first, and the VM's own growth (string table, registry) is category 0.
-  - One VM-wide mutex serializes all script code, whichever game thread calls. `Unload` drops the script's
-    anchor, collects, and returns the category to the free list when its bytes reach 0; otherwise it keeps the
-    category reserved and writes a `category_reserved` record.
-  - Budget, sticky breach, the pattern-matcher interrupt, garbage handling and the integer rule are the same, per
-    script. A full collection covers the whole state, so a script that triggers one pays for it in its own call
-    budget.
+  - **Locking.** One VM-wide mutex serializes all script code, whichever game thread calls.
+  - **Unloading.** `Unload` drops the script's anchor, collects, and returns the category to the free list once
+    its bytes reach 0. Otherwise it keeps the category reserved and writes a `category_reserved` record.
+  - **Per script, as in the other mode:** the budget, the sticky breach, the pattern-matcher interrupt, garbage
+    handling and the integer rule. A full collection covers the whole state, so a script that triggers one pays
+    for it in its own call budget.
 - **Isolation.** Each script gets its own `lua_State`. Upstream's `luaL_sandbox` makes library tables, the
   string metatable and the globals read-only, and each script runs in a `luaL_sandboxthread` thread, so its
   globals are its own.
@@ -151,10 +157,13 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
 - **No time or thread in a record.** `LogRecord` carries neither a timestamp nor a thread id. Rendered through
   the runtime's `Log()`, a line gets an ISO8601 UTC time (`src/core/logging.cpp`); a thread id is not added
   anywhere yet.
-- **Re-entry is refused, not served.** While a script's code runs on a thread, a hook point that calls the same
-  script again on that thread fails that callback (`callback_failed`, "re-entrant"). That holds whether the
-  script is the innermost one (A to A) or further out (A to B to A). It does not wait, because each state's lock
-  is not recursive. Scripts nested more than 8 deep on one thread are refused as well.
+- **Re-entry is refused, not served.** A hook point or load that needs a lock this thread already holds fails
+  (`callback_failed`, "re-entrant"). It does not wait, because the lock is not recursive.
+  - With the shared state, one lock serves every script, so any script called while another runs on the same
+    thread is refused.
+  - With one state per script, only the same script again is refused, whether directly (A to A) or further out
+    (A to B to A).
+  - Scripts nested more than 8 deep on one thread are refused as well.
 - **Reload is dev-only.** Hot reload, including bringing back a script that was disabled for a limit breach,
   happens only in dev builds. In a normal build a breached script stays off until the game restarts.
 
@@ -212,23 +221,21 @@ builds the same executables with no VM; that is the size baseline.
 
 ## What the prototype proves
 
-At `lane-lua/design`, both targets give the same results: mingw-w64 under wine and NDK arm64 under qemu.
+`just test-scripting` (part of `just verify`) runs every suite in both modes. Both targets give the same results:
+mingw-w64 under wine and NDK arm64 under qemu.
 
 | Executable | Result |
 | --- | --- |
 | `nevr_script_registry_test` | 19/19 |
-| `nevr_script_host_test` | 10/10 |
-| `nevr_script_conformance` | 24/24; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
+| `nevr_script_host_test` | 12/12 |
+| `nevr_script_stubs_test` | 3/3 |
+| `nevr_script_conformance` | 28/28; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
+| `nevr_luau_memory_test` | 4/4 |
+| `nevr_luau_shared_test` (shared state only) | 8/8: per-script globals, memory and runaway breaches, byte counts and caps stay with the script that caused them; the 256th script is refused; an unloaded script's category is reused |
 | `--pattern-dos` | stopped: the owner is disabled |
 | `--gc-dos` | returns; the finalizer never runs (Luau has no script finalizers) |
 
-`nevr_script_stubs_test` (3/3) and `src/scripting/check/check_test.sh` run on the host.
-
-With `-DNEVR_LUAU_SHARED_STATE=ON` the same four rows give the same results on both targets, and
-`nevr_luau_shared_test` (7/7) adds what the mode changes: globals, memory breach, runaway loop and per-script
-byte counts stay with the script that caused them, the 256th script is refused, and an unloaded script's category
-is reused. `--bench` M3 with 20 sample scripts: 7,381,920 bytes in total with a state each (allocator bytes);
-118,793 with a shared state (object bytes, 5,940 per script), which is 385,456 counted at the allocator.
+`src/scripting/check/check_test.sh` runs on the host.
 
 ## What is left
 
@@ -242,8 +249,6 @@ is reused. `--bench` M3 with 20 sample scripts: 7,381,920 bytes in total with a 
      on the tick path.
 3. **The first real hook point.** A named game function, detoured once by the runtime and invoked through
    `Registry::Invoke`.
-4. **Choose a mode.** `NEVR_LUAU_SHARED_STATE=ON` holds 20 scripts in 385,456 allocator bytes against 7,381,920
-   (`--bench`, M3); decide which one the embedded build uses.
-5. **Real arm64 timing.** Run `nevr_script_conformance --bench` on a Quest (adb, no game).
-6. **Report the manifests.** Add the script manifests to the login's plugin report
+4. **Real arm64 timing.** Run `nevr_script_conformance --bench` on a Quest (adb, no game).
+5. **Report the manifests.** Add the script manifests to the login's plugin report
    (`src/runtime/ext/plugin_manifest.h`).
