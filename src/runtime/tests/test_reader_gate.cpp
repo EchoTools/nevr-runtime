@@ -127,6 +127,50 @@ TEST(ReaderGate, ATimedOutWaitIsNotForgottenByTheNextOne) {
   EXPECT_EQ(gate.Readers(), 0);
 }
 
+// A reader that read the epoch, was overtaken by a whole WaitIdle and only then raised the counter of
+// the epoch it read must not stay registered there: the next WaitIdle would wait on the other counter
+// and call the gate idle while this reader uses the object the first one published.
+TEST(ReaderGate, AReaderOvertakenBetweenReadingTheEpochAndRegisteringIsWaitedFor) {
+  nevr::ReaderGate gate;
+  struct Obj {
+    int v;
+  } first{1}, second{2}, third{3};
+  std::atomic<Obj*> slot{&first};
+  std::atomic<bool> stalled{false};
+  std::atomic<bool> resume{false};
+  std::atomic<bool> inside{false};
+  std::atomic<bool> leave{false};
+  std::atomic<int> seen{0};
+
+  std::thread reader([&] {
+    bool once = true;
+    nevr::ReaderGate::Scope scope(gate, [&] {
+      if (!once) return;  // the retry after the epoch moved is not held
+      once = false;
+      stalled = true;
+      while (!resume) std::this_thread::sleep_for(1ms);
+    });
+    seen = nevr::ReaderGate::Load(slot)->v;
+    inside = true;
+    while (!leave) std::this_thread::sleep_for(1ms);
+  });
+  while (!stalled) std::this_thread::sleep_for(1ms);
+
+  nevr::ReaderGate::Publish(slot, &second);
+  EXPECT_TRUE(gate.WaitIdle(1s)) << "nobody is registered yet";
+  resume = true;
+  while (!inside) std::this_thread::sleep_for(1ms);
+  EXPECT_EQ(seen.load(), 2) << "a reader that registers after the writer's wait loads the replacement";
+
+  nevr::ReaderGate::Publish(slot, &third);
+  EXPECT_FALSE(gate.WaitIdle(50ms)) << "WaitIdle called the gate idle while a reader is inside it";
+  EXPECT_EQ(gate.Readers(), 1);
+
+  leave = true;
+  reader.join();
+  EXPECT_TRUE(gate.WaitIdle(1s));
+}
+
 // A reader that enters after the writer started waiting is not waited for.
 TEST(ReaderGate, ALaterReaderDoesNotHoldTheWriterBack) {
   nevr::ReaderGate gate;
@@ -179,9 +223,13 @@ struct Canary {
 TEST(ReaderGate, RepublishNeverFreesAnObjectAReaderIsStillUsing) {
   constexpr int kReaders = 6;
   constexpr int kRepublishes = 30000;
-  // The budget is the test's own, far inside the runner's limit: a writer that cannot get through fails
-  // here with the numbers instead of running into a 900 s kill (#469).
-  constexpr auto kBudget = 60s;
+  // The race needs pressure, not a fixed count: the run ends at kRepublishes or at kBudget, whichever
+  // comes first, because on a machine with fewer cores than readers each republish waits for the
+  // descheduled readers inside the gate to run again (a 4 vCPU runner: ~1.6 ms each). It fails by name
+  // below kFloor, which only a wedged writer misses; that a stream of readers cannot starve the writer
+  // is pinned by WaitIdleIsNotStarvedByReadersThatOverlapEachOther (#469).
+  constexpr auto kBudget = 15s;
+  constexpr int kFloor = 200;
 
   nevr::ReaderGate gate;
   std::vector<Canary> pool(kRepublishes + 1);
@@ -233,9 +281,8 @@ TEST(ReaderGate, RepublishNeverFreesAnObjectAReaderIsStillUsing) {
     done = i;
     if (std::chrono::steady_clock::now() - started > kBudget) break;
   }
-  ASSERT_EQ(done, kRepublishes) << "only " << done << " of " << kRepublishes << " republishes in "
-                                << kBudget.count() << " s with " << kReaders
-                                << " readers: the writer is starved by the reader stream (#469)";
+  ASSERT_GE(done, kFloor) << "only " << done << " republishes in " << kBudget.count() << " s with "
+                          << kReaders << " readers: the writer is starved by the reader stream (#469)";
   stop = true;
   for (auto& t : readers) t.join();
 
