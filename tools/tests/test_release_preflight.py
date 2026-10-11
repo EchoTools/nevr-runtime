@@ -254,6 +254,46 @@ class ReleasePreflightTest(unittest.TestCase):
                 self.assertIn(f"{label} failed (exit 128)", result.stdout)
                 self.assertNotIn("release-preflight: OK", result.stdout)
 
+    def shimmed(self, script_body):
+        """A git wrapper on PATH: `script_body` (bash) may handle a call and exit; otherwise real git runs."""
+        shim_dir = self.tmp / f"shim{len(list(self.tmp.glob('shim*')))}"
+        shim_dir.mkdir()
+        shim = shim_dir / "git"
+        shim.write_text(f"#!/usr/bin/env bash\n{script_body}\nexec '{shutil.which('git')}' \"$@\"\n")
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+        return {"PATH": f"{shim_dir}:{os.environ['PATH']}"}
+
+    def test_a_failing_object_lookup_is_a_problem_but_an_absent_object_still_says_fetch(self):
+        self.push_from_seed("two")  # origin's tip is not in this clone
+        failing = self.shimmed('if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ]; then '
+                               'echo "fatal: simulated" >&2; exit 128; fi')
+        result = self.run_preflight(env=failing)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("git rev-parse --verify", result.stdout)
+        self.assertIn("failed (exit 128)", result.stdout)
+        self.assertNotIn("git fetch, then re-run", result.stdout)
+        absent = self.run_preflight()  # real git: --verify --quiet exits 1, silently, for an absent object
+        self.assertIn("git fetch, then re-run", absent.stdout)
+        self.assertNotIn("failed (exit", absent.stdout)
+
+    def test_a_rev_list_that_fails_or_prints_garbage_is_a_problem_never_zero_commits(self):
+        self.push_from_seed("two")
+        git(self.clone, "fetch", "-q")  # the objects are here: the counting path runs
+        for name, body in (("exit 128", 'if [ "$1" = "rev-list" ]; then echo "fatal: simulated" >&2; exit 128; fi'),
+                           ("garbage", 'if [ "$1" = "rev-list" ]; then echo "not-a-number"; exit 0; fi')):
+            with self.subTest(rev_list=name):
+                result = self.run_preflight(env=self.shimmed(body))
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("git rev-list", result.stdout)
+                self.assertNotIn("release-preflight: OK", result.stdout)
+
+    def test_the_log_record_names_the_origin_pattern_in_force(self):
+        self.run_preflight()
+        record = json.loads(self.log.read_text().splitlines()[0])
+        self.assertEqual(record["expect_origin"], scratch_expect(self.origin))
+        self.run_preflight("--expect-origin", ".*")
+        self.assertEqual(json.loads(self.log.read_text().splitlines()[1])["expect_origin"], ".*")
+
     def test_a_tracked_change_alone_is_refused(self):
         (self.clone / "a.txt").write_text("changed\n")
         result = self.run_preflight()
@@ -277,7 +317,7 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         calls = argv_log.read_text().splitlines()
         self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
-        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "cat-file", "rev-list"}
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "rev-list"}
         for call in calls:
             words = call.split()
             while words and words[0] == "-c":
