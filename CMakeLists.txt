@@ -38,6 +38,20 @@ set_project_version_from_git()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_rc_label.cmake")
 nevr_apply_rc_label()
 
+# A release candidate reports its own run-card checks to the game service (src/runtime/compat/self_check.h):
+# it connects with debug=true so the service asks the game for every remote log category, and each check
+# sends its result as one remote log string. The decision follows the stamped version, so a local
+# package-dev build (stamped -dev) leaves the unit off; -DNEVR_SELF_CHECKS=ON turns it on for any build.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_self_checks.cmake")
+option(NEVR_SELF_CHECKS "Report run-card checks as remote logs (default: on for a build stamped -rc.<N>)" OFF)
+nevr_self_checks_by_stamp(NEVR_SELF_CHECKS_BY_STAMP "${PROJECT_VERSION}")
+if(NEVR_SELF_CHECKS OR NEVR_SELF_CHECKS_BY_STAMP)
+  add_compile_definitions(NEVR_SELF_CHECKS=1)
+  message(STATUS "Self-checks: on (${PROJECT_VERSION})")
+else()
+  message(STATUS "Self-checks: off (${PROJECT_VERSION})")
+endif()
+
 # Define the version and git hash as compile definitions
 add_compile_definitions(
   NEVR_PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"

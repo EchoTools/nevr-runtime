@@ -70,6 +70,9 @@ class SessionBridge {
     // NEVR friend list itself (its own friend code talks to the Oculus platform, which the social facade
     // replaces), so the bridge asks, exactly as the PC bridge does after LoginSuccess.
     bool subscribeFriendList = false;
+    // Ask the game service for every remote log category: `debug=true` on the login connection's upgrade
+    // query (server/session_ws.go "debug"). Set when the self-checks are on (runtime/compat/self_check.h).
+    bool remoteDebugQuery = false;
     nevr_session_router::LogSink log;
     // Whether the account the login needs is available (see "A held login"). Null: always available.
     // Called with the router lock held: a lock-free read of a flag the owner keeps current.

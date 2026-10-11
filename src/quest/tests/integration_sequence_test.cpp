@@ -19,10 +19,12 @@
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/net/frame_tap.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/self_check.h"
 
 // Counts every allocation through the global operator new in this test binary, for the no-allocation check
 // on IdentitySource::Ready (it runs on the Oculus message pump).
@@ -439,6 +441,101 @@ void TestPostLoadRetriesUntilSettledThenStops() {
   QCHECK(stats.loginSettled == 1 && stats.matchmakingSettled == 1);
 }
 
+// Self-check "matchmaking_reload_redirect" (#451): the number of distinct libpnsradmatchmaking images is what the
+// once-installed redirect is compared with.
+void TestPostLoadCountsEachDistinctMatchmakingImage() {
+  int imageA = 0;
+  int imageB = 0;
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("libpnsovr.so", &imageA);  // another library: not counted
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // the same handle again: a refcount, not a new image
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageB);  // closed and mapped again elsewhere
+  QCHECK(MatchmakingImages() == 2);
+  AfterDlopen("/x/libpnsradmatchmaking.so", nullptr);  // a failed dlopen is not an image
+  QCHECK(MatchmakingImages() == 2);
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+}
+
+// The matchmaking check's probe (self_check_wiring.cpp): an image without an install is not a failure while the
+// matchmaking action is unsettled, and is one once it settled without covering that image.
+void TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce() {
+  int imageA = 0;
+  int imageB = 0;
+  nevr_quest::integration::ResetMatchmakingReloadCheckForTest();
+  nevr_self_check::Observation seen;
+  ResetPostLoad(&FakeLogin, &FakeMatchmaking, Settle::kRetryLater, Settle::kRetryLater);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));  // no image yet
+
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // mapped, the action is retrying: wait
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));
+
+  g_mmSettle = Settle::kDone;
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // the action settles on this call
+  nevr_quest::integration::NoteMatchmakingRedirectInstalled();
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=1 installs=1" && seen.pass);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));  // said once
+
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageB);  // another mapping: the once-installed hook misses it
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=2 installs=1" && !seen.pass);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));
+}
+
+// The action gave up with the module mapped: the one image has no install, and that is a failure.
+void TestMatchmakingReloadProbeFailsWhenTheActionGaveUp() {
+  int image = 0;
+  nevr_quest::integration::ResetMatchmakingReloadCheckForTest();
+  nevr_self_check::Observation seen;
+  ResetPostLoad(&FakeLogin, &FakeMatchmaking, Settle::kDone, Settle::kGiveUp);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &image);
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=1 installs=0" && !seen.pass);
+}
+
+// The self_check feature's wiring: the debug query, the user the service names, the sender.
+void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
+  static std::vector<std::string> sent;
+  sent.clear();
+  nevr_self_check::ResetForTest();
+  quest_net::FrameTapSinks sinks;
+  int previousCalls = 0;
+  sinks.onLoginUser = [&](std::uint64_t, std::uint64_t) { ++previousCalls; };
+  bool debugQuery = false;
+  nevr_quest::integration::SelfCheckHooks hooks;
+  hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
+  hooks.log = [](const nevr_self_check::LogRecord&) {};
+  hooks.build = "4.0.0-rc.1+abc";
+  nevr_quest::integration::ApplySelfCheck(&sinks, &debugQuery, hooks);
+  QCHECK(debugQuery);
+  QCHECK(nevr_self_check::Enabled());
+  QCHECK(static_cast<bool>(sinks.onLoginUser));
+
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"wiring", "ok", nullptr});
+  nevr_self_check::Report(id, "ok", true);
+  nevr_self_check::Flush();
+  QCHECK(sent.empty());  // not logged in yet
+
+  quest_net::FrameTap tap(sinks);
+  tap.ServerToGame(nevr_evr_codec::BuildLoginSuccess(5, 0x2222ULL));
+  QCHECK(previousCalls == 1);  // the consumer that was there is still called
+  nevr_self_check::Flush();
+  QCHECK(sent.size() == 1);
+  if (sent.size() == 1) {
+    nevr_evr_codec::Message message;
+    QCHECK(nevr_evr_codec::ReadMessage(sent[0], 0, &message) == nevr_evr_codec::ReadStatus::Ok);
+    QCHECK(message.symbol == nevr_evr_codec::kSymRemoteLogSet);
+    QCHECK(nevr_evr_codec::ReadLE64(message.payload) == 5 && nevr_evr_codec::ReadLE64(message.payload + 8) == 0x2222ULL);
+  }
+  nevr_self_check::ResetForTest();
+}
+
 void TestPostLoadGiveUpEndsOnlyThatAction() {
   int dummy = 0;
   ResetPostLoad(&ThrowingLogin, &FakeMatchmaking, Settle::kGiveUp, Settle::kRetryLater);
@@ -687,6 +784,20 @@ void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
   QCHECK(accounts.empty());
 }
 
+void TestFrameTapNamesThePlatformAndTheAccountOfTheLogin() {
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> users;
+  FrameTapSinks sinks;
+  sinks.onLoginUser = [&](std::uint64_t platform, std::uint64_t account) { users.emplace_back(platform, account); };
+  FrameTap tap(sinks);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(5, 0x1122334455667788ULL);
+  tap.GameToServer(success);
+  QCHECK(users.empty());
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, "abc") + success);
+  QCHECK(users.size() == 1 && users[0].first == 5 && users[0].second == 0x1122334455667788ULL);
+  tap.ServerToGame("garbage");
+  QCHECK(users.size() == 1);
+}
+
 void TestFrameTapContainsAThrowingConsumer() {
   int logins = 0;
   FrameTapSinks sinks;
@@ -794,6 +905,10 @@ int main() {
   TestConfigFailureLeavesAllFeaturesOff();
   TestPostLoadIgnoresANullHandle();
   TestPostLoadRetriesUntilSettledThenStops();
+  TestPostLoadCountsEachDistinctMatchmakingImage();
+  TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
+  TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
+  TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
   TestPostLoadGiveUpEndsOnlyThatAction();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
@@ -804,6 +919,7 @@ int main() {
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
+  TestFrameTapNamesThePlatformAndTheAccountOfTheLogin();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "integration_sequence_test: %d check(s) failed\n", quest_test::Failures());
