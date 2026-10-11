@@ -1602,14 +1602,8 @@ void ShutdownWebSocketBridge() {
   // The graceful path uses StopWebSocketBridgeListener() instead; see below.
 }
 
-// N105: the REAL stop, for callers that are NOT under the loader lock — the
-// SIGINT/SIGTERM graceful path and gameserver's BeginGracefulShutdown.
-//
-// This capability was lost by the N92 fold: the only definition of
-// WsBridge_Shutdown lives in src/modules/ws-bridge/, a module that stopped
-// being built, while two shipping call sites still resolved it with
-// GetProcAddress("ws_bridge.dll") and got null. Every server run since has
-// logged `ws_bridge=absent WsBridge_Shutdown=null` and left the listener up.
+// Stop the listener from console-control shutdown or
+// GameServerLib::BeginGracefulShutdown, outside the loader lock.
 //
 // Stopping the listener is what releases the socket FD. ixwebsocket never sets
 // SO_REUSEADDR (N37), so a leaked LISTEN socket is precisely the zombie-bind

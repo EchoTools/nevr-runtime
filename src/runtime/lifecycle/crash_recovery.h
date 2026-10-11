@@ -62,9 +62,7 @@ void NotifyGameServerLibStarted();
 /// N87: TRUE once a console CTRL+C/close/break event has been observed. Read by
 /// GameServerLib::Terminate to exit cleanly at the end of the game's own
 /// teardown, instead of letting the game fault in the client-side teardown that
-/// follows it. Distinct from g_shutdownRequested, which triggers an immediate
-/// PerformGracefulShutdown from the per-frame and per-state-transition hooks and
-/// would therefore kill the process before the lobby is unregistered.
+/// follows it.
 bool ConsoleShutdownPending();
 
 /// Forces a genuine process exit with the given code, bypassing the server-mode
@@ -86,10 +84,8 @@ void InstallFatalErrorHandler();
 /// socket FD to prevent wineserver zombie — N38 root cause), (2) unhooks BinaryBugFixes
 /// MinHook hooks, (3) calls ForceFatalExit to terminate the process.
 /// Safe to call from any thread — uses InterlockedExchange to prevent re-entry.
-/// Primary call sites: POSIX signal handler (SIGINT/SIGTERM — direct call, NOT
-/// flag-deferred), SetConsoleCtrlHandler lambda (direct), per-frame
-/// PrecisionSleepWaitHook (flag check, now dead-code defense), per-transition
-/// NetGameSwitchStateHook (flag check + session-end path).
+/// Primary call sites: console control handler, per-frame
+/// PrecisionSleepWaitHook, and per-transition NetGameSwitchStateHook.
 void PerformGracefulShutdown(unsigned int exitCode);
 
 /// Server-mode fatal exit — logs the cause as the last log line and immediately

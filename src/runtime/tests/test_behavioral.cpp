@@ -104,7 +104,6 @@ CHAR   g_regionOverride[64]   = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
-volatile sig_atomic_t g_shutdownRequested = 0;
 
 // --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
 std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }

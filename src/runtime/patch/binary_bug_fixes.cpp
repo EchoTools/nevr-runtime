@@ -58,7 +58,7 @@
 #include <MinHook.h>
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/cli.h"              // g_isServer
-#include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, PerformGracefulShutdown
+#include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
 #endif
 
 /* --------------------------------------------------------------------
@@ -319,14 +319,6 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 
     // (nevr_hook_liveness::Mark above is the entry evidence this hook needs; no frame
     // counter is kept here.)
-
-    // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
-    // This fires every game tick, so CTRL+C responsiveness is bounded by the
-    // frame interval (~8ms at 120Hz, ~16ms at 60Hz).
-    if (g_shutdownRequested) {
-      PerformGracefulShutdown(0);
-      // Unreachable — ForceFatalExit calls TerminateProcess.
-    }
 
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //

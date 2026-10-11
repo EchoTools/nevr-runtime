@@ -14,13 +14,10 @@
 #include <processthreadsapi.h>
 #include <psapi.h>
 #include <setjmp.h>
-#include <signal.h>
 #include <windows.h>
 
 #include <atomic>
 #include <cstdarg>
-
-#include <unistd.h>
 
 #include "runtime/lifecycle/cli.h"
 #include "abi/echovr_functions.h"
@@ -132,12 +129,6 @@ void InstallGameMainHook() {
         "armed; a null-deref AV in server mode will terminate the process instead of recovering");
   }
 }
-
-// N62: set for the duration of a signal-context shutdown. `volatile sig_atomic_t`
-// is the only type the C standard permits a handler to touch. Read by the
-// shutdown path to choose an async-signal-safe reporting transport.
-static volatile sig_atomic_t g_inSignalContext = 0;
-
 
 // N67: these two flags are written from CreateProcessAHook, CreateProcessWHook,
 // ExitProcessHook and TerminateProcessHook — any thread — and read/written from
@@ -1033,29 +1024,6 @@ bool InstallVEH() {
   return true;
 }
 
-// POSIX signal handler — initiates shutdown DIRECTLY.
-// A flag (set g_shutdownRequested, check per-frame in PrecisionSleepWaitHook)
-// would lose the race: after SIGINT the game begins teardown before the next
-// frame runs, so PerformGracefulShutdown would never be invoked and the
-// listening socket would survive as a zombie (N13/N38).
-// Uses write() for async-signal-safe diagnostics (not fprintf/Log).
-// PerformGracefulShutdown is NOT formally async-signal-safe (calls Log, GetProcAddress,
-// etc.), but called directly from here because the flag alternative is proven broken:
-// the per-frame check never fires after signal delivery. Re-entrant-safe via
-// InterlockedExchange gate inside PerformGracefulShutdown.
-static void PosixSignalHandler(int sig) {
-  if (sig == SIGINT) {
-    write(STDERR_FILENO, "[NEVR.PATCH] SIGINT received — direct shutdown\n", 47);
-  } else if (sig == SIGTERM) {
-    write(STDERR_FILENO, "[NEVR.PATCH] SIGTERM received — direct shutdown\n", 48);
-  } else {
-    write(STDERR_FILENO, "[NEVR.PATCH] signal received — direct shutdown\n", 45);
-  }
-  g_inSignalContext = 1;  // N62: switches reporting to the async-signal-safe path
-  PerformGracefulShutdown(0);
-  // Unreachable — PerformGracefulShutdown calls ForceFatalExit which terminates.
-}
-
 // ---------------------------------------------------------------------------
 // N87 — CTRL+C shutdown under Wine.
 //
@@ -1087,14 +1055,8 @@ static void PosixSignalHandler(int sig) {
 
 static void ShutdownReport(EchoVR::LogLevel level, const char* fmt, ...);
 
-// Set by ConsoleCtrlHandler when a CTRL+C/close/break event arrives.
-//
-// Deliberately NOT g_shutdownRequested: that flag is polled by
-// NetGameSwitchStateHook (state_machine.cpp:30) and by the per-frame hook
-// (binary_bug_fixes.cpp:365), and both call PerformGracefulShutdown the
-// instant they see it. The game's own teardown switches NetGame state as its
-// FIRST step, so setting g_shutdownRequested here would force-exit the process
-// before the lobby is unregistered — the precise opposite of graceful.
+// Set by ConsoleCtrlHandler when a CTRL+C/close/break event arrives. The game's
+// own teardown must unregister the lobby before this handler forces process exit.
 static volatile LONG s_consoleShutdownPending = 0;
 
 // Non-zero once RearmConsoleCtrlHandler() has moved us to the front of the
@@ -1244,34 +1206,6 @@ void InstallConsoleCtrlHandler() {
         "[NEVR.PATCH] console ctrl handler installed (behind the game's handler until re-armed)");
   }
 
-  // Register POSIX signal handlers too.
-  // MEASURED (N87, Wine 11.13): signal(SIGINT, ...) registers successfully but
-  // is NEVER called — Wine delivers a tty SIGINT to console ctrl handlers, not
-  // to the CRT signal table. These registrations are retained for native
-  // Windows and for a hosted SIGTERM, not because they fire under Wine.
-  //
-  // These handlers call PerformGracefulShutdown DIRECTLY — a flag (set
-  // g_shutdownRequested, check per-frame) loses the race to game teardown;
-  // the per-frame check never runs after signal delivery (N13/N38).
-  const bool sigintOk = signal(SIGINT, PosixSignalHandler) != SIG_ERR;
-  if (!sigintOk) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
-        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
-        "would block POSIX-path shutdown on native Windows");
-  }
-  const bool sigtermOk = signal(SIGTERM, PosixSignalHandler) != SIG_ERR;
-  if (!sigtermOk) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] SIGTERM handler registration failed — a container/orchestrator stop signal "
-        "(docker stop, systemd) will not trigger graceful shutdown; process will require SIGKILL");
-  }
-  if (sigintOk && sigtermOk) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
-  } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] POSIX signal handlers NOT fully installed: SIGINT=%s SIGTERM=%s",
-        sigintOk ? "ok" : "FAILED", sigtermOk ? "ok" : "FAILED");
-  }
 }
 
 void ServerFatal(const CHAR* format, ...) {
@@ -1336,65 +1270,40 @@ void InstallFatalErrorHandler() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors");
 }
 
-// N62/N105: the signal path must never take the loader lock — GetModuleHandleA
-// and GetProcAddress both serialise on it, and a signal arriving while another
-// thread holds it deadlocks shutdown permanently. N62 satisfied that by
-// resolving WsBridge_Shutdown ONCE at init; N105 satisfies it completely by
-// removing the lookup altogether. The bridge is compiled into this DLL (N92),
-// so PerformGracefulShutdown calls StopWebSocketBridgeListener() directly.
+// The bridge is compiled into this DLL, so graceful shutdown calls its
+// listener stop directly without a module lookup.
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
-      "StopWebSocketBridgeListener=direct (no loader lock on the signal path)");
+      "StopWebSocketBridgeListener=direct");
 }
 
-// N62: report from the shutdown path using a transport that is safe for the
-// context we are actually in. Log() reaches vfprintf, which takes the stderr
-// FILE lock — a signal delivered while the interrupted thread held that lock
-// deadlocks the handler on it. VehPrintf uses only a fixed stack buffer plus
-// WriteFile, so it is safe from a signal handler.
+// Shutdown runs outside CRT signal context, so use the regular logger.
 static void ShutdownReport(EchoVR::LogLevel level, const char* fmt, ...) {
   char buf[512];
   va_list args;
   va_start(args, fmt);
   vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
-  if (g_inSignalContext) {
-    // Signal context has no level transport (VehPrintf is a raw WriteFile with no structured
-    // level field) — fold the level into the text so an anomaly stays visible on this path too.
-    VehPrintf("%s%s", level == EchoVR::LogLevel::Warning ? "WARN: " : "", buf);
-  } else {
-    Log(level, "%s", buf);
-  }
+  Log(level, "%s", buf);
 }
 
 void PerformGracefulShutdown(unsigned int exitCode) {
-  // Prevent re-entry: if the POSIX signal handler fires while another thread
-  // is already running this sequence, only the first call executes. The
-  // second call arrives after TerminateProcess — unreachable.
-  // This gate also handles the (now-dead-code) per-frame / per-transition
-  // flag checks in PrecisionSleepWaitHook and NetGameSwitchStateHook.
+  // Prevent re-entry if a second shutdown path runs while one is active.
   static volatile LONG s_shuttingDown = 0;
   if (InterlockedExchange(&s_shuttingDown, 1) != 0) {
-    // N63: re-entry — another signal arrived while shutdown was in
-    // progress. The first shutdown may be stuck (deadlocked on N62
-    // signal-unsafe locks). Don't return (the caller PosixSignalHandler
-    // would return without terminating the process); force-exit now.
+    // The first shutdown may be stuck. Force exit instead of waiting.
     ForceFatalExit(1);
   }
 
   ShutdownReport(EchoVR::LogLevel::Info,
-                 "[NEVR.PATCH] Graceful shutdown initiated (code=%u signal_ctx=%s)",
-                 exitCode, g_inSignalContext ? "true" : "false");
+                 "[NEVR.PATCH] Graceful shutdown initiated (code=%u)", exitCode);
 
   // 1. Stop the ws_bridge listener — this is the critical step that releases
   //    the socket FD, preventing the wineserver from holding port 6821 as a
   //    zombie LISTEN socket after the process exits (N38 root cause).
   {
-    // N105: direct call into the in-process bridge. The N62 concern — never take
-    // the loader lock on the signal path — is satisfied more completely than
-    // before: there is no module handle and no symbol lookup at all, at init or
-    // here. The bridge is compiled into this DLL (N92).
+    // Direct call into the in-process bridge; no loader lookup is required.
     //
     // A GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown") returns NULL on
     // every run since the N92 fold, taking the else-branch and leaking the

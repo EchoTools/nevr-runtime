@@ -19,6 +19,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/boot_replay.h"
+#include "runtime/log/game_line_format.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -919,12 +920,13 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     }
 
     /* File output */
-    if (g_config.file_enabled && g_log_file) {
+    if (g_config.file_enabled) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-        WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
-
-        std::fflush(g_log_file);
-        RotateIfNeeded();
+        if (g_log_file) {
+            WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
+            std::fflush(g_log_file);
+            RotateIfNeeded();
+        }
     }
 
     g_emitted_count++;
@@ -1053,21 +1055,11 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     char buf[0x2000];
     int len;
 
-    if (std::strchr(fmt, '%') == nullptr) {
-        len = static_cast<int>(std::strlen(fmt));
-        if (len >= static_cast<int>(sizeof(buf))) len = sizeof(buf) - 1;
-        std::memcpy(buf, fmt, len);
-        buf[len] = '\0';
-    } else {
-        len = vsnprintf(buf, sizeof(buf), fmt, reinterpret_cast<va_list>(varargs));
-        if (len < 0) len = 0;
-        if (len >= static_cast<int>(sizeof(buf))) len = sizeof(buf) - 1;
-        buf[len] = '\0';
-    }
+    len = nevr_game_line_format::Capture(buf, sizeof(buf), fmt, varargs);
 
     if (len == 0) {
         g_suppressed_count++;
-        if (g_config.passthrough_to_engine && orig_PrintfImpl)
+        if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr)
             orig_PrintfImpl(level, category, fmt, varargs);
         return;
     }
@@ -1111,7 +1103,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     EmitLine(level, buf, emit_len);
 
-    if (g_config.passthrough_to_engine && orig_PrintfImpl) {
+    if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr) {
         /* N89: max_line_length must apply to the console too, not ONLY to our
          * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
          * reformat the FULL line to console — which is what
