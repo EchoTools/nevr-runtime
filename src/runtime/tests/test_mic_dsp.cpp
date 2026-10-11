@@ -249,6 +249,56 @@ TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
   EXPECT_EQ(std::vector<int16_t>(out, out + 4), (std::vector<int16_t>{3, 4, 5, 6}));
 }
 
+// #95: the ring reports how many samples it overwrote, so a slow reader and a slow capture can be told
+// apart in the log. The total is cumulative: a new stream (Reset) does not zero it.
+TEST(MicRingBuffer, DroppedSamplesCountsEveryOverwrittenSampleAndSurvivesReset) {
+  MicRingBuffer ring(4);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t three[] = {1, 2, 3};
+  ring.Push(three, 3);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t five[] = {1, 2, 3, 4, 5};
+  EXPECT_TRUE(ring.Push(five, 5));  // 1 free slot, 4 overwritten
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  ring.Reset();
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  const int16_t six[] = {1, 2, 3, 4, 5, 6};
+  ring.Push(six, 6);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // 4 fit, 2 overwritten
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // reading drops nothing
+}
+
+TEST(MicRingBuffer, AZeroCapacityRingDropsEverythingItIsGiven) {
+  MicRingBuffer ring(0);
+  const int16_t three[] = {1, 2, 3};
+  EXPECT_TRUE(ring.Push(three, 3));
+  EXPECT_EQ(ring.DroppedSamples(), 3u);
+}
+
+// The warning line is counted instead of once per stream: the first overflow logs at once and carries the
+// samples dropped since the last line; later ones wait the interval and then carry what piled up.
+TEST(MicOverflowLogGate, FirstOverflowLogsThenWaitsTheIntervalAndCarriesTheAccumulatedCount) {
+  MicOverflowLogGate gate(5000);
+  EXPECT_EQ(gate.Poll(0, 1000), 0u);        // nothing dropped: nothing to say
+  EXPECT_EQ(gate.Poll(480, 1010), 480u);    // first overflow logs immediately
+  EXPECT_EQ(gate.Poll(960, 1020), 0u);      // inside the interval
+  EXPECT_EQ(gate.Poll(1920, 5999), 0u);     // 4989 ms after the line: still inside
+  EXPECT_EQ(gate.Poll(1920, 6010), 1440u);  // 5000 ms: what piled up since the line (1920 - 480)
+  EXPECT_EQ(gate.Poll(1920, 20000), 0u);    // nothing new: silent however long it has been
+}
+
+TEST(MicOverflowLogGate, RebaseHidesDropsFromBeforeTheGameWasReadingAndResetLogsTheNextStreamAtOnce) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(9600);                        // dropped while nobody was listening
+  EXPECT_EQ(gate.Poll(9600, 100), 0u);
+  EXPECT_EQ(gate.Poll(10080, 110), 480u);  // only the drop after the game started reading
+  gate.Reset();                             // a new stream: its first overflow is not held back
+  gate.Rebase(10080);
+  EXPECT_EQ(gate.Poll(10560, 200), 480u);  // 90 ms after the last line, inside the old interval
+}
+
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
   struct RatePair { uint32_t source; uint32_t target; size_t frames; };
   const RatePair rates[] = {

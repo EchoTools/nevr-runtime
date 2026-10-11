@@ -12,7 +12,10 @@ MicRingBuffer::MicRingBuffer(uint32_t capacity)
 
 bool MicRingBuffer::Push(const int16_t* samples, uint32_t count) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (capacity_ == 0) return count > 0;
+  if (capacity_ == 0) {
+    droppedSamples_ += count;
+    return count > 0;
+  }
   bool dropped = false;
   for (uint32_t i = 0; i < count; i++) {
     data_[head_] = samples[i];
@@ -21,9 +24,25 @@ bool MicRingBuffer::Push(const int16_t* samples, uint32_t count) {
       count_++;
     } else {
       dropped = true;
+      droppedSamples_++;
     }
   }
   return dropped;
+}
+
+uint64_t MicRingBuffer::DroppedSamples() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return droppedSamples_;
+}
+
+uint64_t MicOverflowLogGate::Poll(uint64_t droppedTotal, uint64_t nowMs) {
+  if (droppedTotal <= reported_) return 0;
+  if (hasLogged_ && nowMs - lastLogMs_ < intervalMs_) return 0;
+  const uint64_t sinceLast = droppedTotal - reported_;
+  reported_ = droppedTotal;
+  lastLogMs_ = nowMs;
+  hasLogged_ = true;
+  return sinceLast;
 }
 
 uint32_t MicRingBuffer::Available() const {

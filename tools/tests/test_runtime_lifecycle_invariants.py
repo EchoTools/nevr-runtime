@@ -237,7 +237,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # MicAvailable is a poll the game makes from the moment capture starts; it must not drop or latch.
         avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
         self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
-        self.assertRegex(source, r"result\.ringOverflow\s*&&\s*g_ring\.ReaderActive\(\)")
+        # #95: the capture side is in the periodic line and the overflow warning is counted, not one-shot.
+        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}result\.ringOverflow")
+        self.assertNotIn("g_ringOverflowLogged", source)
+        for field in ("packets=", "silent=", "discontinuities=", "samples_pushed=", "samples_dropped=",
+                      "max_poll_gap_ms="):
+            self.assertIn(field, source, field)
+        self.assertIn("AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY", source)
         cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
         self.assertIsNotNone(cap)
         self.assertLessEqual(int(cap.group(1)), 9600)
