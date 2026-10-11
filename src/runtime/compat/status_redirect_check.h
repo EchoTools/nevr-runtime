@@ -51,13 +51,13 @@ inline bool HostOf(const char* uri, char* out, std::size_t outBytes) noexcept {
   if (p == nullptr) return false;
   p += 3;
   std::size_t n = 0;
-  while (p[n] != '\\0' && p[n] != ':' && p[n] != '/' && p[n] != '?' && p[n] != '#') ++n;
+  while (p[n] != '\0' && p[n] != ':' && p[n] != '/' && p[n] != '?' && p[n] != '#') ++n;
   if (n == 0 || n >= outBytes) return false;
   for (std::size_t i = 0; i < n; ++i) {
     const char c = p[i];
     out[i] = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
   }
-  out[n] = '\\0';
+  out[n] = '\0';
   return true;
 }
 
@@ -76,7 +76,7 @@ inline bool IsApiBase(const char* uri) noexcept {
 inline bool IsGraphBase(const char* uri) noexcept {
   constexpr char kGraph[] = "https://graph.oculus.com";
   constexpr std::size_t kLength = sizeof(kGraph) - 1;
-  return std::strncmp(uri, kGraph, kLength) == 0 && (uri[kLength] == '\\0' || uri[kLength] == '/');
+  return std::strncmp(uri, kGraph, kLength) == 0 && (uri[kLength] == '\0' || uri[kLength] == '/');
 }
 
 inline std::uint64_t FloorPowerOfTwo(std::uint64_t n) noexcept {
@@ -91,7 +91,7 @@ class Ledger {
  public:
   /// One game HTTP connect: `gameUri` is what the game asked for, `finalUri` what it will be sent to.
   void NoteConnect(const char* gameUri, const char* finalUri) noexcept {
-    if (gameUri == nullptr || gameUri[0] == '\\0') return;
+    if (gameUri == nullptr || gameUri[0] == '\0') return;
     const bool redirected = finalUri != nullptr && std::strcmp(gameUri, finalUri) != 0;
     if (detail::IsApiBase(gameUri)) {
       (redirected ? apiRedirected_ : apiPassthrough_).fetch_add(1, std::memory_order_relaxed);
@@ -178,7 +178,7 @@ class Ledger {
     const std::uint32_t slot = next_.fetch_add(1, std::memory_order_relaxed);
     if (slot >= detail::kHostSlots) return;  // the first four distinct hosts are kept
     std::strncpy(hosts_[slot], host, detail::kHostBytes - 1);
-    hosts_[slot][detail::kHostBytes - 1] = '\\0';
+    hosts_[slot][detail::kHostBytes - 1] = '\0';
     ready_[slot].store(true, std::memory_order_release);
   }
 
