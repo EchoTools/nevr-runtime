@@ -7,9 +7,20 @@
 # is written so that no C++ frame with a non-trivial destructor sits between a
 # lua_error and the lua_pcall that catches it (see lua54_vm.cpp), which also means
 # it does not need C++ exceptions: the binding builds with -fno-exceptions.
-set(NEVR_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../extern/lua")
+# NEVR_LUA_VARIANT picks the VM: 5.4 (extern/lua, tag v5.4.9) or 5.5 (extern/lua55, tag
+# v5.5.1). The binding is the same file; lua54_vm.cpp is conditional only on
+# LUA_VERSION_NUM where the C API differs (lua_newstate takes a seed in 5.5).
+set(NEVR_LUA_VARIANT "5.4" CACHE STRING "Lua release line: 5.4 or 5.5")
+if(NEVR_LUA_VARIANT STREQUAL "5.5")
+  set(NEVR_LUA_SUBDIR lua55)
+elseif(NEVR_LUA_VARIANT STREQUAL "5.4")
+  set(NEVR_LUA_SUBDIR lua)
+else()
+  message(FATAL_ERROR "NEVR_LUA_VARIANT must be 5.4 or 5.5 (got '${NEVR_LUA_VARIANT}')")
+endif()
+set(NEVR_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../extern/${NEVR_LUA_SUBDIR}")
 if(NOT EXISTS "${NEVR_LUA_DIR}/lua.h")
-  message(FATAL_ERROR "extern/lua is empty: run `git submodule update --init extern/lua`")
+  message(FATAL_ERROR "extern/${NEVR_LUA_SUBDIR} is empty: run `git submodule update --init extern/${NEVR_LUA_SUBDIR}`")
 endif()
 
 set(NEVR_LUA_SOURCES

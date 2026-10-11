@@ -596,7 +596,12 @@ class Lua54Vm final : public ScriptVm {
     }
     std::lock_guard<std::mutex> lock(vm->mu);
     vm->BeginCall();
+    #if LUA_VERSION_NUM >= 505
+    // Lua 5.5 takes the string-hash seed from the caller (extern/lua55/lua.h lua_newstate).
+    vm->L = lua_newstate(Alloc, vm, static_cast<unsigned>(Clock::now().time_since_epoch().count()));
+#else
     vm->L = lua_newstate(Alloc, vm);
+#endif
     if (vm->L == nullptr) return Fail(*vm, "memory cap exceeded while creating the state", error, chunkname);
     lua_State* L = vm->L;
     lua_atpanic(L, PanicHandler);
