@@ -64,3 +64,10 @@ target_link_libraries(nevr_script_stubs_test PRIVATE nevr_script_host)
 
 nevr_script_test(nevr_script_conformance tests/conformance_test.cpp)
 target_link_libraries(nevr_script_conformance PRIVATE nevr_script_vm nevr_script_host)
+
+# Shared-state Luau mode only: what it adds to the conformance suite (isolation
+# and per-script accounting inside one lua_State).
+if(NEVR_LUAU_SHARED_STATE)
+  nevr_script_test(nevr_luau_shared_test vm/luau/tests/shared_state_test.cpp)
+  target_link_libraries(nevr_luau_shared_test PRIVATE nevr_script_vm nevr_script_host)
+endif()

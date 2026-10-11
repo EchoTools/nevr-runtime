@@ -28,7 +28,8 @@ struct LogRecord {
   const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
                             // hook_unknown, override_unknown, undeclared, refused_disabled, quiesce_failed, callback_failed, owner_disabled,
                             // owner_reset, owner_log; script host (script_host.h): script_loaded,
-                            // script_refused, script_reloaded, reload_failed
+                            // script_refused, script_reloaded, reload_failed; Luau binding in shared-state
+                            // mode (vm/luau): category_reserved
   const char* owner;        // "" when none
   const char* other_owner;  // the owner already holding the key, on override_conflict; else ""
   const char* target;       // the override key or hook point name; else ""
