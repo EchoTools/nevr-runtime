@@ -188,6 +188,31 @@ class WalkTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("DRIFT: kOrgRequestLoginReturns", result.stderr)
 
+    def test_sites_flags_a_social_list_that_drifted_from_the_social_sites(self):
+        path, sites, header = self.sites_fixture(
+            "ovr_User_GetOrgScopedID 0x2000 login\novr_User_GetOrgScopedID 0x2010 social\n", "0x2004")
+        header.write_text(header.read_text(encoding="utf-8") +
+                          "inline constexpr std::uint64_t kOrgRequestSocialReturns[] = {0x2018};\n", encoding="utf-8")
+        result = self.run_sites(path, sites, header)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("DRIFT: kOrgRequestSocialReturns", result.stderr)
+        header.write_text(header.read_text(encoding="utf-8").replace("0x2018", "0x2014"), encoding="utf-8")
+        self.assertEqual(self.run_sites(path, sites, header).returncode, 0)
+
+    def test_the_committed_social_list_matches_the_committed_sites_file(self):
+        listed = []
+        for line in (REPO / "tools" / "pinned_ovr_sites.txt").read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                name, site, klass = line.split()
+                if name == "ovr_User_GetOrgScopedID" and klass == "social":
+                    listed.append(int(site, 16) + 4)
+        header = (REPO / "src" / "quest" / "login" / "login_prerequisite_targets.h").read_text(encoding="utf-8")
+        marker = header.index("kOrgRequestSocialReturns[]")
+        body = header[header.index("{", marker) + 1:header.index("}", marker)]
+        import re
+        self.assertEqual(sorted(listed), sorted(int(v, 16) for v in re.findall(r"0x[0-9a-fA-F]+", body)))
+
     def test_the_committed_sites_file_matches_the_committed_header(self):
         listed = []
         for line in (REPO / "tools" / "pinned_ovr_sites.txt").read_text(encoding="utf-8").splitlines():

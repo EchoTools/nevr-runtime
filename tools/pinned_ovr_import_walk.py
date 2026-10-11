@@ -233,6 +233,16 @@ def check_sites(path: Path, expect: Path, header: Path) -> int:
             print(f"DRIFT: kOrgRequestLoginReturns in {header} is {[hex(v) for v in in_header]} but the login "
                   f"GetOrgScopedID call sites in {expect} (+4) are {[hex(v) for v in in_list]}", file=sys.stderr)
             bad += 1
+    if header is not None and "kOrgRequestSocialReturns" in text:
+        marker = text.index("kOrgRequestSocialReturns")
+        body = text[text.index("{", marker) + 1:text.index("}", marker)]
+        in_header = sorted(int(v, 16) for v in re.findall(r"0x[0-9a-fA-F]+", body))
+        in_list = sorted(site + 4 for (name, site), klass in expected.items()
+                         if name == "ovr_User_GetOrgScopedID" and klass == "social")
+        if in_header != in_list:
+            print(f"DRIFT: kOrgRequestSocialReturns in {header} is {[hex(v) for v in in_header]} but the social "
+                  f"GetOrgScopedID call sites in {expect} (+4) are {[hex(v) for v in in_list]}", file=sys.stderr)
+            bad += 1
     if bad:
         return 1
     login = sum(1 for k in expected.values() if k == "login")
