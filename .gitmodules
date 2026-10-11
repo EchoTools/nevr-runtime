@@ -10,3 +10,6 @@
 [submodule "extern/lua"]
 	path = extern/lua
 	url = https://github.com/lua/lua.git
+[submodule "extern/lua55"]
+	path = extern/lua55
+	url = https://github.com/lua/lua.git

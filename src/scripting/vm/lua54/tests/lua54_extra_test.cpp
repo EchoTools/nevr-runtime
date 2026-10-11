@@ -216,6 +216,23 @@ TEST(x12_gc_finalizers_are_refused_and_setmetatable_still_works) {
   CHECK(h.Has(a, "done"));
 }
 
+// The same bomb as t7_memory_bomb_at_top_level_is_refused with the wall-clock budget out of
+// the way: under qemu (emulated arm64) 50 ms ends the run before 4 MiB is allocated, and the
+// owner is then disabled for "time", which is the budget doing its job.
+TEST(x13_memory_bomb_with_a_long_time_budget_names_memory) {
+  VmLimits lim;
+  lim.memory_bytes = 4u << 20;
+  lim.millis_per_call = 20000;
+  lim.instructions_per_call = 4000000000ull;
+  Host h(lim);
+  NevrOwner* a = h.Load("m.lua", "local t = {}\n"
+                                 "for i = 1, 100000000 do t[i] = string.rep('x', 100) .. i end\n", false);
+  CHECK(a->disabled.load());
+  const Captured* c = h.Find("owner_disabled");
+  CHECK(c && Contains(c->detail, "memory"));
+  CHECK(h.vm->MemoryBytes(a) <= lim.memory_bytes);
+}
+
 TEST(x11_unload_stops_the_callbacks) {
   Host h;
   NevrOwner* a = h.Load("m.lua", "nevr.hook('test.add', {post = function(h) h:set('result', 99) end})\n");
