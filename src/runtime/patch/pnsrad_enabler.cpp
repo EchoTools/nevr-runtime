@@ -199,9 +199,13 @@ static bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
     return s_mmLedger.Take(&out->observed, &out->pass);
 }
 
-[[maybe_unused]] static const nevr_self_check::CheckId s_mmReloadCheck = nevr_self_check::Register(
-    {"matchmaking_reload_patch", "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
-     &MatchmakingReloadProbe});
+/* Registered from Init (the game's boot, not the DLL's static initialisation: Register allocates). */
+static void RegisterMatchmakingReloadCheck() {
+    nevr_self_check::Register(
+        {"matchmaking_reload_patch",
+         "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
+         &MatchmakingReloadProbe});
+}
 static uintptr_t s_pnsradModuleBase = 0;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
@@ -462,6 +466,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
  * ==================================================================== */
 
 void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
+    RegisterMatchmakingReloadCheck();
 #ifdef _WIN32
     // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
     // "init complete" summary can show a baseline instead of a bare count.

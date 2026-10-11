@@ -228,18 +228,24 @@ binary.
 A release candidate reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one
 source for the PC runtime and the Quest sentinel).
 
-- **On:** PC when the build is a release candidate (`NEVR_RC_LABEL` set, or `-DNEVR_SELF_CHECKS=ON`); Quest when
-  the `self_check` feature is on (the release candidate's default features, or `features.self_check` in
-  `nevr-quest.json`; it needs `login`). Off otherwise: nothing is registered, logged or sent, and no
-  `debug=true` is added. Never on a dedicated game server.
+- **On:** PC when the build's STAMPED version is a release candidate (`<x.y.z>-rc.<N>`, set only by a CI build of
+  the matching tag, `cmake/nevr_rc_label.cmake`), or with `-DNEVR_SELF_CHECKS=ON`. A local `just package-dev` build
+  is stamped `-dev` and leaves it off (`cmake/nevr_self_checks.cmake`, `tools/tests/test_self_checks_flag.py`).
+  Quest when the `self_check` feature is on: `features.self_check` in `nevr-quest.json`, or the build's default
+  features (`NEVR_QUEST_DEFAULT_FEATURES`); `just package-dev` does not name it, so the tester APK it builds does
+  not self-report unless `features="...,self_check"` is passed or the file turns it on. It needs `login`.
+  Off: no `debug=true`, nothing sent, nothing in the log; the unit's idle cost is one registration at boot, two
+  atomic increments per matchmaking load and a lock-free flag read per flush. Never on a dedicated game server.
 - **Connection:** the login connection's upgrade query carries `debug=true` (PC `ws_bridge.cpp`, Quest
   `SessionBridge::BuildRequest`), which section 1 turns into every `remote_log_*` category.
 - **Sender:** PC `SendFrameToServer` (the login pair), Quest `SessionBridge::SendToLogin`. Nothing is sent
   before `LoginSuccess` (the service drops remote logs from a session with no user); results wait in a queue
-  of 64 and the frame carries the user the service named.
+  of 64 and the frame carries the user the service named. On Quest the flush runs on the token-auth poll, so a
+  build without `nevr_http_uri` and `nevr_http_key` (no token auth) logs its results but never sends them.
 - **One result, one string:** `{"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":...,
   "check":...,"pass":...,"expected":...,"observed":...,"seq":...,"build":...}`; each text is cut at 160 bytes.
-  At most 8 results per check per session, then one with `observed":"capped"`; at most 16 strings per frame.
+  At most 8 results per check per session (PC; Quest never sees a login end, so there it is per process), then
+  one with `"observed":"capped"`; at most 16 strings per frame.
   The same result is written to the build's own log at Info: PC `[NEVR.SELFCHECK] check=... pass=...`, Quest
   `self_check {check, pass, expected, observed}`.
 - **Adding a check** is one registration and one call at the event:

@@ -9,7 +9,7 @@
 // supplies its sender (a login-connection frame sink) and its log sink.
 //
 // What a result looks like (nlohmann::json, one string):
-//   {"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":"OVR_ORG-<id>","check":"<name>",
+//   {"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":"<platform prefix>-<id>","check":"<name>",
 //    "pass":true,"expected":"...","observed":"...","seq":3,"build":"4.0.0-rc.1+<commit>"}
 // The game service keeps an unknown `message` as a generic remote log and journals it per user
 // (server/evr_remotelogset.go, evr/login_remotelogset_messages.go); none of the names its filter drops.
@@ -19,9 +19,13 @@
 // kMaxResultsPerCheck results per session and then one "capped" result, and the queue held before login
 // keeps the newest kMaxQueued and says how many it dropped.
 //
-// Threading: every function takes the unit's own mutex briefly. Report, Register and Flush must not be called
-// from a hooked game function or under the loader lock: those paths bump an atomic they already own and let a
-// probe read it on Flush.
+// Threading: every function takes the unit's own mutex briefly (Enabled, Report and Flush return without it
+// while the unit is off). Register and Report allocate: neither may run under the loader lock (a DLL's static
+// initialiser, a DllMain, an LdrDllNotification callback) or inside a game function whose caller holds a lock;
+// those paths only bump an atomic they already own, and a probe reads it on Flush. Flush runs the probes and
+// the sender on the thread that calls it: on PC that is the per-frame tick (frame/tick.cpp), which the
+// engine's own hooks drive on the game's thread, so a probe must not block and the sender is the bridge's
+// non-blocking frame queue; on Quest it is the token-auth poll thread.
 
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +88,10 @@ CheckId Register(const CheckSpec& spec);
 void Report(CheckId id, std::string_view observed, bool pass);
 // Runs the probes, then sends what is queued (if logged in and a sender is set), kMaxStringsPerFrame at a time.
 void Flush();
+
+// Whether a connection's upgrade should ask the game service for every remote log category (`debug=true`):
+// the login connection (index 1) of a client build with the unit on, never a dedicated game server.
+inline bool WantsRemoteDebug(int connIdx, bool isServer) { return connIdx == 1 && !isServer && Enabled(); }
 
 // Test seam: forgets every registration, the queue and the counters; leaves nothing set.
 void ResetForTest();

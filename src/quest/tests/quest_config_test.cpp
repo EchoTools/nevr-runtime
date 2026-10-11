@@ -395,7 +395,7 @@ void ObbSkipIsOnlyEverOnByAFileBoolean() {
   CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
 }
 
-// The no-config gate (package-rc): a build that turns the login features on by default logs in with no
+// The no-config gate (the release packages): a build that turns the login features on by default logs in with no
 // nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
 constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
 

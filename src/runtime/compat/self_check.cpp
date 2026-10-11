@@ -1,6 +1,7 @@
 #include "runtime/compat/self_check.h"
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <mutex>
 #include <vector>
@@ -31,7 +32,7 @@ struct Pending {
 
 struct State {
   std::mutex mutex;
-  bool enabled = false;
+  std::atomic<bool> enabled{false};  // read without the mutex, so a build with the unit off pays nothing
   bool loggedIn = false;
   nevr_evr_codec::UserId user;
   Sender sender = nullptr;
@@ -89,17 +90,9 @@ void Enqueue(State& s, Pending result) {
 
 }  // namespace
 
-void SetEnabled(bool enabled) {
-  State& s = S();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  s.enabled = enabled;
-}
+void SetEnabled(bool enabled) { S().enabled.store(enabled, std::memory_order_release); }
 
-bool Enabled() {
-  State& s = S();
-  std::lock_guard<std::mutex> lock(s.mutex);
-  return s.enabled;
-}
+bool Enabled() { return S().enabled.load(std::memory_order_acquire); }
 
 void SetSender(Sender sender) {
   State& s = S();
@@ -144,11 +137,12 @@ CheckId Register(const CheckSpec& spec) {
 
 void Report(CheckId id, std::string_view observed, bool pass) {
   State& s = S();
+  if (!s.enabled.load(std::memory_order_acquire)) return;
   LogSink sink = nullptr;
   LogRecord record;
   {
     std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.enabled || id < 0 || static_cast<std::size_t>(id) >= s.checks.size()) return;
+    if (id < 0 || static_cast<std::size_t>(id) >= s.checks.size()) return;
     Check& c = s.checks[static_cast<std::size_t>(id)];
     if (c.reported > kMaxResultsPerCheck) return;  // already said it was capped
     Pending p;
@@ -176,11 +170,11 @@ void Report(CheckId id, std::string_view observed, bool pass) {
 
 void Flush() {
   State& s = S();
+  if (!s.enabled.load(std::memory_order_acquire)) return;
   // Probes first, outside the lock (a probe reads atomics; Report takes the lock itself).
   std::vector<std::pair<CheckId, Probe>> probes;
   {
     std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.enabled) return;
     for (std::size_t i = 0; i < s.checks.size(); ++i) {
       if (s.checks[i].probe != nullptr) probes.emplace_back(static_cast<CheckId>(i), s.checks[i].probe);
     }
@@ -237,7 +231,7 @@ void Flush() {
 void ResetForTest() {
   State& s = S();
   std::lock_guard<std::mutex> lock(s.mutex);
-  s.enabled = false;
+  s.enabled.store(false);
   s.loggedIn = false;
   s.user = nevr_evr_codec::UserId();
   s.sender = nullptr;

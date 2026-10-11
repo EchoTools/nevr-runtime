@@ -101,8 +101,8 @@
             }
         },
         {
-            "name": "mingw-rc",
-            "displayName": "MinGW Release for a release candidate (just package-rc): its own build tree",
+            "name": "mingw-dev",
+            "displayName": "MinGW Release for a local package (just package-dev): its own build tree",
             "inherits": "mingw-release"
         }
     ],
@@ -143,9 +143,9 @@
             "configurePreset": "mingw-scenario"
         },
         {
-            "name": "mingw-rc",
-            "displayName": "Build MinGW (Release candidate)",
-            "configurePreset": "mingw-rc"
+            "name": "mingw-dev",
+            "displayName": "Build MinGW (local dev package)",
+            "configurePreset": "mingw-dev"
         }
     ]
 }

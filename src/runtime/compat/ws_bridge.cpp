@@ -760,12 +760,13 @@ bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
 static const bool g_partySenderRegistered = (nevr_social_party::SetSender(&SendFrameToServer), true);
 
 // Self-checks (compat/self_check.h): a result goes out on the login connection through SendFrameToServer once
-// LoginSuccess has been seen, and into the nevr log at the moment it happens.
+// LoginSuccess has been seen, and into the nevr log at the moment it happens. Wired from InstallWebSocketBridge
+// (the game's boot), not from a static initialiser: the unit allocates.
 static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
   Log(EchoVR::LogLevel::Info, "[NEVR.SELFCHECK] check=%s pass=%d expected=\"%s\" observed=\"%s\"", record.name.c_str(),
       record.pass ? 1 : 0, record.expected.c_str(), record.observed.c_str());
 }
-static const bool g_selfCheckWired = []() {
+static void WireSelfChecks() {
   nevr_self_check::SetSender(&SendFrameToServer);
   nevr_self_check::SetLogSink(&LogSelfCheck);
 #ifdef NEVR_PROJECT_VERSION
@@ -774,8 +775,7 @@ static const bool g_selfCheckWired = []() {
 #ifdef NEVR_SELF_CHECKS
   nevr_self_check::SetEnabled(true);
 #endif
-  return true;
-}();
+}
 
 // Platform codes, the bridge's login platform, the remote Bearer choice and the /ws path test live in
 // EvrCodec (compat/evr_codec.h), shared with the Quest target.
@@ -906,6 +906,8 @@ void InstallWebSocketBridge() {
     Log(EchoVR::LogLevel::Info, "[NEVR.WS] No wss:// target — bridge disabled");
     return;
   }
+
+  WireSelfChecks();
 
   // One-time WSA init
   static bool netInit = false;
@@ -1059,7 +1061,7 @@ void InstallWebSocketBridge() {
             // Self-checks (release candidate builds): the login connection asks the game service for every
             // remote log category (server/session_ws.go reads "debug"), so each category reaches the game
             // service and the runtime's own results ride the same set. Never on a dedicated server.
-            if (connIdx == 1 && !g_isServer && nevr_self_check::Enabled()) {
+            if (nevr_self_check::WantsRemoteDebug(connIdx, g_isServer != FALSE)) {
               std::optional<std::string> withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(remoteUrl);
               if (withDebug) remoteUrl = std::move(*withDebug);
             }

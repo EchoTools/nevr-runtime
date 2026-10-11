@@ -190,6 +190,15 @@ TEST_F(SelfCheck, ReportBeforeLoginIsLoggedNowAndSentAfterLogin) {
   EXPECT_EQ(DecodeNakamaStyle(g_sent.frames[0]).account, 42u);
 }
 
+TEST_F(SelfCheck, OnlyTheLoginConnectionOfAClientBuildWithTheUnitOnAsksForDebug) {
+  EXPECT_TRUE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/false));
+  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(0, false)) << "the config connection";
+  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(2, false)) << "the matchmaker connection";
+  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/true)) << "a dedicated game server";
+  nevr_self_check::SetEnabled(false);
+  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, false)) << "the unit is off";
+}
+
 TEST_F(SelfCheck, DisabledUnitRecordsNothing) {
   nevr_self_check::SetEnabled(false);
   const auto id = nevr_self_check::Register({"x", "y", nullptr});

@@ -218,7 +218,7 @@ TEST(ServerModeDefaultsGate, ServerModeSuppliesNoGameNativeConfig) {
   EXPECT_NE(NevrCfgGameNativeConfigJson(), nullptr);
 }
 
-// The no-config gate (package-rc): a client with no config.yaml anywhere reaches the service from the
+// The no-config gate (the release packages): a client with no config.yaml anywhere reaches the service from the
 // embedded public defaults alone. The production path runs here: the real embedded values and the real
 // config.yaml discovery, with nothing injected.
 TEST(NoConfigGate, EveryLoginKeyComesFromTheEmbeddedDefaultsWhenThereIsNoConfigYaml) {
