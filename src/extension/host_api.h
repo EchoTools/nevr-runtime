@@ -54,7 +54,8 @@ enum {
     NEVR_ERR_TYPE_MISMATCH  = 5, /* value type differs from the field's declared type */
     NEVR_ERR_READ_ONLY      = 6, /* the field is not writable in this phase */
     NEVR_ERR_NOT_FOUND      = 7, /* no override for this key */
-    NEVR_ERR_DISABLED       = 8  /* the owner was disabled (budget breach, error policy) */
+    NEVR_ERR_DISABLED       = 8, /* the owner was disabled (budget breach, error policy) */
+    NEVR_ERR_UNDECLARED     = 9  /* the owner's manifest does not declare this hook or key */
 };
 
 typedef int32_t NevrValueType;
