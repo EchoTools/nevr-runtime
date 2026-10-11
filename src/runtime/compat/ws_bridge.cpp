@@ -6,6 +6,7 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
+#include "runtime/patch/asset_registry.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -836,6 +837,12 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   profileInputs.build_type = buildId.build_type;
   profileInputs.social_level = nevr_social_party::kSocialLevel;
   profileInputs.plugins = std::move(plugins);
+  // Assets the loaded plugins registered (#432). The report is built by the registry's own nlohmann output, so
+  // the non-throwing parse only guards a future change to it.
+  nlohmann::json assets = nlohmann::json::parse(nevr::assets::Global().ReportJson(), nullptr, false);
+  if (assets.is_discarded() || !assets.is_array()) assets = nlohmann::json::array();
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_assets count=%zu", assets.size());
+  profileInputs.assets = std::move(assets);
   const std::string jsonStr = nevr_login_profile::BuildLoginProfileJson(profileInputs);
 
   // Frame layout (UUID, platform, account, JSON, NUL) is EvrCodec's, shared with the Quest target.

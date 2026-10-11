@@ -91,7 +91,7 @@
  *   feature didn't exist when the plugin was built; the host treats
  *   the absence as "not supported" rather than "error."
  *
- *   NEVR_PLUGIN_API_VERSION is currently 5 (N134 S8).
+ *   NEVR_PLUGIN_API_VERSION is currently 6 (#432).
  *
  *   | Export present        | What it signals                                 |
  *   |-----------------------|-------------------------------------------------|

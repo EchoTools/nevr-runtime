@@ -148,6 +148,11 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
+ * v6 (#432): plugin-carried assets. The host exports NEVR_RegisterAsset / NEVR_DeregisterAssets (see "Plugin
+ * assets" below) so a plugin can add levels and resources that live inside its own image. Additive: no
+ * existing struct or signature changes, so the bump is a CAPABILITY signal. A plugin that registers assets
+ * should declare api version 6 and treat a missing export as "this host cannot carry assets".
+ *
  * v5 (N134 S8): adds ctx_size + get_plugin_count / get_plugin_info to the TAIL
  * of NvrGameContext. This is backward-compatible — a pre-v5 plugin still reads
  * base_addr / net_game / game_state / flags at their original offsets — so the
@@ -168,7 +173,7 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 5
+#define NEVR_PLUGIN_API_VERSION 6
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);
@@ -213,3 +218,38 @@ enum NvrPluginCapabilities : uint32_t {
 
 /* Optional: return a bitwise OR of NvrPluginCapabilities. Absent => UNDECLARED. */
 typedef uint32_t (*NvrPluginGetCapabilities_fn)(void);
+
+/*
+ * Plugin assets (API v6).
+ *
+ * A plugin carries its levels and resources inside its own image and registers them with the host; the host
+ * hands the engine a pointer into the plugin's mapped image, so nothing is copied. The host exports two C
+ * functions from the runtime module (GetProcAddress on the host module, like the resource override exports):
+ *
+ *   NEVR_RegisterAsset(type_hash, name_hash, data, size, label) -> NevrAssetStatus
+ *   NEVR_DeregisterAssets(data_start, data_end)
+ *
+ * type_hash / name_hash are the engine's 64-bit symbol hashes of the resource's type and name (the same pair
+ * NEVR_RegisterResourceOverride takes). `data` must stay valid until the asset is deregistered: put it in the
+ * plugin image (a const array or a resource section), never on the heap. `size` is in bytes, 1..0xFFFFFFFF.
+ * `label` is a short name for logs and for the `nevr_assets` list the game client reports to the game service
+ * at login; it is copied.
+ *
+ * Register before the engine first loads the resource (NvrPluginInit/InitEx is early enough). A name the
+ * engine has already loaded is refused with NEVR_ASSET_ALREADY_LOADED, never silently ignored.
+ *
+ * Lifetime: call NEVR_DeregisterAssets(image_start, image_end) from NvrPluginShutdown. The host also drops
+ * every asset inside a plugin's image before it frees that image.
+ *
+ * Only single-buffer resources are served in v6; the host logs a warning naming any asset it cannot serve.
+ */
+enum NevrAssetStatus : int32_t {
+    NEVR_ASSET_OK             = 0,
+    NEVR_ASSET_BAD_ARGUMENT   = 1, /* null/empty data, zero type or name, or size above 0xFFFFFFFF */
+    NEVR_ASSET_DUPLICATE      = 2, /* this (type, name) is already registered */
+    NEVR_ASSET_ALREADY_LOADED = 3, /* the engine has already loaded this (type, name) */
+};
+
+typedef int  (*NevrRegisterAsset_fn)(uint64_t type_hash, uint64_t name_hash, const void* data, uint64_t size,
+                                    const char* label);
+typedef void (*NevrDeregisterAssets_fn)(const void* data_start, const void* data_end);

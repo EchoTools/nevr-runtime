@@ -44,6 +44,9 @@ std::string BuildLoginProfileJson(const LoginProfileInputs& inputs) {
   // caps), failed (error), or disabled. A top-level key beside nevr_identity and
   // nevr_social, carried as a JSON array rather than a string-escaped copy of one.
   profile["nevr_plugins"] = inputs.plugins;
+  // The levels and resources those plugins carry (#432), so the game service knows what this game client can
+  // load. Absent when there are none: a login with no asset-carrying plugin is unchanged on the wire.
+  if (inputs.assets.is_array() && !inputs.assets.empty()) profile["nevr_assets"] = inputs.assets;
 
   auto& system = profile["system_info"];
   system["headset_type"] = inputs.headset_type;

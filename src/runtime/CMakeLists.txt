@@ -32,6 +32,8 @@ set(PATCHES_SOURCES
     "ext/plugin_manifest.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
+    "patch/asset_registry.cpp"
+    "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
@@ -104,6 +106,8 @@ set(PATCHES_HEADERS
     "lifecycle/veh_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/asset_registry.h"
+    "patch/plugin_assets.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
@@ -213,6 +217,8 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #432: asset_registry.cpp builds the login's nevr_assets array with nlohmann-json; same arrangement.
+set_source_files_properties(patch/asset_registry.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
@@ -659,16 +665,17 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
-    # The engine's package manifest layout (patch/asset_manifest.cpp): pure byte handling, so it builds and runs
-    # on its own; the plugin asset registry that feeds it to the game is a separate unit.
-    add_executable(test_asset_manifest
-      tests/test_asset_manifest.cpp
-      patch/asset_manifest.cpp)
-    set_source_files_properties(tests/test_asset_manifest.cpp patch/asset_manifest.cpp
+    # The plugin asset registry (patch/asset_registry.cpp): std + nlohmann-json only, so it builds and runs on
+    # its own. The hooks that serve it to the engine (patch/plugin_assets.cpp) are in BugSplat64.dll.
+    add_executable(test_asset_registry
+      tests/test_asset_registry.cpp
+      patch/asset_registry.cpp)
+    set_source_files_properties(tests/test_asset_registry.cpp patch/asset_registry.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_asset_manifest PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_asset_manifest PRIVATE GTest::gtest GTest::gtest_main)
-    gtest_discover_tests(test_asset_manifest DISCOVERY_MODE PRE_TEST)
+    target_include_directories(test_asset_registry PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_registry PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_asset_registry DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_social_facade
       tests/test_social_facade.cpp
@@ -764,6 +771,8 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       # #60: plugin_loader.cpp builds the login's plugin report through this.
       ext/plugin_manifest.cpp
+      # #432: plugin_loader.cpp and ws_bridge.cpp read the process-wide plugin asset registry.
+      patch/asset_registry.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
@@ -795,6 +804,7 @@ if(BUILD_TESTING)
       patch/evrp_package.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
+      patch/asset_registry.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp

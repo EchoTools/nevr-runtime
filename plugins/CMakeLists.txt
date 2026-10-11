@@ -26,3 +26,4 @@ endif()
 # stranded a fix twice here (N93, N94).
 add_subdirectory(example)
 add_subdirectory(debug-lockout)
+add_subdirectory(asset-test)

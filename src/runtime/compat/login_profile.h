@@ -30,6 +30,8 @@ struct LoginProfileInputs {
   uint64_t social_level = 0;
   // A JSON array of per-plugin loader results; anything else is the caller's bug.
   nlohmann::json plugins = nlohmann::json::array();
+  // A JSON array of the assets the loaded plugins carry (#432); the key is sent only when this is non-empty.
+  nlohmann::json assets = nlohmann::json::array();
 };
 
 std::string BuildLoginProfileJson(const LoginProfileInputs& inputs);
