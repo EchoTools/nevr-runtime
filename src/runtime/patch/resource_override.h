@@ -2,6 +2,12 @@
 
 #include <cstdint>
 
+#ifdef NEVR_TEST_HOOKS
+void TestHook_InitResourceOverrides(void (*original)(void*));
+void TestHook_RunResourceCallback(void* callback_data);
+void TestHook_CloseResourceOverrides();
+#endif
+
 /// Install the resource override hook on AsyncResourceIOCallback.
 /// Registers built-in overrides (splash texture) and scans _overrides/
 /// directory for additional file-based overrides.
@@ -20,10 +26,8 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
 /// Reset all applied flags so overrides can re-trigger on next level load.
 void ResetResourceOverrides();
 
-/// Deallocate the resource override registry and uninstall hooks.
-void ShutdownResourceOverride();
-
 /// Remove all overrides whose data pointer falls within [data_start, data_end).
 /// Call from plugin shutdown before the plugin DLL is freed to prevent
-/// dangling pointers in the override registry.
+/// dangling pointers in the override registry. Do not call this from the
+/// original resource callback while it is using the same replacement.
 void DeregisterResourceOverrides(const void* data_start, const void* data_end);

@@ -765,9 +765,11 @@ if(BUILD_TESTING)
     # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
+      tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      patch/resource_override.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
@@ -811,8 +813,10 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
+      tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/resource_override.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       ext/module_loader.cpp
