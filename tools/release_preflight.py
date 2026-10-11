@@ -12,10 +12,13 @@ pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and pr
   2. there is no uncommitted change (staged or not) and no untracked file (ignored files do not count);
   3. HEAD is on origin's <base> branch (no commit that origin does not have);
   4. this clone is not behind origin's <base> (HEAD is origin's tip exactly);
-  5. origin is reachable: a check that cannot run is a refusal, not a pass.
+  5. origin is reachable, and is the project's repository (github.com EchoTools/nevr-runtime, the ssh and
+     https forms; `--expect-origin REGEX` overrides): a clone whose `origin` points elsewhere, or a check
+     that cannot run, is a refusal, not a pass. Every git command is checked: a non-zero exit, or git
+     missing from PATH, is a problem line and a log record, never "clean".
 
 It is READ-ONLY. The git commands it runs, and nothing else:
-  git rev-parse --show-toplevel          git remote get-url origin       git rev-parse HEAD
+  git rev-parse --show-toplevel          git config --get remote.origin.url   git rev-parse HEAD
   git status --porcelain=v1 --untracked-files=all
   git for-each-ref refs/tags --format=...  (local tags and their peeled commits)
   git ls-remote origin                   (origin's refs: the only network call; it reads, it writes nothing here)
@@ -32,15 +35,27 @@ import datetime
 import getpass
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 MAX_PATHS = 20
+# origin must be this repository, in either URL form; the project is public, so this is not a secret.
+EXPECT_ORIGIN = r"^(git@github\.com:|https://github\.com/|ssh://git@github\.com/)EchoTools/nevr-runtime(\.git)?/?$"
 
 
 def git(*args, cwd):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    """Run git. A missing git binary is a failed result (127), never an exception."""
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(["git", *args], 127, "", "git is not installed or not on PATH")
+
+
+def failure(result, what: str) -> str:
+    first = (result.stderr.strip().splitlines() or ["no error text"])[0]
+    return f"{what} failed (exit {result.returncode}): {first}"
 
 
 def log_path() -> tuple:
@@ -82,13 +97,16 @@ def parse_ls_remote(text: str) -> tuple:
     return heads, tags
 
 
-def local_tags(root: str) -> dict:
+def local_tags(root: str) -> tuple:
+    """(tags, failure message or None): name -> (object, peeled commit or None)."""
     out = git("for-each-ref", "refs/tags", "--format=%(refname:strip=2)\t%(objectname)\t%(*objectname)", cwd=root)
+    if out.returncode != 0:
+        return {}, failure(out, "git for-each-ref refs/tags")
     tags = {}
     for line in out.stdout.splitlines():
         name, obj, peeled = (line.split("\t") + ["", ""])[:3]
         tags[name] = (obj, peeled or None)
-    return tags
+    return tags, None
 
 
 def commit_of(entry: tuple) -> str:
@@ -100,13 +118,19 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def check(root: str, base: str) -> tuple:
+def check(root: str, base: str, expect_origin: str = EXPECT_ORIGIN) -> tuple:
     """Returns (problems, facts). Never raises for a git failure: that is itself a problem."""
     problems, facts = [], {"base": base}
-    head = git("rev-parse", "HEAD", cwd=root).stdout.strip()
+    head_result = git("rev-parse", "HEAD", cwd=root)
+    head = head_result.stdout.strip()
     facts["head"] = head
+    if head_result.returncode != 0 or not head:
+        problems.append(failure(head_result, "git rev-parse HEAD"))
 
-    status = git("status", "--porcelain=v1", "--untracked-files=all", cwd=root).stdout.splitlines()
+    status_result = git("status", "--porcelain=v1", "--untracked-files=all", cwd=root)
+    if status_result.returncode != 0:
+        problems.append(failure(status_result, "git status"))
+    status = status_result.stdout.splitlines()
     changed = [l[3:] for l in status if not l.startswith("??")]
     untracked = [l[3:] for l in status if l.startswith("??")]
     for label, paths in (("uncommitted change", changed), ("untracked file", untracked)):
@@ -115,10 +139,16 @@ def check(root: str, base: str) -> tuple:
         if len(paths) > MAX_PATHS:
             problems.append(f"{len(paths) - MAX_PATHS} more {label}s not listed")
 
-    remote = git("remote", "get-url", "origin", cwd=root)
-    if remote.returncode != 0:
+    # The URL as configured (not expanded by url.<base>.insteadOf): what the clone says origin is.
+    remote = git("config", "--get", "remote.origin.url", cwd=root)
+    if remote.returncode != 0 or not remote.stdout.strip():
         problems.append("no remote named origin: nothing to compare this clone with")
         return problems, facts
+    origin_url = remote.stdout.strip()
+    facts["origin_url"] = origin_url
+    if not re.match(expect_origin, origin_url):
+        problems.append(f"origin is {origin_url}, not the project's repository "
+                        f"(github.com/EchoTools/nevr-runtime); a clone of another repository proves nothing")
     refs = git("ls-remote", "origin", cwd=root)
     if refs.returncode != 0:
         first = (refs.stderr.strip().splitlines() or ["no error text"])[0]
@@ -126,7 +156,10 @@ def check(root: str, base: str) -> tuple:
         return problems, facts
     heads, remote_tags = parse_ls_remote(refs.stdout)
 
-    for name, entry in sorted(local_tags(root).items()):
+    tags, tags_failure = local_tags(root)
+    if tags_failure:
+        problems.append(tags_failure)
+    for name, entry in sorted(tags.items()):
         if name not in remote_tags:
             problems.append(f"local tag {name} exists only in this clone (not on origin)")
         elif commit_of(entry) != commit_of(remote_tags[name]):
@@ -151,24 +184,28 @@ def check(root: str, base: str) -> tuple:
             if behind:
                 problems.append(f"this clone is behind origin/{base} by {plural(behind, 'commit')} "
                                 f"(origin's tip {tip[:12]}; git fetch and update)")
-    facts["local_tags"] = len(local_tags(root))
+    facts["local_tags"] = len(tags)
     return problems, facts
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--base", default="main", help="origin's release branch (default main)")
+    parser.add_argument("--expect-origin", default=EXPECT_ORIGIN, metavar="REGEX",
+                        help="regular expression origin's URL must match (default: the project's GitHub URL)")
     args = parser.parse_args(argv)
     top = git("rev-parse", "--show-toplevel", cwd=".")
     if top.returncode != 0:
-        print("release-preflight: PROBLEM: not inside a git work tree")
-        return 1
-    root = top.stdout.strip()
-    problems, facts = check(root, args.base)
+        root, problems, facts = os.getcwd(), [failure(top, "git rev-parse --show-toplevel")], {}
+        if top.returncode != 127:
+            problems = ["not inside a git work tree"]
+    else:
+        root = top.stdout.strip()
+        problems, facts = check(root, args.base, args.expect_origin)
     record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
               "user": getpass.getuser(), "cwd": root, "head": facts.get("head"), "base": args.base,
-              "origin_tip": facts.get("origin_tip"), "result": "refused" if problems else "ok",
-              "problems": problems}
+              "origin_tip": facts.get("origin_tip"), "origin_url": facts.get("origin_url"),
+              "result": "refused" if problems else "ok", "problems": problems}
     write_log(record)
     for problem in problems:
         print(f"release-preflight: PROBLEM: {problem}")
