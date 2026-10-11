@@ -111,6 +111,10 @@ struct RedirectCounters {
   std::atomic<std::uint64_t> valueTooLong{0};   // fault: value over kMaxValueBytes
   std::atomic<std::uint64_t> poolRefused{0};    // fault: the pool returned a non-success status
   std::atomic<std::uint64_t> exceptions{0};     // fault: std::exception inside Apply
+  // ApplyUrl's decisions, kept apart from `reads`/`redirected` (which Apply's config-key reads share): one
+  // per CSysHttp::CreateConnection URL that is an API or graph base. #408
+  std::atomic<std::uint64_t> urlRedirected{0};    // the connect was sent to the configured HTTP service
+  std::atomic<std::uint64_t> urlPassThrough{0};   // the original URL was kept (no target, feature off, doubt)
 };
 RedirectCounters& GlobalCounters() noexcept;
 void ResetCountersForTest() noexcept;

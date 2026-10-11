@@ -4,7 +4,7 @@
 // Precedence per key: file value, else the value embedded at build time, else absent. The file is
 // `nevr-quest.json` in the app's external files directory; it is never `config.json`, never a
 // `.env`, and nothing here reads the environment. Features (redirect, bridge, login, social) are off
-// unless the file turns them on, and a feature whose prerequisite is off or missing is forced off
+// unless the build turns them on (EmbeddedDefaults::features) or the file does, and a feature whose prerequisite is off or missing is forced off
 // with a logged reason. A value in the file that is invalid (including the empty string) is
 // rejected and the embedded default stays: the file cannot clear a default. A key that appears
 // twice in one object takes its last value and logs a warning.
@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal, kSelfCheck };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -32,6 +32,9 @@ struct EmbeddedDefaults {
   const char* httpUri = "";
   const char* httpKey = "";
   const char* serverKey = "";
+  // Comma-separated feature names the build turns on when the file does not say otherwise (a release
+  // candidate: the APK logs in with no config file). Empty: every feature is off until the file turns it on.
+  const char* features = "";
 };
 
 struct Value {
@@ -58,6 +61,10 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. Off until a headset run confirms it; needs the social facade.
   bool presenceLocal = false;
+  // Report the run-card checks as remote logs to the game service (runtime/compat/self_check.h) and connect
+  // with debug=true so the service asks the game for every log category. A release candidate turns it on;
+  // needs the login (the results go out on the login connection).
+  bool selfCheck = false;
 };
 
 struct LogEvent {

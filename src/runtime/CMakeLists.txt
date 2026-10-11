@@ -35,6 +35,7 @@ set(PATCHES_SOURCES
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
+    "compat/self_check.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -192,7 +193,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -631,6 +632,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
 
+    # Self-check unit (compat/self_check.cpp): the registry that reports a run-card check's result as one
+    # remote log string, and the SNSRemoteLogSetv3 frame builder it sends through. Platform neutral, the same
+    # sources the Quest target compiles.
+    add_executable(test_self_check
+      tests/test_self_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_self_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_self_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_self_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
+
     # Legacy <-> current translator (compat/legacy_codec.cpp): platform neutral like evr_codec, so it builds
     # and runs on its own. It is not part of BugSplat64.dll until the legacy mode wires it in.
     find_package(ZLIB REQUIRED)
@@ -760,6 +775,8 @@ if(BUILD_TESTING)
       compat/ws_bridge.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
+      # self-checks: ws_bridge.cpp wires the sender and the login gate through the unit.
+      compat/self_check.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -789,6 +806,7 @@ if(BUILD_TESTING)
       compat/ws_bridge.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
+      compat/self_check.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
@@ -889,8 +907,8 @@ if(BUILD_TESTING)
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

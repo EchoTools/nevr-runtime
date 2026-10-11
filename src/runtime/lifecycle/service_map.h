@@ -76,7 +76,7 @@ using FlatEnvOverrides = std::map<std::string, std::string>;
 
 /// The environment variables that override flat keys: NEVR_API_KEY -> nevr_http_key
 /// (auth.http_key), NEVR_SOCKET_KEY -> nevr_server_key (auth.server_key). The build never reads
-/// them (cmake/nevr_builtin_defaults.cmake embeds NEVR_PUBLIC_API_KEY / NEVR_PUBLIC_SOCKET_KEY).
+/// them (cmake/nevr_builtin_defaults.cmake embeds the NEVR_PUBLIC_* values of config/public-defaults.env).
 struct FlatEnvVar {
   const char* envName;
   const char* flatKey;

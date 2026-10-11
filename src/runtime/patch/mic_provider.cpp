@@ -77,12 +77,23 @@ constexpr uint32_t kRingCapacitySamples = 9600;
 // unit-tested directly in tests/test_mic_dsp.cpp. This file only adapts real
 // WASAPI packets into it.
 MicRingBuffer g_ring(kRingCapacitySamples);
-bool g_ringOverflowLogged = false;
+// Overflow after the game started reading is logged with a count, at most once per interval (#95).
+constexpr uint64_t kOverflowLogIntervalMs = 5000;
+MicOverflowLogGate g_overflowGate(kOverflowLogIntervalMs);
 // How often the game actually reads the microphone (#95): the ring overflows when the game does not
 // drain MicRead, and nothing else says whether it ever calls MicAvailable/MicRead.
 std::atomic<uint64_t> g_availableCalls{0};
 std::atomic<uint64_t> g_readCalls{0};
 std::atomic<uint64_t> g_samplesRead{0};
+// The capture side of the same question (#95): whether samples stopped arriving or the game stopped
+// reading them. Cumulative for the process, like the reader-side counters above.
+std::atomic<uint64_t> g_capturePackets{0};
+std::atomic<uint64_t> g_captureSilentPackets{0};
+std::atomic<uint64_t> g_captureDiscontinuities{0};
+std::atomic<uint64_t> g_samplesPushed{0};
+// The longest gap between two MicAvailable polls (the game's tick) since the last periodic line.
+std::atomic<int64_t> g_lastPollNs{0};
+std::atomic<uint64_t> g_maxPollGapMs{0};
 
 // --- WASAPI state ------------------------------------------------------
 // Every public create/start/stop/destroy call is marshalled onto
@@ -146,13 +157,27 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
     const auto now = std::chrono::steady_clock::now();
     if (now - lastReport >= std::chrono::seconds(30)) {
       lastReport = now;
-      Log(EchoVR::LogLevel::Info, "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu",
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu | capture side: "
+          "packets=%llu silent=%llu discontinuities=%llu samples_pushed=%llu samples_dropped=%llu "
+          "max_poll_gap_ms=%llu",
           static_cast<unsigned long long>(g_availableCalls.load()),
           static_cast<unsigned long long>(g_readCalls.load()),
-          static_cast<unsigned long long>(g_samplesRead.load()));
+          static_cast<unsigned long long>(g_samplesRead.load()),
+          static_cast<unsigned long long>(g_capturePackets.load()),
+          static_cast<unsigned long long>(g_captureSilentPackets.load()),
+          static_cast<unsigned long long>(g_captureDiscontinuities.load()),
+          static_cast<unsigned long long>(g_samplesPushed.load()),
+          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          static_cast<unsigned long long>(g_maxPollGapMs.exchange(0)));
     }
   }
   const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+  g_capturePackets.fetch_add(1, std::memory_order_relaxed);
+  if (silent) g_captureSilentPackets.fetch_add(1, std::memory_order_relaxed);
+  if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+    g_captureDiscontinuities.fetch_add(1, std::memory_order_relaxed);
+  }
   const size_t bytes = silent ? 0 : static_cast<size_t>(frameCount) * fmt->nBlockAlign;
   const MicCapturePacketResult result = g_captureAdapter.Process(
       data, frameCount, bytes, fmt->nChannels, fmt->nBlockAlign,
@@ -163,16 +188,28 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
         "[NEVR.MIC] capture packet rejected (status=%u consumed=%u/%u frames)",
         static_cast<unsigned>(result.status), result.consumedFrames, frameCount);
   }
+  g_samplesPushed.fetch_add(result.producedSamples, std::memory_order_relaxed);
   // A full ring before the game's first read of this stream is expected (nobody is listening yet,
   // the oldest audio is simply not wanted); the warning is for a game that read and then stopped.
-  if (result.ringOverflow && g_ring.ReaderActive() && !g_ringOverflowLogged) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
-        "(game calls so far: MicAvailable=%llu MicRead=%llu samples_read=%llu)",
-        static_cast<unsigned long long>(g_availableCalls.load()),
-        static_cast<unsigned long long>(g_readCalls.load()),
-        static_cast<unsigned long long>(g_samplesRead.load()));
-    g_ringOverflowLogged = true;
+  // It is counted: the first overflow logs at once, later ones at most every kOverflowLogIntervalMs
+  // with how many samples were dropped since the previous line.
+  if (!g_ring.ReaderActive()) {
+    g_overflowGate.Rebase(g_ring.DroppedSamples());
+  } else if (result.ringOverflow) {
+    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    const uint64_t droppedSinceLast = g_overflowGate.Poll(g_ring.DroppedSamples(), nowMs);
+    if (droppedSinceLast > 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
+          "(dropped %llu samples since the last warning, %llu in total; game calls so far: "
+          "MicAvailable=%llu MicRead=%llu samples_read=%llu)",
+          static_cast<unsigned long long>(droppedSinceLast),
+          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          static_cast<unsigned long long>(g_availableCalls.load()),
+          static_cast<unsigned long long>(g_readCalls.load()),
+          static_cast<unsigned long long>(g_samplesRead.load()));
+    }
   }
 }
 
@@ -494,7 +531,7 @@ void ReleaseWasapiResources(void*) {
 void ResetCaptureStream(void*) {
   g_captureAdapter.Reset();
   g_ring.Reset();
-  g_ringOverflowLogged = false;
+  g_overflowGate.Reset();
 }
 
 const MicLifecycleOperations kMicLifecycleOperations = {
@@ -649,6 +686,17 @@ static void NoteGameReader() {
 
 uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
+  {
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t previousNs = g_lastPollNs.exchange(nowNs, std::memory_order_relaxed);
+    if (previousNs != 0) {
+      const uint64_t gapMs = static_cast<uint64_t>((nowNs - previousNs) / 1000000);
+      uint64_t seen = g_maxPollGapMs.load(std::memory_order_relaxed);
+      while (gapMs > seen && !g_maxPollGapMs.compare_exchange_weak(seen, gapMs, std::memory_order_relaxed)) {
+      }
+    }
+  }
   return static_cast<uint64_t>(g_ring.Available());
 }
 

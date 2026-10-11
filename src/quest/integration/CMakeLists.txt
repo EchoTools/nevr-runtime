@@ -24,6 +24,7 @@ add_library(nevr_quest_integration STATIC
   stage_log.cpp
   bridge_uri.cpp
   production_steps.cpp
+  self_check_wiring.cpp
   dlopen_hook.cpp
   social_shim.cpp)
 set_source_files_properties(dlopen_hook.cpp social_shim.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
@@ -35,6 +36,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_redirect
   nevr_quest_login
   nevr_quest_social
+  nevr_quest_self_check
   nevr_quest_net
   nevr_quest_token_auth
   nevr_quest_hwdump

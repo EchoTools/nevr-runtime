@@ -23,6 +23,16 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
+    # The Quest build embeds config/public-defaults.env and reads nothing else; it is git-ignored, so it
+    # is written here from the repository's Actions variables (and fails when one is unset).
+    - name: Write the public client defaults
+      uses: ./.github/actions/write-public-defaults
+      with:
+        socket-uri: ${{ vars.NEVR_SOCKET_URI }}
+        http-uri: ${{ vars.NEVR_HTTP_URI }}
+        public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
+        public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
+
     - name: Setup pinned just
       uses: extractions/setup-just@v4
       with:

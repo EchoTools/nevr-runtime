@@ -35,7 +35,8 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/, gen/, .env from the main checkout)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release candidate is only a CI build of a v*-rc.<N> tag; never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
@@ -210,18 +211,25 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## ReVault — Reverse Engineering Data Warehouse
 
-ReVault is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+ReVault is the single source of truth for binary analysis. It indexes every binary of the game with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
 
-Available as an MCP server (`revault` in `.mcp.json`) and CLI:
+**Search the project, never one binary.** The echovr project is the whole game: `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that finds nothing says nothing about the game.
+
+1. `revault_projects`, then `revault_binaries(project)` for the full binary list.
+2. Run `revault_search_code` / `revault_search_strings` on **every** binary in the list. Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
+3. Report it as `searched N of N binaries in project <name>: hits in <binaries>`. A negative without "N of N" is not a finding.
+4. A hit in a script DLL is the game's own logic: read it (`revault_function`) before concluding anything.
+
+Available as an MCP server (`revault` in `.mcp.json`) and CLI. The CLI takes one `--binary` per call, so a search (`fn search`, `search code`) is repeated for every binary in the project; the commands that act on an address (`fn show`, `fn callers`, `fn callees`, `xref to`, `rename`) belong to the one binary the address is in:
 
 ```sh
 revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
-revault fn search <pattern> --binary pnsrad.dll  # Search function names + source
 revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
 revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
-revault search code <pattern> --binary pnsrad.dll  # Search decompiled source
 revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
 revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
+revault fn search <pattern> --binary <binary>      # Search function names + source: once per binary in the project
+revault search code <pattern> --binary <binary>    # Search decompiled source: once per binary in the project
 ```
 
 When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
@@ -329,11 +337,15 @@ your seat name, for example `claude-main` or `codex`.
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
-  copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
+  copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
   checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
-  that `extern/<d>` and run `git submodule update --init extern/<d>`). Never print `.env`.
-  The build embeds the production endpoints from `.env`.
+  that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
+  writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
+  checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
+  not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
+  never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;

@@ -426,8 +426,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows the Quest config path never names one.
    `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
-   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
-   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
+   time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
+   from the repository's Actions variables, at configure time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
    `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
    is off unless the file turns it on, and is forced off while its prerequisite is missing
    (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
@@ -1076,15 +1076,31 @@ are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library
 pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
 when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
 new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
-`prereq_local_delivered` and `prereq_local_dropped` (a full table of 32 slots: the request still gets a local
-id and never reaches Meta, nothing is queued behind it, and its callback does not run) are the counters.
+`prereq_local_delivered`, `prereq_local_deferred` (a pop that had an answer ready while the game still held
+all eight handles: the answer waits) and `prereq_local_id_collisions` (an SDK request id in the local range)
+are the counters. A pending answer takes no storage: local ids are sequential, so the pending set is the id
+range not yet popped and a request can neither fail nor reach Meta; a handle exists only while the pump holds
+the message. The SDK's own request ids are small per-process counts (recorded device runs: 5, 6, 7 for user,
+org id and token, 13-16 for the proof requests), which is why the high word `0x4E455652` is free; an id the
+SDK returns there is counted.
 
 `ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
 `GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
 `GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
 `CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
 the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
-`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`); every other caller goes to the SDK. The other
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`). The nine `CNSOVRSocial` sites
+(`kOrgRequestSocialReturns`, compared with `tools/pinned_ovr_sites.txt` by `pinned_ovr_import_walk.py --sites`) are
+refused locally once the Social() hook has selected the facade (`quest_social::Counters().selected`, read through
+`local::SetSocialSelectedProbe`; independent of local answers being on): the game then drives the facade, not
+`CNSOVRSocial` (`Update`, `Initialize` and the Refresh* slots are the only ways into those nine sites), so the lookup
+is one nobody asked for and a Meta user id has no NEVR account id to answer it with. A refused request gets an id from its own space (bit 31 of the local id
+range, `local::Refuse`), no handle, no queued answer and never reaches the SDK; it is counted as a fault
+(`prereq_social_org_refused`) and logged once per call site (`quest_social_org_request_refused`, the offset in
+libpnsovr). If one ever ran, its callback would never run: the original object's friend or room batch would wait for
+that entry (`GotFriendOrgIdCB` collects a batch), so the refresh would stay "refreshing"; nothing on the facade path
+waits on it. With the facade not selected (stock Meta social), and for any caller this build does not know, the
+request goes to the SDK as before. The other
 three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
 in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
 and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed

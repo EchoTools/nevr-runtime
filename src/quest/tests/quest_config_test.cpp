@@ -47,7 +47,7 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal && !f.selfCheck;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -395,6 +395,59 @@ void ObbSkipIsOnlyEverOnByAFileBoolean() {
   CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
 }
 
+// The no-config gate (the release packages): a build that turns the login features on by default logs in with no
+// nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
+constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
+
+EmbeddedDefaults FullWithFeatures(const char* features) {
+  EmbeddedDefaults d = Full();
+  d.features = features;
+  return d;
+}
+
+void NoConfigFileLogsInFromTheEmbeddedDefaultsAlone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(kLoginFeatures), nullptr);
+  CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.httpUri.source == Source::kEmbedded);
+  CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.serverKey.source == Source::kEmbedded);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kRedirect));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kBridge));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));  // diagnostics stay off
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
+}
+
+void DefaultFeaturesAreOffWhenTheBuildNamesNone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(""), nullptr);
+  CHECK(AllOff(r.config.effective));
+}
+
+void AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults() {
+  const LoadResult off = Load(FullWithFeatures(kLoginFeatures), R"({"features":{"social":false}})");
+  CHECK(nevr_quest::FeatureEnabled(off.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(off.config, Feature::kSocial));
+  const LoadResult rejected = Load(FullWithFeatures(kLoginFeatures), "{not json");
+  CHECK(rejected.fileRejected);
+  CHECK(nevr_quest::FeatureEnabled(rejected.config, Feature::kLogin));
+  CHECK(rejected.config.socketUri.source == Source::kEmbedded);
+}
+
+void ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne() {
+  EmbeddedDefaults noKey = FullWithFeatures(kLoginFeatures);
+  noKey.serverKey = "";
+  const LoadResult r = nevr_quest::ResolveConfig(noKey, nullptr);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(EventsContain(r, "forced off"));
+}
+
+void AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures("login,nonsense"), nullptr);
+  CHECK(EventsContain(r, "embedded default feature ignored reason=unknown_name"));
+  CHECK(!EventsContain(r, "nonsense"));
+}
+
 // Presence names (#393) ride in the social facade's member data: off unless the file asks, forced off without
 // social (so without login), and only a JSON true counts.
 void PresenceNamesNeedSocialAndAreOffByDefault() {
@@ -451,13 +504,40 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
+// Self-checks (#451) are off unless the file or the build's defaults ask, and need the login.
+void SelfCheckNeedsLoginAndIsOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.selfCheck && r.config.effective.selfCheck);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSelfCheck));
+  CHECK(EventsContain(r, "feature=self_check requested=on effective=on"));
+
+  r = Load(Full(), R"({"features":{"self_check":true}})");
+  CHECK(r.config.requested.selfCheck && !r.config.effective.selfCheck);
+  CHECK(EventsContain(r, "feature=self_check forced off reason=login_not_enabled"));
+
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
+  CHECK(!r.config.requested.selfCheck && !r.config.effective.selfCheck);
+  CHECK(EventsContain(r, "feature=self_check requested=off effective=off"));
+  for (const char* text : {R"({"features":{"self_check":"true"}})", R"({"features":{"self_check":1}})", R"({"self_check":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.selfCheck);
+  }
+}
+
 int main() {
   DefaultsWithoutFile();
+  NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
+  DefaultFeaturesAreOffWhenTheBuildNamesNone();
+  AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults();
+  ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne();
+  AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything();
   EmptyEmbeddedIsAbsent();
   InvalidEmbeddedIsRejectedWithoutValue();
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
+  SelfCheckNeedsLoginAndIsOffByDefault();
   SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();

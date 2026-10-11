@@ -31,6 +31,7 @@
 #include "runtime/patch/provider_identity.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
+#include "runtime/compat/self_check.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
@@ -188,6 +189,23 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
+
+/* Self-check "matchmaking_reload_patch" (#18, docs/engine/remote-log.md): the game loads
+ * pnsradmatchmaking.dll once per lobby and every load must have its host default re-applied. The loader
+ * callback only counts (it runs under the loader lock); the probe reads the counts on the frame tick. */
+static nevr_matchmaker_host_patch::ReloadLedger s_mmLedger;
+
+static bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
+    return s_mmLedger.Take(&out->observed, &out->pass);
+}
+
+/* Registered from Init (the game's boot, not the DLL's static initialisation: Register allocates). */
+static void RegisterMatchmakingReloadCheck() {
+    nevr_self_check::Register(
+        {"matchmaking_reload_patch",
+         "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
+         &MatchmakingReloadProbe});
+}
 static uintptr_t s_pnsradModuleBase = 0;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
@@ -396,6 +414,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             reason, name->Buffer, name->Length / sizeof(WCHAR), image, port,
             [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
         if (result) ReportMatchmakingHostResult(*result, image, port, err);
+        s_mmLedger.NoteLoad(result);
     }
 
     if (s_pnsradPatched) return;
@@ -447,6 +466,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
  * ==================================================================== */
 
 void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
+    RegisterMatchmakingReloadCheck();
 #ifdef _WIN32
     // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
     // "init complete" summary can show a baseline instead of a bare count.

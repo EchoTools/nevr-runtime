@@ -18,6 +18,8 @@ class MicRingBuffer {
   uint32_t Pop(int16_t* out, uint32_t maxCount);
   void Reset();
   uint32_t capacity() const { return capacity_; }
+  /// Samples overwritten before the game read them, over the life of the process (Reset() keeps it).
+  uint64_t DroppedSamples() const;
 
   /// Called by the game's MicRead before it pops. The first call after the stream (re)started that
   /// finds audio waiting drops that backlog, so the first read gets only fresh audio (#95), and
@@ -36,6 +38,29 @@ class MicRingBuffer {
   std::vector<int16_t> data_;
   uint32_t head_ = 0;
   uint32_t count_ = 0;
+  uint64_t droppedSamples_ = 0;
+};
+
+/// Decides when ring overflow is worth a log line: the first overflow of a stream the game is reading,
+/// then at most one line per interval carrying how many samples were dropped since the last line (#95).
+/// Used from the capture thread only.
+class MicOverflowLogGate {
+ public:
+  explicit MicOverflowLogGate(uint64_t intervalMs) : intervalMs_(intervalMs) {}
+  /// `droppedTotal` is MicRingBuffer::DroppedSamples(); `nowMs` a monotonic clock. Returns the samples
+  /// dropped since the last reported line when one should be logged now, otherwise 0.
+  uint64_t Poll(uint64_t droppedTotal, uint64_t nowMs);
+  /// Treats everything dropped so far as already accounted for (the game is not reading yet, so a full
+  /// ring is the normal state and not a stall).
+  void Rebase(uint64_t droppedTotal) { reported_ = droppedTotal; }
+  /// A new stream starts: its first overflow logs at once. Keeps what was already accounted for.
+  void Reset() { hasLogged_ = false; }
+
+ private:
+  uint64_t intervalMs_;
+  uint64_t reported_ = 0;
+  uint64_t lastLogMs_ = 0;
+  bool hasLogged_ = false;
 };
 
 enum class MicDspStatus {

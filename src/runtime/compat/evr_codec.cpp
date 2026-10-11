@@ -96,6 +96,28 @@ std::optional<UserId> ParseLoginSuccessUserId(const std::string& frame) {
   return id;
 }
 
+std::string BuildRemoteLogSet(const UserId& user, uint64_t level, const std::vector<std::string>& logs) {
+  std::string payload;
+  AppendLE64(payload, user.platformCode);
+  AppendLE64(payload, user.accountId);
+  for (int i = 0; i < 4; ++i) AppendLE64(payload, 0);  // the session UUID and the 16 text bytes
+  AppendLE64(payload, level);
+  const auto appendLE32 = [&payload](uint32_t value) {
+    for (int i = 0; i < 4; ++i) payload.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+  };
+  appendLE32(static_cast<uint32_t>(logs.size()));
+  uint32_t offset = 0;
+  for (const std::string& log : logs) {
+    appendLE32(offset);
+    offset += static_cast<uint32_t>(log.size() + 1);
+  }
+  for (const std::string& log : logs) {
+    payload.append(log);
+    payload.push_back('\0');
+  }
+  return BuildMessage(kSymRemoteLogSet, payload);
+}
+
 std::string BuildFriendListSubscribe() {
   return BuildMessage(kSymFriendListSubscribe, std::string(kFriendListSubscribePayloadSize, '\0'));
 }

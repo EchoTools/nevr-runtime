@@ -20,6 +20,9 @@ struct FrameTapSinks {
   std::function<void(bool serverToGame, const std::uint8_t* data, std::size_t len)> observe;
   // The account id of a server-to-game LoginSuccess ([session 16][platform 8][account 8]). May be empty.
   std::function<void(std::uint64_t accountId)> onLoginSuccess;
+  // The platform code and account id of the same LoginSuccess: the user the service named (self-checks send
+  // their results as that user). May be empty.
+  std::function<void(std::uint64_t platformCode, std::uint64_t accountId)> onLoginUser;
 };
 
 class FrameTap {
@@ -38,5 +41,7 @@ class FrameTap {
 // The LoginSuccess account id in `frame`, if any message in it is one with a full payload.
 // (Exposed for the test.)
 bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) noexcept;
+// The platform code and account id of the LoginSuccess in `frame`, if any. (Exposed for the test.)
+bool FindLoginSuccessUser(std::string_view frame, std::uint64_t* platformCode, std::uint64_t* accountId) noexcept;
 
 }  // namespace quest_net
