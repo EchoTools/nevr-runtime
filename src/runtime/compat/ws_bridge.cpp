@@ -1058,7 +1058,7 @@ void InstallWebSocketBridge() {
                     connIdx, ConnLabel(connIdx));
               }
             }
-            // Self-checks (release candidate builds): the login connection asks the game service for every
+            // Self-checks (release builds): the login connection asks the game service for every
             // remote log category (server/session_ws.go reads "debug"), so each category reaches the game
             // service and the runtime's own results ride the same set. Never on a dedicated server.
             if (nevr_self_check::WantsRemoteDebug(connIdx, g_isServer != FALSE)) {

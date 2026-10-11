@@ -62,7 +62,7 @@ struct Features {
   // the match. Off until a headset run confirms it; needs the social facade.
   bool presenceLocal = false;
   // Report the run-card checks as remote logs to the game service (runtime/compat/self_check.h) and connect
-  // with debug=true so the service asks the game for every log category. A release candidate turns it on;
+  // with debug=true so the service asks the game for every log category. A release build turns it on;
   // needs the login (the results go out on the login connection).
   bool selfCheck = false;
 };

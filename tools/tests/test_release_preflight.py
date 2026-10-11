@@ -98,10 +98,10 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertIn("only in this clone", result.stdout)
 
     def test_a_lightweight_local_only_tag_is_refused_too(self):
-        git(self.clone, "tag", "v4.0.0-rc.1")
+        git(self.clone, "tag", "v5.0.0-beta.1")
         result = self.run_preflight()
         self.assertEqual(result.returncode, 1)
-        self.assertIn("v4.0.0-rc.1", result.stdout)
+        self.assertIn("v5.0.0-beta.1", result.stdout)
 
     def test_a_tag_moved_to_another_commit_is_refused(self):
         (self.clone / "b.txt").write_text("b")
