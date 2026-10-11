@@ -360,6 +360,10 @@ TEST(t6_globals_are_per_script) {
 TEST(t7_memory_bomb_at_top_level_is_refused) {
   VmLimits limits;
   limits.memory_bytes = 4u << 20;
+  // Only the memory cap may stop these: under emulation (qemu) the default
+  // time budget fired first and the test measured the wrong limit.
+  limits.instructions_per_call = UINT64_MAX;
+  limits.millis_per_call = 60000;
   Host h(limits);
   NevrOwner* a = h.Load("mod_a.lua",
                         "local t = {}\n"
@@ -373,6 +377,10 @@ TEST(t7_memory_bomb_at_top_level_is_refused) {
 TEST(t7_memory_bomb_in_a_callback_is_contained) {
   VmLimits limits;
   limits.memory_bytes = 4u << 20;
+  // Only the memory cap may stop these: under emulation (qemu) the default
+  // time budget fired first and the test measured the wrong limit.
+  limits.instructions_per_call = UINT64_MAX;
+  limits.millis_per_call = 60000;
   Host h(limits);
   NevrOwner* a = h.Load("mod_a.lua",
                         "nevr.hook('test.add', {pre = function(h) local s = string.rep('x', 64 * 1024 * 1024) end})\n");
