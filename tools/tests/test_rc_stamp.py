@@ -58,6 +58,11 @@ class RcStampTest(unittest.TestCase):
         env = {"GITHUB_ACTIONS": "true", "GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "main"}
         self.assertEqual(stamped(stamp("rc.1", **env)), "4.0.0-dev+1199.abc1234")
 
+    def test_a_branch_that_is_named_like_an_rc_tag_still_stamps_dev(self):
+        # The ref NAME alone proves nothing: only GITHUB_REF_TYPE says whether it is a tag.
+        env = {"GITHUB_ACTIONS": "true", "GITHUB_REF_TYPE": "branch", "GITHUB_REF_NAME": "v4.0.0-rc.1"}
+        self.assertEqual(stamped(stamp("rc.1", **env)), "4.0.0-dev+1199.abc1234")
+
     def test_a_tag_that_is_not_a_release_candidate_tag_stamps_dev(self):
         for name in ("v4.0.0", "v4.0.0-beta.1", "rc.1", "v4.0.0-rc.", "v4.0.0-rc.1x", "xv4.0.0-rc.1"):
             with self.subTest(tag=name):
