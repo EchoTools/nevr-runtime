@@ -34,16 +34,22 @@ void AddLoadFilter(const char* name, LoadFilter filter);
  * does not match, so a library under such a directory is not refused. */
 bool IsOculusPlatformPath(const wchar_t* lower_path);
 
-/* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests). */
+/* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests).
+ * `blocked_by` remains valid until the next IsLoadBlocked call on the same thread. */
 bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by);
 
 /* Register a callback to fire when a DLL matching `dll_name` loads.
  * dll_name is matched case-insensitively against the filename only (not path).
- * The callback fires once per load. Multiple callbacks per DLL are supported. */
+ * The callback fires at most once per registration. Multiple callbacks per DLL are supported. */
 void OnLoad(const char* dll_name, PatchCallback callback);
 
 /* Trigger callbacks for a DLL that was loaded through a non-LoadLibrary path
  * (e.g., the game's CSysDLL_Load). Only fires each callback once per DLL. */
 void FireCallbacksForModule(const char* lower_name, HMODULE module);
+
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+using ModuleProbe = HMODULE(WINAPI*)(LPCSTR);
+void SetModuleProbeForTest(ModuleProbe probe);
+#endif
 
 } // namespace nevr_dll_load_hook
