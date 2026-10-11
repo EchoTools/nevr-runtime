@@ -90,9 +90,17 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
 - **Isolation.** Each script gets its own `lua_State`. Upstream's `luaL_sandbox` makes library tables, the
   string metatable and the globals read-only, and each script runs in a `luaL_sandboxthread` thread, so its
   globals are its own.
-- **Sandbox.** Removed after `luaL_sandbox`'s defaults: `getfenv`, `setfenv`, `newproxy` and `gcinfo`.
-  `collectgarbage` is limited to `"count"`, and `getmetatable('')` returns `"locked"`. Scripts cannot load
-  bytecode; the only `luau_load` call takes what `luau_compile` produced from source.
+- **Sandbox.**
+  - No `debug` library: introspection reached host internals, and errors already carry chunk:line.
+  - `os` has only `clock`, `date` and `time`.
+  - Removed beyond `luaL_sandbox`'s defaults: `getfenv`, `setfenv`, `newproxy` and `gcinfo`.
+  - `collectgarbage` is limited to `"count"`, and `getmetatable('')` returns `"locked"`.
+  - Scripts cannot load bytecode; the only `luau_load` call takes what `luau_compile` produced from source.
+  - Callbacks are called with `lua_pcall` directly, so no host C function sits on a script's stack. The two
+    setup thunks refuse any argument the binding did not pass them.
+  - `t6_globals_are_only_the_contract_surface` checks every global against the contract's list.
+- **Numbers.** No NaN or infinity reaches a FLOAT game field or key: the registry refuses it, and the binding
+  raises with the script's line.
 - **Budget.**
   - The interrupt callback counts safepoints and checks the wall clock. It also runs inside the string pattern
     matcher.
@@ -113,6 +121,20 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
 - **Integers.** Luau numbers are doubles. An INT field or key outside ±2^53 is never rounded silently: `h:get`
   raises, and the registry refuses to convert such a number to INT.
 - **Errors.** Script errors carry `<file>:<line>: <message>`.
+
+## Known limits
+
+- **The log sink runs under the registry lock.** `LogRecord`s are delivered while `Registry`'s lock is held on
+  the paths that set overrides and add hooks. A sink must not call back into those functions, or it deadlocks.
+  The sink the runtime will install when scripting is embedded must only render the record.
+- **No time or thread in a record.** `LogRecord` carries neither a timestamp nor a thread id. Rendered through
+  the runtime's `Log()`, a line gets an ISO8601 UTC time (`src/core/logging.cpp`); a thread id is not added
+  anywhere yet.
+- **Re-entry is refused, not served.** While a script's code runs on a thread, a hook point that calls the same
+  script again on that thread fails that callback (`callback_failed`, "re-entrant"). It does not wait, because
+  the state's lock is not recursive.
+- **Reload is dev-only.** Hot reload, including bringing back a script that was disabled for a limit breach,
+  happens only in dev builds. In a normal build a breached script stays off until the game restarts.
 
 ## Typed API stubs and the checker
 

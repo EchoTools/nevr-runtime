@@ -42,13 +42,15 @@
 // as the reason; the owner stays enabled.
 //
 // Sandbox: a script sees only `nevr`, `print` and the safe parts of the standard
-// library (string, table, math, coroutine, pairs/ipairs/select/type/tostring/
-// tonumber/pcall/error/assert/next/unpack/rawequal/rawget/rawset/rawlen/setmetatable/
-// getmetatable, utf8 where the VM has it, os.clock/os.time/os.date). It sees no io,
-// the rest of os, package, require, dofile, loadfile, load, loadstring, string.dump,
-// debug (beyond traceback/info), collectgarbage other than "count", getfenv, setfenv,
-// newproxy, ffi or jit, and getmetatable('') does not return the string metatable.
-// Probes for each are in conformance_test.cpp (t6_*).
+// library (string, table, math, coroutine, pairs/ipairs/select/type/typeof/tostring/
+// tonumber/pcall/xpcall/error/assert/next/unpack/rawequal/rawget/rawset/rawlen/
+// setmetatable/getmetatable, utf8 where the VM has it, os.clock/os.time/os.date). It
+// sees no io, the rest of os, package, require, dofile, loadfile, load, loadstring,
+// string.dump, debug, collectgarbage other than "count", getfenv, setfenv, newproxy,
+// ffi or jit, and getmetatable('') does not return the string metatable. No function
+// of the host reachable from a script may misbehave when a script calls it.
+// Probes for each are in conformance_test.cpp (t6_*). No NaN or infinity reaches
+// a FLOAT value: the call raises, naming the script's line.
 #pragma once
 
 #include <cstddef>

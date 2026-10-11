@@ -10,20 +10,20 @@ other people and run inside the game client and the game server on Windows x64 (
 that errs, loops or allocates without end must never crash or hang the game.
 
 Three VMs were built against the same contract, `src/scripting/script_vm.h`, and the same tests,
-`src/scripting/tests/conformance_test.cpp`, on 2026-10-10. Each was built for both targets and run under
-`wine` (x86_64) and `qemu-aarch64` (arm64), standalone, with the toolchains of the real builds
-(`cmake/toolchain-mingw64.cmake`; NDK r26d, `arm64-v8a`, API 26, `c++_static`). The bindings were on lane
-branches (commits below), run through `src/scripting/CMakeLists.txt` with `-DNEVR_SCRIPT_VM=<vm>`.
+`src/scripting/tests/conformance_test.cpp`. Each was built for both targets and run under `wine` (x86_64) and
+`qemu-aarch64` (arm64), standalone, with the toolchains of the real builds (`cmake/toolchain-mingw64.cmake`;
+NDK r26d, `arm64-v8a`, API 26, `c++_static`), through `src/scripting/CMakeLists.txt` with
+`-DNEVR_SCRIPT_VM=<vm>`. Only the Luau binding is kept in the tree.
 
-| VM | Pin | Lane commit |
-| --- | --- | --- |
-| Lua 5.4 / 5.5 (PUC-Rio) | `v5.4.9` `312b9efa`, `v5.5.1` `7579fc9d` | `cad96350` (`lane-lua/440-lua54`) |
-| LuaJIT 2.1 | `v2.1` `c6ffc141` (rolling; no release tags) | `b4b50420` (`lane-lua/440-luajit`) |
-| Luau | `0.742` `8387cfb4` | `30a25e98` (`lane-lua/440-luau`) |
+| VM | Upstream pin |
+| --- | --- |
+| Lua 5.4 / 5.5 (PUC-Rio) | tags `v5.4.9` and `v5.5.1` of github.com/lua/lua |
+| LuaJIT 2.1 | the head of the `v2.1` branch (LuaJIT has no release tags) |
+| Luau | tag `0.742` of github.com/luau-lang/luau (`extern/luau`) |
 
 ## Measurements
 
-Conformance under wine, at the contract the lanes merged (`3796e550`). The runaway tests are `t5_*`;
+Conformance under wine, at the 19-test contract the three prototypes ran. The runaway tests are `t5_*`;
 `--pattern-dos` runs one `string.find` that backtracks for seconds inside a single C call; `--gc-dos` registers
 a `__gc` that loops forever.
 
@@ -81,9 +81,11 @@ Luau, interpreter only (no CodeGen), one `lua_State` per script, upstream's `lua
 
 ## Consequences
 
-- About +1.1 MB on Windows and +0.9 MB on Quest, and about 370 KB per loaded script (one state each). Sharing one
-  state across scripts, each in its own `luaL_sandboxthread` with `lua_setmemcat` accounting, is the measured
-  next step if the per-script cost matters.
+- About +1.1 MB on Windows and +0.9 MB on Quest, and about 370 KB per loaded script (one state each). Past about
+  20 scripts a shared state is required: one state, each script in its own `luaL_sandboxthread` with
+  `lua_setmemcat` accounting.
+- The script surface has no `debug` library (introspection reached host internals; errors already carry
+  chunk:line), `os` only has `clock`, `date` and `time`, and no NaN or infinity reaches a FLOAT game value.
 - Errors inside the VM are `longjmp` (`LUA_USE_LONGJMP=1`), so the VM and the binding build with
   `-fno-exceptions`; the binding keeps no object with a destructor alive across a call that can raise. Luau's parser
   and compiler throw and catch internally and build with exceptions; on Quest, compiling a script on the device
