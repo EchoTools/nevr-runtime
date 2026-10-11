@@ -2559,6 +2559,8 @@ verify:
     # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
     # against this tree): adding tests raises it in the same change, a drop is a regression
     # that needs an explicit sensor update and review.
+    # #451: the self-check wiring goes through the tested gate functions (source check).
+    python3 tools/verify_self_check_wiring.py
     python3 tools/verify_gtest_floor.py --floor 860
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
