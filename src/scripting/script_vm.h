@@ -26,7 +26,10 @@
 //   doubles: h:get raises rather than return a nearby integer.
 //   h:skip()                     pre only: the original is not called.
 //
-// Limits: a script runs in its own VM state, under its own owner. Its top-level
+// Limits: a script runs in its own VM state, under its own owner. (The Luau
+// binding can instead share one state between scripts, each in its own thread
+// with its own globals and its own memory category; every limit below then
+// applies to the one script, and a breach by it leaves the others as they were.) Its top-level
 // chunk and every callback run under `instructions_per_call` and
 // `millis_per_call`; on a breach the binding stops the code, calls
 // Registry::DisableOwner with a reason that names the limit, and the call fails.
@@ -76,10 +79,14 @@ class ScriptVm {
   // false and sets *error to "<chunk>:<line>: <message>" where there is a line.
   virtual bool Load(NevrOwner* owner, const std::string& chunkname, const std::string& source,
                     std::string* error) = 0;
-  // Bytes the owner's script holds now, as counted by the binding's allocator.
+  // Bytes the owner's script holds now, as the binding counts them: a state per
+  // script counts what its allocator handed out; a shared state counts the bytes
+  // of the objects charged to the script's memory category (the Luau binding's
+  // NEVR_LUAU_SHARED_STATE mode), which leaves out free space inside pages.
+  // Not to be called from a script callback of a shared-state binding.
   virtual size_t MemoryBytes(const NevrOwner* owner) const = 0;
   // Bytes every loaded script holds together, including whatever the binding
-  // shares between them (a shared state's libraries).
+  // shares between them (a shared state's libraries), counted the same way.
   virtual size_t TotalMemoryBytes() const = 0;
   // Closes the owner's state (hot reload, shutdown). The registry entries are
   // the caller's to reset.
