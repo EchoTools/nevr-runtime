@@ -126,7 +126,11 @@ void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user) {
 CheckId Register(const CheckSpec& spec) {
   State& s = S();
   std::lock_guard<std::mutex> lock(s.mutex);
-  if (spec.name == nullptr || s.checks.size() >= kMaxChecks) return -1;
+  if (spec.name == nullptr) return -1;
+  for (std::size_t i = 0; i < s.checks.size(); ++i) {
+    if (s.checks[i].name == spec.name) return static_cast<CheckId>(i);
+  }
+  if (s.checks.size() >= kMaxChecks) return -1;
   Check c;
   c.name = spec.name;
   c.expected = spec.expected != nullptr ? spec.expected : "";

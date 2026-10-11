@@ -88,6 +88,8 @@ void SetBuild(std::string_view build);
 // while this is false (the service drops remote logs from a session that has not logged in).
 void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user = nevr_evr_codec::UserId());
 
+// Idempotent by name: a second registration of a name returns the first one's id and changes nothing, so a
+// check may be looked up from the place that fires it without a shared variable.
 CheckId Register(const CheckSpec& spec);
 void Report(CheckId id, std::string_view observed, bool pass);
 // Runs the probes, then sends what is queued (if logged in and a sender is set), kMaxStringsPerFrame at a time.

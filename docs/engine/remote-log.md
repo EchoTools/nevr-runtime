@@ -260,6 +260,7 @@ differently because of how it was stamped.
 
 | Check | PC | Quest |
 | --- | --- | --- |
+| `party_data_share` (#398) | `ws_bridge.cpp` `ObserveSocialFrames` hands every server-to-game symbol to `nevr_party_share_check::OnServerMessage` | `production_steps.cpp` `ObserveForSelfChecks` in the frame tap's observer | the answer symbol names the scope (`PartyUpdateSuccess`/`Failure` party data, `PartyUpdateMemberSuccess`/`MemberFailure` member data); the first success is reported once, every failure is reported with the running counts. No answer produces no result (no timeout) |
 | `matchmaking_reload_patch` / `matchmaking_reload_redirect` (#18) | `pnsrad_enabler.cpp` `OnDllLoaded` feeds `nevr_matchmaker_host_patch::ReloadLedger`; passes when every load of `pnsradmatchmaking.dll` was patched | `post_load.cpp` `MatchmakingImages` (distinct handles the game's `dlopen` returned) against the redirect installs in `production_steps.cpp`; passes when installs >= images. A reload mapped at the same address returns the same handle and is not seen |
 
 Run-card checks not registered yet are listed in issue #451.

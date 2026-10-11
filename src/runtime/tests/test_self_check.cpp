@@ -190,6 +190,15 @@ TEST_F(SelfCheck, ReportBeforeLoginIsLoggedNowAndSentAfterLogin) {
   EXPECT_EQ(DecodeNakamaStyle(g_sent.frames[0]).account, 42u);
 }
 
+TEST_F(SelfCheck, RegisteringANameAgainReturnsTheSameCheck) {
+  const auto first = nevr_self_check::Register({"same", "ok", nullptr});
+  const auto second = nevr_self_check::Register({"same", "something else", nullptr});
+  const auto other = nevr_self_check::Register({"other", "ok", nullptr});
+  EXPECT_GE(first, 0);
+  EXPECT_EQ(first, second);
+  EXPECT_NE(first, other);
+}
+
 TEST_F(SelfCheck, DisabledUnitRecordsNothing) {
   nevr_self_check::SetEnabled(false);
   const auto id = nevr_self_check::Register({"x", "y", nullptr});
