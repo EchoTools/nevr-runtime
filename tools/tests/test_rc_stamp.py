@@ -96,5 +96,28 @@ class RcStampTest(unittest.TestCase):
         self.assertIn("must be dev or look like rc.<N>", result.stdout + result.stderr)
 
 
+class LocalRecipeTest(unittest.TestCase):
+    """`just package-dev` is the only local package recipe and it can only ask for a dev stamp."""
+
+    def recipe(self, name: str) -> str:
+        text = (REPO / "justfile").read_text()
+        start = text.index(f"\n{name} ")
+        end = text.index("\n\n", start)
+        return text[start:end]
+
+    def test_the_local_recipe_asks_for_dev_never_for_an_rc_label(self):
+        body = self.recipe("package-dev")
+        self.assertEqual(body.count("-DNEVR_RC_LABEL=dev"), 2)  # the DLL and the Quest sentinel
+        self.assertNotIn("-DNEVR_RC_LABEL=rc", body)
+        self.assertNotIn('label="rc.', body)
+        self.assertNotIn("--n ", body)
+        self.assertNotIn("\npackage-rc ", (REPO / "justfile").read_text())
+
+    def test_presets_and_docs_name_no_local_rc_recipe(self):
+        for relative in ("AGENTS.md", "README.md", "CMakePresets.json", "src/quest/CMakePresets.json", "justfile"):
+            text = (REPO / relative).read_text()
+            self.assertNotIn("just package-rc", text, relative)
+
+
 if __name__ == "__main__":
     unittest.main()

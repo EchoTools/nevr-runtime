@@ -19,10 +19,10 @@
             }
         },
         {
-            "name": "android-arm64-rc",
-            "displayName": "Android arm64-v8a for a release candidate (just package-rc): its own build tree",
+            "name": "android-arm64-dev",
+            "displayName": "Android arm64-v8a for a local package (just package-dev): its own build tree",
             "inherits": "android-arm64",
-            "binaryDir": "${sourceDir}/../../build/android-rc"
+            "binaryDir": "${sourceDir}/../../build/android-dev"
         }
     ],
     "buildPresets": [
@@ -32,9 +32,9 @@
             "configurePreset": "android-arm64"
         },
         {
-            "name": "android-arm64-rc",
+            "name": "android-arm64-dev",
             "displayName": "Build Android arm64-v8a (release candidate)",
-            "configurePreset": "android-arm64-rc"
+            "configurePreset": "android-arm64-dev"
         }
     ]
 }

@@ -22,7 +22,7 @@ def load():
 
 
 def steps_text(job: dict) -> str:
-    return yaml.safe_dump(job.get("steps", []))
+    return yaml.safe_dump(job.get("steps", []), width=10**9)  # no line folding inside a phrase
 
 
 class SigningWorkflowTest(unittest.TestCase):
@@ -101,6 +101,66 @@ class SigningWorkflowTest(unittest.TestCase):
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(sorted(set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text))), ["GITHUB_TOKEN"])
+
+    def label_step(self, **env):
+        """Run the `Release candidate label` step's script as bash with the given GITHUB_* environment."""
+        import os, subprocess, tempfile
+        data, _ = load()
+        step = next(s for s in data["jobs"]["build"]["steps"] if s.get("id") == "rc")
+        with tempfile.TemporaryDirectory(prefix="rc-label-") as tmp:
+            out = Path(tmp) / "out"
+            out.write_text("")
+            clean = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "EVENT", "TAG", "RC_"))}
+            clean.update({"EVENT": "workflow_dispatch", "TAG": "", "RC_NUMBER": "", "GITHUB_OUTPUT": str(out)})
+            clean.update(env)
+            result = subprocess.run(["bash", "-c", step["run"]], env=clean, capture_output=True, text=True)
+            label = dict(line.split("=", 1) for line in out.read_text().splitlines()).get("label")
+            return result.returncode, label, result.stderr
+
+    def test_the_label_comes_only_from_a_tag_ref_named_v_x_y_z_rc_n(self):
+        rc, label, _ = self.label_step(EVENT="release", TAG="v4.0.0-rc.1",
+                                       GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0-rc.1")
+        self.assertEqual((rc, label), (0, "rc.1"))
+        rc, label, _ = self.label_step(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.1.0-rc.12", RC_NUMBER="12")
+        self.assertEqual((rc, label), (0, "rc.12"))
+        for ref_type, name in (("branch", "main"), ("branch", "v4.0.0-rc.1"), ("tag", "v4.0.0"),
+                               ("tag", "v4.0.0-rc.0"), ("tag", "v4.0.0-rc.1x")):
+            with self.subTest(ref_type=ref_type, name=name):
+                rc, label, _ = self.label_step(GITHUB_REF_TYPE=ref_type, GITHUB_REF_NAME=name)
+                self.assertEqual((rc, label), (0, ""))  # the build stamps a dev version
+
+    def test_rc_number_must_be_empty_or_the_tags_number_and_needs_a_tag(self):
+        rc, _, err = self.label_step(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0-rc.2", RC_NUMBER="1")
+        self.assertEqual(rc, 1)
+        self.assertIn("does not match the tag", err)
+        rc, _, err = self.label_step(GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main", RC_NUMBER="1")
+        self.assertEqual(rc, 1)
+        self.assertIn("needs the run to be started on a v<x.y.z>-rc.<N> tag", err)
+
+    def test_a_release_on_an_rc_tag_that_yields_no_label_fails_the_job(self):
+        rc, label, err = self.label_step(EVENT="release", TAG="v4.0.0-rc.1",
+                                         GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
+        self.assertEqual(rc, 1)
+        self.assertIn("refusing to build it as anything else", err)
+        # An ordinary release tag is not a candidate and is not refused.
+        rc, label, _ = self.label_step(EVENT="release", TAG="v4.0.0", GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0")
+        self.assertEqual((rc, label), (0, ""))
+
+    def test_the_build_asserts_the_stamped_version_right_after_building(self):
+        data, _ = load()
+        names = [step.get("name", "") for step in data["jobs"]["build"]["steps"]]
+        self.assertIn("Assert the stamped version", names)
+        self.assertLess(names.index("Build"), names.index("Assert the stamped version"))
+        self.assertLess(names.index("Assert the stamped version"),
+                        names.index("Gate and assemble the release candidate tree (unsigned)"))
+        step = data["jobs"]["build"]["steps"][names.index("Assert the stamped version")]
+        self.assertIn("tools/package_rc.py stamp", step["run"])
+
+    def test_a_release_with_no_quest_apk_seals_zip_only_and_the_seal_does_not_need_one(self):
+        data, _ = load()
+        seal = steps_text(data["jobs"]["rc-seal"])
+        self.assertIn("a zip-only candidate", seal)
+        self.assertNotIn("a missing or undownloadable APK fails the job", seal)
 
     def test_the_release_candidate_is_gated_then_sealed_unsigned(self):
         data, _ = load()

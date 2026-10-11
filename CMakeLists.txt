@@ -34,7 +34,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
-# A release candidate (just package-rc) adds -rc.<N> and always carries the commit hash.
+# A CI build of a v<x.y.z>-rc.<N> tag adds -rc.<N>; a local package (just package-dev) adds -dev; both carry the commit hash.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_rc_label.cmake")
 nevr_apply_rc_label()
 
