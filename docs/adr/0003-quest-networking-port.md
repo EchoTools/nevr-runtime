@@ -1089,16 +1089,18 @@ SDK returns there is counted.
 `GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
 `CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
 the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
-`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`). Every other caller is refused locally once the
-Social() hook has selected the facade (`quest_social::Counters().selected`, read through
-`local::SetSocialSelectedProbe`): the game then drives the facade, not `CNSOVRSocial` (`Update`, `Initialize` and
-the Refresh* slots are the only ways into those nine sites), so the lookup is one nobody asked for and a Meta user id
-has no NEVR account id to answer it with. A refused request gets an id from its own space (bit 31 of the local id
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`). The nine `CNSOVRSocial` sites
+(`kOrgRequestSocialReturns`, compared with `tools/pinned_ovr_sites.txt` by `pinned_ovr_import_walk.py --sites`) are
+refused locally once the Social() hook has selected the facade (`quest_social::Counters().selected`, read through
+`local::SetSocialSelectedProbe`; independent of local answers being on): the game then drives the facade, not
+`CNSOVRSocial` (`Update`, `Initialize` and the Refresh* slots are the only ways into those nine sites), so the lookup
+is one nobody asked for and a Meta user id has no NEVR account id to answer it with. A refused request gets an id from its own space (bit 31 of the local id
 range, `local::Refuse`), no handle, no queued answer and never reaches the SDK; it is counted as a fault
 (`prereq_social_org_refused`) and logged once per call site (`quest_social_org_request_refused`, the offset in
 libpnsovr). If one ever ran, its callback would never run: the original object's friend or room batch would wait for
 that entry (`GotFriendOrgIdCB` collects a batch), so the refresh would stay "refreshing"; nothing on the facade path
-waits on it. With the facade not selected (stock Meta social) they go to the SDK as before. The other
+waits on it. With the facade not selected (stock Meta social), and for any caller this build does not know, the
+request goes to the SDK as before. The other
 three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
 in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
 and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
