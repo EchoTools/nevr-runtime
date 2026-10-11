@@ -34,9 +34,11 @@ struct Registration {
     char dll_name[64];     // lowercase, filename only
     PatchCallback callback;
     bool fired;
+    HMODULE held;          // already loaded at registration during boot: fired by FireHeldCallbacks()
 };
 
 static std::vector<Registration> g_registrations;
+static bool g_holdEarly = false;
 
 struct Filter {
     char name[48];
@@ -124,6 +126,7 @@ static void FireCallbacks(const char* lower_name, HMODULE module) {
                     lower_name, (void*)module);
             fflush(stderr);
             reg.fired = true;
+            reg.held = nullptr;
             reg.callback(lower_name, module);
         }
     }
@@ -205,6 +208,8 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
 }
 
 void Install() {
+    // While the runtime boots, the game's log isn't usable until the log filter is in (FireHeldCallbacks).
+    HoldEarlyCallbacks();
 #ifdef _WIN32
     // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
     // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
@@ -253,6 +258,24 @@ void Shutdown() {
 #endif
     g_registrations.clear();
     g_filters.clear();
+    g_holdEarly = false;
+}
+
+void HoldEarlyCallbacks() { g_holdEarly = true; }
+
+void FireHeldCallbacks() {
+    g_holdEarly = false;
+    // By index, on a copy: a callback may register more (and reallocate the vector).
+    for (size_t i = 0; i < g_registrations.size(); i++) {
+        if (g_registrations[i].fired || g_registrations[i].held == nullptr) continue;
+        Registration reg = g_registrations[i];
+        g_registrations[i].fired = true;
+        g_registrations[i].held = nullptr;
+        fprintf(stderr, "[NEVR.DLLHOOK] firing held patch callback for '%s' (module=%p)\n",
+                reg.dll_name, (void*)reg.held);
+        fflush(stderr);
+        reg.callback(reg.dll_name, reg.held);
+    }
 }
 
 void OnLoad(const char* dll_name, PatchCallback callback) {
@@ -260,10 +283,19 @@ void OnLoad(const char* dll_name, PatchCallback callback) {
     ExtractLowerFilename(dll_name, reg.dll_name, sizeof(reg.dll_name));
     reg.callback = callback;
     reg.fired = false;
+    reg.held = nullptr;
     g_registrations.push_back(reg);
 
-    // If the DLL is already loaded, fire immediately
+    // If the DLL is already loaded, fire immediately (during boot: once the game log is up)
     HMODULE existing = GetModuleHandleA(dll_name);
+    if (existing && g_holdEarly) {
+        fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p) during boot, "
+                        "held until the log filter is in\n",
+                reg.dll_name, (void*)existing);
+        fflush(stderr);
+        g_registrations.back().held = existing;
+        return;
+    }
     if (existing) {
         fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p), firing immediately\n",
                 reg.dll_name, (void*)existing);

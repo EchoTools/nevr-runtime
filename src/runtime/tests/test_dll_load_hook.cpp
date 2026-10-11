@@ -70,3 +70,52 @@ TEST(OculusPlatformPath, AllowsAFileWhoseFolderIsNamedLikeTheSdk) {
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"kernel32.dll"));
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(nullptr));
 }
+
+// #495: a callback for a DLL already loaded when it registers waits for FireHeldCallbacks() during
+// the runtime's boot (the game's log isn't usable before the log filter; an injector like Revive's has
+// dxgi/d3d12 loaded before the runtime starts); after boot it fires right away.
+namespace {
+
+int g_fired = 0;
+HMODULE g_module = nullptr;
+
+void Count(const char*, HMODULE module) {
+  g_fired++;
+  g_module = module;
+}
+
+}  // namespace
+
+TEST(DllLoadHookHeld, HoldsALoadedDllsCallbackDuringBootUntilFired) {
+  g_fired = 0;
+  nevr_dll_load_hook::HoldEarlyCallbacks();
+  nevr_dll_load_hook::OnLoad("KERNEL32.dll", Count);
+  EXPECT_EQ(g_fired, 0);
+
+  nevr_dll_load_hook::FireHeldCallbacks();
+  EXPECT_EQ(g_fired, 1);
+  EXPECT_EQ(g_module, GetModuleHandleA("kernel32.dll"));
+
+  // Held callbacks fire once.
+  nevr_dll_load_hook::FireHeldCallbacks();
+  EXPECT_EQ(g_fired, 1);
+  nevr_dll_load_hook::Shutdown();
+}
+
+TEST(DllLoadHookHeld, AfterBootALoadedDllsCallbackFiresRightAway) {
+  g_fired = 0;
+  nevr_dll_load_hook::HoldEarlyCallbacks();
+  nevr_dll_load_hook::FireHeldCallbacks();
+  nevr_dll_load_hook::OnLoad("kernel32.dll", Count);
+  EXPECT_EQ(g_fired, 1);
+  nevr_dll_load_hook::Shutdown();
+}
+
+TEST(DllLoadHookHeld, ADllNotLoadedYetIsNotFiredByTheHeldOnes) {
+  g_fired = 0;
+  nevr_dll_load_hook::HoldEarlyCallbacks();
+  nevr_dll_load_hook::OnLoad("nevr-not-a-real-module.dll", Count);
+  nevr_dll_load_hook::FireHeldCallbacks();
+  EXPECT_EQ(g_fired, 0);
+  nevr_dll_load_hook::Shutdown();
+}
