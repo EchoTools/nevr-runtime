@@ -11,6 +11,10 @@ namespace {
 // wait on itself.
 thread_local const NevrOwner* t_running_owner = nullptr;
 
+// last_error is per thread, like errno: two game threads failing calls for one
+// owner must neither race on one string nor read each other's reason.
+thread_local std::unordered_map<const NevrOwner*, std::string> t_last_error;
+
 const char* StatusName(NevrStatus status) {
   switch (status) {
     case NEVR_OK: return "NEVR_OK";
@@ -145,7 +149,9 @@ void ApiLog(NevrOwner* owner, NevrLogLevel level, const char* message) {
 }
 
 const char* ApiLastError(NevrOwner* owner) {
-  return owner ? owner->last_error.c_str() : "";
+  if (!owner) return "";
+  const auto it = t_last_error.find(owner);
+  return it == t_last_error.end() ? "" : it->second.c_str();
 }
 
 const NevrHostApi kApi = {
@@ -217,7 +223,7 @@ NevrOwner* Registry::FindOwner(const std::string& name) const {
 }
 
 NevrStatus Registry::Fail(NevrOwner* owner, NevrStatus status, std::string why) {
-  owner->last_error = std::move(why);
+  t_last_error[owner] = std::move(why);
   return status;
 }
 
@@ -262,10 +268,13 @@ size_t Registry::DropOwnerLocked(NevrOwner* owner) {
 }
 
 void Registry::DisableOwner(NevrOwner* owner, const std::string& reason) {
-  if (!owner || owner->disabled.exchange(true)) return;
+  if (!owner) return;
   size_t dropped = 0;
   {
+    // Under mu_, so a hook_add or override_set already past its own check
+    // (which also runs under mu_) has finished and its entry is dropped here.
     std::lock_guard<std::mutex> lock(mu_);
+    if (owner->disabled.exchange(true)) return;
     dropped = DropOwnerLocked(owner);
   }
   Emit(NEVR_LOG_ERROR, "owner_disabled", owner, nullptr, nullptr,
@@ -293,15 +302,18 @@ bool Registry::ResetOwner(NevrOwner* owner) {
   if (!owner) return false;
   size_t dropped = 0;
   {
+    // Disabled first, under mu_: a callback still running while Quiesce waits
+    // cannot add anything new (hook_add and override_set check under mu_ and
+    // fail with NEVR_ERR_DISABLED), so nothing outlives the reset.
     std::lock_guard<std::mutex> lock(mu_);
+    owner->disabled.store(true);
     dropped = DropOwnerLocked(owner);
   }
-  if (!Quiesce(owner)) {
-    owner->disabled.store(true);
-    return false;
+  if (!Quiesce(owner)) return false;  // stays disabled
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    owner->disabled.store(false);
   }
-  owner->disabled.store(false);
-  owner->last_error.clear();
   Emit(NEVR_LOG_INFO, "owner_reset", owner, nullptr, nullptr,
        std::to_string(dropped) + " override(s) and callback(s) removed");
   return true;
@@ -342,11 +354,11 @@ std::vector<const HookPoint*> Registry::HookPoints() const {
 }
 
 NevrStatus Registry::OverrideSet(NevrOwner* owner, const char* key, const NevrValue* value) {
-  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
   if (!key || !*key || !ValidValue(value)) {
     return Fail(owner, NEVR_ERR_INVALID_ARG, "override needs a non-empty key and a typed value");
   }
   std::lock_guard<std::mutex> lock(mu_);
+  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
   if (owner->declared && !DeclarationCoversKey(owner->declaration, key)) {
     return Undeclared(owner, "override", key);
   }
@@ -394,11 +406,11 @@ NevrStatus Registry::OverrideGet(NevrOwner* owner, const char* key, NevrValue* o
 
 NevrStatus Registry::HookAdd(NevrOwner* owner, const char* hook, NevrHookPhase phase, NevrHookFn fn,
                              void* user) {
-  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
   if (!hook || !*hook || !fn || (phase != NEVR_HOOK_PRE && phase != NEVR_HOOK_POST)) {
     return Fail(owner, NEVR_ERR_INVALID_ARG, "hook_add needs a hook name, a phase and a function");
   }
   std::lock_guard<std::mutex> lock(mu_);
+  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
   if (owner->declared && std::find(owner->declaration.hooks.begin(), owner->declaration.hooks.end(),
                                    hook) == owner->declaration.hooks.end()) {
     return Undeclared(owner, "hook", hook);

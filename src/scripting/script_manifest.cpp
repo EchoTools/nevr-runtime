@@ -1,6 +1,7 @@
 #include "scripting/script_manifest.h"
 
 #include <cctype>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -113,9 +114,22 @@ bool ParseScriptManifest(const std::string& chunkname, const std::string& source
     }
     text += lines[i] + "\n";
   }
-  const nlohmann::json doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
+  // nlohmann keeps the last of two equal keys; a manifest must not, or
+  // `"hooks": [], ... "hooks": [...]` would declare whichever came last.
+  std::set<std::string> seen;
+  std::string repeated;
+  const nlohmann::json::parser_callback_t note_keys = [&seen, &repeated](int depth, nlohmann::json::parse_event_t event,
+                                                                          nlohmann::json& parsed) {
+    if (event == nlohmann::json::parse_event_t::key && depth == 1 && parsed.is_string() &&
+        !seen.insert(parsed.get_ref<const std::string&>()).second && repeated.empty()) {
+      repeated = parsed.get_ref<const std::string&>();
+    }
+    return true;
+  };
+  const nlohmann::json doc = nlohmann::json::parse(text, note_keys, /*allow_exceptions=*/false);
   const size_t first = open + 2;  // line number of the block's first JSON line
   if (doc.is_discarded()) return Fail(error, chunkname, first, "the block is not valid JSON");
+  if (!repeated.empty()) return Fail(error, chunkname, first, "key \"" + repeated + "\" appears twice");
   if (!doc.is_object()) return Fail(error, chunkname, first, "the block must be one JSON object");
 
   ScriptManifest m;

@@ -422,6 +422,62 @@ TEST(reset_owner_is_not_called_from_a_chain_loaded_before_the_reset) {
 }
 
 namespace {
+// F1 (review of #458): a callback still running while its owner is reset
+// registers another callback. That one must not survive the reset.
+NevrOwner* g_late_owner = nullptr;
+Alive* g_late_data = nullptr;
+std::atomic<NevrStatus> g_late_status{NEVR_OK};
+std::atomic<int> g_registrar_entered{0};
+NevrHookResult RegistersDuringReset(NevrHookCall*, void*) {
+  if (g_registrar_entered.fetch_add(1) != 0) return NEVR_HOOK_CONTINUE;
+  const uint64_t before = g_late_owner->generation.load();
+  while (g_late_owner->generation.load() == before) std::this_thread::yield();  // Quiesce has started
+  g_late_status.store(g_api->hook_add(g_late_owner, "test.add", NEVR_HOOK_PRE, SlowCallback, g_late_data));
+  return NEVR_HOOK_CONTINUE;
+}
+}  // namespace
+
+TEST(callback_registered_by_a_running_callback_during_reset_does_not_survive) {
+  Fixture f;
+  g_api = f.api;
+  NevrOwner* a = f.reg.OpenOwner("mod_a");
+  auto late = std::make_unique<Alive>();
+  g_late_owner = a;
+  g_late_data = late.get();
+  g_registrar_entered.store(0);
+  f.api->hook_add(a, "test.add", NEVR_HOOK_PRE, RegistersDuringReset, nullptr);
+  std::thread game([&f] { f.Add(1, 1); });
+  while (g_registrar_entered.load() == 0) std::this_thread::yield();
+  CHECK(f.reg.ResetOwner(a));
+  game.join();
+  late->alive.store(false);  // the binding frees the state the late callback would use
+  for (int i = 0; i < 5; ++i) f.Add(1, 1);
+  CHECK_EQ(g_late_status.load(), NEVR_ERR_DISABLED);
+  CHECK_EQ(late->runs.load(), 0);
+  CHECK_EQ(late->used_after_free.load(), 0);
+}
+
+// F2 (review of #458): last_error is per thread, so two game threads failing
+// calls for one owner neither race nor read each other's reason.
+TEST(last_error_is_per_thread) {
+  Fixture f;
+  NevrOwner* a = f.reg.OpenOwner("mod_a");
+  std::atomic<int> wrong{0};
+  auto worker = [&](const char* key) {
+    NevrValue v = Int(1);
+    for (int i = 0; i < 2000; ++i) {
+      f.api->override_set(a, key, &v);  // unknown key: fails, naming it
+      if (std::string(f.api->last_error(a)).find(key) == std::string::npos) wrong.fetch_add(1);
+    }
+  };
+  std::thread t1(worker, "no.such.one");
+  std::thread t2(worker, "no.such.two");
+  t1.join();
+  t2.join();
+  CHECK_EQ(wrong.load(), 0);
+}
+
+namespace {
 bool g_quiesce_from_inside = true;
 NevrHookResult QuiescesItself(NevrHookCall* call, void*) {
   g_quiesce_from_inside = g_reg->Quiesce(const_cast<NevrOwner*>(call->current), std::chrono::milliseconds(50));

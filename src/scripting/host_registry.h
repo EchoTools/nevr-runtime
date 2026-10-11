@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -63,8 +64,7 @@ struct NevrOwner {
   nevr_script::Registry* registry;
   std::string name;
   uint32_t order;  // position in `plugins:` order; callbacks chain by it
-  std::atomic<bool> disabled{false};
-  std::string last_error;
+  std::atomic<bool> disabled{false};  // written under Registry::mu_
   bool declared = false;  // Registry::Declare was called: enforce `declaration`
   nevr_script::Declaration declaration;
   // Callbacks carry the generation they were added under and run only while it

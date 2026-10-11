@@ -181,6 +181,9 @@ TEST(manifest_refusals_name_file_and_line) {
       {Manifest("a", ", \"hooks\": [\"test.*\"]"), "is not a dotted name"},
       {"--[[nevr\n{\"name\": \"a\", \"version\": \"1.0.0\", \"api\": 1,\n \"description\": \"x]]y\"}\n]]\n",
        "mod.lua:3: manifest: \"]]\" inside the block"},
+      // F6 (review of #458): a repeated key must not silently take the last value.
+      {"--[[nevr\n{\"name\": \"a\", \"version\": \"1.0.0\", \"api\": 1, \"hooks\": [], \"hooks\": [\"test.add\"]}\n]]\n",
+       "key \"hooks\" appears twice"},
   };
   for (const Case& c : cases) {
     std::string error;
