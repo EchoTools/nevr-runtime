@@ -23,7 +23,7 @@
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
-#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from env/.env at configure
+#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from config/public-defaults.env
 
 #ifdef NEVR_TEST_HOOKS
 #include "runtime/tests/service_config_test_hooks.h"
@@ -152,7 +152,7 @@ const nevr::NevrConfig& NevrCfg() {
 
 // --- build-time defaults ---------------------------------------------------
 // The four keys a player needs to reach the service without any config file, embedded at
-// configure time from the environment / .env (cmake/nevr_builtin_defaults.cmake). Applied
+// configure time from config/public-defaults.env (cmake/nevr_builtin_defaults.cmake). Applied
 // at LOOKUP time under the config.yaml value (nevr_cfg::LookupFlatWithDefaults), so a
 // config.yaml can override any of them and a rejected or absent file still leaves them in
 // place. Client mode only: a dedicated server has always been configured explicitly, and
