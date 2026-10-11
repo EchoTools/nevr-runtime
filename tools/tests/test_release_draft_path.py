@@ -109,12 +109,19 @@ class ReleaseDraftPathTest(unittest.TestCase):
         self.assertEqual(download["if"], "github.event_name == 'release' || " + DRAFT)
         self.assertEqual(sign["if"], "github.event_name == 'release' || needs.build.outputs.version != ''")
 
-    def test_publish_runs_for_a_release_event_as_before_and_for_a_dispatch_only_with_a_draft(self):
-        publish = load()["jobs"]["publish"]
-        self.assertEqual(publish["needs"], ["build", "sign", "seal"])
+    def test_repack_and_publish_run_for_a_release_event_as_before_and_for_a_dispatch_only_with_a_draft(self):
+        jobs = load()["jobs"]
+        gate = ("(github.event_name == 'release' || needs.build.outputs.draft == 'true')")
+        repack, publish = jobs["repack"], jobs["publish"]
+        self.assertEqual(repack["needs"], ["build", "sign", "seal"])
+        self.assertEqual(repack["if"],
+            "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
+        self.assertEqual(publish["needs"], ["build", "sign", "seal", "repack"])
         self.assertEqual(publish["if"],
             "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
-            "(github.event_name == 'release' || needs.build.outputs.draft == 'true') }}")
+            "needs.repack.result == 'success' && " + gate + " }}")
+        # the read-only/write split is kept: the draft path gives repack no write token
+        self.assertEqual(repack["permissions"], {"contents": "read"})
 
     def test_both_uploads_keep_a_draft_a_draft_and_never_set_the_prerelease_flag(self):
         steps = load()["jobs"]["publish"]["steps"]
@@ -130,10 +137,11 @@ class ReleaseDraftPathTest(unittest.TestCase):
 
     def test_a_dispatch_without_a_draft_is_the_dry_run_it_was(self):
         # publish is gated on the guard's draft output, which is only 'true' when a draft was found
-        publish = load()["jobs"]["publish"]
-        self.assertIn("needs.build.outputs.draft == 'true'", publish["if"])
-        self.assertNotIn("github.event_name == 'workflow_dispatch' &&", publish["if"].replace(
-            "(github.event_name == 'release' || needs.build.outputs.draft == 'true')", ""))
+        for name in ("repack", "publish"):
+            gated = load()["jobs"][name]["if"]
+            self.assertIn("needs.build.outputs.draft == 'true'", gated, name)
+            self.assertNotIn("github.event_name == 'workflow_dispatch' &&", gated.replace(
+                "(github.event_name == 'release' || needs.build.outputs.draft == 'true')", ""), name)
 
     def test_the_guard_and_the_draft_lookup_read_one_list_of_names(self):
         for script in ("release_already_built.sh", "release_draft.sh"):
