@@ -196,7 +196,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
 # Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
-# before pushing a v<x.y.z>-rc.<N> tag and before `gh release create` (tools/release_preflight.py).
+# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
 release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
 
