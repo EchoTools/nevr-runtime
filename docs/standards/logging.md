@@ -112,7 +112,7 @@ subsystems that nEVR annotates.
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
-| `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (release candidate builds, `compat/self_check.h`) |
+| `[NEVR.SELFCHECK]`    | Self-checks: one result per run-card check (every build, `compat/self_check.h`) |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you

@@ -40,7 +40,11 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 9> kFeatures = {{
+// Feature names that existed and are gone. A file that still names one is told so, by name: the name is one of
+// ours, so logging it leaks nothing a file could supply. Anything else unknown is only counted.
+constexpr std::array<const char*, 1> kRetiredFeatures = {"self_check"};  // self-checks are on in every build (#451)
+
+constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -49,7 +53,6 @@ constexpr std::array<FeatureSpec, 9> kFeatures = {{
     {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
-    {"self_check", Feature::kSelfCheck, &Features::selfCheck},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -229,7 +232,14 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
       if (item.key() == f.name) spec = &f;
     }
     if (spec == nullptr) {
-      warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
+      bool retired = false;
+      for (const char* name : kRetiredFeatures) {
+        if (item.key() == name) {
+          warn(std::string("config file feature=") + name + " retired ignored (self-checks are on in every build)");
+          retired = true;
+        }
+      }
+      if (!retired) warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
       continue;
     }
     if (!item.value().is_boolean()) {
@@ -294,11 +304,6 @@ void Derive(LoadResult& r) {
   if (c.effective.presenceLocal && !c.effective.social) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
-  }
-  // The results go out on the login connection, so the login has to be in place.
-  if (c.effective.selfCheck && !c.effective.login) {
-    c.effective.selfCheck = false;
-    force_off("self_check", "login_not_enabled");
   }
 }
 

@@ -143,7 +143,7 @@ class SelfCheck : public ::testing::Test {
     nevr_self_check::SetEnabled(true);
     nevr_self_check::SetSender(&Sender);
     nevr_self_check::SetLogSink(&Logger);
-    nevr_self_check::SetBuild("4.0.0-rc.1+abc");
+    nevr_self_check::SetBuild("5.0.0");
   }
   static std::vector<nlohmann::json> AllSent() {
     std::vector<nlohmann::json> out;
@@ -184,19 +184,10 @@ TEST_F(SelfCheck, ReportBeforeLoginIsLoggedNowAndSentAfterLogin) {
   EXPECT_EQ(results[0]["pass"], false);
   EXPECT_EQ(results[0]["expected"], "PartyUpdateSuccess");
   EXPECT_EQ(results[0]["observed"], "PartyUpdateFailure");
-  EXPECT_EQ(results[0]["build"], "4.0.0-rc.1+abc");
+  EXPECT_EQ(results[0]["build"], "5.0.0");
   EXPECT_EQ(results[0]["userid"], "OVR-ORG-42");
   EXPECT_EQ(results[0]["seq"], 1);
   EXPECT_EQ(DecodeNakamaStyle(g_sent.frames[0]).account, 42u);
-}
-
-TEST_F(SelfCheck, OnlyTheLoginConnectionOfAClientBuildWithTheUnitOnAsksForDebug) {
-  EXPECT_TRUE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/false));
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(0, false)) << "the config connection";
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(2, false)) << "the matchmaker connection";
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, /*isServer=*/true)) << "a dedicated game server";
-  nevr_self_check::SetEnabled(false);
-  EXPECT_FALSE(nevr_self_check::WantsRemoteDebug(1, false)) << "the unit is off";
 }
 
 TEST_F(SelfCheck, DisabledUnitRecordsNothing) {

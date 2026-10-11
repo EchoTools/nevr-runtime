@@ -47,7 +47,7 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal && !f.selfCheck;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -504,25 +504,20 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
-// Self-checks (#451) are off unless the file or the build's defaults ask, and need the login.
-void SelfCheckNeedsLoginAndIsOffByDefault() {
-  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})";
-  LoadResult r = Load(Full(), all);
-  CHECK(r.config.requested.selfCheck && r.config.effective.selfCheck);
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSelfCheck));
-  CHECK(EventsContain(r, "feature=self_check requested=on effective=on"));
-
-  r = Load(Full(), R"({"features":{"self_check":true}})");
-  CHECK(r.config.requested.selfCheck && !r.config.effective.selfCheck);
-  CHECK(EventsContain(r, "feature=self_check forced off reason=login_not_enabled"));
-
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
-  CHECK(!r.config.requested.selfCheck && !r.config.effective.selfCheck);
-  CHECK(EventsContain(r, "feature=self_check requested=off effective=off"));
-  for (const char* text : {R"({"features":{"self_check":"true"}})", R"({"features":{"self_check":1}})", R"({"self_check":true})"}) {
-    r = Load(Full(), text);
-    CHECK(!r.config.effective.selfCheck);
-  }
+// The Quest `self_check` feature is gone (#451: self-checks are on in every build). A file that still names it is
+// not an error: it is told the feature is retired, by name (the name is one of ours, so nothing a file supplies
+// reaches the log), nothing else about it counts as an unknown feature, and startup carries on.
+void ARetiredFeatureNamedInAFileIsIgnoredByName() {
+  LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
+  CHECK(EventsContain(r, "feature=self_check retired ignored"));
+  CHECK(!EventsContain(r, "unknown feature #"));
+  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
+  CHECK(!AllOff(r.config.effective));
+  // an unrelated unknown name is still only counted, never named
+  r = Load(Full(), R"({"features":{"made_up_name":true}})");
+  CHECK(EventsContain(r, "unknown feature #1 ignored"));
+  CHECK(!EventsContain(r, "made_up_name"));
+  CHECK(!EventsContain(r, "retired"));
 }
 
 int main() {
@@ -537,7 +532,7 @@ int main() {
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
-  SelfCheckNeedsLoginAndIsOffByDefault();
+  ARetiredFeatureNamedInAFileIsIgnoredByName();
   SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();

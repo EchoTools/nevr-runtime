@@ -10,7 +10,7 @@
 //
 // What a result looks like (nlohmann::json, one string):
 //   {"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":"<platform prefix>-<id>","check":"<name>",
-//    "pass":true,"expected":"...","observed":"...","seq":3,"build":"4.0.0-rc.1+<commit>"}
+//    "pass":true,"expected":"...","observed":"...","seq":3,"build":"5.0.0"}
 // The game service keeps an unknown `message` as a generic remote log and journals it per user
 // (server/evr_remotelogset.go, evr/login_remotelogset_messages.go); none of the names its filter drops.
 //
@@ -73,12 +73,16 @@ struct LogRecord {
 using Sender = bool (*)(const std::string& frame);
 using LogSink = void (*)(const LogRecord& record);
 
-// Off by default: a normal build registers nothing and sends nothing.
+// On in every build (the bridge turns it on when it is installed): a check that reports its result is plain
+// instrumentation, compact and capped, and nothing in a build may behave differently because of how it was
+// stamped. Whether a player's game sends the FULL remote logs is the game service's decision (its
+// profile.EnableAllRemoteLogs and serviceSettings.EnableSessionDebug); the runtime adds no query to the
+// connection for it. The flag stays so a test (and a build that never installs the bridge) has an off state.
 void SetEnabled(bool enabled);
 bool Enabled();
 void SetSender(Sender sender);
 void SetLogSink(LogSink sink);
-// The build string every result carries (version with the release-candidate label and commit).
+// The build string every result carries: the build's stamped version, which names the commit.
 void SetBuild(std::string_view build);
 // Set at LoginSuccess with the user the service named; false when the login session ends. Nothing is sent
 // while this is false (the service drops remote logs from a session that has not logged in).
@@ -88,10 +92,6 @@ CheckId Register(const CheckSpec& spec);
 void Report(CheckId id, std::string_view observed, bool pass);
 // Runs the probes, then sends what is queued (if logged in and a sender is set), kMaxStringsPerFrame at a time.
 void Flush();
-
-// Whether a connection's upgrade should ask the game service for every remote log category (`debug=true`):
-// the login connection (index 1) of a client build with the unit on, never a dedicated game server.
-inline bool WantsRemoteDebug(int connIdx, bool isServer) { return connIdx == 1 && !isServer && Enabled(); }
 
 // Test seam: forgets every registration, the queue and the counters; leaves nothing set.
 void ResetForTest();
