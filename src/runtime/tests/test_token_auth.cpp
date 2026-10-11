@@ -19,6 +19,7 @@
 #include "core/bounded_retry.h"
 #include "core/signin_dialog_lifecycle.h"
 #include "core/signin_dialog_text.h"
+#include "core/system_info.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
@@ -1365,6 +1366,12 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   auth.refresh_token_expiry = 2100000000U;
   auth.user_id = "account-17";
   auth.username = "cached-player";
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+    EXPECT_FALSE(std::filesystem::exists(location.credentialsPath));
+    EXPECT_EQ(Read(yamlPath), yamlContents);
+    return;
+  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
 
   nlohmann::json expected = {{"refresh_token", "refresh-token-v1"},
@@ -1393,6 +1400,26 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   EXPECT_EQ(Read(yamlPath), yamlContents);
 }
 
+TEST_F(CredentialsDirFixture, WineRefusesCacheWriteBeforeCreatingFile) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  CachedAuthToken auth;
+  auth.refresh_token = "protected-refresh-token";
+  auth.refresh_token_expiry = 2100000000U;
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  HANDLE changes = FindFirstChangeNotificationA(path.parent_path().string().c_str(), FALSE,
+      FILE_NOTIFY_CHANGE_FILE_NAME);
+  ASSERT_NE(changes, INVALID_HANDLE_VALUE);
+  EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_EQ(WaitForSingleObject(changes, 50), WAIT_TIMEOUT);
+  FindCloseChangeNotification(changes);
+  EXPECT_FALSE(std::filesystem::exists(path));
+
+  Write(path, "existing-cache-content");
+  EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_EQ(Read(path), "existing-cache-content");
+}
+
 TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
   const auto nearCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
   const auto fartherYaml = root_ / "_local" / "config.yaml";
@@ -1407,6 +1434,12 @@ TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
   CachedAuthToken auth;
   auth.refresh_token = "rotated-near";
   auth.refresh_token_expiry = 2100000000U;
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+    EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near-existing");
+    EXPECT_EQ(Read(fartherYaml), fartherContents);
+    return;
+  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "rotated-near");
   EXPECT_EQ(Read(fartherYaml), fartherContents);
@@ -1437,6 +1470,11 @@ TEST_F(CredentialsDirFixture, FirstYamlDirectoryInSuffixOrderWinsWhenNoCredentia
   CachedAuthToken auth;
   auth.refresh_token = "near-yaml-refresh";
   auth.refresh_token_expiry = 2100000000U;
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+    EXPECT_FALSE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
+    return;
+  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_TRUE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
   EXPECT_FALSE(std::filesystem::exists(fartherYaml.parent_path() / ".credentials.json"));
@@ -1470,6 +1508,12 @@ TEST_F(CredentialsDirFixture, MalformedSelectedCredentialsDoNotFallThroughAndSav
   CachedAuthToken auth;
   auth.refresh_token = "repaired-selected";
   auth.refresh_token_expiry = 2100000000U;
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+    EXPECT_EQ(Read(selected), "{ malformed");
+    EXPECT_EQ(Read(farther), fartherContents);
+    return;
+  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "repaired-selected");
   EXPECT_EQ(Read(farther), fartherContents);
@@ -1483,6 +1527,11 @@ TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
   CachedAuthToken auth;
   auth.refresh_token = "fallback-refresh";
   auth.refresh_token_expiry = 2100000000U;
+  if (nevr_system_info::Get().IsWine()) {
+    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
+    EXPECT_FALSE(std::filesystem::exists(fallback));
+    return;
+  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
   EXPECT_TRUE(std::filesystem::exists(fallback));
