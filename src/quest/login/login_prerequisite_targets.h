@@ -78,6 +78,23 @@ inline constexpr PinnedSlot kGetUserProof{"ovr_User_GetUserProof", RelocKind::kJ
 // against every call site in the real library (tools/pinned_ovr_sites.txt).
 inline constexpr std::uint64_t kOrgRequestLoginReturns[] = {0x1ec9a0, 0x1ecf84, 0x2069c0};
 
+// The same for CNSOVRSocial's nine call sites (SUserList::Add 0x1f22f0, JoinedCB 0x1f4970, SyncRoom 0x1f876c and
+// 0x1f8b94, GotRemoteOrgIdCB 0x1f902c, AddInvitableUser 0x1f998c, GotInvitableUserOrgIdCB 0x1fa0f8, GotFriendOrgIdCB
+// 0x1fcb8c, GotRecentlyMetUserOrgIdCB 0x1fd29c; each +4). Only these are refused once the social facade is selected;
+// a caller this build does not know goes to the SDK. Checked against tools/pinned_ovr_sites.txt like the login's.
+inline constexpr std::uint64_t kOrgRequestSocialReturns[] = {0x1f22f4, 0x1f4974, 0x1f8770, 0x1f8b98, 0x1f9030,
+                                                             0x1f9990, 0x1fa0fc, 0x1fcb90, 0x1fd2a0};
+
+inline bool IsSocialOrgRequestCaller(const void* caller, std::uintptr_t base) noexcept {
+  if (caller == nullptr || base == 0) return false;
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(caller);
+  if (address < base) return false;
+  for (const std::uint64_t site : kOrgRequestSocialReturns) {
+    if (address - base == site) return true;
+  }
+  return false;
+}
+
 inline bool IsLoginOrgRequestCaller(const void* caller, std::uintptr_t base) noexcept {
   if (caller == nullptr || base == 0) return false;
   const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(caller);

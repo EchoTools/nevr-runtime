@@ -131,14 +131,20 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 }  // namespace
 
 // ovr_User_GetOrgScopedID has twelve call sites: three are the login's, nine are CNSOVRSocial's (friends, room
-// members, invitable users) and ask about other users. Only the login's are answered locally; every other caller,
-// and any caller this build does not know, goes to the SDK exactly as it did before local answers.
+// members, invitable users) and ask about other users. Only the login's are answered locally (and only while
+// local answers are on). One of the nine Social sites, while the facade is selected (the game's Social() is not
+// CNSOVRSocial, so nothing should run these), is refused: no Meta call and no data (local::Refuse); that does not
+// depend on local answers being on. Every other caller, the login's own sites with local answers off, and any
+// caller this build does not know, goes to the SDK exactly as it did before local answers.
 std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* caller, std::uint64_t user) noexcept {
-  if (local::Enabled() &&
-      T::IsLoginOrgRequestCaller(caller, g_pnsovr_base.load(std::memory_order_relaxed))) {
+  const std::uintptr_t base = g_pnsovr_base.load(std::memory_order_relaxed);
+  if (local::Enabled() && T::IsLoginOrgRequestCaller(caller, base)) {
     const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
     NoteRequest(Prerequisite::OrgScopedId, id);
     return id;
+  }
+  if (local::SocialSelected() && T::IsSocialOrgRequestCaller(caller, base)) {
+    return local::Refuse(reinterpret_cast<std::uintptr_t>(caller) - base);
   }
   const std::uint64_t request = original(user);
   local::NoteSdkRequestId(request);
