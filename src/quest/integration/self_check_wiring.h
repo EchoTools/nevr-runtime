@@ -1,6 +1,6 @@
 #pragma once
 // The Quest side of the self-checks (runtime/compat/self_check.h), kept apart from production_steps.cpp so a host
-// test can drive it: the `self_check` feature's effect on the bridge's config and on the unit.
+// test can drive it: what the bridge's config and the unit get when the bridge starts, and the matchmaking check's probe.
 
 #include "quest/net/frame_tap.h"
 #include "runtime/compat/self_check.h"

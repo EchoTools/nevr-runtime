@@ -74,6 +74,13 @@ class SelfCheckWiringGateTest(unittest.TestCase):
             result = run(root)
             self.assertEqual(result.returncode, 1, text)
 
+    def test_a_later_disable_fails_outside_tests_only(self):
+        root = self.tree()
+        self.append(root, "src/quest/integration/self_check_wiring.cpp", "\nvoid X() { nevr_self_check::SetEnabled(false); }\n")
+        result = run(root)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("SetEnabled(false)", result.stderr)
+
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp", "ApplySelfCheck(&config.tap,", "(void)(&config.tap,")

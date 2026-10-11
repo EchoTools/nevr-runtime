@@ -82,7 +82,7 @@ void SetEnabled(bool enabled);
 bool Enabled();
 void SetSender(Sender sender);
 void SetLogSink(LogSink sink);
-// The build string every result carries (version with the release-candidate label and commit).
+// The build string every result carries: the build's stamped version, which names the commit.
 void SetBuild(std::string_view build);
 // Set at LoginSuccess with the user the service named; false when the login session ends. Nothing is sent
 // while this is false (the service drops remote logs from a session that has not logged in).

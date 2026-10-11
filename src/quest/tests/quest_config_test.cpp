@@ -504,6 +504,22 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
+// The Quest `self_check` feature is gone (#451: self-checks are on in every build). A file that still names it is
+// not an error: it is told the feature is retired, by name (the name is one of ours, so nothing a file supplies
+// reaches the log), nothing else about it counts as an unknown feature, and startup carries on.
+void ARetiredFeatureNamedInAFileIsIgnoredByName() {
+  LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
+  CHECK(EventsContain(r, "feature=self_check retired ignored"));
+  CHECK(!EventsContain(r, "unknown feature #"));
+  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
+  CHECK(!AllOff(r.config.effective));
+  // an unrelated unknown name is still only counted, never named
+  r = Load(Full(), R"({"features":{"made_up_name":true}})");
+  CHECK(EventsContain(r, "unknown feature #1 ignored"));
+  CHECK(!EventsContain(r, "made_up_name"));
+  CHECK(!EventsContain(r, "retired"));
+}
+
 int main() {
   DefaultsWithoutFile();
   NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
@@ -516,6 +532,7 @@ int main() {
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
+  ARetiredFeatureNamedInAFileIsIgnoredByName();
   SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();

@@ -49,8 +49,13 @@ FORBIDDEN_TOKENS = [
     "bool selfCheck",
 ]
 FORBIDDEN_REGEX = [
-    (re.compile(r"\bdebug=true\b"), "a `debug=true` query literal"),
-    (re.compile(r"\{\s*\"debug\"\s*,"), "a `debug` query parameter being appended"),
+    (re.compile(r"\bdebug=true\b"), "a `debug=true` query literal", False,
+     "the game service decides who sends the full remote logs"),
+    (re.compile(r"\{\s*\"debug\"\s*,"), "a `debug` query parameter being appended", False,
+     "the game service decides who sends the full remote logs"),
+    # the unit stays on once the bridge turned it on; a test may switch it off
+    (re.compile(r"nevr_self_check::SetEnabled\(\s*false\s*\)"), "a later SetEnabled(false)", True,
+     "self-checks are on in every build"),
 ]
 SCAN_SUFFIXES = {".cpp", ".h", ".cmake", ".txt", ".in"}
 SCAN_ROOTS = ["src", "cmake", "CMakeLists.txt", "justfile"]
@@ -93,10 +98,11 @@ def main() -> int:
                 print(f"verify: FAIL — self-check wiring: {rel} names `{token}`: self-checks are on in every build "
                       "and the runtime adds no debug query by build type (#451)", file=sys.stderr)
                 failed += 1
-        for regex, what in FORBIDDEN_REGEX:
+        for regex, what, tests_may, reason in FORBIDDEN_REGEX:
+            if tests_may and "/tests/" in "/" + rel:
+                continue
             if regex.search(text):
-                print(f"verify: FAIL — self-check wiring: {rel} has {what}: the game service decides who sends "
-                      "the full remote logs (#451)", file=sys.stderr)
+                print(f"verify: FAIL — self-check wiring: {rel} has {what}: {reason} (#451)", file=sys.stderr)
                 failed += 1
     if scanned == 0:
         print("verify: FAIL — self-check wiring: nothing was scanned", file=sys.stderr)

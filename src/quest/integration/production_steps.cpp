@@ -165,7 +165,7 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
-    nevr_self_check::Flush();  // probes and queued results, every poll (a no-op unless the feature is on)
+    nevr_self_check::Flush();  // probes and queued results, every poll (cheap: nothing is sent before LoginSuccess)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
   }
