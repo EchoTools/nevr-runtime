@@ -35,6 +35,7 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/self_check.h"
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -163,6 +164,7 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
+    nevr_self_check::Flush();  // probes and queued results, every poll (a no-op unless the feature is on)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
   }
@@ -249,11 +251,39 @@ ActionResult LoginAction() noexcept {
   }
 }
 
+// Self-check "matchmaking_reload_redirect" (#451, docs/engine/remote-log.md). The matchmaking redirect is a
+// GOT hook installed once per process (post_load settles on the first install). A second mapping of
+// libpnsradmatchmaking.so would not be covered, so the check compares the images the game's dlopen returned
+// (post_load.h MatchmakingImages) with the installs. It is read on the self-check flush, never on the dlopen
+// path, and it speaks once the image count has held steady for a flush so an install that is still running in
+// the same dlopen call is not mistaken for a missing one.
+std::atomic<std::uint64_t> g_matchmakingInstalls{0};
+std::atomic<std::uint64_t> g_matchmakingImagesSeen{0};
+std::atomic<std::uint64_t> g_matchmakingImagesReported{0};
+
+bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
+  const std::uint64_t images = nevr_quest::integration::MatchmakingImages();
+  if (g_matchmakingImagesSeen.exchange(images) != images) return false;  // still changing: look again next flush
+  if (g_matchmakingImagesReported.exchange(images) == images) return false;
+  const std::uint64_t installs = g_matchmakingInstalls.load(std::memory_order_acquire);
+  out->observed = "images=" + std::to_string(images) + " installs=" + std::to_string(installs);
+  out->pass = installs >= images;
+  return true;
+}
+
+void SelfCheckLog(const nevr_self_check::LogRecord& record) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "self_check",
+                      {{"check", record.name.c_str()}, {"pass", record.pass ? 1 : 0},
+                       {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
+}
+
 ActionResult MatchmakingAction() noexcept {
   try {
     const sentinel::GotStatus status = nevr_quest::redirect::InstallMatchmakingRedirect();
     switch (status) {
-      case sentinel::GotStatus::kOk: return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
+      case sentinel::GotStatus::kOk:
+        g_matchmakingInstalls.fetch_add(1, std::memory_order_release);
+        return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
       case sentinel::GotStatus::kAlreadyInstalled:
         return Staged("matchmaking_redirect_installed", {Settle::kDone, "already_installed"});
       case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
@@ -370,6 +400,24 @@ class ProductionSteps final : public Steps {
     quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
+    if (cfg.effective.selfCheck) {
+      // Self-checks (#451): ask the game service for every remote log category, and report each run-card
+      // check's result on the login connection as the user the service names at LoginSuccess.
+      config.remoteDebugQuery = true;
+      config.tap.onLoginUser = [](std::uint64_t platform, std::uint64_t account) {
+        nevr_evr_codec::UserId user;
+        user.platformCode = platform;
+        user.accountId = account;
+        nevr_self_check::SetLoggedIn(true, user);
+      };
+      nevr_self_check::SetEnabled(true);
+      nevr_self_check::SetSender(&SendSocialFrame);
+      nevr_self_check::SetLogSink(&SelfCheckLog);
+      nevr_self_check::SetBuild(NEVR_QUEST_PROJECT_VERSION);
+      nevr_self_check::Register({"matchmaking_reload_redirect",
+                                 "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
+                                 &MatchmakingReloadProbe});
+    }
     config.connector = rt.connector.get();
     config.log = RouterLog();
     config.loginGate = [] { return static_cast<nevr_session_router::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };

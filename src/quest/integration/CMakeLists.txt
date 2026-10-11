@@ -35,6 +35,7 @@ target_link_libraries(nevr_quest_integration PUBLIC
   nevr_quest_redirect
   nevr_quest_login
   nevr_quest_social
+  nevr_quest_self_check
   nevr_quest_net
   nevr_quest_token_auth
   nevr_quest_hwdump

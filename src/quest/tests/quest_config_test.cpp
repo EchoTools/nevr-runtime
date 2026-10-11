@@ -47,7 +47,7 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal && !f.selfCheck;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -504,6 +504,27 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
+// Self-checks (#451) are off unless the file or the build's defaults ask, and need the login.
+void SelfCheckNeedsLoginAndIsOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.selfCheck && r.config.effective.selfCheck);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSelfCheck));
+  CHECK(EventsContain(r, "feature=self_check requested=on effective=on"));
+
+  r = Load(Full(), R"({"features":{"self_check":true}})");
+  CHECK(r.config.requested.selfCheck && !r.config.effective.selfCheck);
+  CHECK(EventsContain(r, "feature=self_check forced off reason=login_not_enabled"));
+
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
+  CHECK(!r.config.requested.selfCheck && !r.config.effective.selfCheck);
+  CHECK(EventsContain(r, "feature=self_check requested=off effective=off"));
+  for (const char* text : {R"({"features":{"self_check":"true"}})", R"({"features":{"self_check":1}})", R"({"self_check":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.selfCheck);
+  }
+}
+
 int main() {
   DefaultsWithoutFile();
   NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
@@ -516,6 +537,7 @@ int main() {
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
+  SelfCheckNeedsLoginAndIsOffByDefault();
   SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();

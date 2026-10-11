@@ -200,7 +200,7 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
 # the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
 # This never tags, uploads or publishes.
-package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social,self_check":
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{ n }}" in ''|*[!0-9]*|0) echo "package-rc: N must be a positive integer, got '{{ n }}'" >&2; exit 1;; esac

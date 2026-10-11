@@ -439,6 +439,27 @@ void TestPostLoadRetriesUntilSettledThenStops() {
   QCHECK(stats.loginSettled == 1 && stats.matchmakingSettled == 1);
 }
 
+// Self-check "matchmaking_reload_redirect" (#451): the number of distinct libpnsradmatchmaking images is what the
+// once-installed redirect is compared with.
+void TestPostLoadCountsEachDistinctMatchmakingImage() {
+  int imageA = 0;
+  int imageB = 0;
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("libpnsovr.so", &imageA);  // another library: not counted
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // the same handle again: a refcount, not a new image
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageB);  // closed and mapped again elsewhere
+  QCHECK(MatchmakingImages() == 2);
+  AfterDlopen("/x/libpnsradmatchmaking.so", nullptr);  // a failed dlopen is not an image
+  QCHECK(MatchmakingImages() == 2);
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+}
+
 void TestPostLoadGiveUpEndsOnlyThatAction() {
   int dummy = 0;
   ResetPostLoad(&ThrowingLogin, &FakeMatchmaking, Settle::kGiveUp, Settle::kRetryLater);
@@ -687,6 +708,20 @@ void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
   QCHECK(accounts.empty());
 }
 
+void TestFrameTapNamesThePlatformAndTheAccountOfTheLogin() {
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> users;
+  FrameTapSinks sinks;
+  sinks.onLoginUser = [&](std::uint64_t platform, std::uint64_t account) { users.emplace_back(platform, account); };
+  FrameTap tap(sinks);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(5, 0x1122334455667788ULL);
+  tap.GameToServer(success);
+  QCHECK(users.empty());
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, "abc") + success);
+  QCHECK(users.size() == 1 && users[0].first == 5 && users[0].second == 0x1122334455667788ULL);
+  tap.ServerToGame("garbage");
+  QCHECK(users.size() == 1);
+}
+
 void TestFrameTapContainsAThrowingConsumer() {
   int logins = 0;
   FrameTapSinks sinks;
@@ -794,6 +829,7 @@ int main() {
   TestConfigFailureLeavesAllFeaturesOff();
   TestPostLoadIgnoresANullHandle();
   TestPostLoadRetriesUntilSettledThenStops();
+  TestPostLoadCountsEachDistinctMatchmakingImage();
   TestPostLoadGiveUpEndsOnlyThatAction();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
@@ -804,6 +840,7 @@ int main() {
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
+  TestFrameTapNamesThePlatformAndTheAccountOfTheLogin();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "integration_sequence_test: %d check(s) failed\n", quest_test::Failures());

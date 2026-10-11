@@ -31,6 +31,7 @@
 #include "runtime/patch/provider_identity.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
+#include "runtime/compat/self_check.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
@@ -188,6 +189,19 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
+
+/* Self-check "matchmaking_reload_patch" (#18, docs/engine/remote-log.md): the game loads
+ * pnsradmatchmaking.dll once per lobby and every load must have its host default re-applied. The loader
+ * callback only counts (it runs under the loader lock); the probe reads the counts on the frame tick. */
+static nevr_matchmaker_host_patch::ReloadLedger s_mmLedger;
+
+static bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
+    return s_mmLedger.Take(&out->observed, &out->pass);
+}
+
+[[maybe_unused]] static const nevr_self_check::CheckId s_mmReloadCheck = nevr_self_check::Register(
+    {"matchmaking_reload_patch", "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
+     &MatchmakingReloadProbe});
 static uintptr_t s_pnsradModuleBase = 0;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
@@ -396,6 +410,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             reason, name->Buffer, name->Length / sizeof(WCHAR), image, port,
             [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
         if (result) ReportMatchmakingHostResult(*result, image, port, err);
+        s_mmLedger.NoteLoad(result);
     }
 
     if (s_pnsradPatched) return;

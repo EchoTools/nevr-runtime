@@ -41,6 +41,14 @@ add_library(nevr_quest_evr_codec STATIC
 target_include_directories(nevr_quest_evr_codec PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_compile_options(nevr_quest_evr_codec PRIVATE -Wall -Wextra -Werror)
 
+# The self-check unit (runtime/compat/self_check.cpp): the registry and the remote log frame a run-card check's
+# result goes out in. No Windows headers, no sockets; the same source the Windows runtime compiles.
+add_library(nevr_quest_self_check STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/self_check.cpp")
+target_include_directories(nevr_quest_self_check PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_self_check PUBLIC nevr_quest_evr_codec nlohmann_json::nlohmann_json)
+target_compile_options(nevr_quest_self_check PRIVATE -Wall -Wextra -Werror)
+
 # Android-linkable codec test; the same file runs on the host in `just test-quest-shared`.
 add_executable(evr_codec_test tests/evr_codec_test.cpp)
 target_link_libraries(evr_codec_test PRIVATE nevr_quest_evr_codec nevr_quest_login_profile nlohmann_json::nlohmann_json)

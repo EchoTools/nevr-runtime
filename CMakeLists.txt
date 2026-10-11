@@ -38,6 +38,15 @@ set_project_version_from_git()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_rc_label.cmake")
 nevr_apply_rc_label()
 
+# A release candidate reports its own run-card checks to the game service (src/runtime/compat/self_check.h):
+# it connects with debug=true so the service asks the game for every remote log category, and each check
+# sends its result as one remote log string. Any other build leaves the unit off.
+option(NEVR_SELF_CHECKS "Report run-card checks as remote logs (on for a release candidate)" OFF)
+if(NEVR_SELF_CHECKS OR NOT NEVR_RC_LABEL STREQUAL "")
+  add_compile_definitions(NEVR_SELF_CHECKS=1)
+  message(STATUS "Self-checks: on")
+endif()
+
 # Define the version and git hash as compile definitions
 add_compile_definitions(
   NEVR_PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"

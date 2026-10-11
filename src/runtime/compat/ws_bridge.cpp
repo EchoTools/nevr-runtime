@@ -39,6 +39,7 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/serverdb_uri.h"
+#include "runtime/compat/self_check.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -288,6 +289,7 @@ static bool ForgetLoginSessionLocked(const ix::WebSocket* remote) {
   g_loginRemoteWs.reset();
   g_loginGameWs = nullptr;
   g_connectionCount.store(1);
+  nevr_self_check::SetLoggedIn(false);  // no result is sent until the next LoginSuccess
   return true;
 }
 
@@ -572,6 +574,13 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       }
     }
     if (fromServer && sym == nevr_evr_codec::kSymLoginSuccess) {
+      // Self-checks may send from here on, as the user the service named (payload: session UUID, platform, account).
+      if (len >= nevr_evr_codec::kUuidSize + 16) {
+        nevr_evr_codec::UserId user;
+        user.platformCode = nevr_evr_codec::ReadLE64(payload + nevr_evr_codec::kUuidSize);
+        user.accountId = nevr_evr_codec::ReadLE64(payload + nevr_evr_codec::kUuidSize + 8);
+        nevr_self_check::SetLoggedIn(true, user);
+      }
       // A new session (first login, reconnect or another account): the friend requests that were pending
       // belonged to the last one. The server replays this player's after the subscribe that follows.
       const size_t cleared = nevr_social_roster::RecentlyMet().ClearRequests();
@@ -749,6 +758,24 @@ bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
 
 // Registers SendFrameToServer as the party requests' sender when the bridge is loaded.
 static const bool g_partySenderRegistered = (nevr_social_party::SetSender(&SendFrameToServer), true);
+
+// Self-checks (compat/self_check.h): a result goes out on the login connection through SendFrameToServer once
+// LoginSuccess has been seen, and into the nevr log at the moment it happens.
+static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.SELFCHECK] check=%s pass=%d expected=\"%s\" observed=\"%s\"", record.name.c_str(),
+      record.pass ? 1 : 0, record.expected.c_str(), record.observed.c_str());
+}
+static const bool g_selfCheckWired = []() {
+  nevr_self_check::SetSender(&SendFrameToServer);
+  nevr_self_check::SetLogSink(&LogSelfCheck);
+#ifdef NEVR_PROJECT_VERSION
+  nevr_self_check::SetBuild(NEVR_PROJECT_VERSION);
+#endif
+#ifdef NEVR_SELF_CHECKS
+  nevr_self_check::SetEnabled(true);
+#endif
+  return true;
+}();
 
 // Platform codes, the bridge's login platform, the remote Bearer choice and the /ws path test live in
 // EvrCodec (compat/evr_codec.h), shared with the Quest target.
@@ -1028,6 +1055,13 @@ void InstallWebSocketBridge() {
                     "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
                     connIdx, ConnLabel(connIdx));
               }
+            }
+            // Self-checks (release candidate builds): the login connection asks the game service for every
+            // remote log category (server/session_ws.go reads "debug"), so each category reaches the game
+            // service and the runtime's own results ride the same set. Never on a dedicated server.
+            if (connIdx == 1 && !g_isServer && nevr_self_check::Enabled()) {
+              std::optional<std::string> withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(remoteUrl);
+              if (withDebug) remoteUrl = std::move(*withDebug);
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
