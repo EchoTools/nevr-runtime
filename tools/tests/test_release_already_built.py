@@ -80,9 +80,11 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertNotIn("false", result.stdout)
 
     def test_a_tag_that_is_not_vx_y_z_is_an_error_and_gh_is_not_called(self):
-        result = self.run_script(tag="v5.0.0-beta.1", FAKE_ASSETS=self.names())
-        self.assertEqual(result.returncode, 1)
-        self.assertFalse((self.tmp / "log").exists())
+        for tag in ("v5.0.0-beta.1", "v4.0.0-rc.1", "v05.0.0", "v5.00.0", "v5.0.0+x", "v5.0", "5.0.0", "v5.0.0.1"):
+            with self.subTest(tag=tag):
+                result = self.run_script(tag=tag, FAKE_ASSETS=self.names())
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse((self.tmp / "log").exists())
 
     def test_the_prerelease_flag_is_never_asked_for(self):
         self.run_script(FAKE_ASSETS=self.names())

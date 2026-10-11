@@ -119,7 +119,7 @@ function(set_project_version_from_git)
   # "All regular expression-related commands, including e.g. if(MATCHES), save subgroup matches in the
   # variables CMAKE_MATCH_<n>"); a string that does not match is an error here, never a half-parsed
   # version.
-  if(NOT GIT_PROJECT_VERSION_STRING MATCHES "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)-([0-9]+)-g([0-9a-f]+)$")
+  if(NOT GIT_PROJECT_VERSION_STRING MATCHES "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-([0-9]+)-g([0-9a-f]+)$")
     message(
       FATAL_ERROR
         "set_project_version_from_git: cannot parse `git describe` output '${GIT_PROJECT_VERSION_STRING}' "

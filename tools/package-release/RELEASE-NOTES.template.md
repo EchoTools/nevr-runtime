@@ -3,7 +3,7 @@
 Commit `@COMMIT@`.
 
 @IF_APK@Two artifacts, built the same way from the same commit:
-@IF_NOAPK@One artifact: the Windows zip. **No Quest APK in this release** (the Quest build is not part of
+@IF_NOAPK@Three zips and their checksums. **No Quest APK in this release** (the Quest build is not part of
 @IF_NOAPK@the public set).
 
 | file | what |
@@ -11,7 +11,9 @@ Commit `@COMMIT@`.
 | `@ZIP@` | Windows: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
-@IF_NOAPK@| `SHA256SUMS` | SHA-256 of the file above |
+@IF_NOAPK@| `nevr-runtime-v@VERSION@.zip` | `BugSplat64.dll`, `echovr_server.exe`, `README.md`, `INSTALL.md` |
+@IF_NOAPK@| `nevr-runtime-v@VERSION@-lite.zip` | the same four files, both PE files stripped |
+@IF_NOAPK@| `SHA256SUMS` | SHA-256 of `@ZIP@` |
 
 @IF_APK@Neither build needs a config file. The service endpoints and the public client keys are built in; the
 @IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK turns its login and social features on

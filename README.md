@@ -112,7 +112,8 @@ yet. On PC:
    (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, from `just package-dev`) privately; install it with
    `adb install -r`. It is signed with the same key as earlier test builds, so it installs over them and
    keeps your data.
-5. The Windows DLL is **unsigned**; Windows Defender or SmartScreen may warn about it.
+5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
+   (PowerShell) says whether a file is signed.
 
 The community beta guide for a manual install is [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 The Quest sign-in flow is in [`docs/quest/SIGN-IN.md`](docs/quest/SIGN-IN.md).

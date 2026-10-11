@@ -12,7 +12,7 @@
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
 repo=${2:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
-if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+if [[ ! "$tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
   echo "release_already_built: tag '$tag' is not vX.Y.Z" >&2
   exit 1
 fi

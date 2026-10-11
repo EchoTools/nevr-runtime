@@ -43,8 +43,9 @@ REQUIRED_FEATURES = ("redirect", "bridge", "login", "social")
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
-RELEASE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
-DEV_VERSION = re.compile(r"^\d+\.\d+\.\d+-dev\.\d+\+[0-9a-f]{7,40}$")
+_NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
+RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
+DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
 
 
 class GateFailure(Exception):
@@ -98,7 +99,7 @@ def package_base(version: str, commit: str) -> str:
     nevr-runtime-v<X.Y.Z-dev.N>-<sha7> (the build metadata dropped, the commit kept)."""
     if RELEASE_VERSION.match(version):
         return f"nevr-runtime-v{version}"
-    match = re.match(r"^(\d+\.\d+\.\d+-dev\.\d+)\+", version)
+    match = re.match(rf"^({_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM})\+", version)
     if not match:
         raise GateFailure(f"version '{version}' is neither X.Y.Z nor X.Y.Z-dev.N+sha")
     return f"nevr-runtime-v{match.group(1)}-{commit[:7]}"
@@ -224,9 +225,9 @@ def write_tree(args, out: Path, version: str) -> Path:
 # which state this copy is in, so a signer replacing the signed entries never has to edit it.
 SIGNING_TEXT = """Signing
 
-This package is built by CI from a tag; the build itself signs nothing. A separate signing step may sign
-BugSplat64.dll, install.ps1 and uninstall.ps1 afterwards and replace this zip under the same name. This
-text is the same either way: it says how to check, not which state your copy is in.
+The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1 and
+uninstall.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
+says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
   BugSplat64.dll              an Authenticode signature

@@ -202,11 +202,19 @@ class ReleaseVersionTest(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("no v<X>.<Y>.<Z> tag is reachable", out)
 
-    def test_a_tag_that_does_not_parse_fails_loudly_not_with_a_half_version(self):
-        self.tag("vnext")
-        rc, version, out = self.configure()
-        self.assertNotEqual(rc, 0)
-        self.assertIsNone(version)
+    def test_a_tag_that_is_not_plain_semver_fails_in_the_parser_not_with_a_half_version(self):
+        """`vnext` is filtered out by --match "v[0-9]*" and exercises the no-tag branch (above). These pass
+        the glob, so describe returns them and the PARSE-failure branch is the one that must stop the
+        build: leading zeros and build metadata are not release versions."""
+        for tag in ("v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x"):
+            with self.subTest(tag=tag):
+                git(self.src, "tag", "-a", "-m", tag, tag)
+                rc, version, out = self.configure()
+                self.assertNotEqual(rc, 0, out)
+                self.assertIsNone(version)
+                self.assertIn("cannot parse `git describe` output", out)
+                self.assertIn(tag, out)
+                git(self.src, "tag", "-d", tag)
 
     # --- precedence, with the real comparator --------------------------------------------------------
 

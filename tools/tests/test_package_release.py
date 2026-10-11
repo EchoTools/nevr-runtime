@@ -237,7 +237,7 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("is not the checked-out commit", result.stderr)
 
     def test_the_tree_stage_refuses_a_version_that_is_not_x_y_z(self):
-        for bad in ("v5.0.0", "5.0", "5.0.0-rc.1", "5.0.0-dev.1+abc1234"):
+        for bad in ("v5.0.0", "5.0", "5.0.0-rc.1", "5.0.0-dev.1+abc1234", "05.0.0", "5.00.0", "5.0.00", "5.0.0+x"):
             with self.subTest(version=bad):
                 result = self.run_stage("tree", *self.tree_args(**{"--version": bad}))
                 self.assertEqual(result.returncode, 1)
@@ -289,6 +289,18 @@ class ReleaseStagesTest(PackageFixture):
             self.assertNotRegex(text, r"(?i)\b(pre-?release)\b", f"{name} must not depend on the pre-release flag")
         self.assertEqual(texts["SIGNING.txt"], package_release.SIGNING_TEXT)
         self.assertIn("may sign", texts["SIGNING.txt"])
+        # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
+        self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
+        self.assertIn("Three zips", texts["RELEASE-NOTES.md"])
+        for name in ("nevr-runtime-v5.0.0.zip", "nevr-runtime-v5.0.0-lite.zip"):
+            self.assertIn(name, texts["RELEASE-NOTES.md"])
+
+    def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
+        # README.md is copied into nevr-runtime-vX.Y.Z.zip and -lite.zip, which are attested and never
+        # change: it must be true whether or not the Windows zip has been signed.
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertNotRegex(readme, r"(?i)\bunsigned\b|is not signed")
+        self.assertEqual(words_of_the_old_model(readme), [])
 
     def test_seal_regenerates_sha256sums_from_the_signed_files_and_leaves_the_texts_alone(self):
         tree = self.make_tree()

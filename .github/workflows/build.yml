@@ -14,8 +14,8 @@ name: Build
 # (tools/package_release.py tree), passes it through the signing stub, and seals it (seal): the Windows
 # zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ zips (the .tar.zst
 # archives stay a workflow artifact). No file or text
-# depends on the pre-release flag; the only place the flag is read is the upload's `prerelease:` input,
-# set to the event's own value so an upload can never change it. The whole workflow runs on
+# depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
+# release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run and publishes nothing.
 on:
@@ -119,7 +119,7 @@ jobs:
         TAG: ${{ github.event.release.tag_name }}
       run: |
         set -euo pipefail
-        re='^v([0-9]+\.[0-9]+\.[0-9]+)$'
+        re='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
         echo "ref: type=${GITHUB_REF_TYPE:-} name=${GITHUB_REF_NAME:-} event=${EVENT}"
         version=""
         if [ "$EVENT" = release ]; then
@@ -455,12 +455,12 @@ jobs:
           release-assets/SHA256SUMS
           release-assets/RELEASE-NOTES.md
 
-    # The upload never decides the pre-release flag: the input is the event's own value, so a human's
-    # choice (and a later promotion) is left exactly as it is.
+    # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
+    # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
+    # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
     - name: Upload dist artifacts
       uses: softprops/action-gh-release@v3
       with:
-        prerelease: ${{ github.event.release.prerelease }}
         fail_on_unmatched_files: true
         files: |
           dist/*.zip
@@ -471,7 +471,6 @@ jobs:
     - name: Upload the release files
       uses: softprops/action-gh-release@v3
       with:
-        prerelease: ${{ github.event.release.prerelease }}
         fail_on_unmatched_files: true
         files: |
           release-assets/*.zip

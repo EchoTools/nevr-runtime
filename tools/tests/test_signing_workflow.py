@@ -136,22 +136,24 @@ class WorkflowStructureTest(unittest.TestCase):
         tar_steps = [s for s in steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
         self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
 
-    def test_the_pre_release_flag_is_read_once_by_each_upload_and_nowhere_else(self):
-        """Promotion changes no byte: nothing that builds, packages or seals may see the flag."""
-        text = WORKFLOW.read_text(encoding="utf-8")
+    def test_no_step_reads_or_sets_the_pre_release_flag(self):
+        """Promotion changes no byte and no run: the flag is the human's. Nothing reads the event's value,
+        and the uploads leave the `prerelease` input unset so the action re-sends the release's own flag
+        (read at upload time, so a promotion made while a run is going is kept)."""
         data, _ = load()
-        occurrences = text.count("github.event.release.prerelease")
+        text = WORKFLOW.read_text(encoding="utf-8")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn("event.release.prerelease", code)
+        self.assertNotIn("isPrerelease", code)
+        for name, job in data["jobs"].items():
+            self.assertNotIn("prerelease", steps_text(job).lower(), name)
         steps = data["jobs"]["publish"]["steps"]
         uploads = [s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
+        self.assertEqual(len(uploads), 2)
         for step in uploads:
-            self.assertEqual(step["with"]["prerelease"], "${{ github.event.release.prerelease }}")
+            self.assertNotIn("prerelease", step["with"])
+            self.assertNotIn("draft", step["with"])
             self.assertTrue(step["with"]["fail_on_unmatched_files"])
-        # the two inputs and the header comment that explains them
-        self.assertEqual(sum(1 for line in text.splitlines()
-                             if "github.event.release.prerelease" in line and not line.lstrip().startswith("#")), 2)
-        self.assertGreaterEqual(occurrences, 2)
-        for name in ("guard", "build", "sign", "seal"):
-            self.assertNotIn("prerelease", steps_text(data["jobs"][name]).lower(), name)
 
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -180,6 +182,16 @@ class WorkflowStructureTest(unittest.TestCase):
                                       GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v12.3.45")
         self.assertEqual((rc, out.get("version")), (0, "12.3.45"))
 
+    def test_the_step_logs_the_ref_and_the_version_it_decided(self):
+        """The version step is an Actions-log-only record (artifacts keep 7 days); its lines are asserted."""
+        rc, _, out, _ = self.run_step("build", "release", EVENT="release", TAG="v5.0.0",
+                                      GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v5.0.0")
+        self.assertEqual(rc, 0)
+        self.assertIn("ref: type=tag name=v5.0.0 event=release", out)
+        self.assertIn("release version: '5.0.0'", out)
+        rc, _, out, _ = self.run_step("build", "release", GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
+        self.assertIn("release version: '' (empty: a branch build, which stamps a development version)", out)
+
     def test_a_dispatch_on_a_release_tag_is_a_dry_run_with_the_same_version(self):
         rc, out, _, _ = self.run_step("build", "release", GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v5.0.1")
         self.assertEqual((rc, out.get("version")), (0, "5.0.1"))
@@ -189,7 +201,8 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual((rc, out.get("version")), (0, ""))
 
     def test_a_tag_that_is_not_vx_y_z_fails_with_one_line(self):
-        for tag in ("v5.0", "v5.0.0-beta.1", "v4.0.0-rc.1", "5.0.0", "release-5", "v5.0.0.1", "vx.y.z"):
+        for tag in ("v5.0", "v5.0.0-beta.1", "v4.0.0-rc.1", "5.0.0", "release-5", "v5.0.0.1", "vx.y.z",
+                    "v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x", "v5.0.0-rc.1", "V5.0.0", "v5.0.0 "):
             with self.subTest(tag=tag):
                 rc, out, _, err = self.run_step("build", "release", EVENT="release", TAG=tag,
                                                 GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
