@@ -18,7 +18,7 @@ jobs:
     env:
       NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: recursive
         fetch-depth: 0
@@ -34,7 +34,7 @@ jobs:
         public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
 
     - name: Setup pinned just
-      uses: extractions/setup-just@v4
+      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       with:
         just-version: '1.58.0'
 
@@ -50,7 +50,7 @@ jobs:
     - name: Restore the downloaded NDK
       if: steps.ndk.outputs.present != 'true'
       id: ndk_cache
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ runner.temp }}/android-ndk-r26d
         key: android-ndk-r26d-linux
@@ -85,7 +85,7 @@ jobs:
 
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
@@ -105,7 +105,7 @@ jobs:
     # Saved after a successful build, so a cache is never made from a failed one.
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
