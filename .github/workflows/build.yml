@@ -1,7 +1,9 @@
 name: Build
 
 # Builds and runs `just verify` when someone asks for it (workflow_dispatch), and builds the release
-# artifact when a release is created (drafted). Nothing runs on a pull request or a push: the merge
+# artifact when a release is PUBLISHED (`release: created` does not fire for a draft: publish the release,
+# or start this workflow with `--ref <tag>`, which seals a dry run and publishes nothing). Nothing runs on a
+# pull request or a push: the merge
 # gate is the local capped `just verify`, and CI runs by hand with
 # `gh workflow run build.yml --ref <branch>`. The toolchain is reinstalled from scratch every run
 # (~29 billed minutes), which is why it is not automatic.

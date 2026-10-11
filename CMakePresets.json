@@ -144,7 +144,7 @@
         },
         {
             "name": "mingw-dev",
-            "displayName": "Build MinGW (Release candidate)",
+            "displayName": "Build MinGW (local dev package)",
             "configurePreset": "mingw-dev"
         }
     ]

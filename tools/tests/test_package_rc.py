@@ -188,6 +188,19 @@ class SigningStagesTest(PackageFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.out / "nevr-runtime-v4.0.0-rc.3-windows"
 
+    def test_the_file_names_follow_the_versions_own_x_y_z(self):
+        version = "4.1.0-rc.3+1172.3a35e0b9"
+        blob = b"\0".join([v.encode() for v in VALUES.values()] + [version.encode(), COMMIT[:8].encode()])
+        self.dll.write_bytes(b"MZ" + blob)
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        tree = self.out / "nevr-runtime-v4.1.0-rc.3-windows"
+        self.assertTrue(tree.is_dir(), sorted(p.name for p in self.out.iterdir()))
+        sealed = self.tmp / "sealed"
+        self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed)).returncode, 0)
+        self.assertTrue((sealed / "nevr-runtime-v4.1.0-rc.3-windows.zip").exists())
+        self.assertIn("nevr-runtime-v4.1.0-rc.3-windows.zip", (sealed / "RELEASE-NOTES.md").read_text())
+
     def test_tree_holds_the_files_the_sign_job_signs_and_no_checksums_yet(self):
         tree = self.make_tree()
         self.assertEqual(sorted(p.name for p in tree.iterdir()),

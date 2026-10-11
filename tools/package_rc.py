@@ -8,7 +8,7 @@ usage: package_rc.py --commit <sha> --out <dir> --dll <BugSplat64.dll> --apk <si
 Only a CI build of a v<x.y.z>-rc.<N> tag may carry a release-candidate stamp (cmake/nevr_rc_label.cmake),
 so the two paths are separate:
   package_rc.py ...        `just package-dev`, a LOCAL build: the binaries must carry `-dev+<tweak>.<sha>`;
-                           one stamped -rc.<N> is refused; the output is nevr-runtime-v4.0.0-dev-<sha>-*
+                           one stamped -rc.<N> is refused; the output is nevr-runtime-v<x.y.z>-dev-<sha>-*
   package_rc.py tree ...   CI: gate the DLL (`-rc.<N>+` required) and write the unsigned package tree + rc.json
   package_rc.py seal ...   CI: zip the (signed) tree with a SHA256SUMS regenerated from the files as they are
                            now; a given APK must carry `-rc.<N>+` (else refused); without one the candidate
@@ -140,10 +140,15 @@ def render(template: Path, values: dict, apk: bool = True) -> str:
     return text
 
 
-def package_base(n, commit: str) -> str:
+def package_base(n, commit: str, version: str) -> str:
+    """The file-name stem. X.Y.Z is read from the build's own version string (it comes from the git tag),
+    never assumed: a tag v4.1.0-rc.2 packages as nevr-runtime-v4.1.0-rc.2-*."""
+    match = re.match(r"^(\d+\.\d+\.\d+)", version)
+    if not match:
+        raise GateFailure(f"version '{version}' does not start with <x.y.z>")
     if n is None:
-        return f"nevr-runtime-v4.0.0-dev-{commit[:7]}"
-    return f"nevr-runtime-v4.0.0-rc.{n}"
+        return f"nevr-runtime-v{match.group(1)}-dev-{commit[:7]}"
+    return f"nevr-runtime-v{match.group(1)}-rc.{n}"
 
 
 def pe_has_certificate_table(path: Path) -> bool:
@@ -182,7 +187,7 @@ def version_in(dll: Path, n) -> str:
     token = re.escape(stamp_token(n).encode())
     match = re.search(rb"\d+\.\d+\.\d+" + token + rb"\+[0-9.a-f]+", dll.read_bytes())
     if not match:
-        raise GateFailure(f"no 4.0.0{stamp_token(n)}+<commit> version string in {dll.name}")
+        raise GateFailure(f"no <x.y.z>{stamp_token(n)}+<commit> version string in {dll.name}")
     return match.group().decode("ascii")
 
 
@@ -220,7 +225,7 @@ def check_apk_stamp(apk: Path, n, commit: str) -> None:
 
 def write_tree(args, out: Path, version: str) -> Path:
     """The unsigned package tree: what the sign job signs. SHA256SUMS is written after signing, by seal()."""
-    base = package_base(args.n, args.commit)
+    base = package_base(args.n, args.commit, version)
     tree = out / f"{base}-windows"
     if tree.exists():
         raise GateFailure(f"{tree} exists; not overwritten")
@@ -256,7 +261,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
             raise GateFailure("not signed (no signature block): " + ", ".join(unsigned_scripts))
         signed_files = [p.name for p in files if p.suffix.lower() in (".dll", ".exe", ".ps1")]
     out.mkdir(parents=True, exist_ok=True)
-    base = package_base(n, commit)
+    base = package_base(n, commit, version)
     zip_path = out / f"{base}-windows.zip"
     apk_path = out / f"{base}-quest.apk"
     notes_path = out / "RELEASE-NOTES.md"
