@@ -28,17 +28,25 @@ namespace {
 // call shape CArchiveResource's instance code uses (FUN_1401123d0).
 constexpr uintptr_t kRvaLoadResource = 0xFA2820;
 constexpr uintptr_t kRvaResourceLoader = 0x20A0708;
+// DAT_1420a2ad8: the factory manager 0x140fa1c50 (resource-object creation) looks the resource type up in. The
+// loader global above is set much earlier; a LoadResource before the factories are registered faults inside the
+// factory lookup (observed: access violation at 0x1401f3e60 with rcx=0x50, run 1).
+constexpr uintptr_t kRvaFactoryManager = 0x20A2AD8;
+// Engine start-up is over well inside this; nothing else in this test knows when the factories are complete.
+constexpr uint64_t kSettleMs = 20000;
 constexpr uint64_t kLoadFlags = 0x351127d67ULL;
 constexpr size_t kObjState = 0x60;  // 4 = loaded and initialized
 
 using LoadResourceFn = int64_t(__cdecl*)(void* loader, void** out, const uint64_t* key, uint64_t a, uint64_t flags);
 
 uintptr_t g_base = 0;
+uint64_t g_initMs = 0;
 bool g_registered = false;
 bool g_loadDone = false;
 
 // The loader global is null until the engine has built its resource manager; try again on a later frame.
 void* ResourceLoader() { return *reinterpret_cast<void**>(g_base + kRvaResourceLoader); }
+void* FactoryManager() { return *reinterpret_cast<void**>(g_base + kRvaFactoryManager); }
 
 void LoadOnce(const char* what, uint64_t type, uint64_t name) {
     auto load = reinterpret_cast<LoadResourceFn>(g_base + kRvaLoadResource);
@@ -71,6 +79,7 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void) { return NEVR_PLUGIN_CAP
 
 NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* /*args_json*/) {
     g_base = ctx ? ctx->base_addr : 0;
+    g_initMs = GetTickCount64();
     const int info = nevr::RegisterAsset(kTypeLevelInfo, kLevelName, kLevelInfo, sizeof(kLevelInfo), "nevr_test_level.info");
     const int level = nevr::RegisterAsset(kTypeLevelResource, kLevelName, kLevelResource, sizeof(kLevelResource), "nevr_test_level.level");
     PluginLog("register info=%d level=%d (0 = ok)", info, level);
@@ -79,7 +88,9 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* /*arg
 }
 
 NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* /*ctx*/) {
-    if (!g_registered || g_loadDone || g_base == 0 || ResourceLoader() == nullptr) return;
+    if (!g_registered || g_loadDone || g_base == 0) return;
+    if (GetTickCount64() - g_initMs < kSettleMs) return;
+    if (ResourceLoader() == nullptr || FactoryManager() == nullptr) return;
     g_loadDone = true;
     LoadOnce("level_info", kTypeLevelInfo, kLevelName);
     LoadOnce("level", kTypeLevelResource, kLevelName);
