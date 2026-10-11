@@ -53,8 +53,8 @@ const char* TypeName(NevrValueType type) {
   }
 }
 
-// Converts `in` to the override point's type: an integral FLOAT to INT, an INT
-// to FLOAT. False when the types can't meet.
+// Converts `in` to the override point's type: an integral FLOAT within ±2^53
+// to INT, an INT to FLOAT. False when the types can't meet.
 bool CoerceTo(NevrValueType type, const NevrValue& in, NevrValue* out) {
   *out = in;
   if (in.type == type) return true;
@@ -65,8 +65,10 @@ bool CoerceTo(NevrValueType type, const NevrValue& in, NevrValue* out) {
   }
   if (type == NEVR_VALUE_INT && in.type == NEVR_VALUE_FLOAT) {
     const double f = in.as.f;
-    // [-2^63, 2^63): both bounds are exact doubles.
-    if (!(f >= -9223372036854775808.0 && f < 9223372036854775808.0)) return false;
+    // (-2^53, 2^53): past it a double no longer holds every integer, so the
+    // value may already have been rounded on its way here (a script literal
+    // 2^53+1 arrives as 2^53). Refuse rather than store a nearby integer.
+    if (!(f > -9007199254740992.0 && f < 9007199254740992.0)) return false;
     const int64_t i = static_cast<int64_t>(f);
     if (static_cast<double>(i) != f) return false;
     out->type = NEVR_VALUE_INT;

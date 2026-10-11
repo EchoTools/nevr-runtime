@@ -176,6 +176,10 @@ TEST(override_keys_are_registered_and_typed) {
   NevrValue out{};
   f.api->override_get(a, "match.rounds", &out);
   CHECK(out.type == NEVR_VALUE_INT && out.as.i == 3);
+  NevrValue two53 = Float(9007199254740992.0);  // 2^53: past it a double does not hold every integer
+  CHECK_EQ(f.api->override_set(a, "match.rounds", &two53), NEVR_ERR_TYPE_MISMATCH);
+  NevrValue below = Float(9007199254740991.0);  // 2^53-1
+  CHECK_EQ(f.api->override_set(a, "match.rounds", &below), NEVR_OK);
   CHECK_EQ(f.api->override_set(a, "physics.gravity", &seven), NEVR_OK);  // INT into FLOAT
   f.api->override_get(a, "physics.gravity", &out);
   CHECK(out.type == NEVR_VALUE_FLOAT && out.as.f == 7.0);
@@ -429,8 +433,10 @@ Alive* g_late_data = nullptr;
 std::atomic<NevrStatus> g_late_status{NEVR_OK};
 std::atomic<int> g_registrar_entered{0};
 NevrHookResult RegistersDuringReset(NevrHookCall*, void*) {
-  if (g_registrar_entered.fetch_add(1) != 0) return NEVR_HOOK_CONTINUE;
+  // Read the generation before announcing entry: the test resets only after
+  // the announcement, so the bump Quiesce makes is always after `before`.
   const uint64_t before = g_late_owner->generation.load();
+  if (g_registrar_entered.fetch_add(1) != 0) return NEVR_HOOK_CONTINUE;
   while (g_late_owner->generation.load() == before) std::this_thread::yield();  // Quiesce has started
   g_late_status.store(g_api->hook_add(g_late_owner, "test.add", NEVR_HOOK_PRE, SlowCallback, g_late_data));
   return NEVR_HOOK_CONTINUE;

@@ -57,6 +57,7 @@ struct Host {
       "test.add", {{"a", NEVR_VALUE_INT, true, false},
                    {"b", NEVR_VALUE_INT, true, false},
                    {"result", NEVR_VALUE_INT, true, true}});
+  HookPoint* big = reg.RegisterHookPoint("test.big", {{"v", NEVR_VALUE_INT, true, true}});
   std::unique_ptr<ScriptVm> vm;
 
   // The override points the scripts below use, as the runtime would register them.
@@ -68,6 +69,15 @@ struct Host {
         {"escape", NEVR_VALUE_BOOL}};
     for (const auto& key : keys) reg.RegisterOverridePoint(key.first, key.second);
     vm = nevr_script::CreateScriptVm(reg, limits);
+  }
+
+  // Invokes test.big(v) and returns v as the callbacks left it.
+  int64_t Big(int64_t v) {
+    NevrValue field{};
+    field.type = NEVR_VALUE_INT;
+    field.as.i = v;
+    reg.Invoke(big, &field, [](NevrValue*, void*) {}, nullptr);
+    return field.as.i;
   }
 
   int64_t Add(int64_t a, int64_t b) {
@@ -208,6 +218,40 @@ TEST(t3_unknown_hook_returns_nil_and_status) {
   CHECK_EQ(h.api->override_get(a, "mod_a.err", &v), NEVR_OK);
   CHECK(v.type == NEVR_VALUE_STRING && Contains(v.as.s, "NEVR_ERR_UNKNOWN_HOOK"));
   CHECK(h.Find("hook_unknown", "mod_a") != nullptr);
+}
+
+// F3 (review of #458): an INT the script's numbers cannot hold exactly is never
+// changed silently; either it round-trips exactly or the callback fails.
+TEST(t3_large_integers_round_trip_exactly_or_fail) {
+  Host h;
+  h.Load("mod_a.lua", "nevr.hook('test.big', {pre = function(h) h:set('v', h:get('v')) end})\n");
+  const int64_t kBig = (int64_t{1} << 53) + 1;
+  const int64_t out = h.Big(kBig);
+  CHECK_EQ(out, kBig);  // never left changed: exact, or the callback failed before setting it
+  std::printf("  round trip of 2^53+1: %s\n", h.Find("callback_failed", "mod_a") ? "refused" : "exact");
+}
+
+TEST(t3_script_never_sees_a_rounded_integer) {
+  Host h;
+  NevrOwner* a = h.Load("mod_a.lua", "nevr.hook('test.big', {pre = function(h) nevr.override('mod_a.err', tostring(h:get('v'))) end})\n");
+  h.Big((int64_t{1} << 53) + 1);
+  NevrValue seen{};
+  // Either h:get refused (the callback failed, nothing stored) or the script saw the exact value.
+  if (h.api->override_get(a, "mod_a.err", &seen) == NEVR_OK) {
+    CHECK(std::string(seen.as.s) == "9007199254740993");
+  } else {
+    CHECK(h.Find("callback_failed", "mod_a") != nullptr);
+  }
+}
+
+TEST(t3_script_number_too_large_for_an_exact_integer_is_refused) {
+  Host h;
+  h.Load("mod_a.lua", "nevr.hook('test.big', {pre = function(h) h:set('v', 9007199254740993) end})\n");
+  const int64_t out = h.Big(7);
+  // 9007199254740993 = 2^53+1. A VM with 64-bit integers stores it exactly; one
+  // whose numbers are doubles must refuse it rather than store 2^53.
+  CHECK(out == 7 || out == 9007199254740993LL);
+  if (out == 7) CHECK(h.Find("callback_failed", "mod_a") != nullptr);
 }
 
 // ---- T4 errors are contained ----------------------------------------------------------------
@@ -388,6 +432,28 @@ TEST(t7_memory_bomb_in_a_callback_is_contained) {
   CHECK(a->disabled.load());
   const Captured* c = h.Find("owner_disabled", "mod_a");
   CHECK(c && Contains(c->detail, "memory"));
+}
+
+// F4 (review of #458): garbage is not a breach. A script whose live set is small
+// but which allocates more than the cap over many calls, or within one call,
+// keeps running.
+TEST(t7_garbage_does_not_disable_a_script) {
+  VmLimits limits;
+  limits.memory_bytes = 8u << 20;
+  limits.instructions_per_call = UINT64_MAX;
+  limits.millis_per_call = 60000;
+  Host h(limits);
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "nevr.hook('test.add', {pre = function(h)\n"
+                        "  for i = 1, 30 do local s = string.rep('x', 1024 * 1024) end\n"
+                        "end})\n");
+  // 30 MiB of 1 MiB strings per call against an 8 MiB cap; nothing stays live.
+  // A call may fail when garbage outruns the collector, but the script is not
+  // disabled for it, and calls keep working.
+  for (int i = 0; i < 5; ++i) h.Add(2, 3);
+  CHECK(!a->disabled.load());
+  const Captured* c = h.Find("owner_disabled", "mod_a");
+  if (c) std::printf("  disabled: %s\n", c->detail.c_str());
 }
 
 // ---- T8 hot reload --------------------------------------------------------------------------

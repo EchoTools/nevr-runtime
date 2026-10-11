@@ -59,7 +59,7 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   `libr15.so` TString `0xfa2e7c`, Int `0xfa40ec`, LReal `0xfa4204` and Boolean `0xfa4370`, behind resolver
   `0xfa0950` and reached through GOT slots; on Windows `echovr.exe` `CJson_NavigatePath` `0x1405fcea0`, called
   directly.
-  - Values: a number becomes INT when it is integral, and an INT is accepted for a FLOAT key.
+  - Values: a number becomes INT when it is integral and within ±2^53, and an INT is accepted for a FLOAT key.
   - Unknown key: `NEVR_ERR_UNKNOWN_KEY` plus an `override_unknown` record.
   - Conflict: the first owner keeps the key; a second owner gets `NEVR_ERR_CONFLICT`, and one
     `override_conflict` record names both owners.
@@ -75,7 +75,10 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
     same call. Its overrides are dropped, and `owner_disabled` names the limit.
 - **Freeing safely.** `Registry::Quiesce` reuses `nevr::ReaderGate` (`src/core/reader_gate.h`). It retires the
   owner's callbacks and waits for every game thread still inside one to leave. Only then may a binding free
-  their state, on hot reload, on a failed load, and at shutdown.
+  their state, on hot reload, on a failed load, and at shutdown. `ResetOwner` disables the owner before it
+  drops and quiesces, so a callback still running cannot register anything that would outlive the reset.
+- **Errors per thread.** `last_error` is kept per thread, like errno, so two game threads using one owner
+  neither race nor read each other's reason.
 - **Records.** Every event is one structured record with a stable `event` name, the owner, the other owner on a
   conflict, the key or hook point, and a detail. The event names are listed on `LogRecord` in
   `src/scripting/host_registry.h`.
@@ -95,8 +98,16 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
     matcher.
   - A breach is sticky: the interrupt raises at every later safepoint, so a script's `pcall` cannot swallow it.
   - After the call, the owner is disabled.
-- **Memory.** A capped `lua_Alloc` refuses growth past `VmLimits::memory_bytes`. A refusal disables the owner,
-  with "memory" in the reason.
+- **Memory.** A capped `lua_Alloc` refuses growth past `VmLimits::memory_bytes`. The cap counts allocated bytes,
+  garbage not yet collected included, and Luau has no emergency collection inside the allocator. So after a
+  refusal the binding collects, then judges:
+  - the owner is disabled, with "memory" in the reason, when the live set is over half the cap or a single
+    refused request was over half the cap;
+  - otherwise only that call failed, and the script continues with a warning record.
+
+  Between calls, a state past half its cap is collected.
+- **Integers.** Luau numbers are doubles. An INT field or key outside ±2^53 is never rounded silently: `h:get`
+  raises, and the registry refuses to convert such a number to INT.
 - **Errors.** Script errors carry `<file>:<line>: <message>`.
 
 ## Typed API stubs and the checker
@@ -159,7 +170,7 @@ At `lane-lua/design`, both targets give the same results: mingw-w64 under wine a
 | --- | --- |
 | `nevr_script_registry_test` | 16/16 |
 | `nevr_script_host_test` | 10/10 |
-| `nevr_script_conformance` | 19/19, 14 of 14 sandbox probes refused |
+| `nevr_script_conformance` | 23/23; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
 | `--pattern-dos` | stopped |
 | `--gc-dos` | stopped |
 
