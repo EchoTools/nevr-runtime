@@ -41,6 +41,8 @@ void ResetCountersForTest() noexcept {
   c.valueTooLong.store(0);
   c.poolRefused.store(0);
   c.exceptions.store(0);
+  c.urlRedirected.store(0);
+  c.urlPassThrough.store(0);
 }
 
 bool IsServiceHostKey(const char* key) noexcept {
@@ -139,7 +141,10 @@ const char* ServiceRedirector::Apply(const char* key, const char* result) noexce
 
 const char* ServiceRedirector::ApplyUrl(const char* url) noexcept {
   if (!active_ || (!IsApiBaseUrl(url) && !IsGraphBaseUrl(url))) return url;
-  return ApplyChecked(url, /*graphRule=*/true);
+  const char* const chosen = ApplyChecked(url, /*graphRule=*/true);
+  RedirectCounters& counters = GlobalCounters();
+  (chosen != url ? counters.urlRedirected : counters.urlPassThrough).fetch_add(1, std::memory_order_relaxed);
+  return chosen;
 }
 
 const char* ServiceRedirector::ApplyChecked(const char* result, bool graphRule) noexcept {
