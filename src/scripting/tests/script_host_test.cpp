@@ -60,6 +60,7 @@ class FakeVm final : public ScriptVm {
     return true;
   }
   size_t MemoryBytes(const NevrOwner*) const override { return 0; }
+  size_t TotalMemoryBytes() const override { return 0; }
   // Freeing a state whose callbacks were not quiesced first is the use-after-free
   // Registry::Quiesce exists to prevent: count it.
   void Unload(NevrOwner* owner) override {

@@ -593,6 +593,13 @@ class LuauVm final : public ScriptVm {
     return it == states_.end() ? 0 : it->second->used.load();
   }
 
+  size_t TotalMemoryBytes() const override {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    size_t total = 0;
+    for (const auto& entry : states_) total += entry.second->used.load();
+    return total;
+  }
+
   void Unload(NevrOwner* owner) override {
     std::unique_ptr<State> gone;
     {

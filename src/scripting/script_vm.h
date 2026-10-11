@@ -67,8 +67,11 @@ class ScriptVm {
   // false and sets *error to "<chunk>:<line>: <message>" where there is a line.
   virtual bool Load(NevrOwner* owner, const std::string& chunkname, const std::string& source,
                     std::string* error) = 0;
-  // Bytes the owner's state holds now, as counted by the binding's allocator.
+  // Bytes the owner's script holds now, as counted by the binding's allocator.
   virtual size_t MemoryBytes(const NevrOwner* owner) const = 0;
+  // Bytes every loaded script holds together, including whatever the binding
+  // shares between them (a shared state's libraries).
+  virtual size_t TotalMemoryBytes() const = 0;
   // Closes the owner's state (hot reload, shutdown). The registry entries are
   // the caller's to reset.
   virtual void Unload(NevrOwner* owner) = 0;

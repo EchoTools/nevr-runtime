@@ -465,6 +465,15 @@ int Bench() {
     NevrOwner* a = h.Load("sample.lua", kSample);
     Report(h, "M3", "state_after_sample", static_cast<double>(h.vm->MemoryBytes(a)), "bytes");
   }
+  {
+    // What each script costs once many are loaded (Spritz: the shared-state variant is required past
+    // about 20 scripts): total VM memory with 20 sample scripts loaded, and per script.
+    Host h;
+    for (int i = 0; i < 20; ++i) h.Load("sample" + std::to_string(i) + ".lua", kSample);
+    const double total = static_cast<double>(h.vm->TotalMemoryBytes());
+    Report(h, "M3", "total_with_20_scripts", total, "bytes");
+    Report(h, "M3", "per_script_with_20_scripts", total / 20.0, "bytes");
+  }
   return mini_test::Failures() == 0 ? 0 : 1;
 }
 
