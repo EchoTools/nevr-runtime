@@ -10,7 +10,9 @@ bool RegisterSocialCounters() noexcept;
 
 // quest_social::InstallSocialHook(true, uiEventProbe): builds the facade, arms the callback, redirects the slot.
 // False when the hook was refused (the game keeps the Oculus social object). `detail` receives a fixed
-// token naming the outcome (an InstallStatus or GotStatus name). `uiEventProbe` is features.ui_event_probe.
-bool InstallSocialHook(const char** detail, bool uiEventProbe) noexcept;
+// token naming the outcome (an InstallStatus or GotStatus name). `presenceNames` is the effective
+// presence_names feature (#393): answer the rich presence's destination lookup from the built-in table.
+// `presenceLocal` is presence_local (#396); `uiEventProbe` is features.ui_event_probe (#318).
+bool InstallSocialHook(const char** detail, bool presenceNames, bool presenceLocal, bool uiEventProbe) noexcept;
 
 }  // namespace nevr_quest::integration

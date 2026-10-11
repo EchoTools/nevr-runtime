@@ -319,10 +319,17 @@ void CheckRichPresence(const LoadedElf& r15, const LoadedElf& ovr) {
   QCHECK(methods[quest_social::kRichPresenceSlotDestinationName] == "CNSOVRRichPresence15DestinationNameEj");
   QCHECK(methods[quest_social::kRichPresenceSlotDestination] == "CNSOVRRichPresence11DestinationEv");
   QCHECK(methods[quest_social::kRichPresenceSlotSet] == "CNSOVRRichPresence3SetERKNS_5CJsonE");
+  QCHECK(methods[quest_social::kRichPresenceSlotShareData] == "CNSOVRRichPresence9ShareDataEv");
+  QCHECK(methods[quest_social::kRichPresenceSlotRefreshDestinations] == "CNSOVRRichPresence19RefreshDestinationsEv");
+  QCHECK(methods[quest_social::kRichPresenceSlotClear] == "CNSOVRRichPresence5ClearEv");
   QCHECK(addresses[quest_social::kRichPresenceSlotDestinationCount] == quest_social::kOvrRichPresenceDestinationCountVaddr);
   QCHECK(addresses[quest_social::kRichPresenceSlotDestinationName] == quest_social::kOvrRichPresenceDestinationNameVaddr);
   QCHECK(addresses[quest_social::kRichPresenceSlotDestination] == quest_social::kOvrRichPresenceDestinationVaddr);
   QCHECK(addresses[quest_social::kRichPresenceSlotSet] == quest_social::kOvrRichPresenceSetVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotShareData] == quest_social::kOvrRichPresenceShareDataVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotRefreshDestinations] ==
+         quest_social::kOvrRichPresenceRefreshDestinationsVaddr);
+  QCHECK(addresses[quest_social::kRichPresenceSlotClear] == quest_social::kOvrRichPresenceClearVaddr);
 }
 
 }  // namespace

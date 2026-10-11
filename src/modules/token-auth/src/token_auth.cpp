@@ -16,6 +16,8 @@
 #include "core/auth_token.h"
 #include "core/auth_refresh.h"
 #include "core/device_auth_flow.h"
+#include "core/signin_dialog_text.h"
+#include "core/signin_dialog_lifecycle.h"
 #include "auth_token_refresh.h"
 #include "core/bounded_retry.h"
 #include "nevr_curl.h"
@@ -29,8 +31,10 @@
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <condition_variable>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -60,6 +64,15 @@ struct InternalDeviceAuthFlowOps {
     std::function<void(EchoVR::LogLevel, const std::string&)> log;
     // Optional: true once the flow should stop (the game is closing while it waits, #37).
     std::function<bool()> cancelled;
+    // Optional (#397): the code is issued / the wait ended. The Windows client shows them in a dialog.
+    std::function<void(const std::string& code, const std::string& loginUrl)> onCodeIssued;
+    std::function<void(nevr::auth::FlowEnd)> onEnd;
+};
+
+// What the sign-in wait shows the player: set by the off-bootstrap wait, null in tests and on servers.
+struct SignInPresenter {
+    std::function<void(const std::string& code, const std::string& loginUrl)> codeIssued;
+    std::function<void(nevr::auth::FlowEnd)> ended;
 };
 
 // Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up (#202).
@@ -76,7 +89,8 @@ public:
     bool TryLoadCachedToken();
     bool RunDeviceAuthFlow(bool is_server);
     // Sleeps wait on `cancel` and the flow stops once it is requested (nullptr: plain sleeps).
-    bool RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel);
+    bool RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel,
+                           const SignInPresenter* ui = nullptr);
     bool RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops);
     bool SaveToken();
     bool IsAuthenticated() const;
@@ -98,7 +112,7 @@ private:
     nevr_token_auth::DevicePollResponse PollDeviceCode(const std::string& code);
     void ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResponse& response,
                                    const InternalDeviceAuthFlowOps& ops);
-    std::string HttpPostPublic(const std::string& url, const std::string& body);
+    std::string HttpPostPublic(const std::string& url, const std::string& body, long* httpCode = nullptr);
 
 #ifdef NEVR_TEST_HOOKS
 public:
@@ -224,7 +238,7 @@ bool DeviceAuth::SaveToken() {
     return true;
 }
 
-std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string& body) {
+std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string& body, long* httpCode) {
     nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) return "";
@@ -244,6 +258,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
 #endif
 
     CURLcode res = curl_easy_perform(curl);
+    if (httpCode != nullptr && res == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
@@ -283,9 +298,17 @@ nevr_token_auth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string
     std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
-    std::string response = HttpPostPublic(url, reqBody.dump());
-    if (response.empty()) return {};
-    return nevr_token_auth::ParseDevicePollResponse(response);
+    long httpCode = 0;
+    std::string response = HttpPostPublic(url, reqBody.dump(), &httpCode);
+    if (response.empty()) {
+        nevr_token_auth::DevicePollResponse none;
+        none.http_code = httpCode;
+        return none;
+    }
+    nevr_token_auth::DevicePollResponse parsed = nevr_token_auth::ParseDevicePollResponse(response);
+    parsed.http_code = httpCode;
+    parsed.body_prefix = nevr_token_auth::PollBodyPrefix(response, code);
+    return parsed;
 }
 
 void DeviceAuth::ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResponse& response,
@@ -339,8 +362,13 @@ void DeviceAuth::ApplyVerifiedPollResponse(const nevr_token_auth::DevicePollResp
 
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server) { return RunDeviceAuthFlow(is_server, nullptr); }
 
-bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel) {
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel,
+                                   const SignInPresenter* ui) {
     InternalDeviceAuthFlowOps ops;
+    if (ui != nullptr) {
+        ops.onCodeIssued = ui->codeIssued;
+        ops.onEnd = ui->ended;
+    }
     ops.now = []() { return InternalDeviceAuthFlowOps::Clock::now(); };
     ops.requestDeviceCode = [this]() { return RequestDeviceCode(); };
 #ifdef _WIN32
@@ -405,6 +433,8 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
     core.poll = ops.poll;
     core.sleep = ops.sleep;
     core.cancelled = ops.cancelled;
+    core.on_code_issued = ops.onCodeIssued;
+    core.on_end = ops.onEnd;
     core.max_consecutive_poll_errors = kMaxConsecutivePollErrors;
     core.log = [&ops](nevr::auth::LogLevel level, const std::string& message) {
         ops.log(nevr::auth::ToEchoLogLevel(level), message);
@@ -691,6 +721,8 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
     ops.showOpenFailure = injected.show_open_failure;
     ops.poll = injected.poll;
     ops.sleep = injected.sleep;
+    ops.onCodeIssued = injected.on_code_issued;
+    ops.onEnd = injected.on_end;
     ops.save = injected.save;
     ops.log = injected.log;
     ops.cancelled = injected.cancelled;
@@ -804,6 +836,214 @@ private:
     HRESULT m_hr;
 };
 
+// The sign-in window (#397): the code and the page, on a thread of its own so the bootstrap thread's
+// pump (which dispatches nothing to windows it does not own) and the game never have to know about it.
+// It is informational: closing it does not cancel the sign-in. When the wait ends it shows how, and
+// closes by itself (signed in) or when the player dismisses it or after kSignInDialogLinger.
+constexpr UINT kDialogApply = WM_APP + 1;
+constexpr UINT kDialogClose = WM_APP + 2;
+constexpr UINT_PTR kDialogLingerTimer = 1;
+constexpr UINT kSignInDialogLingerMs = 30000;
+constexpr int kDialogCloseButton = 100;
+
+std::wstring WideFromUtf8(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &w[0], n);
+    return w;
+}
+
+class SignInDialog {
+public:
+    SignInDialog() : m_state(std::make_shared<State>()) {}
+    ~SignInDialog() {
+        // A wait that never reported its end must not leave the dialog up; one that did keeps its message
+        // until the player dismisses it (or kSignInDialogLingerMs). A window that does not exist yet closes
+        // itself when it does (SignInDialogLifecycle).
+        if (m_started && !m_ended) Abandon();
+    }
+    SignInDialog(const SignInDialog&) = delete;
+    SignInDialog& operator=(const SignInDialog&) = delete;
+
+    // Starts the window thread and waits (bounded) for the window to exist. False: no window was made.
+    bool Show(const nevr::auth::SignInDialogContent& content) {
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->content = content;
+        }
+        if (!m_started) {
+            m_started = true;
+            std::shared_ptr<State> state = m_state;
+            std::thread([state]() { WindowThread(state); }).detach();
+            std::unique_lock<std::mutex> lock(m_state->mutex);
+            m_state->ready.wait_for(lock, std::chrono::seconds(3), [this]() { return m_state->created || m_state->failed; });
+            if (m_state->created) return true;
+            // Gave up waiting: a window that appears later closes itself instead of staying topmost forever.
+            (void)m_state->lifecycle.Abandon();
+            return false;
+        }
+        PostIfCreated(kDialogApply, 0);
+        return true;
+    }
+
+    // The wait ended: the window says how (and closes itself when `content.closes_by_itself`).
+    void Ended(const nevr::auth::SignInDialogContent& content) {
+        m_ended = true;
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->content = content;
+        }
+        PostIfCreated(kDialogApply, content.closes_by_itself ? 1 : 2);
+    }
+
+private:
+    struct State {
+        std::mutex mutex;
+        std::condition_variable ready;
+        nevr::auth::SignInDialogContent content;
+        HWND hwnd = nullptr;
+        HWND instruction = nullptr;
+        HWND code = nullptr;
+        HWND button = nullptr;
+        HFONT codeFont = nullptr;
+        bool created = false;
+        bool failed = false;
+        nevr::auth::SignInDialogLifecycle lifecycle;
+    };
+
+    // The wait is over without a result to show: close the window now, or have it close on creation.
+    void Abandon() {
+        bool closeNow = false;
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            closeNow = !m_state->lifecycle.Abandon();
+        }
+        if (closeNow) PostIfCreated(kDialogClose, 0);
+    }
+
+    void PostIfCreated(UINT message, WPARAM wParam) {
+        HWND hwnd = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            if (m_state->created) hwnd = m_state->hwnd;
+        }
+        if (hwnd != nullptr) PostMessageW(hwnd, message, wParam, 0);
+    }
+
+    static void Apply(State& s, WPARAM how) {
+        nevr::auth::SignInDialogContent content;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            content = s.content;
+        }
+        SetWindowTextW(s.hwnd, WideFromUtf8(content.title).c_str());
+        SetWindowTextW(s.instruction, WideFromUtf8(content.instruction).c_str());
+        SetWindowTextW(s.code, WideFromUtf8(content.code).c_str());
+        if (how == 1) {  // closes by itself: a moment to read it
+            SetTimer(s.hwnd, kDialogLingerTimer, 1500, nullptr);
+        } else if (how == 2) {
+            ShowWindow(s.button, SW_SHOW);
+            SetTimer(s.hwnd, kDialogLingerTimer, kSignInDialogLingerMs, nullptr);
+        }
+        nevr::auth::WipeSecret(content.code);
+    }
+
+    static LRESULT CALLBACK Proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+        State* s = reinterpret_cast<State*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        switch (message) {
+            case WM_NCCREATE: {
+                const auto* cs = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+                break;
+            }
+            case kDialogApply:
+                if (s != nullptr) Apply(*s, wParam);
+                return 0;
+            case kDialogClose:
+            case WM_TIMER:
+                DestroyWindow(hwnd);
+                return 0;
+            case WM_COMMAND:
+                if (LOWORD(wParam) == kDialogCloseButton) DestroyWindow(hwnd);
+                return 0;
+            case WM_DESTROY:
+                PostQuitMessage(0);
+                return 0;
+            default:
+                break;
+        }
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+
+    static void WindowThread(std::shared_ptr<State> state) {
+        static const wchar_t kClass[] = L"NevrSignInDialog";
+        HINSTANCE instance = GetModuleHandleW(nullptr);
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = &SignInDialog::Proc;
+        wc.hInstance = instance;
+        wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = kClass;
+        RegisterClassW(&wc);  // fails harmlessly with ERROR_CLASS_ALREADY_EXISTS on a second dialog
+
+        constexpr int kWidth = 520;
+        constexpr int kHeight = 330;
+        const int x = (GetSystemMetrics(SM_CXSCREEN) - kWidth) / 2;
+        const int y = (GetSystemMetrics(SM_CYSCREEN) - kHeight) / 3;
+        HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, kClass, L"Echo VR - sign in",
+                                    WS_CAPTION | WS_SYSMENU | WS_VISIBLE, x, y, kWidth, kHeight, nullptr, nullptr,
+                                    instance, state.get());
+        if (hwnd == nullptr) {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->failed = true;
+            state->ready.notify_all();
+            return;
+        }
+        HFONT guiFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        state->hwnd = hwnd;
+        state->instruction = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_CENTER, 20, 16, kWidth - 56,
+                                             110, hwnd, nullptr, instance, nullptr);
+        state->codeFont = CreateFontW(-40, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+        state->code = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_CENTER, 20, 140, kWidth - 56, 56,
+                                      hwnd, nullptr, instance, nullptr);
+        state->button = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | BS_DEFPUSHBUTTON, (kWidth - 96) / 2, 220, 96, 30,
+                                        hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDialogCloseButton)),
+                                        instance, nullptr);
+        SendMessageW(state->instruction, WM_SETFONT, reinterpret_cast<WPARAM>(guiFont), TRUE);
+        SendMessageW(state->code, WM_SETFONT, reinterpret_cast<WPARAM>(state->codeFont), TRUE);
+        SendMessageW(state->button, WM_SETFONT, reinterpret_cast<WPARAM>(guiFont), TRUE);
+        Apply(*state, 0);
+        SetForegroundWindow(hwnd);
+        bool closeAtOnce = false;
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->created = true;
+            closeAtOnce = state->lifecycle.OnCreated();
+        }
+        state->ready.notify_all();
+        if (closeAtOnce) DestroyWindow(hwnd);  // created after the caller stopped waiting
+
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->created = false;
+            state->hwnd = nullptr;
+            nevr::auth::WipeSecret(state->content.code);
+        }
+        if (state->codeFont != nullptr) DeleteObject(state->codeFont);
+    }
+
+    std::shared_ptr<State> m_state;
+    bool m_started = false;
+    bool m_ended = false;
+};
+
 }  // namespace
 #endif  // _WIN32
 
@@ -818,10 +1058,19 @@ static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
         "(retitled while waiting)",
         wait.ThreadWindows(), wait.ProcessWindows());
     const auto start = std::chrono::steady_clock::now();
+    SignInDialog dialog;
+    SignInPresenter ui;
+    ui.codeIssued = [&dialog](const std::string& code, const std::string& loginUrl) {
+        const bool shown = dialog.Show(nevr::auth::SignInWaitingContent(loginUrl, code));
+        Log(shown ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+            shown ? "[NEVR.AUTH] sign-in dialog shown: the page and the code are on screen"
+                  : "[NEVR.AUTH] sign-in dialog could not be created; the browser page is the only prompt");
+    };
+    ui.ended = [&dialog](nevr::auth::FlowEnd end) { dialog.Ended(nevr::auth::SignInEndedContent(end)); };
     const nevr_token_auth::OffThreadWaitResult r = nevr_token_auth::RunWhilePumping(
-        [&auth, &cancel]() {
+        [&auth, &cancel, &ui]() {
             ComApartment com;
-            return auth.RunDeviceAuthFlow(false, &cancel);
+            return auth.RunDeviceAuthFlow(false, &cancel, &ui);
         },
         [&wait]() { wait.Pump(); }, kSignInPumpInterval);
     const long long seconds =

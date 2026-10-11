@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kUiEventProbe };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal, kUiEventProbe };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -49,6 +49,15 @@ struct Features {
   // Report the OBB mount as done and use the data root the game falls back to (#319): no ~30 s wait in
   // CSysFile::Init. Off until a headset run confirms it; independent of every other feature.
   bool obbSkip = false;
+  // Answer the rich presence's destination lookup from a built-in table ("Social Lobby", "Arena", ...) when
+  // Meta's GetDestinations failed (#393): the status under the player's name stops reading the game's second
+  // field. Off until a headset run confirms it; needs the social facade (the status travels in its member data).
+  bool presenceNames = false;
+  // Rich presence is not sent to Meta's platform service (#396, option b of #393): the presence object's
+  // ShareData, RefreshDestinations and Clear are answered locally, so no group_presence request leaves (they
+  // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
+  // the match. Off until a headset run confirms it; needs the social facade.
+  bool presenceLocal = false;
   // The invite/party UI probe (#318): the Invite Members and Party slots post the friends script event instead
   // of reaching Meta's panels. A measurement build only: off unless the file asks, and it needs social.
   bool uiEventProbe = false;

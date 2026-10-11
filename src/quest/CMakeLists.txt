@@ -114,7 +114,7 @@ target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
 
-# Build-time defaults embedded from the environment or <root>/.env at configure time (never read
+# Build-time defaults embedded from <root>/config/public-defaults.env at configure time (never read
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
@@ -210,7 +210,8 @@ if(TARGET nevr_quest_got_hook)
   # archive so the install, its thunks and the backend are present.
   add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
-  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
+  # -fno-exceptions: the test arms the entitlement hook's thunk (callback_thunk.h refuses other units).
+  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 
   add_executable(login_standin_test tests/login_standin_test.cpp login/login_standin.cpp)
   target_link_libraries(login_standin_test PRIVATE nevr_quest_login)

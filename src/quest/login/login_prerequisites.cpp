@@ -72,6 +72,31 @@ constexpr FakeHandle kFakeUserProof{'p'};
 
 std::size_t Index(Prerequisite which) { return static_cast<std::size_t>(which); }
 
+// ---- local answers: the synthetic message handles ---------------------------------------------
+// A pending answer needs no storage: local ids are sequential, so the pending set is the id range
+// [g_next_deliver, g_issued]. Only a message the pump currently holds has a handle: one byte per slot,
+// the address is the handle. State: 0 free, 1 filling, 3 delivered (held by the pump until it frees it).
+constexpr std::uint8_t kFree = 0;
+constexpr std::uint8_t kFilling = 1;
+constexpr std::uint8_t kDelivered = 3;
+
+unsigned char g_handles[local::kSlots] = {};
+std::atomic<std::uint8_t> g_slot_state[local::kSlots] = {};
+std::atomic<std::uint64_t> g_slot_id[local::kSlots] = {};
+std::atomic<std::uint64_t> g_issued{0};        // ids handed out: 1..g_issued
+std::atomic<std::uint64_t> g_next_deliver{1};  // the next id to hand the pump
+std::atomic<bool> g_local_enabled{false};
+std::atomic<std::uint64_t> g_local_requested{0};
+std::atomic<std::uint64_t> g_local_delivered{0};
+std::atomic<std::uint64_t> g_local_deferred{0};
+std::atomic<std::uint64_t> g_local_collisions{0};
+
+int SlotOf(const void* message) {
+  const unsigned char* p = static_cast<const unsigned char*>(message);
+  if (p < g_handles || p >= g_handles + local::kSlots) return -1;
+  return static_cast<int>(p - g_handles);
+}
+
 bool UsableString(const char* value) {
   return value != nullptr && value[0] != '\0' && !(value[0] == '?' && value[1] == '\0');
 }
@@ -375,6 +400,40 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
   const std::uint64_t call = g_callbacks[i].fetch_add(1, std::memory_order_relaxed) + 1;
   const OvrErrorApi& api = g_config.api;
 
+  if (local::IsSynthetic(message)) {
+    // A locally answered request (#411): no SDK function may see this handle, so the real error API is not
+    // consulted. The message is an Oculus error with stand-ins: the accessor hooks answer by address, so the
+    // game's own success path runs and writes its globals.
+    Attempt synth{which, true, true, true, "local", "local"};
+    Attempt* expected = nullptr;
+    const bool claimed = g_active.compare_exchange_strong(expected, &synth, std::memory_order_acq_rel);
+    if (claimed) g_active_message.store(message, std::memory_order_release);
+    original(self, message);
+    if (claimed) {
+      g_active_message.store(nullptr, std::memory_order_release);
+      g_active_handle.store(nullptr, std::memory_order_release);
+      g_active.store(nullptr, std::memory_order_release);
+    }
+    const bool ready_now = g_config.ready != nullptr && g_config.ready();
+    if (!ready_now && g_config.reset != nullptr) g_config.reset();
+    bool summary_local = false;
+    if (WindowAllows(g_callback_window_ms[i], g_callback_logged[i], kCallbackLogLimit, &summary_local)) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "quest_login_prerequisite",
+                          {{"call", PrerequisiteCall(which)},
+                           {"result", "stand_in"},
+                           {"reason", "local"},
+                           {"accessor", "local"},
+                           {"ovr_error", -1},
+                           {"error_code", 0},
+                           {"http_code", 0},
+                           {"callback", call}});
+    } else if (summary_local) {
+      sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_login_prerequisite",
+                          {{"call", PrerequisiteCall(which)}, {"status", "log_limit_reached"}, {"callback", call}});
+    }
+    return;
+  }
+
   Attempt attempt{which, false, false, false, "ok", ""};
   long long error_code = 0;
   long long http_code = 0;
@@ -466,6 +525,7 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
 }
 
 bool OnMessageIsError(bool (*original)(const void*), const void* message) noexcept {
+  if (local::IsSynthetic(message)) return false;  // never the SDK; the stand-ins answer the accessors
   if (message != nullptr && g_active_message.load(std::memory_order_acquire) == message) {
     Attempt* attempt = g_active.load(std::memory_order_acquire);
     if (attempt != nullptr && attempt->errored) {
@@ -477,6 +537,7 @@ bool OnMessageIsError(bool (*original)(const void*), const void* message) noexce
 }
 
 const char* OnMessageGetString(const char* (*original)(const void*), const void* message) noexcept {
+  if (local::IsSynthetic(message)) return StandIn::AccessToken();
   Attempt* attempt = AttemptFor(message, Prerequisite::AccessToken);
   if (attempt == nullptr) return original(message);
   if (attempt->errored) {
@@ -490,6 +551,7 @@ const char* OnMessageGetString(const char* (*original)(const void*), const void*
 }
 
 const void* OnMessageGetOrgScopedId(const void* (*original)(const void*), const void* message) noexcept {
+  if (local::IsSynthetic(message)) return &kFakeOrgScopedId;
   return HandleAccessor(original, message, Prerequisite::OrgScopedId, kFakeOrgScopedId,
                         "ovr_Message_GetOrgScopedID");
 }
@@ -504,6 +566,7 @@ std::uint64_t OnOrgScopedIdGetId(std::uint64_t (*original)(const void*), const v
 }
 
 const void* OnMessageGetUser(const void* (*original)(const void*), const void* message) noexcept {
+  if (local::IsSynthetic(message)) return &kFakeUser;
   return HandleAccessor(original, message, Prerequisite::LoggedInUser, kFakeUser, "ovr_Message_GetUser");
 }
 
@@ -513,6 +576,7 @@ const char* OnUserGetOculusId(const char* (*original)(const void*), const void* 
 }
 
 const void* OnMessageGetUserProof(const void* (*original)(const void*), const void* message) noexcept {
+  if (local::IsSynthetic(message)) return &kFakeUserProof;
   return HandleAccessor(original, message, Prerequisite::UserProof, kFakeUserProof,
                         "ovr_Message_GetUserProof");
 }
@@ -521,6 +585,105 @@ const char* OnUserProofGetNonce(const char* (*original)(const void*), const void
   return StringAccessor(original, handle, Prerequisite::UserProof, kFakeUserProof, StandIn::Nonce(),
                         "ovr_UserProof_GetNonce");
 }
+
+namespace local {
+
+bool IsSynthetic(const void* message) noexcept { return message != nullptr && SlotOf(message) >= 0; }
+
+void SetEnabled(bool enabled) noexcept { g_local_enabled.store(enabled, std::memory_order_release); }
+bool Enabled() noexcept { return g_local_enabled.load(std::memory_order_acquire); }
+
+std::uint64_t Request(Prerequisite which) noexcept {
+  static_cast<void>(which);  // the callback the game registered under the id decides what it is
+  // Cannot fail and never reaches the SDK: the answer is the id range [g_next_deliver, g_issued], not a slot.
+  const std::uint64_t n = g_issued.fetch_add(1, std::memory_order_acq_rel) + 1;
+  g_local_requested.fetch_add(1, std::memory_order_relaxed);
+  return kRequestIdBase | n;
+}
+
+const void* OnPopMessage(const void* (*original)()) noexcept {
+  // Frequency: once per game-loop pump iteration. Atomics only, no logging.
+  if (g_local_enabled.load(std::memory_order_acquire) && g_config.ready != nullptr && g_config.ready()) {
+    for (;;) {
+      const std::uint64_t n = g_next_deliver.load(std::memory_order_acquire);
+      if (n > g_issued.load(std::memory_order_acquire)) break;  // nothing pending
+      int handle = -1;
+      for (std::size_t i = 0; i < kSlots && handle < 0; ++i) {
+        std::uint8_t expected = kFree;
+        if (g_slot_state[i].compare_exchange_strong(expected, kFilling, std::memory_order_acq_rel)) {
+          handle = static_cast<int>(i);
+        }
+      }
+      if (handle < 0) {  // every handle is still held by the game: the answer waits, nothing is lost
+        g_local_deferred.fetch_add(1, std::memory_order_relaxed);
+        break;
+      }
+      std::uint64_t expected_next = n;
+      if (!g_next_deliver.compare_exchange_strong(expected_next, n + 1, std::memory_order_acq_rel)) {
+        g_slot_state[handle].store(kFree, std::memory_order_release);  // another pump took it
+        continue;
+      }
+      g_slot_id[handle].store(kRequestIdBase | n, std::memory_order_release);
+      g_slot_state[handle].store(kDelivered, std::memory_order_release);
+      g_local_delivered.fetch_add(1, std::memory_order_relaxed);
+      return &g_handles[handle];
+    }
+  }
+  return original();
+}
+
+int OnMessageGetType(int (*original)(const void*), const void* message) noexcept {
+  if (IsSynthetic(message)) return kMessageType;
+  return original(message);
+}
+
+std::uint64_t OnMessageGetRequestId(std::uint64_t (*original)(const void*), const void* message) noexcept {
+  const int slot = SlotOf(message);
+  if (slot >= 0) return g_slot_id[slot].load(std::memory_order_acquire);
+  return original(message);
+}
+
+void OnFreeMessage(void (*original)(void*), void* message) noexcept {
+  const int slot = SlotOf(message);
+  if (slot >= 0) {
+    g_slot_state[slot].store(kFree, std::memory_order_release);
+    return;
+  }
+  original(message);
+}
+
+std::uint64_t Requested() noexcept { return g_local_requested.load(std::memory_order_relaxed); }
+std::uint64_t Delivered() noexcept { return g_local_delivered.load(std::memory_order_relaxed); }
+std::uint64_t Deferred() noexcept { return g_local_deferred.load(std::memory_order_relaxed); }
+std::uint64_t Pending() noexcept {
+  const std::uint64_t issued = g_issued.load(std::memory_order_acquire);
+  const std::uint64_t next = g_next_deliver.load(std::memory_order_acquire);
+  return issued >= next ? issued - next + 1 : 0;
+}
+std::uint64_t Collisions() noexcept { return g_local_collisions.load(std::memory_order_relaxed); }
+const std::atomic<std::uint64_t>& DeliveredCounter() noexcept { return g_local_delivered; }
+const std::atomic<std::uint64_t>& DeferredCounter() noexcept { return g_local_deferred; }
+const std::atomic<std::uint64_t>& CollisionCounter() noexcept { return g_local_collisions; }
+
+void NoteSdkRequestId(std::uint64_t id) noexcept {
+  if ((id >> 32) == (kRequestIdBase >> 32)) g_local_collisions.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ResetForTest() noexcept {
+  for (std::size_t i = 0; i < kSlots; ++i) {
+    g_slot_state[i].store(kFree, std::memory_order_relaxed);
+    g_slot_id[i].store(0, std::memory_order_relaxed);
+  }
+  g_issued.store(0, std::memory_order_relaxed);
+  g_next_deliver.store(1, std::memory_order_relaxed);
+  g_local_enabled.store(false, std::memory_order_relaxed);
+  g_local_requested.store(0, std::memory_order_relaxed);
+  g_local_delivered.store(0, std::memory_order_relaxed);
+  g_local_deferred.store(0, std::memory_order_relaxed);
+  g_local_collisions.store(0, std::memory_order_relaxed);
+}
+
+}  // namespace local
 
 void NoteRequest(Prerequisite which, std::uint64_t request_id) noexcept {
   const std::size_t i = Index(which);
@@ -553,6 +716,7 @@ void ResetPrerequisitesForTest() noexcept {
     g_callbacks[i].store(0, std::memory_order_relaxed);
     g_requests[i].store(0, std::memory_order_relaxed);
   }
+  local::ResetForTest();
   EndPrerequisiteAttempt();
 }
 

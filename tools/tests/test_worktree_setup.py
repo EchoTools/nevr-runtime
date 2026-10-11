@@ -11,6 +11,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/worktree-setup.sh"
 SECRET = "NEVR_API_KEY=do-not-print-me"
+DEFAULTS = "NEVR_SOCKET_URI=wss://example.invalid/nevr\n"
 
 
 def git(cwd, *args):
@@ -28,7 +29,7 @@ class WorktreeSetupTest(unittest.TestCase):
         git(self.main, "init", "-q")
         git(self.main, "add", "tools/worktree-setup.sh")
         git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
-        # The inputs a build needs, untracked like the real submodules/gen/.env in a worktree.
+        # The inputs a build needs, untracked like the real submodules/gen in a worktree (and a .env the build ignores).
         for name in ("minhook", "breakpad", "lss"):
             d = self.main / "extern" / name
             d.mkdir(parents=True)
@@ -37,6 +38,8 @@ class WorktreeSetupTest(unittest.TestCase):
         (self.main / "gen/cpp").mkdir(parents=True)
         (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
         (self.main / ".env").write_text(SECRET + "\n")
+        (self.main / "config").mkdir()
+        (self.main / "config/public-defaults.env").write_text(DEFAULTS)
         self.wt = self.tmp / "wt"
         git(self.main, "worktree", "add", "-q", "--no-track", "-b", "feature", str(self.wt))
         # A real worktree has the submodule directories, empty (a gitlink checks out as an empty directory).
@@ -55,7 +58,7 @@ class WorktreeSetupTest(unittest.TestCase):
             self.assertTrue((self.wt / "extern" / name / "CMakeLists.txt").exists(), name)
             self.assertFalse((self.wt / "extern" / name / ".git").exists(), f"{name}/.git must not be copied")
         self.assertTrue((self.wt / "gen/cpp/x.pb.cc").exists())
-        self.assertEqual((self.wt / ".env").read_text(), SECRET + "\n")
+        self.assertFalse((self.wt / ".env").exists(), ".env is runtime-only and is never copied into a worktree")
         after = sorted(str(p.relative_to(self.main)) for p in self.main.rglob("*") if ".git/" not in str(p))
         self.assertEqual(before, after, "the main checkout changed")
 
@@ -86,12 +89,30 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertIn("just proto", result.stderr)
         self.assertFalse((self.wt / "extern/minhook/CMakeLists.txt").exists(), "nothing is copied on error")
 
-    def test_a_missing_env_is_a_warning_not_a_failure(self):
-        (self.main / ".env").unlink()
+    def test_the_public_defaults_file_is_copied_and_an_existing_one_is_kept(self):
         result = self.run_script(self.wt)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("no .env", result.stderr)
+        self.assertEqual((self.wt / "config/public-defaults.env").read_text(), DEFAULTS)
+        (self.wt / "config/public-defaults.env").write_text("OWN=1\n")
+        again = self.run_script(self.wt)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual((self.wt / "config/public-defaults.env").read_text(), "OWN=1\n")
+        self.assertIn("config/public-defaults.env", again.stdout.split("kept what this worktree already has:")[1])
+
+    def test_a_missing_defaults_file_is_a_warning_naming_the_example(self):
+        (self.main / "config/public-defaults.env").unlink()
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("config/public-defaults.env.example", result.stderr)
+        self.assertFalse((self.wt / "config/public-defaults.env").exists())
+
+    def test_a_main_checkout_env_is_never_read_or_copied(self):
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.wt / ".env").exists())
+        self.assertNotRegex(result.stdout + result.stderr, r"(?<![\w-])\.env\b")
+        (self.main / ".env").unlink()
+        self.assertEqual(self.run_script(self.wt).returncode, 0, "a missing .env is not an error or a warning")
 
     def test_running_it_twice_is_safe_and_does_not_nest_gen(self):
         self.assertEqual(self.run_script(self.wt).returncode, 0)
@@ -156,15 +177,12 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse((self.wt / "gen").exists(), "a partial gen/ was left in place")
         self.assertFalse((self.wt / ".nevr-worktree-setup").exists(), "temporary copy left behind")
 
-    def test_an_existing_env_is_kept_and_a_new_one_is_private(self):
+    def test_a_worktrees_own_env_is_left_alone(self):
         (self.wt / ".env").write_text("OWN=1\n")
         result = self.run_script(self.wt)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.wt / ".env").read_text(), "OWN=1\n")
-        self.assertIn("kept what this worktree already has: .env", result.stdout)
-        (self.wt / ".env").unlink()
-        self.assertEqual(self.run_script(self.wt).returncode, 0)
-        self.assertEqual((self.wt / ".env").stat().st_mode & 0o777, 0o600)
+        self.assertNotRegex(result.stdout + result.stderr, r"(?<![\w-])\.env\b")
 
     def test_a_worktrees_own_initialised_submodule_and_gen_are_never_replaced(self):
         (self.wt / "extern/minhook").mkdir(exist_ok=True)
@@ -270,7 +288,7 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertFalse((home / ".env").exists())
 
     def test_dangling_symlink_destinations_are_refused(self):
-        for victim in ("gen", ".env", "extern/lss"):
+        for victim in ("gen", "extern/lss"):
             link = self.wt / victim
             if link.exists() or link.is_symlink():
                 shutil.rmtree(link) if link.is_dir() and not link.is_symlink() else link.unlink()
@@ -344,25 +362,6 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual((mine / "notes.txt").read_text(), "precious\n")
         mine_file = self.wt / "other"
         self.assertFalse(mine_file.exists())
-
-    def test_an_env_that_appears_during_the_run_is_kept_and_reported_as_kept(self):
-        shim = self.tmp / "shim-env"
-        shim.mkdir()
-        real_mv = shutil.which("mv")
-        (shim / "mv").write_text(
-            "#!/bin/bash\n"
-            'dest="${@: -1}"\n'
-            'if [[ "$dest" == ".env" ]]; then echo USER_OWN=1 > .env; fi\n'
-            f'exec {real_mv} "$@"\n')
-        (shim / "mv").chmod(0o755)
-        env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
-        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
-                                env=env, timeout=60)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((self.wt / ".env").read_text(), "USER_OWN=1\n")
-        filled_line = next(l for l in result.stdout.splitlines() if l.startswith("filled from"))
-        self.assertNotIn(".env", filled_line)
-        self.assertIn(".env", result.stdout.split("kept what this worktree already has:")[1])
 
     def test_the_pin_warning_is_only_for_what_this_run_filled(self):
         subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",

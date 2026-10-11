@@ -426,8 +426,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows the Quest config path never names one.
    `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
-   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
-   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
+   time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
+   from the repository's Actions variables, at configure time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
    `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
    is off unless the file turns it on, and is forced off while its prerequisite is missing
    (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
@@ -779,11 +779,21 @@ analysis found. Paths that can still reach Ready At Dawn with the redirect on, m
 PCVR redirects an `https://...readyatdawn.com` value under any key; Quest redirects values only under the
 service keys above.
 
-HTTP is not covered by this hook. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
-`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
+HTTP does not go through `TString`. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
+`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`; so does
 `CR15NetStoreTransactions::InitializeHttp`, which reads the key `env` (`0x126c214`) and, when it is
 not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateConnection`
-(`0x126c25c`). An HTTP hook is a separate tranche.
+(`0x126c25c`). `CreateConnection(unsigned long&, char const*)` is defined in `libr15.so` (`0xf96c08`) and
+called through its own PLT (JUMP_SLOT `0x36e8028`), the same shape as the `TString` slot, so it has its own
+thunk (`Slot::kCreateConnection`, installed with libr15's `TString` slot): a URL that starts `https://api.` or
+`https://api-` goes through `ServiceRedirector::ApplyUrl`, the same shared policy and string pool, so it
+reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot, the result and every
+other URL pass through. The strings of the game's service-status request
+(`status/services,news?env=%s&projectid=rad14`, `libr15.so` `0x2baa0d2`) and of its matchmaker queue API
+(`ready_at_dawn/join_queue`, `poll_queue_position`, `leave_queue`, `0x2bad4ea`, `0x2bad390`, `0x2bad547`) are in
+`libr15.so`, and the PC build sends both on the connection `InitializeHttp`-style code opens to the same base
+URL, so this redirect is what lets nakama answer them on Quest (nevr-runtime#408, #414); which libr15 function
+sends each on Quest is not decoded here.
 
 The PCVR runtime redirects by value for every key (`config.cpp`, `RedirectServiceUrl`) and uses a
 key list only for the login override. Quest keeps the shared value policy
@@ -1043,6 +1053,49 @@ the game to the "login failed" state and a new login comes from the UI script (`
 calls `BeginLogIn`); nothing was shown to re-enter login on its own. In both smoke runs the process
 stayed alive for over a minute after the failure. The player restarts the game after signing in, and
 a cached token makes `Ready` true at the next startup; an automatic in-process retry is not claimed.
+
+The entitlement request is answered without Meta. `RadPluginMain` (`0x20671c`) logs "Checking OVR
+entitlement..." and calls `ovr_Entitlement_GetIsViewerEntitled` (PLT `0x1afc70`, call sites `0x206824` and
+`0x206ae4`) unless the plugin config key `skipentitlement` is nonzero, and discards the request id. Nothing
+waits for the answer; its only reader is the message pump (`Update`, `0x207534`), which calls `CSysOS::HardExit(1)`
+on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (`kEntitlementRequest`,
+`OnEntitlementRequest`) and the handler returns request id 0 without calling the SDK, so no request leaves and
+no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
+and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
+
+The four user requests are answered without Meta either (local answers, `login_prerequisites.h` namespace
+`local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
+the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
+`ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
+`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
+code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
+`ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
+are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
+pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
+when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
+new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
+`prereq_local_delivered`, `prereq_local_deferred` (a pop that had an answer ready while the game still held
+all eight handles: the answer waits) and `prereq_local_id_collisions` (an SDK request id in the local range)
+are the counters. A pending answer takes no storage: local ids are sequential, so the pending set is the id
+range not yet popped and a request can neither fail nor reach Meta; a handle exists only while the pump holds
+the message. The SDK's own request ids are small per-process counts (recorded device runs: 5, 6, 7 for user,
+org id and token, 13-16 for the proof requests), which is why the high word `0x4E455652` is free; an id the
+SDK returns there is counted.
+
+`ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
+`GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
+`GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
+`CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
+the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`); every other caller goes to the SDK. The other
+three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
+in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
+and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
+by the walk: `blr`/`br` and a PLT stub into the library's own exports.
+`UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
+its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
@@ -1589,6 +1642,16 @@ absent from the file. The only consumer is the install call above.
   package does not install; if the owner wants it zeroed, that is a separate change. (c) **The
   invitable-users refresh goes away** (`RefreshInvitableUsers`, bit 1 of `Update`'s flags, libpnsovr
   0x20455c): the facade's friend list is the NEVR service's, so there is nothing to refresh.
+- Rich presence to Meta (`presence_local`, #396). `CNSOVRRichPresence` stays on pnsovr but its three slots that talk
+  to Meta's platform service are wrapped on the same pinned object as the trace: `ShareData` (slot 0, `0x1f044c`,
+  `group_presence set`), `RefreshDestinations` (slot 11, `0x1f1c2c`, `get_destinations`) and `Clear` (slot 16,
+  `0x1f1cf0`, `group_presence clear`). With the feature on they are answered locally and the object's state word
+  (`this+0x30`: bit 0 dirty, bit 1 share in flight, bit 2 clear in flight) is left as the game's own versions leave
+  it once the answer has come back (`Clear` sets bit 2 and `ClearUserPresenceCB` takes it down again, so locally it
+  stays down), so the game sees a completed share and no request leaves. The status text
+  the player sees is the game's member JSON (destination names from the `presence_names` table); a friend's
+  status is derived by the game service from the match they are in (nakama `server/evr_friend_presence.go`), so
+  nothing is published from the client. Off by default; needs the social facade.
 - Name pointers: the facade returns `const char*` from the roster and party views. The three callers
   checked copy them into a 64-byte buffer before returning (`CR15NetFriendExpression` 0x2322db0,
   `CR15NetRecentlyMetUserExpression` 0x2332768, `CR15NetPartyMemberExpression` 0x232c098), so no pointer is
@@ -1620,11 +1683,11 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
 thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage`, `CR15NetGame::Update` and
 `CR15UIPage2EnablePageNode::Enter` slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
-prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
+prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` and `CSysHttp::CreateConnection` redirect on libr15;
 (10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
 installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:
-clock 2, redirect 10, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
-prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 64 of the reporter's 96
+clock 2, redirect 12, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
+prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 66 of the reporter's 96
 slots (`integration_hooks_test` runs the sequence against the real registration functions). The production identity source answers the prerequisites'
 `IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed

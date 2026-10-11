@@ -28,6 +28,14 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
+    - name: Write the public client defaults
+      uses: ./.github/actions/write-public-defaults
+      with:
+        socket-uri: ${{ vars.NEVR_SOCKET_URI }}
+        http-uri: ${{ vars.NEVR_HTTP_URI }}
+        public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
+        public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
+
     - name: Trust the workspace for git
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
@@ -52,7 +60,7 @@ jobs:
     - name: Configure and build
       run: |
         set -euo pipefail
-        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=OFF
+        cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
         cmake --build --preset mingw-release
 
     - name: Create the distribution zip (unsigned)

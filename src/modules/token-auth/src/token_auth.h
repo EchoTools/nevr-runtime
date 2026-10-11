@@ -11,6 +11,7 @@
 #include <functional>
 #include "abi/echovr.h"
 #include "device_poll_response.h"
+#include "core/device_auth_flow.h"
 struct CachedAuthToken;
 #endif  // NEVR_TEST_HOOKS
 
@@ -62,6 +63,8 @@ struct DeviceAuthFlowOps {
     std::function<bool()> save;
     std::function<void(EchoVR::LogLevel, const std::string&)> log;
     std::function<bool()> cancelled;  // optional
+    std::function<void(const std::string& code, const std::string& login_url)> on_code_issued;  // optional
+    std::function<void(nevr::auth::FlowEnd)> on_end;                                             // optional
 };
 
 struct DeviceAuthFlowResult {

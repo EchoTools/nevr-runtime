@@ -23,6 +23,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/login/login_prerequisite_targets.h"
 #include "quest/login/login_prerequisites.h"
 #include "quest/login/login_standin.h"
 #include "quest/sentinel/hook_log.h"
@@ -622,10 +623,206 @@ void TestRequestsAreLoggedThenCounted() {
   QCHECK(nevr_quest_login::PrerequisiteRequests(Prerequisite::AccessToken) == nevr_quest_login::kRequestLogLimit + 3);
 }
 
+// ---- #411: the four user requests answered locally -------------------------------------------
+
+bool g_pop_original_called = false;
+const FakeMessage g_real_message;
+const void* FakePop() {
+  g_pop_original_called = true;
+  return &g_real_message;
+}
+int g_original_type_calls = 0;
+int FakeGetType(const void*) {
+  ++g_original_type_calls;
+  return 7;
+}
+std::uint64_t FakeGetRequestId(const void*) {
+  ++g_original_type_calls;
+  return 5;
+}
+int g_original_free_calls = 0;
+void FakeFree(void*) { ++g_original_free_calls; }
+
+void TestLocalRequestsGetIdsTheSdkNeverProduces() {
+  Fresh(true, true);
+  using namespace nevr_quest_login;
+  local::SetEnabled(true);
+  QCHECK(local::Enabled());
+  const std::uint64_t a = local::Request(Prerequisite::OrgScopedId);
+  const std::uint64_t b = local::Request(Prerequisite::LoggedInUser);
+  QCHECK(a >= local::kRequestIdBase && b > a);
+  QCHECK(local::Requested() == 2);
+  // An id the SDK returned in the local range is counted; the small ids the device runs show are not.
+  for (std::uint64_t sdk : {5ULL, 6ULL, 7ULL, 13ULL, 16ULL}) local::NoteSdkRequestId(sdk);
+  QCHECK(local::Collisions() == 0);
+  local::NoteSdkRequestId(local::kRequestIdBase | 3);
+  QCHECK(local::Collisions() == 1);
+  QCHECK(!local::IsSynthetic(nullptr));
+  QCHECK(!local::IsSynthetic(&g_real_message));
+  local::ResetForTest();
+  QCHECK(!local::Enabled() && local::Requested() == 0);
+}
+
+void TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally() {
+  namespace T = nevr_quest_login::PrerequisiteTargets;
+  const std::uintptr_t base = 0x7000000000;
+  const auto at = [&](std::uint64_t returnVa) { return reinterpret_cast<const void*>(base + returnVa); };
+  // The login's three call sites (return address = the instruction after the bl).
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x1ec9a0), base));  // LogInInternal
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x1ecf84), base));  // GotLoggedInUserOrgIdCb re-request
+  QCHECK(T::IsLoginOrgRequestCaller(at(0x2069c0), base));  // RadPluginMain
+  // CNSOVRSocial's nine: SUserList::Add, JoinedCB, SyncRoom x2, GotRemoteOrgIdCB, AddInvitableUser,
+  // GotInvitableUserOrgIdCB, GotFriendOrgIdCB, GotRecentlyMetUserOrgIdCB.
+  const std::uint64_t social[] = {0x1f22f4, 0x1f4974, 0x1f8770, 0x1f8b98, 0x1f9030, 0x1f9990, 0x1fa0fc, 0x1fcb90, 0x1fd2a0};
+  for (const std::uint64_t va : social) QCHECK(!T::IsLoginOrgRequestCaller(at(va), base));
+  // The call instruction itself, the neighbours, an address below the image, no caller, no base.
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec99c), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec9a4), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(reinterpret_cast<const void*>(base - 0x10), base));
+  QCHECK(!T::IsLoginOrgRequestCaller(nullptr, base));
+  QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec9a0), 0));
+}
+
+void TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder() {
+  using namespace nevr_quest_login;
+  Fresh(true, true, /*ready=*/false);
+  local::SetEnabled(true);
+  const std::uint64_t first = local::Request(Prerequisite::OrgScopedId);
+  const std::uint64_t second = local::Request(Prerequisite::UserProof);
+  g_pop_original_called = false;
+  // Not ready: held. The real pop answers (the game's other messages keep flowing).
+  QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);
+  QCHECK(local::Delivered() == 0);
+  // Ready: the queued handles come first, oldest request first, then the real queue.
+  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, &ReadyTrue, nullptr);
+  g_pop_original_called = false;
+  const void* one = local::OnPopMessage(&FakePop);
+  const void* two = local::OnPopMessage(&FakePop);
+  QCHECK(one != nullptr && two != nullptr && one != two && !g_pop_original_called);
+  QCHECK(local::IsSynthetic(one) && local::IsSynthetic(two));
+  QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, one) == first);
+  QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, two) == second);
+  QCHECK(local::OnMessageGetType(&FakeGetType, one) == local::kMessageType);
+  QCHECK(g_original_type_calls == 0);  // the SDK was never asked about a synthetic handle
+  QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);
+  QCHECK(local::Delivered() == 2);
+  // A real message keeps going to the SDK; a synthetic one is released without it.
+  QCHECK(local::OnMessageGetType(&FakeGetType, &g_real_message) == 7);
+  QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, &g_real_message) == 5);
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(one));
+  QCHECK(g_original_free_calls == 0);
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(static_cast<const void*>(&g_real_message)));
+  QCHECK(g_original_free_calls == 1);
+  // The freed slot is reusable.
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(two));
+  for (std::size_t i = 0; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) != 0);
+}
+
+// #411 follow-up: there is no table to fill. Far more requests than there are handles all get a local id, none
+// reaches the SDK, and every one of them is delivered, in order, even while the game holds every handle.
+void TestAnswersPastTheHandleCountAreNeverLostOrForwarded() {
+  using namespace nevr_quest_login;
+  Fresh(true, true, /*ready=*/true);
+  local::SetEnabled(true);
+  const int types_before = g_original_type_calls;
+  const int frees_before = g_original_free_calls;
+  constexpr std::uint64_t kRequests = 1000;
+  const std::uint64_t base = local::kRequestIdBase;
+  for (std::uint64_t i = 1; i <= kRequests; ++i) {
+    QCHECK(local::Request(Prerequisite::UserProof) == (base | i));  // distinct, sequential, always local
+  }
+  QCHECK(local::Requested() == kRequests && local::Pending() == kRequests);
+  // The game holds every handle (none freed): the next pop is the real one and the answer waits.
+  const void* held[local::kSlots] = {};
+  for (std::size_t i = 0; i < local::kSlots; ++i) {
+    held[i] = local::OnPopMessage(&FakePop);
+    QCHECK(local::IsSynthetic(held[i]));
+    QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, held[i]) == (base | (i + 1)));
+  }
+  g_pop_original_called = false;
+  QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);
+  QCHECK(local::Deferred() >= 1 && local::Pending() == kRequests - local::kSlots);
+  // One handle comes back: the next answer in order is delivered.
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(held[3]));
+  const void* next = local::OnPopMessage(&FakePop);
+  QCHECK(local::IsSynthetic(next));
+  QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, next) == (base | (local::kSlots + 1)));
+  // Drain the rest in order.
+  std::uint64_t expected = local::kSlots + 2;
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(next));
+  for (std::size_t i = 0; i < local::kSlots; ++i) {
+    if (i != 3) local::OnFreeMessage(&FakeFree, const_cast<void*>(held[i]));
+  }
+  for (;;) {
+    const void* m = local::OnPopMessage(&FakePop);
+    if (!local::IsSynthetic(m)) break;
+    QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, m) == (base | expected));
+    ++expected;
+    local::OnFreeMessage(&FakeFree, const_cast<void*>(m));
+  }
+  QCHECK(expected == kRequests + 1);
+  QCHECK(local::Delivered() == kRequests && local::Pending() == 0);
+  QCHECK(g_original_type_calls == types_before && g_original_free_calls == frees_before);  // the SDK never saw one
+}
+
+void TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk() {
+  using namespace nevr_quest_login;
+  Fresh(true, true);
+  g_original_type_calls = 0;
+  g_pop_original_called = false;
+  local::SetEnabled(true);
+  // The game asks for all four; nothing goes to Meta; each answer arrives as a message the pump pops.
+  const Prerequisite order[] = {Prerequisite::LoggedInUser, Prerequisite::OrgScopedId, Prerequisite::AccessToken,
+                                Prerequisite::UserProof};
+  for (Prerequisite which : order) QCHECK(local::Request(which) != 0);
+  for (Prerequisite which : order) {
+    void* handle = const_cast<void*>(local::OnPopMessage(&FakePop));
+    QCHECK(handle != nullptr && local::IsSynthetic(handle));
+    nevr_quest_login::OnPrerequisiteCallback(which, CallbackFor(which), nullptr, handle);
+    local::OnFreeMessage(&FakeFree, handle);
+  }
+  QCHECK(g_violations == 0);                // no real accessor or error function saw a synthetic handle
+  QCHECK(!g_pop_original_called);
+  QCHECK(PrerequisitesMet());               // the game's own success path wrote its globals
+  QCHECK(g_game.org_global == StandIn::OrgId());
+  QCHECK(g_game.name == StandIn::OculusId());
+  QCHECK(g_game.token == StandIn::AccessToken());
+  QCHECK(g_game.nonce == StandIn::Nonce());
+  QCHECK(g_game.sent && !g_game.login_failed);
+  const auto records = Records("quest_login_prerequisite");
+  QCHECK(records.size() == 4);
+  for (const nlohmann::json& record : records) {
+    QCHECK(record.value("result", "") == "stand_in" && record.value("reason", "") == "local");
+  }
+  // The values the game now holds are the per-process stand-ins; the send gate refuses a login that carries one
+  // (login_rewrite.h), so what goes on the wire is the NEVR identity, not these.
+}
+
+void TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady() {
+  using namespace nevr_quest_login;
+  Fresh(true, true, /*ready=*/false);
+  g_violations = 0;
+  local::SetEnabled(true);
+  QCHECK(local::Request(Prerequisite::AccessToken) != 0);
+  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, &ReadyTrue, nullptr);
+  void* handle = const_cast<void*>(local::OnPopMessage(&FakePop));
+  // Accessors answer by address with no callback active at all (a caller outside the four callbacks).
+  QCHECK(!GameIsError(handle));
+  QCHECK(GameGetString(handle) == StandIn::AccessToken());
+  QCHECK(GameGetOrgScopedId(handle) != nullptr && GameGetUser(handle) != nullptr && GameGetUserProof(handle) != nullptr);
+  QCHECK(g_violations == 0);
+}
+
 }  // namespace
 
 int main() {
   sentinel::SetLogSink(&Capture);
+  TestLocalRequestsGetIdsTheSdkNeverProduces();
+  TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally();
+  TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder();
+  TestAnswersPastTheHandleCountAreNeverLostOrForwarded();
+  TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk();
+  TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady();
   TestRealAnswersPassThroughUnchanged();
   TestAccessTokenErrorIsSynthesized();
   TestAllFourErrorsAreSynthesized();

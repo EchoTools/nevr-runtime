@@ -30,7 +30,7 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout,
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
 # and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
 worktree-setup:
     tools/worktree-setup.sh
@@ -112,6 +112,8 @@ check-android-static-init: build-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
+    # The sentinel embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -311,7 +313,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -435,7 +437,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -819,6 +821,13 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so"
+    # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
+    # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
+    python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
+    # #431: ovr_User_GetOrgScopedID has nine Social callers besides the login's three; only the login's are
+    # answered locally, and the list the sentinel gates on equals what the library has.
+    python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
+        --header src/quest/login/login_prerequisite_targets.h
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
@@ -933,6 +942,9 @@ test-quest-integration:
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
     "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
+    # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
+    "${off[@]}" -c src/quest/login/login_prerequisites.cpp -o "$out/login_prerequisites.o"
+    "${off[@]}" -c src/quest/login/login_standin.cpp -o "$out/login_standin.o"
     "${off[@]}" -c src/quest/auth/prompt_board.cpp -o "$out/prompt_board.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
@@ -955,6 +967,7 @@ test-quest-integration:
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prerequisites.o" "$out/login_standin.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
@@ -1006,6 +1019,8 @@ verify:
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
+    # The DLL embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
@@ -2497,15 +2512,10 @@ verify:
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     # Wave 10: a deleted unit test must be visible to the closed-loop gate.
-    # The floor is deliberately derived from the current, production-linked
-    # suite; raising it is part of adding tests, while a drop is always a
-    # regression that needs an explicit sensor update and review.
-    TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 183 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 183)." >&2
-        exit 1
-    fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 183)"
+    # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
+    # against this tree): adding tests raises it in the same change, a drop is a regression
+    # that needs an explicit sensor update and review.
+    python3 tools/verify_gtest_floor.py --floor 813
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

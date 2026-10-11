@@ -30,15 +30,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
-    # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
-    # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
-    # keys makes them extractable from the published DLL: setting those secrets is the owner's call.
     env:
-      NEVR_SOCKET_URI: ${{ github.event_name == 'release' && secrets.NEVR_SOCKET_URI || '' }}
-      NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
-      NEVR_PUBLIC_API_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_API_KEY || '' }}
-      NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
       # just verify runs the C++ tests under Wine. The container runs as root but HOME (/github/home)
       # belongs to the runner user, and Wine refuses a prefix there ("'/github/home' is not owned by
       # you", run 37149598909); give it a root-owned prefix, and skip the Mono/Gecko install prompts.
@@ -54,6 +46,16 @@ jobs:
 
     - name: Trust the workspace for git
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+    # The build embeds config/public-defaults.env and reads nothing else; it is git-ignored, so it is
+    # written here from the repository's Actions variables (and fails when one is unset).
+    - name: Write the public client defaults
+      uses: ./.github/actions/write-public-defaults
+      with:
+        socket-uri: ${{ vars.NEVR_SOCKET_URI }}
+        http-uri: ${{ vars.NEVR_HTTP_URI }}
+        public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
+        public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
 
     - name: Setup pinned just
       uses: extractions/setup-just@v4
@@ -136,7 +138,7 @@ jobs:
     - name: Configure CMake
       # Never signs here: release binaries are signed by the `sign` job with Microsoft Artifact Signing.
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
 
     - name: Build
       run: cmake --build --preset mingw-release

@@ -47,7 +47,8 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.uiEventProbe;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames &&
+         !f.presenceLocal && !f.uiEventProbe;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -399,6 +400,62 @@ void ObbSkipIsOnlyEverOnByAFileBoolean() {
   CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
 }
 
+// Presence names (#393) ride in the social facade's member data: off unless the file asks, forced off without
+// social (so without login), and only a JSON true counts.
+void PresenceNamesNeedSocialAndAreOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_names":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.presenceNames && r.config.effective.presenceNames);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceNames));
+  CHECK(EventsContain(r, "feature=presence_names requested=on effective=on"));
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // Without social it is forced off, with that one reason, and after social's own rules ran.
+  r = Load(Full(), R"({"features":{"presence_names":true}})");
+  CHECK(r.config.requested.presenceNames && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"presence_names":true}})");
+  CHECK(r.config.effective.login && !r.config.effective.social && !r.config.effective.presenceNames);
+  r = Load(Full(), R"({"features":{"social":true,"presence_names":true}})");  // social loses login, so it loses this too
+  CHECK(!r.config.effective.social && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
+
+  // Off by default, and a non-boolean leaves it off.
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.social && !r.config.requested.presenceNames && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names requested=off effective=off"));
+  for (const char* text : {R"({"features":{"presence_names":"true"}})", R"({"features":{"presence_names":1}})",
+                           R"({"presence_names":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.presenceNames);
+  }
+}
+
+// Presence local (#396) needs the social facade like presence_names, is off unless the file asks, and only a
+// JSON true counts.
+void PresenceLocalNeedsSocialAndIsOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_local":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.presenceLocal && r.config.effective.presenceLocal);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceLocal));
+  CHECK(EventsContain(r, "feature=presence_local requested=on effective=on"));
+  CHECK(!r.config.effective.presenceNames);  // independent of the names feature
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  r = Load(Full(), R"({"features":{"presence_local":true}})");
+  CHECK(r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local forced off reason=social_not_enabled"));
+
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.social && !r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local requested=off effective=off"));
+  for (const char* text : {R"({"features":{"presence_local":"true"}})", R"({"features":{"presence_local":1}})",
+                           R"({"presence_local":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.presenceLocal);
+  }
+}
+
 // The UI event probe (#318) needs social (so login, bridge, redirect): without it the file's boolean is
 // forced off with a reason, and anything but a JSON true leaves it off.
 void UiEventProbeNeedsSocialAndIsOffByDefault() {
@@ -449,6 +506,8 @@ int main() {
   RedirectIsGatedByActivation();
   HwDumpIsOnlyEverOnByAFileBoolean();
   ObbSkipIsOnlyEverOnByAFileBoolean();
+  PresenceNamesNeedSocialAndAreOffByDefault();
+  PresenceLocalNeedsSocialAndIsOffByDefault();
   UiEventProbeNeedsSocialAndIsOffByDefault();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
