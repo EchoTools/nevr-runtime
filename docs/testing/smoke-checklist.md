@@ -210,9 +210,11 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 | [ ] | D13 | Quest: every sentinel line goes to logcat and `nevr-sentinel.log` as one JSON line | Quest | After a Quest run, read logcat tag `NEVR-Sentinel` and the file | `logcat tag NEVR-Sentinel and nevr-sentinel.log` (src/quest/sentinel/sentinel_log.h) |
 | [ ] | D14 | Quest: hook counters are reported once the game runs | Quest | Log-only: read logcat | `event hook_report / hook_counter` (src/quest/sentinel/hook_report.cpp) |
 
-## Game game server mode
+## Game server mode
 
 Operator rows: run on a dedicated game server (`echovr_server.exe` or `echovr.exe -server -headless -noconsole`). Nothing here is reachable by a player in the UI, so each row says how to trigger it.
+
+The dedicated game server does not reach bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)), so the rows from SV07 on cannot pass until that is fixed.
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
@@ -256,7 +258,7 @@ Quest rows read logcat tag `NEVR-Sentinel` / `nevr-sentinel.log`; each stage is 
 | [ ] | Q06 | Feature `social`: the social facade on Quest (friends, party, invites) | Quest | Start with social on; open the social lobby | `social_hook_installed` (src/quest/integration/stage_log.h)<br>`"social_install", {{"status", "ok"` (src/quest/social/social_install.cpp)=>event social_install status=ok}} |
 | [ ] | Q07 | Feature `obb_skip`: no 30 second "Echo VR is not responding" wait at launch | Quest | Start with obb_skip on; the game opens without the wait | `event obb_skip_install result=installed` (src/quest/sentinel/obb_skip_hook.cpp)<br>`game line: OBB loading complete (took %llu ms)` (docs/adr/0007-quest-obb-mount-skip.md) |
 | [ ] | Q08 | Feature `hwdump`: a hardware and environment dump file is written once | Quest | Start with hwdump on; `nevr-hwdump.json` appears in the files folder | `hwdump written stage=... path=... fields=... failed=...` (src/quest/diag/hwdump_report.cpp)<br>`hwdump trigger reason=after_vrapi_initialize` (src/quest/diag/hwdump_run.cpp) |
-| [ ] | Q09 | Sign-in on the headset: the game's login-error screen shows a code and page (4 characters wanted, #394) | Quest | Fresh install, no saved sign-in; the screen shows the page and code; sign in on `echovrce.com/login/device`, press RETRY | `login_prompt_hook_installed` (src/quest/integration/stage_log.h)<br>`file device_login.txt in the files folder` (src/quest/auth/file_store.h)<br>`Signed in to EchoVRCE. Select RETRY to finish.` (docs/quest/SIGN-IN.md) |
+| [ ] | Q09 | Sign-in on the headset: the game's login-error screen shows a code and page (4 characters wanted, #394) | Quest | A game client with no saved sign-in; the screen shows the page and code; sign in on `echovrce.com/login/device`, press RETRY | `login_prompt_hook_installed` (src/quest/integration/stage_log.h)<br>`file device_login.txt in the files folder` (src/quest/auth/file_store.h)<br>`Signed in to EchoVRCE. Select RETRY to finish.` (docs/quest/SIGN-IN.md) |
 | [ ] | Q10 | Token session state: launched, signed in, refreshed, expired | Quest | Log-only | `event token_auth_state status=...` (src/quest/integration/production_steps.cpp) |
 | [ ] | Q11 | The saved Quest sign-in is reused on the next start | Quest | Restart the game after Q09; no code is asked | `[NEVR.AUTH] using cached access token` (src/quest/auth/session.cpp) |
 | [ ] | Q12 | Hooks into the game's library loads (libpnsovr, matchmaking) | Quest | Log-only | `dlopen_hook_installed` (src/quest/integration/stage_log.h)<br>`event libpnsovr_loaded status=ok` (src/quest/integration/post_load.cpp) |

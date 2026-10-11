@@ -19,7 +19,7 @@ means each. Every feature below is on `main`; [`docs/testing/smoke-checklist.md`
 says how to check each one and which log line proves it.
 
 ### Get in
-- **Nothing to configure.** The service endpoints and the public client keys are built in, so a fresh install signs in with no `config.yaml` and no `nevr-quest.json`. `config.yaml` (PC) and `nevr-quest.json` (Quest) override them. (both)
+- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml` and no `nevr-quest.json`. `config.yaml` (PC) and `nevr-quest.json` (Quest) override them. (both)
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
@@ -36,6 +36,7 @@ says how to check each one and which log line proves it.
 - **New accounts can invite.** The first-match gate reads as passed, so a fresh account can send a party invite. (both)
 
 ### Matchmaking and play
+- **Matchmaker library host.** The matchmaker library's compiled service address is rewritten each time the library loads, because the game unloads and reloads it during a session. The live check that the PUBLIC MATCH terminal screen populates is still open ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)). (PC)
 - **Service redirect.** The game's hard-coded service addresses (HTTP and WebSocket) go to the community game service, over modern TLS 1.2/1.3. (PC)
 - **Early-quit lockout.** The lockout countdown shows when the game service sends a penalty. (PC)
 - **Arena rules in `config.yaml`.** Round time, celebration time and mercy score can be set under `arena.*`. (PC)
@@ -58,6 +59,8 @@ says how to check each one and which log line proves it.
 - **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
 
 ### Game server mode
+The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -noconsole` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
+
 - **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
 - **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
 - **Operates unattended.** Re-registers after a dropped connection, exits after the session so a fleet manager can respawn it, shuts down cleanly on Ctrl+C, and holds an empty game server for a configurable time. (PC)
@@ -68,17 +71,30 @@ says how to check each one and which log line proves it.
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps
-The issue tracker is the source of truth: on Quest the main-menu FRIENDS LIST
+The issue tracker is the source of truth. On Quest the main-menu FRIENDS LIST
 ([#391](https://github.com/EchoTools/nevr-runtime/issues/391)), QUIT
 ([#392](https://github.com/EchoTools/nevr-runtime/issues/392)), the status text under your
 name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the party tab's
 Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
-yet; on PC the party roster keeps a
-member who disconnected ([#403](https://github.com/EchoTools/nevr-runtime/issues/403)),
-party data sharing is refused ([#398](https://github.com/EchoTools/nevr-runtime/issues/398)),
-a friend request shows no prompt to the receiver
-([#405](https://github.com/EchoTools/nevr-runtime/issues/405)) and the matchmaker library
-loses its patch when it reloads ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)).
+yet. On PC:
+
+- the dedicated game server does not complete bring-up
+  ([#45](https://github.com/EchoTools/nevr-runtime/issues/45));
+- the main menu shows no game service status, because the status request fails
+  ([#408](https://github.com/EchoTools/nevr-runtime/issues/408));
+- the matchmaking screen's time remaining is always 0
+  ([#414](https://github.com/EchoTools/nevr-runtime/issues/414));
+- under Wine and Proton the microphone ring buffer overflows at the start of a capture and
+  whether the game reads it at real time is still being measured
+  ([#95](https://github.com/EchoTools/nevr-runtime/issues/95));
+- the party roster keeps a member who disconnected
+  ([#403](https://github.com/EchoTools/nevr-runtime/issues/403));
+- party data sharing is refused
+  ([#398](https://github.com/EchoTools/nevr-runtime/issues/398));
+- a friend request shows no prompt to the receiver
+  ([#405](https://github.com/EchoTools/nevr-runtime/issues/405));
+- the PUBLIC MATCH terminal screen after a matchmaker library reload has not been checked live
+  ([#18](https://github.com/EchoTools/nevr-runtime/issues/18)).
 
 ## Install for testers
 
@@ -191,7 +207,7 @@ From `build/mingw-release/bin/`:
 
 The distribution package includes an empty `plugins/` directory for optional
 operator plugins; plugin DLLs are built separately and are not bundled. The
-community beta install guide covers the supported client install and uses only
+community beta install guide covers installing the game client and uses only
 `BugSplat64.dll`.
 
 For the community beta on Windows, follow [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
@@ -239,7 +255,7 @@ Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 | ------- | ----------- |
 | **nevr-runtime** (this repo) | Runtime patches for `echovr.exe` |
 | **nevr-runtime-plugins** | Gameplay and tooling plugins |
-| **nakama** | echovrce game service backend |
+| **nakama** | The community game service (echovrce) |
 | **revault** | Reverse-engineering data warehouse for the game binaries |
 
 ## Local configuration
