@@ -86,15 +86,16 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("packages-unsigned", text)
         self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), r"name: signed-")
 
-    def test_the_job_graph_is_guard_build_sign_seal_publish(self):
+    def test_the_job_graph_is_guard_build_sign_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
-        self.assertEqual(list(jobs), ["guard", "build", "sign", "seal", "publish"])
+        self.assertEqual(list(jobs), ["guard", "build", "sign", "seal", "repack", "publish"])
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
         self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["seal", "sign"])
+        self.assertEqual(sorted(jobs["repack"]["needs"]), ["seal", "sign"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["repack", "seal", "sign"])
         self.assertEqual(jobs["sign"]["needs"], "build")
-        for name in ("sign", "seal", "publish"):
+        for name in ("sign", "seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 
     def test_nothing_is_published_without_a_release_event(self):
@@ -105,6 +106,30 @@ class WorkflowStructureTest(unittest.TestCase):
         publish = data["jobs"]["publish"]
         self.assertIn("github.event_name == 'release'", publish["if"])
         self.assertIn("needs.seal.result == 'success'", publish["if"])
+        self.assertIn("needs.repack.result == 'success'", publish["if"])
+
+    def test_the_job_that_holds_the_write_token_installs_nothing_and_runs_no_repository_code(self):
+        """The repack (apt, pip, tools/build_distribution.py, cmake -P) runs with a read-only token; the
+        publish job, which holds contents: write, id-token and attestations, only downloads, attests and
+        uploads. A tool or script that is compromised or changed cannot reach the token (#437)."""
+        data, _ = load()
+        publish, repack = data["jobs"]["publish"], data["jobs"]["repack"]
+        self.assertEqual(repack["permissions"], {"contents": "read"})
+        for step in publish["steps"]:
+            self.assertNotIn("run", step, step)
+            self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
+        self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
+                         ["actions/download-artifact", "actions/download-artifact",
+                          "actions/attest-build-provenance", "softprops/action-gh-release",
+                          "softprops/action-gh-release"])
+        text = steps_text(publish)
+        for word in ("pip", "apt-get", "cmake", "tools/"):
+            self.assertNotIn(word, text, word)
+        repack_text = steps_text(repack)
+        for word in ("pip install cmake==", "tools/build_distribution.py", "cmake/VerifyDistribution.cmake"):
+            self.assertIn(word, repack_text, word)
+        self.assertEqual([s["with"]["name"] for s in repack["steps"] if "with" in s and "path" in s["with"]
+                          and s["with"]["path"].startswith("dist/")], ["dist-tar-zst", "dist-zips"])
 
     def test_the_release_files_get_a_provenance_attestation_in_the_publish_job_only(self):
         data, _ = load()
@@ -133,8 +158,10 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(sorted(subjects), sorted([
             "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md"]))
         self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
-        tar_steps = [s for s in steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
+        repack_steps = load()[0]["jobs"]["repack"]["steps"]
+        tar_steps = [s for s in repack_steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
         self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
+        self.assertEqual([s["with"]["name"] for s in steps if s.get("with", {}).get("path") == "dist"], ["dist-zips"])
 
     def test_no_step_reads_or_sets_the_pre_release_flag(self):
         """Promotion changes no byte and no run: the flag is the human's. Nothing reads the event's value,
