@@ -16,7 +16,7 @@ When the game cannot log in yet, its login error screen shows:
 ```
 Sign in to play: on a phone or computer, open
 echovrce.com/login/device
-and enter the code XXXX-XXXX
+and enter the code XXXX
 Each code lasts 5 minutes, then a new one is issued.
 ```
 

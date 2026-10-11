@@ -652,14 +652,11 @@ void TestLocalRequestsGetIdsTheSdkNeverProduces() {
   const std::uint64_t b = local::Request(Prerequisite::LoggedInUser);
   QCHECK(a >= local::kRequestIdBase && b > a);
   QCHECK(local::Requested() == 2);
-  // The table is bounded, and a full table never sends the request to Meta: the id is still a local one, nothing
-  // is queued behind it, and it is counted.
-  for (std::size_t i = 2; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) >= local::kRequestIdBase);
-  QCHECK(local::Dropped() == 0);
-  const std::uint64_t overflow = local::Request(Prerequisite::UserProof);
-  QCHECK(overflow > b && overflow >= local::kRequestIdBase);
-  QCHECK(local::Dropped() == 1);
-  QCHECK(local::Requested() == local::kSlots);  // the overflow id was not queued
+  // An id the SDK returned in the local range is counted; the small ids the device runs show are not.
+  for (std::uint64_t sdk : {5ULL, 6ULL, 7ULL, 13ULL, 16ULL}) local::NoteSdkRequestId(sdk);
+  QCHECK(local::Collisions() == 0);
+  local::NoteSdkRequestId(local::kRequestIdBase | 3);
+  QCHECK(local::Collisions() == 1);
   QCHECK(!local::IsSynthetic(nullptr));
   QCHECK(!local::IsSynthetic(&g_real_message));
   local::ResetForTest();
@@ -719,20 +716,53 @@ void TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder() {
   // The freed slot is reusable.
   local::OnFreeMessage(&FakeFree, const_cast<void*>(two));
   for (std::size_t i = 0; i < local::kSlots; ++i) QCHECK(local::Request(Prerequisite::AccessToken) != 0);
-  // A request refused for lack of a slot is never delivered: kSlots queued answers pop, the next pop is the real one.
-  const std::uint64_t refused = local::Request(Prerequisite::OrgScopedId);
-  QCHECK(refused >= local::kRequestIdBase && local::Dropped() == 1);
-  std::size_t popped = 0;
-  for (std::size_t i = 0; i < local::kSlots + 2; ++i) {
-    g_pop_original_called = false;
-    const void* m = local::OnPopMessage(&FakePop);
-    if (local::IsSynthetic(m)) {
-      ++popped;
-      QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, m) != refused);
-      local::OnFreeMessage(&FakeFree, const_cast<void*>(m));
-    }
+}
+
+// #411 follow-up: there is no table to fill. Far more requests than there are handles all get a local id, none
+// reaches the SDK, and every one of them is delivered, in order, even while the game holds every handle.
+void TestAnswersPastTheHandleCountAreNeverLostOrForwarded() {
+  using namespace nevr_quest_login;
+  Fresh(true, true, /*ready=*/true);
+  local::SetEnabled(true);
+  const int types_before = g_original_type_calls;
+  const int frees_before = g_original_free_calls;
+  constexpr std::uint64_t kRequests = 1000;
+  const std::uint64_t base = local::kRequestIdBase;
+  for (std::uint64_t i = 1; i <= kRequests; ++i) {
+    QCHECK(local::Request(Prerequisite::UserProof) == (base | i));  // distinct, sequential, always local
   }
-  QCHECK(popped == local::kSlots);
+  QCHECK(local::Requested() == kRequests && local::Pending() == kRequests);
+  // The game holds every handle (none freed): the next pop is the real one and the answer waits.
+  const void* held[local::kSlots] = {};
+  for (std::size_t i = 0; i < local::kSlots; ++i) {
+    held[i] = local::OnPopMessage(&FakePop);
+    QCHECK(local::IsSynthetic(held[i]));
+    QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, held[i]) == (base | (i + 1)));
+  }
+  g_pop_original_called = false;
+  QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);
+  QCHECK(local::Deferred() >= 1 && local::Pending() == kRequests - local::kSlots);
+  // One handle comes back: the next answer in order is delivered.
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(held[3]));
+  const void* next = local::OnPopMessage(&FakePop);
+  QCHECK(local::IsSynthetic(next));
+  QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, next) == (base | (local::kSlots + 1)));
+  // Drain the rest in order.
+  std::uint64_t expected = local::kSlots + 2;
+  local::OnFreeMessage(&FakeFree, const_cast<void*>(next));
+  for (std::size_t i = 0; i < local::kSlots; ++i) {
+    if (i != 3) local::OnFreeMessage(&FakeFree, const_cast<void*>(held[i]));
+  }
+  for (;;) {
+    const void* m = local::OnPopMessage(&FakePop);
+    if (!local::IsSynthetic(m)) break;
+    QCHECK(local::OnMessageGetRequestId(&FakeGetRequestId, m) == (base | expected));
+    ++expected;
+    local::OnFreeMessage(&FakeFree, const_cast<void*>(m));
+  }
+  QCHECK(expected == kRequests + 1);
+  QCHECK(local::Delivered() == kRequests && local::Pending() == 0);
+  QCHECK(g_original_type_calls == types_before && g_original_free_calls == frees_before);  // the SDK never saw one
 }
 
 void TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk() {
@@ -790,6 +820,7 @@ int main() {
   TestLocalRequestsGetIdsTheSdkNeverProduces();
   TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally();
   TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder();
+  TestAnswersPastTheHandleCountAreNeverLostOrForwarded();
   TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk();
   TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady();
   TestRealAnswersPassThroughUnchanged();
