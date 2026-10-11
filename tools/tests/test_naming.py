@@ -66,6 +66,8 @@ BRAND_PROSE_SPELLINGS = {
     "docs/standards/logging.md": {"nEVR"},
     "docs/standards/verification.md": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
+    "tools/package-rc/README.template.txt": {"nEVR"},
+    "tools/package-rc/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
 }
 
