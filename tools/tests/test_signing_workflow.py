@@ -20,8 +20,8 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-SEVEN = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-         "nevr-runtime-v5.0.0.tar.zst", "nevr-runtime-v5.0.0-lite.zip", "nevr-runtime-v5.0.0-lite.tar.zst"]
+FIVE = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+        "nevr-runtime-v5.0.0-lite.zip"]
 
 
 def load():
@@ -131,8 +131,10 @@ class WorkflowStructureTest(unittest.TestCase):
             uploaded += lines(steps[i]["with"]["files"])
         self.assertEqual(sorted(subjects), sorted(uploaded))
         self.assertEqual(sorted(subjects), sorted([
-            "dist/*.zip", "dist/*.tar.zst",
-            "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md"]))
+            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md"]))
+        self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
+        tar_steps = [s for s in steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
+        self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
 
     def test_the_pre_release_flag_is_read_once_by_each_upload_and_nowhere_else(self):
         """Promotion changes no byte: nothing that builds, packages or seals may see the flag."""
@@ -206,7 +208,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     # --- the guard: a release that already carries its assets is not rebuilt --------------------------
 
-    def guard(self, event="release", tag="v5.0.0", assets=SEVEN, view_rc=0):
+    def guard(self, event="release", tag="v5.0.0", assets=FIVE, view_rc=0):
         with tempfile.TemporaryDirectory(prefix="guard-") as tmp:
             bindir = Path(tmp) / "bin"
             bindir.mkdir()
@@ -220,23 +222,23 @@ class WorkflowStructureTest(unittest.TestCase):
                                                  EVENT=event, TAG=tag, **env)
             return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
 
-    def test_a_release_with_all_seven_assets_is_not_rebuilt(self):
+    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
         rc, built, calls = self.guard()
         self.assertEqual((rc, built), (0, "true"))
         self.assertEqual(len(calls), 1)
         self.assertIn("release view v5.0.0", calls[0])
 
     def test_a_release_missing_any_one_asset_is_built(self):
-        for missing in SEVEN:
+        for missing in FIVE:
             with self.subTest(missing=missing):
-                rc, built, _ = self.guard(assets=[a for a in SEVEN if a != missing])
+                rc, built, _ = self.guard(assets=[a for a in FIVE if a != missing])
                 self.assertEqual((rc, built), (0, "false"))
 
     def test_a_release_with_no_assets_is_built(self):
         self.assertEqual(self.guard(assets=[])[:2], (0, "false"))
 
     def test_other_versions_assets_do_not_count(self):
-        other = [a.replace("5.0.0", "4.9.9") for a in SEVEN]
+        other = [a.replace("5.0.0", "4.9.9") for a in FIVE]
         self.assertEqual(self.guard(assets=other)[:2], (0, "false"))
 
     def test_a_failing_listing_fails_the_job_it_does_not_mean_rebuild(self):

@@ -12,7 +12,8 @@ name: Build
 # stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), passes it through the signing stub, and seals it (seal): the Windows
-# zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ archives. No file or text
+# zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ zips (the .tar.zst
+# archives stay a workflow artifact). No file or text
 # depends on the pre-release flag; the only place the flag is read is the upload's `prerelease:` input,
 # set to the event's own value so an upload can never change it. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
@@ -29,7 +30,7 @@ concurrency:
 jobs:
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
-  # NAMES (tools/release_already_built.sh: all seven files of this version are there), never the
+  # NAMES (tools/release_already_built.sh: all five files of this version are there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
@@ -430,6 +431,16 @@ jobs:
         test "${#zips[@]}" -eq 2
         test "${#tars[@]}" -eq 2
 
+    # The .tar.zst archives are built and checked but are not release assets: the public set is zips only
+    # (what Windows users use, and what a signer can sign). They stay here as a workflow artifact.
+    - name: Keep the .tar.zst archives as a workflow artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: dist-tar-zst
+        path: dist/*.tar.zst
+        if-no-files-found: error
+        retention-days: 7
+
     - uses: actions/download-artifact@v8
       with:
         name: release-unsigned
@@ -440,7 +451,6 @@ jobs:
       with:
         subject-path: |
           dist/*.zip
-          dist/*.tar.zst
           release-assets/*.zip
           release-assets/SHA256SUMS
           release-assets/RELEASE-NOTES.md
@@ -454,7 +464,6 @@ jobs:
         fail_on_unmatched_files: true
         files: |
           dist/*.zip
-          dist/*.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
