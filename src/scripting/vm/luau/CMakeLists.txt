@@ -140,14 +140,18 @@ endif()
 
 add_library(nevr_script_vm STATIC luau_vm.cpp)
 
-# Test-only entry points (LuauTestThunksRefuseForeignArguments). The spike build
-# carries them; a build that embeds scripting in the runtime turns this off.
-option(NEVR_LUAU_TEST_HOOKS "Compile the Luau binding's test-only entry points" ON)
+# Test-only entry points (LuauTestThunksRefuseForeignArguments). ON by default only
+# when src/scripting is the top-level project (the spike and its tests); a build
+# that embeds scripting with add_subdirectory gets them OFF unless it asks.
+option(NEVR_LUAU_TEST_HOOKS "Compile the Luau binding's test-only entry points" ${PROJECT_IS_TOP_LEVEL})
 target_compile_definitions(nevr_script_vm PRIVATE NEVR_LUAU_TEST_HOOKS=$<BOOL:${NEVR_LUAU_TEST_HOOKS}>)
 
-# Luau-only tests (paths a VM with an emergency collector never takes).
-nevr_script_test(nevr_luau_memory_test tests/luau_memory_test.cpp)
-target_link_libraries(nevr_luau_memory_test PRIVATE nevr_script_vm nevr_script_host)
+# Luau-only tests (paths a VM with an emergency collector never takes). One of
+# them calls a test-only entry point, so they need NEVR_LUAU_TEST_HOOKS.
+if(NEVR_LUAU_TEST_HOOKS)
+  nevr_script_test(nevr_luau_memory_test tests/luau_memory_test.cpp)
+  target_link_libraries(nevr_luau_memory_test PRIVATE nevr_script_vm nevr_script_host)
+endif()
 target_link_libraries(nevr_script_vm PUBLIC nevr_script_host
                       PRIVATE nevr_luau_compiler nevr_luau_vm)
 target_compile_definitions(nevr_script_vm PRIVATE "NEVR_LUAU_TAG=\"${NEVR_LUAU_TAG}\"" "NEVR_LUAU_SHARED_STATE=${NEVR_LUAU_SHARED_STATE_VALUE}")
