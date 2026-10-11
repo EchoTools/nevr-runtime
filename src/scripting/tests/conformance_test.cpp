@@ -8,6 +8,7 @@
 //   conformance_test --pattern-dos
 //                               T5d: a pattern-matching backtrack inside one C call;
 //                               reports whether the binding stopped it, under a 20 s watchdog
+//   conformance_test --gc-dos   T5e: a __gc finalizer that loops forever; same reporting
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -464,6 +465,37 @@ int PatternDos() {
   return 0;
 }
 
+// T5e: a finalizer that never returns. Lua 5.4 runs __gc with hooks switched
+// off (lgc.c GCTM), so an instruction budget does not stop it; a binding passes
+// by refusing __gc to scripts or by stopping it some other way. Reports what
+// happened; a watchdog ends the run if the call never returns.
+int GcDos() {
+  Host h;
+  NevrOwner* a = h.Load("gcdos.lua",
+                        "nevr.hook('test.add', {pre = function(h)\n"
+                        "  for i = 1, 200 do setmetatable({}, {__gc = function() while true do end end}) end\n"
+                        "  local t = {}\n"
+                        "  for i = 1, 200000 do t[i] = {i} end\n"
+                        "end})\n");
+  std::atomic<bool> done{false};
+  std::thread watchdog([&done] {
+    for (int i = 0; i < 200 && !done.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!done.load()) {
+      std::printf("T5e gc_dos: NOT STOPPED after 20000 ms (a finalizer is still running)\n");
+      std::fflush(stdout);
+      std::_Exit(2);
+    }
+  });
+  const auto t0 = std::chrono::steady_clock::now();
+  h.Add(2, 3);
+  h.Add(2, 3);
+  const double ms = MsSince(t0);
+  done.store(true);
+  watchdog.join();
+  std::printf("T5e gc_dos: returned after %.1f ms, owner %s\n", ms, a->disabled.load() ? "disabled" : "still enabled");
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -471,6 +503,7 @@ int main(int argc, char** argv) {
   g_verbose = verbose && *verbose == '1';
   if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) return Bench();
   if (argc > 1 && std::strcmp(argv[1], "--pattern-dos") == 0) return PatternDos();
+  if (argc > 1 && std::strcmp(argv[1], "--gc-dos") == 0) return GcDos();
   {
     Host h;
     std::printf("VM: %s\n", h.vm->Name());
