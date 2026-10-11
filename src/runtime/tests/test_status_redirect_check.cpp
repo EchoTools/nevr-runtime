@@ -56,68 +56,157 @@ std::vector<nlohmann::json> Results() {
 }
 
 using nevr_self_check::Observation;
+using nevr_status_redirect_check::Ledger;
+
+const char kNevr[] = "https://nevr.example:7350";
 
 }  // namespace
 
-TEST(StatusRedirectReporter, NothingToSayBeforeTheFirstConnection) {
-  nevr_status_redirect_check::Reporter reporter;
-  Observation o;
-  EXPECT_FALSE(reporter.Take(0, 0, &o));
+// ---- classification: every connect the game opens is counted by class --------------------------------------------
+
+TEST(StatusRedirectLedger, AnApiBaseSentToTheConfiguredServiceIsARedirect) {
+  Ledger ledger;
+  ledger.NoteConnect("https://api.readyatdawn.com", kNevr);
+  ledger.NoteConnect("https://api-live.readyatdawn.com", kNevr);  // the libr15 template api-%s.readyatdawn.com
+  const auto c = ledger.Counts();
+  EXPECT_EQ(c.apiRedirected, 2u);
+  EXPECT_EQ(c.apiPassthrough, 0u);
+  EXPECT_EQ(c.uncovered, 0u);
 }
 
-TEST(StatusRedirectReporter, TheFirstRedirectWithNoPassthroughPassesOnce) {
-  nevr_status_redirect_check::Reporter reporter;
+TEST(StatusRedirectLedger, AnApiBaseThatWasLeftAloneIsAPassthrough) {
+  Ledger ledger;
+  ledger.NoteConnect("https://api.readyatdawn.com", "https://api.readyatdawn.com");
+  EXPECT_EQ(ledger.Counts().apiPassthrough, 1u);
+  EXPECT_EQ(ledger.Counts().apiRedirected, 0u);
+}
+
+// The failing shape of #408 on the headset was "Couldn't resolve host name": the request went to a host the
+// redirect does not cover. A service-domain host that is neither the API nor the graph base lands in `uncovered`,
+// by host name only (no path, no query, no key), and is not silently ignored.
+TEST(StatusRedirectLedger, AServiceHostThatIsNotTheApiBaseIsUncoveredAndNamedByHostOnly) {
+  Ledger ledger;
+  ledger.NoteConnect("https://status.readyatdawn.com:443/status/services,news?env=live&projectid=rad14&key=SECRET",
+                     "https://status.readyatdawn.com:443/status/services,news?env=live&projectid=rad14&key=SECRET");
+  const auto c = ledger.Counts();
+  EXPECT_EQ(c.uncovered, 1u);
+  EXPECT_EQ(c.apiPassthrough, 0u) << "it is not an API base, so it must not be read as one";
   Observation o;
-  ASSERT_TRUE(reporter.Take(3, 0, &o));
+  ASSERT_TRUE(ledger.Take(&o));
+  EXPECT_FALSE(o.pass);
+  EXPECT_NE(o.observed.find("uncovered=1"), std::string::npos);
+  EXPECT_NE(o.observed.find("status.readyatdawn.com"), std::string::npos);
+  EXPECT_EQ(o.observed.find("?"), std::string::npos) << "no query string";
+  EXPECT_EQ(o.observed.find("SECRET"), std::string::npos) << "no key";
+  EXPECT_EQ(o.observed.find("/status"), std::string::npos) << "no path";
+}
+
+TEST(StatusRedirectLedger, ASameDomainHostThatTheRedirectDidCoverIsNotUncovered) {
+  Ledger ledger;
+  ledger.NoteConnect("https://config.readyatdawn.com", kNevr);
+  EXPECT_EQ(ledger.Counts().uncovered, 0u);
+}
+
+TEST(StatusRedirectLedger, AHostOutsideTheServiceDomainIsCountedExternalAndIsNotAFailure) {
+  Ledger ledger;
+  ledger.NoteConnect("https://cdn.example.com/assets", "https://cdn.example.com/assets");
+  const auto c = ledger.Counts();
+  EXPECT_EQ(c.external, 1u);
+  EXPECT_EQ(c.uncovered, 0u);
+  EXPECT_EQ(c.apiPassthrough, 0u);
+}
+
+TEST(StatusRedirectLedger, TheGraphBaseIsCountedApartFromTheApiBase) {
+  Ledger ledger;
+  ledger.NoteConnect("https://graph.oculus.com", kNevr);
+  ledger.NoteConnect("https://graph.oculus.com", "https://graph.oculus.com");
+  const auto c = ledger.Counts();
+  EXPECT_EQ(c.graph, 2u);
+  EXPECT_EQ(c.apiRedirected, 0u);
+  EXPECT_EQ(c.apiPassthrough, 0u);
+  EXPECT_EQ(c.uncovered, 0u);
+}
+
+TEST(StatusRedirectLedger, ANullOrEmptyUriIsIgnored) {
+  Ledger ledger;
+  ledger.NoteConnect(nullptr, nullptr);
+  ledger.NoteConnect("", "");
+  const auto c = ledger.Counts();
+  EXPECT_EQ(c.apiRedirected + c.apiPassthrough + c.uncovered + c.external + c.graph, 0u);
+}
+
+TEST(StatusRedirectLedger, UncoveredHostsAreBoundedAndDistinct) {
+  Ledger ledger;
+  for (int i = 0; i < 20; ++i) {
+    const std::string host = "https://h" + std::to_string(i % 6) + ".readyatdawn.com";
+    ledger.NoteConnect(host.c_str(), host.c_str());
+  }
+  EXPECT_EQ(ledger.Counts().uncovered, 20u);
+  Observation o;
+  ASSERT_TRUE(ledger.Take(&o));
+  std::size_t commas = 0;
+  for (char ch : o.observed) commas += ch == ',' ? 1 : 0;
+  EXPECT_LE(commas, 3u) << "at most four distinct hosts are named";
+  EXPECT_LT(o.observed.size(), 200u);
+}
+
+// ---- what is said ------------------------------------------------------------------------------------------------
+
+TEST(StatusRedirectReporter, NothingToSayBeforeTheFirstConnection) {
+  Ledger ledger;
+  Observation o;
+  EXPECT_FALSE(ledger.Take(&o));
+}
+
+TEST(StatusRedirectReporter, TheFirstRedirectWithNothingWrongPassesOnce) {
+  Ledger ledger;
+  Observation o;
+  ledger.NoteConnect("https://api.readyatdawn.com", kNevr);
+  ASSERT_TRUE(ledger.Take(&o));
   EXPECT_TRUE(o.pass);
-  EXPECT_EQ(o.observed, "api_connects=3 redirected=3 passthrough=0");
-  EXPECT_FALSE(reporter.Take(5, 0, &o)) << "a pass is said once";
-  EXPECT_FALSE(reporter.Take(5, 0, &o));
+  EXPECT_EQ(o.observed, "api_connects=1 redirected=1 passthrough=0 uncovered=0 graph=0 external=0");
+  ledger.NoteConnect("https://api.readyatdawn.com", kNevr);
+  EXPECT_FALSE(ledger.Take(&o)) << "a pass is said once";
 }
 
 TEST(StatusRedirectReporter, FailuresAreSaidAtPowersOfTwoWithTheRunningCounts) {
-  nevr_status_redirect_check::Reporter reporter;
+  Ledger ledger;
   Observation o;
-  ASSERT_TRUE(reporter.Take(0, 1, &o));
-  EXPECT_FALSE(o.pass);
-  EXPECT_EQ(o.observed, "api_connects=1 redirected=0 passthrough=1");
-  ASSERT_TRUE(reporter.Take(0, 2, &o));
-  EXPECT_EQ(o.observed, "api_connects=2 redirected=0 passthrough=2");
-  EXPECT_FALSE(reporter.Take(0, 3, &o)) << "between powers of two";
-  ASSERT_TRUE(reporter.Take(0, 5, &o)) << "a jump past 4 is said once";
-  EXPECT_EQ(o.observed, "api_connects=5 redirected=0 passthrough=5");
-  EXPECT_FALSE(reporter.Take(0, 7, &o));
-  ASSERT_TRUE(reporter.Take(0, 8, &o));
-  EXPECT_FALSE(o.pass);
-  EXPECT_FALSE(reporter.Take(0, 8, &o)) << "unchanged";
-}
-
-TEST(StatusRedirectReporter, APassthroughAfterARedirectIsAFailureNotASecondPass) {
-  nevr_status_redirect_check::Reporter reporter;
-  Observation o;
-  ASSERT_TRUE(reporter.Take(2, 0, &o));
-  EXPECT_TRUE(o.pass);
-  ASSERT_TRUE(reporter.Take(2, 1, &o));
-  EXPECT_FALSE(o.pass);
-  EXPECT_EQ(o.observed, "api_connects=3 redirected=2 passthrough=1");
-}
-
-TEST(StatusRedirectReporter, ARedirectAfterAPassthroughIsNotAPass) {
-  nevr_status_redirect_check::Reporter reporter;
-  Observation o;
-  ASSERT_TRUE(reporter.Take(0, 1, &o));
-  EXPECT_FALSE(reporter.Take(4, 1, &o)) << "the failure stands; no late pass";
-}
-
-TEST(StatusRedirectLedger, CountsEachConnectionByItsOutcome) {
-  nevr_status_redirect_check::Ledger ledger;
-  ledger.NoteApiConnect(true);
-  ledger.NoteApiConnect(true);
-  ledger.NoteApiConnect(false);
-  Observation o;
+  auto fail = [&] { ledger.NoteConnect("https://api.readyatdawn.com", "https://api.readyatdawn.com"); };
+  fail();
   ASSERT_TRUE(ledger.Take(&o));
-  EXPECT_EQ(o.observed, "api_connects=3 redirected=2 passthrough=1");
   EXPECT_FALSE(o.pass);
+  EXPECT_EQ(o.observed, "api_connects=1 redirected=0 passthrough=1 uncovered=0 graph=0 external=0");
+  fail();
+  ASSERT_TRUE(ledger.Take(&o));
+  EXPECT_NE(o.observed.find("passthrough=2"), std::string::npos);
+  fail();
+  EXPECT_FALSE(ledger.Take(&o)) << "between powers of two";
+  fail();
+  fail();
+  ASSERT_TRUE(ledger.Take(&o)) << "a jump past 4 is said once";
+  EXPECT_NE(o.observed.find("passthrough=5"), std::string::npos);
+  EXPECT_FALSE(ledger.Take(&o)) << "unchanged";
+}
+
+TEST(StatusRedirectReporter, UncoveredAndPassthroughShareTheFailureLevels) {
+  Ledger ledger;
+  Observation o;
+  ledger.NoteConnect("https://api.readyatdawn.com", "https://api.readyatdawn.com");
+  ASSERT_TRUE(ledger.Take(&o));
+  ledger.NoteConnect("https://x.readyatdawn.com", "https://x.readyatdawn.com");
+  ASSERT_TRUE(ledger.Take(&o)) << "one failure of each kind is two failures: level 2";
+  EXPECT_NE(o.observed.find("passthrough=1"), std::string::npos);
+  EXPECT_NE(o.observed.find("uncovered=1"), std::string::npos);
+}
+
+TEST(StatusRedirectReporter, ARedirectAfterAFailureIsNotAPass) {
+  Ledger ledger;
+  Observation o;
+  ledger.NoteConnect("https://api.readyatdawn.com", "https://api.readyatdawn.com");
+  ASSERT_TRUE(ledger.Take(&o));
+  ledger.NoteConnect("https://api.readyatdawn.com", kNevr);
+  EXPECT_FALSE(ledger.Take(&o)) << "the failure stands; no late pass";
 }
 
 class StatusRedirectCheck : public ::testing::Test {
@@ -133,17 +222,16 @@ class StatusRedirectCheck : public ::testing::Test {
 };
 
 TEST_F(StatusRedirectCheck, TheRegisteredProbeSendsOneResultPerChange) {
-  nevr_status_redirect_check::Register(&nevr_status_redirect_check::LedgerProbe);
+  nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);
   nevr_self_check::Flush();
   EXPECT_TRUE(g_frames.empty()) << "no connection yet";
-  nevr_status_redirect_check::NoteApiConnect(true);
+  nevr_status_redirect_check::NoteConnect("https://api.readyatdawn.com", kNevr);
   nevr_self_check::Flush();
-  nevr_status_redirect_check::NoteApiConnect(false);
+  nevr_status_redirect_check::NoteConnect("https://api.readyatdawn.com", "https://api.readyatdawn.com");
   nevr_self_check::Flush();
   const auto results = Results();
   ASSERT_EQ(results.size(), 2u);
   EXPECT_EQ(results[0]["check"], "status_redirect");
   EXPECT_EQ(results[0]["pass"], true);
   EXPECT_EQ(results[1]["pass"], false);
-  EXPECT_EQ(results[1]["observed"], "api_connects=2 redirected=1 passthrough=1");
 }
