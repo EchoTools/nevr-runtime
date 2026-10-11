@@ -101,7 +101,7 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
 - **Memory.** A capped `lua_Alloc` refuses growth past `VmLimits::memory_bytes`. The cap counts allocated bytes,
   garbage not yet collected included, and Luau has no emergency collection inside the allocator. So the binding
   keeps garbage off the cap:
-  - Each state's collector runs at goal 150% and step multiplier 300% (the pair `lua.h` recommends).
+  - Each state's collector runs at goal 150% and step multiplier 300% (the pair Luau's lua.h recommends).
   - Within a call, past half the cap and once a quarter of the cap has been allocated since the last collection,
     the interrupt collects. Its cost counts against the call's time budget, and a large live set with no churn
     never pays it.
