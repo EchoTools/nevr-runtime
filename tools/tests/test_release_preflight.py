@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -22,6 +24,11 @@ def git(cwd, *args, env=None):
     return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
                            "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
                           cwd=cwd, check=True, capture_output=True, text=True, env=env)
+
+
+def scratch_expect(origin) -> str:
+    """The --expect-origin pattern that accepts the scratch bare repository's path."""
+    return "^" + re.escape(str(origin)) + "$"
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
@@ -44,11 +51,14 @@ class ReleasePreflightTest(unittest.TestCase):
         git(self.tmp, "clone", "-q", str(self.origin), str(self.clone))
         self.log = self.tmp / "preflight.jsonl"
 
-    def run_preflight(self, *extra, env=None, cwd=None):
+    def run_preflight(self, *extra, env=None, cwd=None, expect=True):
         e = dict(os.environ, RELEASE_PREFLIGHT_LOG=str(self.log))
         if env:
             e.update(env)
-        return subprocess.run([str(SCRIPT), *extra], cwd=cwd or self.clone, env=e, capture_output=True, text=True)
+        args = list(extra)
+        if expect and "--expect-origin" not in args:
+            args += ["--expect-origin", scratch_expect(self.origin)]
+        return subprocess.run([str(SCRIPT), *args], cwd=cwd or self.clone, env=e, capture_output=True, text=True)
 
     def problems(self, result):
         return [line for line in result.stdout.splitlines() if line.startswith("release-preflight: PROBLEM:")]
@@ -162,7 +172,7 @@ class ReleasePreflightTest(unittest.TestCase):
 
     def test_an_unreachable_origin_is_refused_not_skipped(self):
         git(self.clone, "remote", "set-url", "origin", str(self.tmp / "nowhere.git"))
-        result = self.run_preflight()
+        result = self.run_preflight("--expect-origin", scratch_expect(self.tmp / "nowhere.git"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("cannot reach origin", result.stdout)
 
@@ -194,6 +204,63 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("origin has no branch nonesuch", result.stdout)
 
+    def test_an_origin_that_is_not_the_project_is_refused_and_named(self):
+        result = self.run_preflight(expect=False)  # the default pattern: the project's GitHub URL
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(str(self.origin), result.stdout)
+        self.assertIn("not the project's repository", result.stdout)
+
+    def test_both_github_url_forms_of_the_project_are_accepted(self):
+        for url in ("git@github.com:EchoTools/nevr-runtime.git", "https://github.com/EchoTools/nevr-runtime.git",
+                    "https://github.com/EchoTools/nevr-runtime", "ssh://git@github.com/EchoTools/nevr-runtime.git"):
+            with self.subTest(url=url):
+                git(self.clone, "config", "remote.origin.url", url)
+                # url.<local bare repository>.insteadOf lets git reach the scratch origin instead of GitHub
+                git(self.clone, "config", f"url.{self.origin}.insteadOf", url)
+                result = self.run_preflight(expect=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                git(self.clone, "config", "--unset", f"url.{self.origin}.insteadOf")
+
+    def test_another_github_repository_is_refused(self):
+        for url in ("git@github.com:someone/nevr-runtime.git", "https://github.com/EchoTools/nevr-runtime-plugins.git",
+                    "https://example.com/EchoTools/nevr-runtime.git"):
+            with self.subTest(url=url):
+                git(self.clone, "config", "remote.origin.url", url)
+                git(self.clone, "config", f"url.{self.origin}.insteadOf", url)
+                result = self.run_preflight(expect=False)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("not the project's repository", result.stdout)
+                git(self.clone, "config", "--unset", f"url.{self.origin}.insteadOf")
+
+    def test_a_missing_base_branch_is_refused(self):
+        result = self.run_preflight("--base", "nonesuch")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("origin has no branch nonesuch", result.stdout)
+
+    def test_a_failing_git_command_is_a_problem_not_a_clean_tree(self):
+        shim_dir = self.tmp / "failshim"
+        shim_dir.mkdir()
+        real_git = shutil.which("git")
+        for sub, label in (("status", "git status"), ("for-each-ref", "git for-each-ref refs/tags"), ("rev-parse HEAD", "git rev-parse HEAD")):
+            with self.subTest(command=sub):
+                shim = shim_dir / "git"
+                first, _, second = sub.partition(" ")
+                cond = f'[ "$1" = "{first}" ]' + (f' && [ "$2" = "{second}" ]' if second else "")
+                shim.write_text(f"#!/usr/bin/env bash\nif {cond}; then echo 'fatal: simulated failure' >&2; exit 128; fi\n"
+                                f"exec '{real_git}' \"$@\"\n")
+                shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+                result = self.run_preflight(env={"PATH": f"{shim_dir}:{os.environ['PATH']}"})
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"{label} failed (exit 128)", result.stdout)
+                self.assertNotIn("release-preflight: OK", result.stdout)
+
+    def test_a_tracked_change_alone_is_refused(self):
+        (self.clone / "a.txt").write_text("changed\n")
+        result = self.run_preflight()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len([p for p in self.problems(result) if "a.txt" in p]), 1)
+        self.assertEqual(len(self.problems(result)), 1, result.stdout)
+
     # --- the contract: read-only, logged ------------------------------------------------------------
 
     def test_it_runs_no_git_command_that_changes_anything(self):
@@ -210,14 +277,14 @@ class ReleasePreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         calls = argv_log.read_text().splitlines()
         self.assertTrue(calls, "the shim saw no git call: the sensor is blind")
-        allowed = {"rev-parse", "remote", "status", "for-each-ref", "ls-remote", "cat-file", "rev-list"}
+        allowed = {"rev-parse", "config", "status", "for-each-ref", "ls-remote", "cat-file", "rev-list"}
         for call in calls:
             words = call.split()
             while words and words[0] == "-c":
                 words = words[2:]
             self.assertIn(words[0], allowed, f"a git call outside the read-only list: {call}")
-            if words[0] == "remote":
-                self.assertEqual(words[1], "get-url", f"a changing remote call: {call}")
+            if words[0] == "config":
+                self.assertEqual(words[1:], ["--get", "remote.origin.url"], f"a changing config call: {call}")
         self.assertTrue(any("ls-remote" in c for c in calls))
         after = git(self.clone, "for-each-ref").stdout
         self.assertEqual(before, after, "the clone's refs changed")
@@ -238,6 +305,23 @@ class ReleasePreflightTest(unittest.TestCase):
         result = self.run_preflight(env={"RELEASE_PREFLIGHT_LOG": str(self.tmp / "no" / "such" / "dir" / "x.jsonl")})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot write the log", result.stdout + result.stderr)
+
+
+class MissingGitTest(unittest.TestCase):
+    """git missing from PATH is a refusal with a log record, not a traceback and exit 1 with nothing written."""
+
+    def test_an_empty_path_is_refused_loudly_and_logged(self):
+        with tempfile.TemporaryDirectory(prefix="no-git-", dir="/var/tmp") as tmp:
+            log = pathlib.Path(tmp) / "preflight.jsonl"
+            result = subprocess.run([sys.executable, str(SCRIPT)], cwd=tmp, capture_output=True, text=True,
+                                    env={"PATH": "", "RELEASE_PREFLIGHT_LOG": str(log)})
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn("release-preflight: PROBLEM: git rev-parse --show-toplevel failed (exit 127)", result.stdout)
+            self.assertIn("git is not installed or not on PATH", result.stdout)
+            record = json.loads(log.read_text().splitlines()[0])
+            self.assertEqual(record["result"], "refused")
+            self.assertTrue(any("not installed" in p for p in record["problems"]))
 
 
 class RecipeAndDocsTest(unittest.TestCase):
