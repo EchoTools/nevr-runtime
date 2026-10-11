@@ -143,7 +143,7 @@ class SelfCheck : public ::testing::Test {
     nevr_self_check::SetEnabled(true);
     nevr_self_check::SetSender(&Sender);
     nevr_self_check::SetLogSink(&Logger);
-    nevr_self_check::SetBuild("5.0.0");
+    nevr_self_check::SetBuild("4.0.0-rc.1+abc");
   }
   static std::vector<nlohmann::json> AllSent() {
     std::vector<nlohmann::json> out;
@@ -184,7 +184,7 @@ TEST_F(SelfCheck, ReportBeforeLoginIsLoggedNowAndSentAfterLogin) {
   EXPECT_EQ(results[0]["pass"], false);
   EXPECT_EQ(results[0]["expected"], "PartyUpdateSuccess");
   EXPECT_EQ(results[0]["observed"], "PartyUpdateFailure");
-  EXPECT_EQ(results[0]["build"], "5.0.0");
+  EXPECT_EQ(results[0]["build"], "4.0.0-rc.1+abc");
   EXPECT_EQ(results[0]["userid"], "OVR-ORG-42");
   EXPECT_EQ(results[0]["seq"], 1);
   EXPECT_EQ(DecodeNakamaStyle(g_sent.frames[0]).account, 42u);

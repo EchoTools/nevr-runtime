@@ -1,9 +1,8 @@
-"""cmake/nevr_self_checks.cmake: a build reports its run-card checks only when it is stamped a release.
+"""cmake/nevr_self_checks.cmake: a build reports its run-card checks only when it is stamped a release candidate.
 
-The decision follows the stamped version (cmake/set_project_version_from_git.cmake): a CI build exactly on
-the tag vX.Y.Z is stamped X.Y.Z and reports; any other build is stamped X.Y.(Z+1)-dev.<N>+<sha> and does
-not, so a local `just package-dev` build never sends debug=true to the game service (#451). The stamp is the
-same before and after a release's pre-release flag is unticked, so promotion changes no byte.
+The decision follows the stamped version, not the raw NEVR_RC_LABEL: `just package-dev` passes
+-DNEVR_RC_LABEL=dev (stamped -dev) and a local -DNEVR_RC_LABEL=rc.<N> is stamped -dev too (#459), so
+neither may send debug=true to the game service (#451).
 """
 
 import re
@@ -35,24 +34,23 @@ def by_stamp(version: str) -> str:
 
 
 class SelfChecksFlagTest(unittest.TestCase):
-    def test_a_release_stamp_turns_it_on(self):
-        self.assertEqual(by_stamp("5.0.0"), "ON")
-        self.assertEqual(by_stamp("4.1.12"), "ON")
+    def test_a_release_candidate_stamp_turns_it_on(self):
+        self.assertEqual(by_stamp("4.0.0-rc.3+0.3a35e0b9"), "ON")
+        self.assertEqual(by_stamp("4.1.0-rc.12+0.deadbeef"), "ON")
 
-    def test_a_development_stamp_or_anything_else_leaves_it_off(self):
-        self.assertEqual(by_stamp("5.0.1-dev.1+47841ade"), "OFF")
-        self.assertEqual(by_stamp("5.0.1-dev.0+3a35e0b"), "OFF")
-        self.assertEqual(by_stamp("5.0.0+3a35e0b"), "OFF")  # a release stamp carries no build metadata
-        self.assertEqual(by_stamp("5.0.0-beta.1"), "OFF")
-        self.assertEqual(by_stamp("5.0"), "OFF")
+    def test_a_development_or_plain_stamp_leaves_it_off(self):
+        # NEVR_RC_LABEL=dev (just package-dev) and a label that was not honoured both stamp -dev.
+        self.assertEqual(by_stamp("4.0.0-dev+1205.47841ade"), "OFF")
+        self.assertEqual(by_stamp("4.0.0-dev+0.3a35e0b9"), "OFF")
+        self.assertEqual(by_stamp("4.0.0+1205.47841ade"), "OFF")
         self.assertEqual(by_stamp(""), "OFF")
 
-    def test_the_root_cmake_uses_the_stamped_version_and_nothing_else(self):
+    def test_the_root_cmake_uses_the_stamped_version_and_not_the_raw_label(self):
         text = ROOT.read_text(encoding="utf-8")
         self.assertIn('nevr_self_checks_by_stamp(NEVR_SELF_CHECKS_BY_STAMP "${PROJECT_VERSION}")', text)
+        # the block that defines NEVR_SELF_CHECKS must not test NEVR_RC_LABEL
         block = text[text.index("nevr_self_checks_by_stamp(NEVR_SELF_CHECKS_BY_STAMP"):text.index("add_compile_definitions(NEVR_SELF_CHECKS=1)")]
-        for forbidden in ("NEVR_RC_LABEL", "ENV{GITHUB", "prerelease"):
-            self.assertNotIn(forbidden, block)
+        self.assertNotIn("NEVR_RC_LABEL", block)
 
 
 if __name__ == "__main__":

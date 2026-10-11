@@ -37,13 +37,12 @@ set_project_version_from_git()
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
-# A release reports its own run-card checks to the game service (src/runtime/compat/self_check.h): it
-# connects with debug=true so the service asks the game for every remote log category, and each check
-# sends its result as one remote log string. The decision follows the stamped version, so every CI release
-# build (stamped exactly X.Y.Z) reports, pre-release or not, and a local package-dev build (stamped -dev)
-# leaves the unit off; -DNEVR_SELF_CHECKS=ON turns it on for any build.
+# A release candidate reports its own run-card checks to the game service (src/runtime/compat/self_check.h):
+# it connects with debug=true so the service asks the game for every remote log category, and each check
+# sends its result as one remote log string. The decision follows the stamped version, so a local
+# package-dev build (stamped -dev) leaves the unit off; -DNEVR_SELF_CHECKS=ON turns it on for any build.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_self_checks.cmake")
-option(NEVR_SELF_CHECKS "Report run-card checks as remote logs (default: on for a release build, stamped X.Y.Z)" OFF)
+option(NEVR_SELF_CHECKS "Report run-card checks as remote logs (default: on for a build stamped -rc.<N>)" OFF)
 nevr_self_checks_by_stamp(NEVR_SELF_CHECKS_BY_STAMP "${PROJECT_VERSION}")
 if(NEVR_SELF_CHECKS OR NEVR_SELF_CHECKS_BY_STAMP)
   add_compile_definitions(NEVR_SELF_CHECKS=1)

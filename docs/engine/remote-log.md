@@ -225,13 +225,12 @@ binary.
 
 ## 6. Self-checks
 
-A release reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one
+A release candidate reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one
 source for the PC runtime and the Quest sentinel).
 
-- **On:** PC when the build's STAMPED version is a release (exactly `<x.y.z>`, set only by a CI build exactly on
-  the tag `vX.Y.Z`, `cmake/set_project_version_from_git.cmake`), or with `-DNEVR_SELF_CHECKS=ON`. The stamp is the
-  same whether the release's pre-release flag is ticked or not. A local `just package-dev` build is stamped
-  `X.Y.(Z+1)-dev.<N>+<sha>` and leaves it off (`cmake/nevr_self_checks.cmake`, `tools/tests/test_self_checks_flag.py`).
+- **On:** PC when the build's STAMPED version is a release candidate (`<x.y.z>-rc.<N>`, set only by a CI build of
+  the matching tag, `cmake/set_project_version_from_git.cmake`), or with `-DNEVR_SELF_CHECKS=ON`. A local `just package-dev` build
+  is stamped `-dev` and leaves it off (`cmake/nevr_self_checks.cmake`, `tools/tests/test_self_checks_flag.py`).
   Quest when the `self_check` feature is on: `features.self_check` in `nevr-quest.json`, or the build's default
   features (`NEVR_QUEST_DEFAULT_FEATURES`); `just package-dev` does not name it, so the tester APK it builds does
   not self-report unless `features="...,self_check"` is passed or the file turns it on. It needs `login`.
