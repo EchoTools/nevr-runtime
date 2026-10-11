@@ -36,11 +36,24 @@ just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release candidate is only a CI build of a v*-rc.<N> tag; never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
+
+Release candidates are built by CI from a tag, never locally. The steps, in order, from a clone of origin:
+
+```sh
+just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
+git tag -a v<x.y.z>-rc.<N> -m "release candidate <N>" && git push origin v<x.y.z>-rc.<N>   # 2. tag origin's tip and push the tag
+just release-preflight && gh release create v<x.y.z>-rc.<N> --verify-tag                    # 3. once more, then publish the release (not a draft)
+```
+
+`just release-preflight` also runs first inside `just package-dev`. It belongs before pushing an rc tag (step 1) and before
+`gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
+(it must work in a dirty tree).
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
 

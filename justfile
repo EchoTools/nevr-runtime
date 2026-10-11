@@ -193,6 +193,13 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
+# Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
+# tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
+# Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
+# before pushing a v<x.y.z>-rc.<N> tag and before `gh release create` (tools/release_preflight.py).
+release-preflight base="main":
+    tools/release_preflight.py --base {{ quote(base) }}
+
 # A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
 # Both builds stamp a DEVELOPMENT version (<x.y.z>-dev+<tweak>.<sha>) and the files are named
 # nevr-runtime-v4.0.0-dev-<sha>-*: this recipe cannot produce a release candidate. Only a CI build of a
@@ -208,7 +215,8 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
     #!/usr/bin/env bash
     set -euo pipefail
-    [ -z "$(git status --porcelain)" ] || { echo "package-dev: the tree is not clean; commit or stash first (a package is built from a commit)" >&2; exit 1; }
+    # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
+    tools/release_preflight.py
     [ -f "{{ ks }}" ] || { echo "package-dev: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
     [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
