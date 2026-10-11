@@ -378,19 +378,16 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-  # Repack the trees into the same archives the build job made, check them, attest their provenance and
-  # publish. Signing is stubbed above: the files are published exactly as built.
-  publish:
+  # Repack the trees into the same archives the build job made and check them. This is the only job
+  # that installs tools (apt, pip) or runs repository scripts after the build, and it holds a read-only
+  # token: the write token and the attestation identity live in `publish`, which runs no repository
+  # code and installs nothing. Signing is stubbed above: the files are repacked exactly as built.
+  repack:
     needs: [sign, seal]
     if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && needs.seal.result == 'success' }}
     runs-on: ubuntu-latest
-    # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
-    # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
-    # features"). They are not code signing.
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -440,6 +437,33 @@ jobs:
         path: dist/*.tar.zst
         if-no-files-found: error
         retention-days: 7
+
+    - name: Keep the zips for the publish job
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: dist-zips
+        path: dist/*.zip
+        if-no-files-found: error
+        retention-days: 7
+
+  # Attest the provenance of the release files and publish them: the zips repacked above, and the sealed
+  # release files. Nothing is built, installed or run from the repository here.
+  publish:
+    needs: [sign, seal, repack]
+    if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' }}
+    runs-on: ubuntu-latest
+    # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
+    # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
+    # features"). They are not code signing.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: dist-zips
+        path: dist
 
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
