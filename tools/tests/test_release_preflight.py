@@ -280,7 +280,8 @@ class ReleasePreflightTest(unittest.TestCase):
         self.push_from_seed("two")
         git(self.clone, "fetch", "-q")  # the objects are here: the counting path runs
         for name, body in (("exit 128", 'if [ "$1" = "rev-list" ]; then echo "fatal: simulated" >&2; exit 128; fi'),
-                           ("garbage", 'if [ "$1" = "rev-list" ]; then echo "not-a-number"; exit 0; fi')):
+                           ("garbage", 'if [ "$1" = "rev-list" ]; then echo "not-a-number"; exit 0; fi'),
+                           ("a number but exit 1", 'if [ "$1" = "rev-list" ]; then echo 0; exit 1; fi')):
             with self.subTest(rev_list=name):
                 result = self.run_preflight(env=self.shimmed(body))
                 self.assertEqual(result.returncode, 1, result.stdout)
