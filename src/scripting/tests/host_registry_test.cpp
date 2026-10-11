@@ -303,6 +303,12 @@ TEST(disabled_owner_is_skipped_and_loses_its_overrides) {
   CHECK_EQ(f.Count("owner_disabled"), 1);
   const Captured* c = f.Find("owner_disabled");
   CHECK(c && c->detail.find("instruction budget exceeded") != std::string::npos);
+  // N2 (re-review of #458): what a disabled owner is refused, and a breach on an
+  // owner already disabled, are recorded.
+  CHECK_EQ(f.Count("refused_disabled"), 2);
+  f.reg.DisableOwner(a, "time budget exceeded");
+  CHECK_EQ(f.Count("owner_disabled"), 2);
+  CHECK(f.log.back().detail.find("already disabled; time budget exceeded") != std::string::npos);
 }
 
 TEST(reset_owner_keeps_its_place_in_the_order) {

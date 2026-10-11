@@ -225,6 +225,7 @@ NevrOwner* Registry::FindOwner(const std::string& name) const {
 }
 
 NevrStatus Registry::Fail(NevrOwner* owner, NevrStatus status, std::string why) {
+  if (status == NEVR_ERR_DISABLED) Emit(NEVR_LOG_WARNING, "refused_disabled", owner, nullptr, nullptr, why);
   t_last_error[owner] = std::move(why);
   return status;
 }
@@ -276,7 +277,12 @@ void Registry::DisableOwner(NevrOwner* owner, const std::string& reason) {
     // Under mu_, so a hook_add or override_set already past its own check
     // (which also runs under mu_) has finished and its entry is dropped here.
     std::lock_guard<std::mutex> lock(mu_);
-    if (owner->disabled.exchange(true)) return;
+    if (owner->disabled.exchange(true)) {
+      // Already disabled (a reload in progress, an earlier breach): the breach
+      // is still recorded.
+      Emit(NEVR_LOG_ERROR, "owner_disabled", owner, nullptr, nullptr, "already disabled; " + reason);
+      return;
+    }
     dropped = DropOwnerLocked(owner);
   }
   Emit(NEVR_LOG_ERROR, "owner_disabled", owner, nullptr, nullptr,

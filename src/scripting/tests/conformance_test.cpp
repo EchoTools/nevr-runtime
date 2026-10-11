@@ -448,12 +448,38 @@ TEST(t7_garbage_does_not_disable_a_script) {
                         "  for i = 1, 30 do local s = string.rep('x', 1024 * 1024) end\n"
                         "end})\n");
   // 30 MiB of 1 MiB strings per call against an 8 MiB cap; nothing stays live.
-  // A call may fail when garbage outruns the collector, but the script is not
-  // disabled for it, and calls keep working.
+  // The collector must keep up within the call: no call fails, and the script
+  // is not disabled.
   for (int i = 0; i < 5; ++i) h.Add(2, 3);
   CHECK(!a->disabled.load());
+  CHECK_EQ(h.Count("callback_failed"), 0);
   const Captured* c = h.Find("owner_disabled", "mod_a");
   if (c) std::printf("  disabled: %s\n", c->detail.c_str());
+}
+
+// N1 (re-review of #458): a script that holds more than half its cap must not
+// make every call pay for a full collection. 50 calls of a small callback with
+// over 8 MiB of small live objects under a 16 MiB cap; a small callback costs
+// microseconds, a full
+// collection of that heap costs milliseconds.
+TEST(t7_large_live_set_does_not_slow_every_call) {
+  VmLimits limits;
+  limits.memory_bytes = 16u << 20;
+  limits.instructions_per_call = UINT64_MAX;  // building the live set under qemu outlasts the default budgets
+  limits.millis_per_call = 60000;
+  Host h(limits);
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "keep = {}\n"
+                        "for i = 1, 120000 do keep[i] = {i, i + 1} end\n"
+                        "nevr.hook('test.add', {pre = function(h) h:set('a', h:get('a') + 1) end})\n");
+  CHECK(!a->disabled.load());
+  h.Add(1, 1);
+  const auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < 50; ++i) h.Add(1, 1);
+  const double per_call_ms = MsSince(t0) / 50.0;
+  std::printf("  %.3f ms per call with %zu bytes held\n", per_call_ms, h.vm->MemoryBytes(a));
+  CHECK(per_call_ms < 0.25);
+  CHECK_EQ(h.Count("callback_failed"), 0);
 }
 
 // ---- T8 hot reload --------------------------------------------------------------------------

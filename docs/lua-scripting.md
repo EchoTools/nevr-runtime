@@ -99,13 +99,17 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   - A breach is sticky: the interrupt raises at every later safepoint, so a script's `pcall` cannot swallow it.
   - After the call, the owner is disabled.
 - **Memory.** A capped `lua_Alloc` refuses growth past `VmLimits::memory_bytes`. The cap counts allocated bytes,
-  garbage not yet collected included, and Luau has no emergency collection inside the allocator. So after a
-  refusal the binding collects, then judges:
-  - the owner is disabled, with "memory" in the reason, when the live set is over half the cap or a single
-    refused request was over half the cap;
-  - otherwise only that call failed, and the script continues with a warning record.
+  garbage not yet collected included, and Luau has no emergency collection inside the allocator. So the binding
+  keeps garbage off the cap:
+  - Each state's collector runs at goal 150% and step multiplier 300% (the pair `lua.h` recommends).
+  - Within a call, past half the cap and once a quarter of the cap has been allocated since the last collection,
+    the interrupt collects. Its cost counts against the call's time budget, and a large live set with no churn
+    never pays it.
 
-  Between calls, a state past half its cap is collected.
+  When an allocation is refused anyway, the binding collects and then judges:
+  - The owner is disabled, with "memory" in the reason, when the live set is over half the cap, when one refused
+    request was over half the cap, or after three calls in a row at the cap.
+  - Otherwise only that call failed, and a warning record says so.
 - **Integers.** Luau numbers are doubles. An INT field or key outside ±2^53 is never rounded silently: `h:get`
   raises, and the registry refuses to convert such a number to INT.
 - **Errors.** Script errors carry `<file>:<line>: <message>`.

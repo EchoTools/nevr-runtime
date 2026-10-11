@@ -12,6 +12,7 @@
 //   - a byte cap enforced by the lua_Alloc handed to lua_newstate.
 // A breach is sticky: it is recorded on the state and the interrupt raises an
 // error at every later safepoint, so a script's pcall cannot swallow it.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -55,6 +56,8 @@ struct State {
   std::atomic<bool> mem_failed{false};
   bool memory_breach = false;  // `breach` was set because an allocation hit the cap
   std::atomic<size_t> largest_refused{0};  // the biggest request CappedAlloc refused since the last check
+  int garbage_refusals = 0;  // calls in a row that hit the cap with mostly garbage
+  size_t live_after_gc = 0;  // bytes held right after the last full collection
 
   // Budget for the running top-level chunk or callback.
   bool active = false;
@@ -144,6 +147,19 @@ void* CappedAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 void Interrupt(lua_State* L, int gc) {
   if (gc >= 0) return;  // a GC step, not a safepoint of the running code
   State* s = StateOf(L);
+  // Keep garbage off the cap within the call: past half the cap, once a quarter
+  // of the cap has been allocated since the last collection, collect here. The
+  // VM runs its own GC steps inside the same VM_PROTECT that wraps this call
+  // (lvmexecute.cpp VM_INTERRUPT, VM_PROTECT(luaC_checkGC(L))), and upstream's REPL
+  // runs a full collection from running code (CLI/src/Repl.cpp lua_collectgarbage).
+  // A large live set with no churn never pays for it, and its cost counts
+  // against this call's time budget.
+  const size_t cap = s->limits.memory_bytes;
+  const size_t used = s->used.load(std::memory_order_relaxed);
+  if (s->active && used > cap / 2 && used - std::min(used, s->live_after_gc) >= cap / 4) {
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    s->live_after_gc = s->used.load(std::memory_order_relaxed);
+  }
   s->CheckBudget();
   if (!s->breach.empty()) luaL_error(L, "%s", s->breach.c_str());
 }
@@ -497,15 +513,22 @@ std::string PopError(lua_State* L) {
 // no single refused request was over half the cap, the failure was garbage
 // outrunning the collector; that call failed, but the script is not disabled.
 // One request past half the cap (string.rep of 64 MiB) is a breach whatever is
-// live. Between calls, a state past half its cap is collected so garbage does
-// not carry over.
+// live, and so is reaching the cap with garbage on kGarbageRefusalLimit calls in
+// a row: the collection here is not timed against the call's budget, so a script
+// must not be able to make every call pay for one. The collector is tuned to
+// keep up within a call (see Load), so a script that is not trying should not
+// get here at all.
+constexpr int kGarbageRefusalLimit = 3;
+
 void ApplyBreach(State* s) {
   const size_t cap = s->limits.memory_bytes;
+  if (!s->mem_failed.load()) s->garbage_refusals = 0;
   if (s->mem_failed.load() && (s->breach.empty() || s->memory_breach)) {
     lua_gc(s->L, LUA_GCCOLLECT, 0);
     const size_t live = s->used.load();
+    s->live_after_gc = live;
     const size_t refused = s->largest_refused.exchange(0);
-    if (live <= cap / 2 && refused <= cap / 2) {
+    if (live <= cap / 2 && refused <= cap / 2 && ++s->garbage_refusals < kGarbageRefusalLimit) {
       s->mem_failed.store(false);
       s->breach.clear();
       s->memory_breach = false;
@@ -516,13 +539,10 @@ void ApplyBreach(State* s) {
       return;
     }
     s->breach = "memory limit exceeded: " + std::to_string(live) + " bytes live after collection, largest refused request " +
-                std::to_string(refused) + " bytes; the cap is " + std::to_string(cap) + " bytes";
+                std::to_string(refused) + " bytes, " + std::to_string(s->garbage_refusals) +
+                " call(s) in a row at the cap; the cap is " + std::to_string(cap) + " bytes";
   }
-  if (!s->breach.empty()) {
-    s->registry->DisableOwner(s->owner, s->breach);
-    return;
-  }
-  if (s->used.load() > cap / 2) lua_gc(s->L, LUA_GCCOLLECT, 0);
+  if (!s->breach.empty()) s->registry->DisableOwner(s->owner, s->breach);
 }
 
 NevrHookResult HookTrampoline(NevrHookCall* call, void* user) {
@@ -566,6 +586,13 @@ class LuauVm final : public ScriptVm {
     s->limits = limits_;
     s->L = lua_newstate(CappedAlloc, s);
     if (!s->L) return Fail(s, "cannot create a Luau state within the memory limit", error);
+    // Goal 150% and step multiplier 300%, the pair lua.h recommends for that
+    // goal (lua_GCOp, LUA_GCSETGOAL): the heap stays nearer the live set and
+    // the collector keeps up with large temporary allocations within one call,
+    // so garbage reaches the memory cap far less often than at the defaults
+    // (200%, 200%).
+    lua_gc(s->L, LUA_GCSETGOAL, 150);
+    lua_gc(s->L, LUA_GCSETSTEPMUL, 300);
     lua_Callbacks* cb = lua_callbacks(s->L);
     cb->userdata = s;
     cb->interrupt = Interrupt;

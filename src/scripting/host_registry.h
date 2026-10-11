@@ -26,7 +26,7 @@ namespace nevr_script {
 struct LogRecord {
   NevrLogLevel level;
   const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
-                            // hook_unknown, override_unknown, undeclared, quiesce_failed, callback_failed, owner_disabled,
+                            // hook_unknown, override_unknown, undeclared, refused_disabled, quiesce_failed, callback_failed, owner_disabled,
                             // owner_reset, owner_log; script host (script_host.h): script_loaded,
                             // script_refused, script_reloaded, reload_failed
   const char* owner;        // "" when none

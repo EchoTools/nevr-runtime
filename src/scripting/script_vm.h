@@ -32,9 +32,12 @@
 // Registry::DisableOwner with a reason that names the limit, and the call fails.
 // The state's allocations are capped at `memory_bytes`, counting what the
 // allocator has handed out (garbage not yet collected included); an allocation
-// past the cap fails. The binding then collects and disables the owner when its
-// live set is still over half the cap, or when one refused request was over half
-// the cap; otherwise only that call failed and the script continues. An error raised
+// past the cap fails. A binding keeps garbage from reaching the cap (collecting
+// within the call), and after a refusal collects and disables the owner when its
+// live set is still over half the cap, when one refused request was over half
+// the cap, or after three calls in a row at the cap; otherwise only that call
+// failed and the script continues. Holding a large live set must not make every
+// call slower (t7_large_live_set_does_not_slow_every_call). An error raised
 // by a callback becomes NEVR_HOOK_FAILED with the message "<chunk>:<line>: <msg>"
 // as the reason; the owner stays enabled.
 //
