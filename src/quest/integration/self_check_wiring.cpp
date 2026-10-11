@@ -9,8 +9,7 @@
 
 namespace nevr_quest::integration {
 
-void ApplySelfCheck(quest_net::FrameTapSinks* tap, bool* remoteDebugQuery, const SelfCheckHooks& hooks) {
-  *remoteDebugQuery = true;
+void ApplySelfCheck(quest_net::FrameTapSinks* tap, const SelfCheckHooks& hooks) {
   std::function<void(std::uint64_t, std::uint64_t)> previous = std::move(tap->onLoginUser);
   tap->onLoginUser = [previous](std::uint64_t platform, std::uint64_t account) {
     if (previous) previous(platform, account);

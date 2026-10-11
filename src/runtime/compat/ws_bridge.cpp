@@ -767,13 +767,11 @@ static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
       record.pass ? 1 : 0, record.expected.c_str(), record.observed.c_str());
 }
 static void WireSelfChecks() {
+  nevr_self_check::SetEnabled(true);  // on in every build, first and unconditional (#451)
   nevr_self_check::SetSender(&SendFrameToServer);
   nevr_self_check::SetLogSink(&LogSelfCheck);
 #ifdef NEVR_PROJECT_VERSION
   nevr_self_check::SetBuild(NEVR_PROJECT_VERSION);
-#endif
-#ifdef NEVR_SELF_CHECKS
-  nevr_self_check::SetEnabled(true);
 #endif
 }
 
@@ -1057,13 +1055,6 @@ void InstallWebSocketBridge() {
                     "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
                     connIdx, ConnLabel(connIdx));
               }
-            }
-            // Self-checks (release candidate builds): the login connection asks the game service for every
-            // remote log category (server/session_ws.go reads "debug"), so each category reaches the game
-            // service and the runtime's own results ride the same set. Never on a dedicated server.
-            if (nevr_self_check::WantsRemoteDebug(connIdx, g_isServer != FALSE)) {
-              std::optional<std::string> withDebug = nevr_serverdb_uri::AppendRemoteDebugParam(remoteUrl);
-              if (withDebug) remoteUrl = std::move(*withDebug);
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
