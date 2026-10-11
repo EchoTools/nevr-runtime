@@ -117,6 +117,10 @@ target_compile_options(nevr_luau_vm PRIVATE -fno-exceptions -fno-math-errno)
 target_link_libraries(nevr_luau_vm PUBLIC nevr_luau_common)
 
 add_library(nevr_script_vm STATIC luau_vm.cpp)
+
+# Luau-only tests (paths a VM with an emergency collector never takes).
+nevr_script_test(nevr_luau_memory_test tests/luau_memory_test.cpp)
+target_link_libraries(nevr_luau_memory_test PRIVATE nevr_script_vm nevr_script_host)
 target_link_libraries(nevr_script_vm PUBLIC nevr_script_host
                       PRIVATE nevr_luau_compiler nevr_luau_vm)
 target_compile_definitions(nevr_script_vm PRIVATE "NEVR_LUAU_TAG=\"${NEVR_LUAU_TAG}\"")

@@ -32,6 +32,9 @@ constexpr CapVerdict JudgeCapHit(const CapHit& hit) {
   return CapVerdict::kGarbage;
 }
 
+// CapVerdictReason spells the limit out; keep the two together.
+static_assert(kCapHitsInARowLimit == 3, "update CapVerdictReason's kRepeated text");
+
 constexpr const char* CapVerdictReason(CapVerdict verdict) {
   switch (verdict) {
     case CapVerdict::kLiveSetTooLarge: return "over half the cap is still live after collection";

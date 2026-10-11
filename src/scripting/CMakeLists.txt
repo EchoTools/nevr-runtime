@@ -34,14 +34,6 @@ target_include_directories(nevr_script_host PUBLIC "${NEVR_SRC_DIR}")
 target_include_directories(nevr_script_host SYSTEM PUBLIC "${NEVR_JSON_INCLUDE_DIR}")
 target_compile_options(nevr_script_host PRIVATE ${NEVR_WARNINGS})
 
-if(NEVR_SCRIPT_VM STREQUAL "null")
-  add_library(nevr_script_vm STATIC vm/null/null_vm.cpp)
-  target_link_libraries(nevr_script_vm PUBLIC nevr_script_host)
-  target_compile_options(nevr_script_vm PRIVATE ${NEVR_WARNINGS})
-else()
-  add_subdirectory("vm/${NEVR_SCRIPT_VM}")
-endif()
-
 # Test executables are fully static, so wine needs no mingw DLLs beside them and
 # qemu-aarch64 needs no Bionic linker.
 function(nevr_script_test name)
@@ -52,6 +44,15 @@ function(nevr_script_test name)
   target_link_libraries(${name} PRIVATE Threads::Threads)
   target_link_options(${name} PRIVATE -static)
 endfunction()
+
+if(NEVR_SCRIPT_VM STREQUAL "null")
+  add_library(nevr_script_vm STATIC vm/null/null_vm.cpp)
+  target_link_libraries(nevr_script_vm PUBLIC nevr_script_host)
+  target_compile_options(nevr_script_vm PRIVATE ${NEVR_WARNINGS})
+else()
+  add_subdirectory("vm/${NEVR_SCRIPT_VM}")
+endif()
+
 
 nevr_script_test(nevr_script_registry_test tests/host_registry_test.cpp)
 target_link_libraries(nevr_script_registry_test PRIVATE nevr_script_host)
