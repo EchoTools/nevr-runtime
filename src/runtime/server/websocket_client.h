@@ -139,6 +139,7 @@ class WebSocketClient {
   CRITICAL_SECTION receivedMessagesMutex_;
 #ifdef NEVR_TEST_HOOKS
   std::function<bool(const std::string&)> testTransportHandler_;
+  std::function<void()> testBeforePendingLock_;
 #endif
 
   // Internal message handler for ixwebsocket
@@ -164,6 +165,8 @@ class WebSocketClient {
   void TestSetConnected(bool connected);
   std::vector<std::string> TestCopyPendingMessages();
   void TestSetTransportHandler(std::function<bool(const std::string&)> handler);
+  void TestSetBeforePendingLock(std::function<void()> hook);
+  void TestFlushPendingMessages();
   // Feeds ProcessReceivedMessages() without an ixwebsocket connection.
   void TestEnqueueReceivedMessage(nevr_game_server::ReceivedWebSocketMessage message);
 #endif
