@@ -31,8 +31,8 @@ if ($Dir -eq '') {
              'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon')
   $found = @()
   foreach ($root in $roots) {
-    $candidate = Join-Path $root 'Software\Software\ready-at-dawn-echo-arena\bin\win10'
-    if (Test-Path -LiteralPath (Join-Path $candidate 'echovr.exe')) { $found += $candidate }
+    $location = Join-Path $root 'Software\Software\ready-at-dawn-echo-arena\bin\win10'
+    if (Test-Path -LiteralPath (Join-Path $location 'echovr.exe')) { $found += $location }
   }
   if ($found.Count -eq 0) { throw 'Echo VR was not found in the usual places; pass -Dir <...\bin\win10>' }
   if ($found.Count -gt 1) { throw ('more than one Echo VR install found; pass -Dir with one of: ' + ($found -join '; ')) }

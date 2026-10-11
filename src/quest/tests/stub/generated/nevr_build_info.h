@@ -1,4 +1,4 @@
-// Host-test stand-in for the configure-time build info: no release-candidate label, no default features.
+// Host-test stand-in for the configure-time build info: no release version, no default features.
 #pragma once
 
 namespace nevr_build {

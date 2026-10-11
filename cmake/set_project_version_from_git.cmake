@@ -102,8 +102,8 @@ function(set_project_version_from_git)
   # input commit-ish will be selected"), always in the long form `<tag>-<distance>-g<sha>` (--long:
   # "Always output the long format ... even when it matches a tag"). --exclude drops every tag with a
   # pre-release part (git-describe(1): "a tag will be considered when it matches at least one --match
-  # pattern and does not match any of the --exclude patterns"), so history tags such as v4.0.0-rc.1 are
-  # never a base. When several release tags point at one commit, annotated tags are preferred over
+  # pattern and does not match any of the --exclude patterns"), so every pre-release tag (a history tag with a
+  # "-<part>") is never a base. When several release tags point at one commit, annotated tags are preferred over
   # lightweight ones and newer tag dates over older ones (same page). No reachable release tag is an
   # error, not a guess: a build that cannot say what it is must not invent a version (fetch the tags;
   # CI checks out with fetch-depth: 0).

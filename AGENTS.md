@@ -51,6 +51,13 @@ git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's
 just release-preflight && gh release create v<x.y.z> --prerelease --verify-tag   # 3. once more, then publish the release (not a draft)
 ```
 
+A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
+stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. `build.yml` fires on
+`published`, goes through one packaging path (the sealed zip, `SHA256SUMS`, `RELEASE-NOTES.md`, all attested, plus the `dist/`
+archives) and does nothing for a release that already carries those assets. Nothing in a file depends on the pre-release flag:
+promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
+identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
+
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).

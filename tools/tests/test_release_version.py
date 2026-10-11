@@ -235,5 +235,28 @@ class ReleaseVersionTest(unittest.TestCase):
         self.assertEqual(semver_key_cmp(released, after), -1)
 
 
+class LocalRecipeTest(unittest.TestCase):
+    """`just package-dev` is the only local package recipe; it asks cmake for nothing special."""
+
+    def recipe(self, name: str) -> str:
+        text = (REPO / "justfile").read_text()
+        start = text.index(f"\n{name} ")
+        return text[start:text.index("\n\n", start)]
+
+    def test_the_local_recipe_passes_no_version_or_label_and_runs_the_preflight_first(self):
+        body = self.recipe("package-dev")
+        self.assertNotIn("NEVR_RC_LABEL", body)
+        self.assertNotIn("--version", body)
+        self.assertIn("tools/package_release.py --commit", body)
+        self.assertNotIn("package_rc", body)
+
+    def test_no_retired_recipe_or_tool_remains(self):
+        justfile = (REPO / "justfile").read_text()
+        self.assertNotIn("\npackage-rc ", justfile)
+        for retired in ("cmake/nevr_rc_label.cmake", "tools/package_rc.py", "tools/rc_release_apk.sh",
+                        "tools/package-rc"):
+            self.assertFalse((REPO / retired).exists(), retired)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,8 +3,8 @@
 
     tools/release_preflight.py [--base main]        (`just release-preflight`)
 
-Run it before building a package or creating any release candidate: before `just package-dev`, before
-pushing a v<x.y.z>-rc.<N> tag and before `gh release create`. It exits 0 and prints
+Run it before building a package or creating any release: before `just package-dev`, before
+pushing a v<x.y.z> release tag and before `gh release create`. It exits 0 and prints
 `release-preflight: OK ...` only when ALL of these hold; otherwise it exits 1 and prints one
 `release-preflight: PROBLEM: ...` line for EACH problem (it never stops at the first):
 

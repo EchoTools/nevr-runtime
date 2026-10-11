@@ -118,7 +118,7 @@ add_subdirectory(redirect)
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
-# The version (with its release-candidate label and commit) and the features on by default.
+# The version (with its commit) and the features on by default.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_info.cmake")
 nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
