@@ -78,6 +78,13 @@ struct Env {
   Registry reg{[this](const LogRecord& r) { log.push_back({r.event, r.owner, r.target, r.detail}); }};
   FakeVm vm{reg};
   HookPoint* add = reg.RegisterHookPoint("test.add", {{"a", NEVR_VALUE_INT, true, false}});
+  bool keys = [this] {
+    bool ok = true;
+    for (const char* key : {"k", "j", "m", "physics.gravity", "physics.player", "physics.player.speed", "match.rounds"}) {
+      ok = reg.RegisterOverridePoint(key, NEVR_VALUE_INT) && ok;
+    }
+    return ok;
+  }();
 
   explicit Env(const char* test) {
     const char* base = std::getenv("NEVR_TEST_TMPDIR");
@@ -180,6 +187,7 @@ TEST(manifest_refusals_name_file_and_line) {
 
 TEST(declared_owner_cannot_touch_what_it_did_not_declare) {
   Env env("declared");
+  CHECK(env.keys);
   NevrOwner* a = env.reg.OpenOwner("mod_a");
   Declaration d;
   d.overrides = {"physics.gravity", "physics.player.*"};

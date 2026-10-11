@@ -6,8 +6,10 @@
 // The script-visible API, identical in every binding (a global table `nevr`):
 //
 //   nevr.override(key, value)    value: boolean | number | string. A number is
-//                                sent as NEVR_VALUE_FLOAT. Returns true, or
-//                                nil and "<STATUS>: <last_error>".
+//                                sent as NEVR_VALUE_FLOAT (or INT where the VM has
+//                                integers); the registry converts it to the
+//                                override point's type. Returns true, or nil and
+//                                "<STATUS>: <last_error>".
 //   nevr.hook(name, {pre = fn, post = fn})
 //                                Either callback may be absent. Returns true, or
 //                                nil and "<STATUS>: <last_error>".
@@ -17,7 +19,8 @@
 //   A callback receives a call object `h`:
 //   h:get(field)                 the field's value (boolean | number | string).
 //   h:set(field, value)          raises an error on any status but NEVR_OK. A
-//                                number set on an INT field must be integral.
+//                                number on an INT field must be integral (the
+//                                registry converts it).
 //   h:skip()                     pre only: the original is not called.
 //
 // Limits: a script runs in its own VM state, under its own owner. Its top-level

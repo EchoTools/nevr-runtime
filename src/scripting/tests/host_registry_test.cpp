@@ -25,6 +25,10 @@ struct Fixture {
     log.push_back({r.event, r.owner, r.other_owner, r.target, r.detail});
   }};
   const NevrHostApi* api = reg.Api();
+  bool keys = reg.RegisterOverridePoint("physics.gravity", NEVR_VALUE_FLOAT) &&
+              reg.RegisterOverridePoint("team.colour", NEVR_VALUE_STRING) &&
+              reg.RegisterOverridePoint("match.rounds", NEVR_VALUE_INT) &&
+              reg.RegisterOverridePoint("k", NEVR_VALUE_INT);
   HookPoint* add = reg.RegisterHookPoint(
       "test.add", {{"a", NEVR_VALUE_INT, true, false},
                    {"b", NEVR_VALUE_INT, true, false},
@@ -91,6 +95,7 @@ TEST(api_table_is_versioned) {
 
 TEST(override_round_trip_copies_strings) {
   Fixture f;
+  CHECK(f.keys);
   NevrOwner* a = f.reg.OpenOwner("mod_a");
   NevrValue gravity = Float(-5.0);
   CHECK_EQ(f.api->override_set(a, "physics.gravity", &gravity), NEVR_OK);
@@ -138,7 +143,7 @@ std::vector<std::string> g_order;
 
 NevrHookResult DoubleA(NevrHookCall* call, void*) {
   g_order.push_back("double_a");
-  NevrValue v = Int(GetInt(g_api, call, "a") * 2);
+  NevrValue v = Float(static_cast<double>(GetInt(g_api, call, "a") * 2));  // an integral number into an INT field
   return g_api->call_set(call, "a", &v) == NEVR_OK ? NEVR_HOOK_CONTINUE : NEVR_HOOK_FAILED;
 }
 NevrHookResult AddOneToResult(NevrHookCall* call, void*) {
@@ -151,6 +156,28 @@ NevrHookResult Tag(NevrHookCall*, void* user) {
   return NEVR_HOOK_CONTINUE;
 }
 }  // namespace
+
+TEST(override_keys_are_registered_and_typed) {
+  Fixture f;
+  NevrOwner* a = f.reg.OpenOwner("mod_a");
+  NevrValue one = Int(1);
+  CHECK_EQ(f.api->override_set(a, "no.such.key", &one), NEVR_ERR_UNKNOWN_KEY);
+  const Captured* c = f.Find("override_unknown");
+  CHECK(c && c->target == "no.such.key" && c->owner == "mod_a");
+  NevrValue text = Str("x");
+  CHECK_EQ(f.api->override_set(a, "match.rounds", &text), NEVR_ERR_TYPE_MISMATCH);
+  CHECK(std::string(f.api->last_error(a)).find("is int, not string") != std::string::npos);
+  NevrValue half = Float(2.5), three = Float(3.0), seven = Int(7);
+  CHECK_EQ(f.api->override_set(a, "match.rounds", &half), NEVR_ERR_TYPE_MISMATCH);  // not integral
+  CHECK_EQ(f.api->override_set(a, "match.rounds", &three), NEVR_OK);                // integral: stored as INT
+  NevrValue out{};
+  f.api->override_get(a, "match.rounds", &out);
+  CHECK(out.type == NEVR_VALUE_INT && out.as.i == 3);
+  CHECK_EQ(f.api->override_set(a, "physics.gravity", &seven), NEVR_OK);  // INT into FLOAT
+  f.api->override_get(a, "physics.gravity", &out);
+  CHECK(out.type == NEVR_VALUE_FLOAT && out.as.f == 7.0);
+  CHECK(!f.reg.RegisterOverridePoint("match.rounds", NEVR_VALUE_INT));  // names are unique
+}
 
 TEST(pre_and_post_callbacks_change_the_call) {
   Fixture f;
