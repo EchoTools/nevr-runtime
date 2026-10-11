@@ -102,6 +102,10 @@ GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept {
   return events;
 }
 
+GameEvents SelectGameEvents(bool probe, sentinel::ImageLookup lookup) noexcept {
+  return probe ? ResolveGameEvents(lookup) : GameEvents{};
+}
+
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
@@ -378,7 +382,7 @@ bool RegisterSocialReportCounters() {
   return ok;
 }
 
-InstallResult InstallSocialHook(bool enabled) {
+InstallResult InstallSocialHook(bool enabled, bool uiEventProbe) {
   InstallResult result;
   if (!enabled) {
     LogFields(LogLevel::kInfo, "social_install", {{"status", "disabled"}});
@@ -392,9 +396,11 @@ InstallResult InstallSocialHook(bool enabled) {
   PublishFacadeObject();
   const GameJson gameJson = ResolveGameJson(&sentinel::FindLoadedImage);
   SetGameJson(gameJson);
-  SetGameEvents(ResolveGameEvents(&sentinel::FindLoadedImage));
+  const GameEvents events = SelectGameEvents(uiEventProbe, &sentinel::FindLoadedImage);
+  SetGameEvents(events);
   LogFields(gameJson.reset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
-            {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"}});
+            {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"},
+             {"ui_event_probe", !uiEventProbe ? "off" : events.send != nullptr ? "armed" : "unavailable"}});
   SocialThunk::Arm(kSocialHook);
   result.got = sentinel::InstallThunk<SocialThunk>(hook, LibR15Social());
   if (result.got != sentinel::GotStatus::kOk) {

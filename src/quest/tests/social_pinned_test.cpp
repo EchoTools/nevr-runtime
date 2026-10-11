@@ -239,6 +239,13 @@ void CheckGameFunctions(const LoadedElf& r15) {
   const quest_social::GameEvents events = quest_social::ResolveGameEvents(&LookupFixed);
   g_lookupImage = nullptr;
   QCHECK(address(events.send) == r15.image.base + quest_social::kLibR15SendComponentEventVaddr);
+  // features.ui_event_probe off (the default): the facade gets no post function even on the pinned build.
+  g_lookupImage = &r15.image;
+  const quest_social::GameEvents off = quest_social::SelectGameEvents(false, &LookupFixed);
+  const quest_social::GameEvents on = quest_social::SelectGameEvents(true, &LookupFixed);
+  g_lookupImage = nullptr;
+  QCHECK(off.send == nullptr);
+  QCHECK(address(on.send) == r15.image.base + quest_social::kLibR15SendComponentEventVaddr);
 
   // SUuid::kInvalid (ExitLobby and Reset copy it; the facade stores sixteen zero bytes instead): a 16-byte
   // object in the .bss part of a PT_LOAD, so zero at load.

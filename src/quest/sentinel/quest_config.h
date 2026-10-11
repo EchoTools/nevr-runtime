@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kUiEventProbe };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -49,6 +49,9 @@ struct Features {
   // Report the OBB mount as done and use the data root the game falls back to (#319): no ~30 s wait in
   // CSysFile::Init. Off until a headset run confirms it; independent of every other feature.
   bool obbSkip = false;
+  // The invite/party UI probe (#318): the Invite Members and Party slots post the friends script event instead
+  // of reaching Meta's panels. A measurement build only: off unless the file asks, and it needs social.
+  bool uiEventProbe = false;
 };
 
 struct LogEvent {

@@ -7,8 +7,8 @@ namespace nevr_quest::integration {
 
 bool RegisterSocialCounters() noexcept { return quest_social::RegisterSocialReportCounters(); }
 
-bool InstallSocialHook(const char** detail) noexcept {
-  const quest_social::InstallResult result = quest_social::InstallSocialHook(/*enabled=*/true);
+bool InstallSocialHook(const char** detail, bool uiEventProbe) noexcept {
+  const quest_social::InstallResult result = quest_social::InstallSocialHook(/*enabled=*/true, uiEventProbe);
   if (detail != nullptr) {
     *detail = result.status == quest_social::InstallStatus::kHookFailed ? sentinel::GotStatusName(result.got)
                                                                        : quest_social::InstallStatusName(result.status);
