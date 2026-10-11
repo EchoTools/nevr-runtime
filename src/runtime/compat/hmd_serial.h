@@ -14,7 +14,7 @@
 #include <cstddef>
 #include <string>
 
-namespace HmdSerial {
+namespace nevr_hmd_serial {
 
 constexpr std::size_t kSerialBytes = 24;  // the game's 0x18-byte serial buffer
 constexpr unsigned long long kNoVrFlag = 0x100000ULL;  // game+0x7ae0 bit 20
@@ -48,4 +48,4 @@ inline const char* SourceName(Source s) {
   }
 }
 
-}  // namespace HmdSerial
+}  // namespace nevr_hmd_serial

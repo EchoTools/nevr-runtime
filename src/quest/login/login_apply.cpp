@@ -17,7 +17,7 @@
 #error "login_apply.cpp must be built with -fno-exceptions (it runs while game code is live)"
 #endif
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 // Names for log records and tests: plain leaf functions kept in this personality-free unit.
 const char* IdentityStatusName(IdentityStatus status) {
@@ -373,4 +373,4 @@ HeldReset ResetHeldStandIns(PrerequisiteState& state) noexcept {
 
 
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

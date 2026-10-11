@@ -4,38 +4,38 @@
 
 #include "runtime/patch/coop_ai_trace_rules.h"
 
-using CoopAiTrace::BotState;
-using CoopAiTrace::BotTable;
+using nevr_coop_ai_trace::BotState;
+using nevr_coop_ai_trace::BotTable;
 
 // Every gate the trace reports is part of the comparison: a change in any one of them is a line.
 TEST(CoopAiTrace, AnyGateChangeIsAChange) {
   const BotState base;
-  EXPECT_TRUE(CoopAiTrace::SameState(base, base));
+  EXPECT_TRUE(nevr_coop_ai_trace::SameState(base, base));
   BotState s = base;
   s.setupPending = 1;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "setup_pending";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "setup_pending";
   s = base;
   s.setupOk = 1;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "setup_ok";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "setup_ok";
   s = base;
   s.goalsOk = 0;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "goals";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "goals";
   s = base;
   s.waypointsOk = 1;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "waypoints";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "waypoints";
   s = base;
   s.lookupActor = -1;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "lookup_actor";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "lookup_actor";
   s = base;
   s.phase = 4;
-  EXPECT_FALSE(CoopAiTrace::SameState(base, s)) << "phase";
+  EXPECT_FALSE(nevr_coop_ai_trace::SameState(base, s)) << "phase";
 }
 
 // The heartbeat is due once the interval has passed since the bot's last line, not before.
 TEST(CoopAiTrace, HeartbeatAfterTheInterval) {
-  EXPECT_FALSE(CoopAiTrace::HeartbeatDue(1'000, 30'999, 30'000));
-  EXPECT_TRUE(CoopAiTrace::HeartbeatDue(1'000, 31'000, 30'000));
-  EXPECT_TRUE(CoopAiTrace::HeartbeatDue(0, 0, 0));
+  EXPECT_FALSE(nevr_coop_ai_trace::HeartbeatDue(1'000, 30'999, 30'000));
+  EXPECT_TRUE(nevr_coop_ai_trace::HeartbeatDue(1'000, 31'000, 30'000));
+  EXPECT_TRUE(nevr_coop_ai_trace::HeartbeatDue(0, 0, 0));
 }
 
 // A bot keeps its record across updates; a new bot gets a fresh one; a full table refuses, and the
@@ -43,12 +43,12 @@ TEST(CoopAiTrace, HeartbeatAfterTheInterval) {
 TEST(CoopAiTrace, TableKeepsEachBotsRecord) {
   BotTable<2> table;
   int a = 0, b = 0, c = 0;
-  CoopAiTrace::BotRecord* ra = table.Find(&a);
+  nevr_coop_ai_trace::BotRecord* ra = table.Find(&a);
   ASSERT_NE(ra, nullptr);
   ra->state.phase = 3;
   EXPECT_EQ(table.Find(&a), ra);
   EXPECT_EQ(table.Find(&a)->state.phase, 3);
-  CoopAiTrace::BotRecord* rb = table.Find(&b);
+  nevr_coop_ai_trace::BotRecord* rb = table.Find(&b);
   ASSERT_NE(rb, nullptr);
   EXPECT_NE(rb, ra);
   EXPECT_EQ(rb->state.phase, 0) << "a new bot starts from a fresh record";
@@ -60,8 +60,8 @@ TEST(CoopAiTrace, TableKeepsEachBotsRecord) {
 // Until the setup lookups run, the record says so rather than reporting a failure.
 TEST(CoopAiTrace, UnrunLookupsAreDistinctFromFailures) {
   const BotState s;
-  EXPECT_EQ(s.goalsOk, CoopAiTrace::kNotRun);
-  EXPECT_EQ(s.waypointsOk, CoopAiTrace::kNotRun);
-  EXPECT_EQ(s.lookupActor, CoopAiTrace::kActorNotRead);
-  EXPECT_NE(CoopAiTrace::kActorNotRead, -1) << "-1 is the game's 'no actor'";
+  EXPECT_EQ(s.goalsOk, nevr_coop_ai_trace::kNotRun);
+  EXPECT_EQ(s.waypointsOk, nevr_coop_ai_trace::kNotRun);
+  EXPECT_EQ(s.lookupActor, nevr_coop_ai_trace::kActorNotRead);
+  EXPECT_NE(nevr_coop_ai_trace::kActorNotRead, -1) << "-1 is the game's 'no actor'";
 }

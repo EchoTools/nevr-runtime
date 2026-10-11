@@ -8,7 +8,7 @@
 #include "quest/login/login_standin.h"
 #include "quest/tests/test_check.h"
 
-namespace SI = QuestLogin::StandIn;
+namespace SI = nevr_quest_login::StandIn;
 
 int main() {
   // Before Generate: everything is empty / 0 and no predicate matches.

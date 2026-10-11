@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-namespace CrashRecovery {
+namespace nevr_crash_recovery {
 
 struct KnownNullDerefSite {
   uint64_t rva;
@@ -53,4 +53,4 @@ inline const char* LookupKnownNullDerefSite(int64_t rva) {
   return best;
 }
 
-}  // namespace CrashRecovery
+}  // namespace nevr_crash_recovery

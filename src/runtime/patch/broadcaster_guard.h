@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-namespace BroadcasterGuard {
+namespace nevr_broadcaster_guard {
 
 void Install(uintptr_t base_addr);
 void Shutdown();

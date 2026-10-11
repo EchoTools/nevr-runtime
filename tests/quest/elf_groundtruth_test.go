@@ -291,7 +291,7 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	// The annotated set the sentinel is allowed to have, pinned so that dropping an annotation fails here
 	// (the function then carries a personality and is reported above) and adding one is a reviewed change.
 	want := map[string]*regexp.Regexp{
-		"login compose phase":         regexp.MustCompile(`^_ZN10QuestLogin11ComposePlanE`),
+		"login compose phase":         regexp.MustCompile(`^_ZN16nevr_quest_login11ComposePlanE`),
 		"post-load installs (dlopen)": regexp.MustCompile(`^_ZN10nevr_quest11integration11AfterDlopenE`),
 	}
 	for what, re := range want {

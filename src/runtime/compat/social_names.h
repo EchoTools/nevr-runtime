@@ -23,7 +23,7 @@
 
 #include "runtime/compat/social_party.h"
 
-namespace SocialNames {
+namespace nevr_social_names {
 
 constexpr std::uint64_t kProfileRequest = 0x1231172031050cb2ULL;  // SNSOtherUserProfileRequest
 constexpr std::uint64_t kProfileSuccess = 0x1230073227050cb5ULL;  // SNSOtherUserProfileSuccess
@@ -31,11 +31,11 @@ constexpr std::uint64_t kPlatformOvrOrg = 4;  // the platform the bridge logs th
 
 /// OtherUserProfileRequest payload: EvrId(platform u64, account u64) then the request JSON, null
 /// terminated and uncompressed. The server answers for any JSON, so this sends an empty object.
-inline SocialParty::Message BuildProfileRequest(std::uint64_t accountId) {
-  SocialParty::Message m;
+inline nevr_social_party::Message BuildProfileRequest(std::uint64_t accountId) {
+  nevr_social_party::Message m;
   m.symbol = kProfileRequest;
-  SocialParty::AppendLe(m.payload, kPlatformOvrOrg, 8);
-  SocialParty::AppendLe(m.payload, accountId, 8);
+  nevr_social_party::AppendLe(m.payload, kPlatformOvrOrg, 8);
+  nevr_social_party::AppendLe(m.payload, accountId, 8);
   m.payload += "{}";
   m.payload.push_back('\0');
   return m;
@@ -61,9 +61,9 @@ inline bool DecodeProfile(const std::uint8_t* payload, std::size_t len, std::uin
 class Resolver {
  public:
   /// The request for `accountId`'s profile, or none if it was already asked for.
-  std::vector<SocialParty::Message> Want(std::uint64_t accountId) {
+  std::vector<nevr_social_party::Message> Want(std::uint64_t accountId) {
     std::lock_guard<std::mutex> guard(mutex_);
-    std::vector<SocialParty::Message> out;
+    std::vector<nevr_social_party::Message> out;
     if (accountId != 0 && asked_.insert(accountId).second) out.push_back(BuildProfileRequest(accountId));
     return out;
   }
@@ -86,4 +86,4 @@ inline Resolver& GlobalResolver() {
 /// Registers the zstd profile decoder (social_names.cpp). Safe to call more than once.
 void RegisterDefaultDecoder();
 
-}  // namespace SocialNames
+}  // namespace nevr_social_names

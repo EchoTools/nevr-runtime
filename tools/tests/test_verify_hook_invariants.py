@@ -42,7 +42,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("SELF-COLLISION: 0x140110AB0", result.stderr)
         self.assertIn("EchoVR::UnexpectedHook", result.stderr)
-        self.assertIn("PatchAddresses::INIT_GLOBAL_GAMESPACE", result.stderr)
+        self.assertIn("nevr_patch_addresses::INIT_GLOBAL_GAMESPACE", result.stderr)
 
     def _run_in_fixture(self, extra_runtime_source=None):
         with tempfile.TemporaryDirectory(
@@ -91,7 +91,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         self.assertIn("fixture_duplicate.cpp: EchoVR::GetProcAddress", result.stderr)
 
     def test_rejects_an_echovr_pointer_detour_on_a_patchaddresses_target(self):
-        """#254: an EchoVR:: pointer and a PatchAddresses:: constant naming one detoured address collide."""
+        """#254: an EchoVR:: pointer and a nevr_patch_addresses:: constant naming one detoured address collide."""
         with tempfile.TemporaryDirectory(
             prefix="hook-invariants-", dir="/var/tmp/work-nevr-runtime"
         ) as temp_dir:
@@ -117,7 +117,7 @@ class VerifyHookInvariantsTest(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("DUPLICATE-RUNTIME-DETOUR: 0x140110AB0", result.stderr)
-        self.assertIn("PatchAddresses::INIT_GLOBAL_GAMESPACE", result.stderr)
+        self.assertIn("nevr_patch_addresses::INIT_GLOBAL_GAMESPACE", result.stderr)
 
     def test_rejects_a_hook_table_row_without_a_prologue(self):
         """#254: a table-driven detour with a nullptr prologue installs without checking the bytes."""

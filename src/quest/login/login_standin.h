@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace QuestLogin::StandIn {
+namespace nevr_quest_login::StandIn {
 
 // Fills the stand-ins from arc4random_buf. Idempotent and safe to call from several threads; the
 // first call generates, later calls return at once. Until it has run every accessor returns 0 or ""
@@ -45,4 +45,4 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
 void ResetForTest() noexcept;
 #endif
 
-}  // namespace QuestLogin::StandIn
+}  // namespace nevr_quest_login::StandIn

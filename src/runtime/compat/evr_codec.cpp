@@ -3,11 +3,7 @@
 #include <cstring>
 #include <limits>
 
-namespace EvrCodec {
-
-namespace {
-
-constexpr std::size_t kLoginFailureFixedPayloadSize = 24;
+namespace nevr_evr_codec {
 
 uint64_t ReadLE64(const uint8_t* p) {
   uint64_t value = 0;
@@ -21,6 +17,10 @@ void AppendLE64(std::string& buffer, uint64_t value) {
     value >>= 8;
   }
 }
+
+namespace {
+
+constexpr std::size_t kLoginFailureFixedPayloadSize = 24;
 
 ReadStatus ReadMessageAt(const uint8_t* data, std::size_t remaining, Message* out) {
   *out = Message{};
@@ -65,6 +65,57 @@ std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId) {
   AppendLE64(payload, platformCode);
   AppendLE64(payload, accountId);
   return BuildMessage(kSymLoginSuccess, payload);
+}
+
+std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json) {
+  std::string payload;
+  payload.reserve(kLoginRemovedFixedSize + json.size());
+  if (kLoginRemovedUserIdSwapped) {
+    AppendLE64(payload, user.accountId);
+    AppendLE64(payload, user.platformCode);
+  } else {
+    AppendLE64(payload, user.platformCode);
+    AppendLE64(payload, user.accountId);
+  }
+  for (int i = 0; i < 4; ++i) payload.push_back(static_cast<char>((kLoginRemovedWord10 >> (8 * i)) & 0xff));
+  payload.push_back(static_cast<char>(reason));
+  payload.append(kLoginRemovedFixedSize - payload.size(), '\0');
+  payload.append(json.data(), json.size());
+  return BuildMessage(kSymLoginRemovedNotify, payload);
+}
+
+std::optional<UserId> ParseLoginSuccessUserId(const std::string& frame) {
+  Message message;
+  if (ReadMessage(frame, 0, &message) != ReadStatus::Ok || message.symbol != kSymLoginSuccess ||
+      message.length < kUuidSize + 16) {
+    return std::nullopt;
+  }
+  UserId id;
+  id.platformCode = ReadLE64(message.payload + kUuidSize);
+  id.accountId = ReadLE64(message.payload + kUuidSize + 8);
+  return id;
+}
+
+std::string BuildRemoteLogSet(const UserId& user, uint64_t level, const std::vector<std::string>& logs) {
+  std::string payload;
+  AppendLE64(payload, user.platformCode);
+  AppendLE64(payload, user.accountId);
+  for (int i = 0; i < 4; ++i) AppendLE64(payload, 0);  // the session UUID and the 16 text bytes
+  AppendLE64(payload, level);
+  const auto appendLE32 = [&payload](uint32_t value) {
+    for (int i = 0; i < 4; ++i) payload.push_back(static_cast<char>((value >> (8 * i)) & 0xff));
+  };
+  appendLE32(static_cast<uint32_t>(logs.size()));
+  uint32_t offset = 0;
+  for (const std::string& log : logs) {
+    appendLE32(offset);
+    offset += static_cast<uint32_t>(log.size() + 1);
+  }
+  for (const std::string& log : logs) {
+    payload.append(log);
+    payload.push_back('\0');
+  }
+  return BuildMessage(kSymRemoteLogSet, payload);
 }
 
 std::string BuildFriendListSubscribe() {
@@ -127,4 +178,4 @@ bool IsBearerReplacingPath(const std::string& url) {
   return url.compare(pathStart, pathEnd == std::string::npos ? std::string::npos : pathEnd - pathStart, "/ws") == 0;
 }
 
-}  // namespace EvrCodec
+}  // namespace nevr_evr_codec

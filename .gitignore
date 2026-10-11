@@ -109,8 +109,10 @@ echovr
 # Temporary working files
 _temp/
 
-# Environment files. The root .env holds the build-time defaults embedded into the
-# runtime (NEVR_PUBLIC_API_KEY, NEVR_PUBLIC_SOCKET_KEY, ...): local values, never committed.
+# Environment files. The root .env holds runtime-only local overrides: never committed, never
+# read by the build. The build embeds config/public-defaults.env, which CI writes from the repository's
+# Actions variables and a developer fills from config/public-defaults.env.example.
+/config/public-defaults.env
 extras/.env
 # scratch of tools/worktree-setup.sh
 /.nevr-worktree-setup/

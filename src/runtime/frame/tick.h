@@ -13,7 +13,7 @@
 /// There is exactly ONE of these, deliberately. A second copy could report the
 /// wrong host type to every plugin on every client (N110). `just verify` fails
 /// if a second one appears.
-namespace Frame {
+namespace nevr_frame {
 
 /// Dispatch per-frame work. Safe to call from any hook on any thread, at any
 /// rate: it is rate-limited to ~125 Hz internally and re-entrancy-guarded,
@@ -24,4 +24,4 @@ namespace Frame {
 /// available; the call is then a no-op rather than a wrapped comparison.
 void DispatchPerFrameWork(uint64_t nowUs);
 
-}  // namespace Frame
+}  // namespace nevr_frame

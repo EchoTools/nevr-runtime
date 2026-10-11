@@ -43,7 +43,7 @@
 @0x1BBDA7FA06AF4627 FriendAcceptSuccess
 @0x1BA8B3F009BF4731 FriendAddFailure
 @0xC237C84C31D3AE05 FriendAcceptNotify
-@0xC2BF83A08EA3A955 FriendBlockSuccess
+@0xC2BF83A08EA3A955 FriendRemoveResponse
 @0xE06972F49CD72265 FriendRemoveNotify
 @0x191AA30801EC6D03 FriendWithdrawnNotify
 @0xB9B86C0CE8E8D0C1 FriendRejectNotify

@@ -8,7 +8,7 @@
 // Built -fno-exceptions (src/quest/CMakeLists.txt): the predicates run inside game callbacks.
 // All storage is constant-initialized, so nothing lands in .init_array.
 
-namespace QuestLogin::StandIn {
+namespace nevr_quest_login::StandIn {
 
 namespace {
 
@@ -125,4 +125,4 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
 void ResetForTest() noexcept { g_state.store(0, std::memory_order_release); }
 #endif
 
-}  // namespace QuestLogin::StandIn
+}  // namespace nevr_quest_login::StandIn

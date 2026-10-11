@@ -6,7 +6,7 @@
 
 #include <cstdio>
 
-namespace BootLines {
+namespace nevr_boot_lines {
 
 /// Writes the record into `buf`. `ts` is an ISO 8601 UTC timestamp in the main log's format,
 /// `escapedMsg` is already JSON-escaped. Returns the length, or -1 if it did not fit.
@@ -17,4 +17,4 @@ inline int Build(char* buf, int size, const char* ts, const char* runId, const c
   return (n <= 0 || n >= size) ? -1 : n;
 }
 
-}  // namespace BootLines
+}  // namespace nevr_boot_lines

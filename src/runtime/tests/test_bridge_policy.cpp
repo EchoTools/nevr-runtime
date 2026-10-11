@@ -8,8 +8,8 @@
 
 namespace {
 
-using BridgePolicy::Decide;
-using BridgePolicy::Outcome;
+using nevr_bridge_policy::Decide;
+using nevr_bridge_policy::Outcome;
 
 TEST(BridgePolicy, ConfiguredSocketUriAlwaysStartsTheBridge) {
   EXPECT_EQ(Decide(true, true, false), Outcome::Start);
@@ -28,27 +28,27 @@ TEST(BridgePolicy, ClientWithoutBridgeKeepsRunning) {
 }
 
 TEST(BridgePolicy, OnlyExplicitTruthyValuesOptIn) {
-  EXPECT_TRUE(BridgePolicy::IsTruthy("true"));
-  EXPECT_TRUE(BridgePolicy::IsTruthy("1"));
-  EXPECT_FALSE(BridgePolicy::IsTruthy("false"));
-  EXPECT_FALSE(BridgePolicy::IsTruthy(""));
-  EXPECT_FALSE(BridgePolicy::IsTruthy(nullptr));
-  EXPECT_FALSE(BridgePolicy::IsTruthy("maybe"));
+  EXPECT_TRUE(nevr_bridge_policy::IsTruthy("true"));
+  EXPECT_TRUE(nevr_bridge_policy::IsTruthy("1"));
+  EXPECT_FALSE(nevr_bridge_policy::IsTruthy("false"));
+  EXPECT_FALSE(nevr_bridge_policy::IsTruthy(""));
+  EXPECT_FALSE(nevr_bridge_policy::IsTruthy(nullptr));
+  EXPECT_FALSE(nevr_bridge_policy::IsTruthy("maybe"));
 }
 
 // #245: the spelling rule is config.yaml's, which is case-insensitive.
 TEST(BridgePolicy, TruthySpellingsAreCaseInsensitive) {
-  for (const char* v : {"Yes", "YES", "ON", "On", "tRuE"}) EXPECT_TRUE(BridgePolicy::IsTruthy(v)) << v;
-  for (const char* v : {"No", "OFF", "False"}) EXPECT_FALSE(BridgePolicy::IsTruthy(v)) << v;
+  for (const char* v : {"Yes", "YES", "ON", "On", "tRuE"}) EXPECT_TRUE(nevr_bridge_policy::IsTruthy(v)) << v;
+  for (const char* v : {"No", "OFF", "False"}) EXPECT_FALSE(nevr_bridge_policy::IsTruthy(v)) << v;
 }
 
 TEST(BridgePolicy, OnlyAnUnparseableValueIsReportedAsUnrecognized) {
-  EXPECT_TRUE(BridgePolicy::IsUnrecognized("maybe"));
-  EXPECT_TRUE(BridgePolicy::IsUnrecognized("ture"));
-  EXPECT_FALSE(BridgePolicy::IsUnrecognized("Yes"));
-  EXPECT_FALSE(BridgePolicy::IsUnrecognized("off"));
-  EXPECT_FALSE(BridgePolicy::IsUnrecognized(""));
-  EXPECT_FALSE(BridgePolicy::IsUnrecognized(nullptr));
+  EXPECT_TRUE(nevr_bridge_policy::IsUnrecognized("maybe"));
+  EXPECT_TRUE(nevr_bridge_policy::IsUnrecognized("ture"));
+  EXPECT_FALSE(nevr_bridge_policy::IsUnrecognized("Yes"));
+  EXPECT_FALSE(nevr_bridge_policy::IsUnrecognized("off"));
+  EXPECT_FALSE(nevr_bridge_policy::IsUnrecognized(""));
+  EXPECT_FALSE(nevr_bridge_policy::IsUnrecognized(nullptr));
 }
 
 // The key is read through the flat-key table, so a config.yaml `services.allow_offline_server: true`
@@ -57,10 +57,10 @@ TEST(BridgePolicy, ConfigKeyIsReadFromServicesAllowOfflineServer) {
   EXPECT_EQ(nevr_cfg::FlatKeyToYamlPath("nevr_allow_offline_server"), "services.allow_offline_server");
   const auto cfg = nevr::NevrConfig::LoadFromString("services:\n  allow_offline_server: true\n");
   const std::string on = nevr_cfg::LookupFlat(cfg, "nevr_allow_offline_server").value_or("");
-  EXPECT_TRUE(BridgePolicy::IsTruthy(on.c_str()));
+  EXPECT_TRUE(nevr_bridge_policy::IsTruthy(on.c_str()));
   const auto none = nevr::NevrConfig::LoadFromString("services:\n  loginservice_host: \"ws://x\"\n");
   const std::string off = nevr_cfg::LookupFlat(none, "nevr_allow_offline_server").value_or("");
-  EXPECT_FALSE(BridgePolicy::IsTruthy(off.c_str()));
+  EXPECT_FALSE(nevr_bridge_policy::IsTruthy(off.c_str()));
 }
 
 }  // namespace

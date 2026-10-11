@@ -5,7 +5,7 @@
 #include <exception>
 #include <utility>
 
-namespace GameServer {
+namespace nevr_game_server {
 
 bool MainThreadHandoff::IsFinishedLocked() const {
   return state_ == State::kDone || state_ == State::kThrew || state_ == State::kCancelled;
@@ -97,4 +97,4 @@ const char* MainThreadHandoffOutcomeName(MainThreadHandoff::Outcome outcome) {
   return "unknown";
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

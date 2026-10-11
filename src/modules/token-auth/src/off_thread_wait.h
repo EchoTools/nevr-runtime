@@ -7,7 +7,7 @@
 #include <chrono>
 #include <functional>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 
 struct OffThreadWaitResult {
   bool flowResult = false;        // what the flow returned (false when it threw)
@@ -22,4 +22,4 @@ struct OffThreadWaitResult {
 OffThreadWaitResult RunWhilePumping(const std::function<bool()>& flow, const std::function<void()>& pump,
                                     std::chrono::milliseconds interval);
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

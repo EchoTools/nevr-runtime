@@ -7,7 +7,7 @@
 
 #include "runtime/patch/social_facade_install.h"
 
-namespace SocialFacade {
+namespace nevr_social_facade {
 
 enum class JsonTraceKind : std::uint32_t {
   kSocialJson,
@@ -123,4 +123,4 @@ std::uint32_t TestMembersClamped();
 const void* TestCallbacksSource();
 #endif
 
-}  // namespace SocialFacade
+}  // namespace nevr_social_facade

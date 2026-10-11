@@ -4,7 +4,7 @@
 
 #include "core/logging.h"
 
-namespace Evrp {
+namespace nevr_evrp {
 
 namespace {
 
@@ -90,4 +90,4 @@ bool ParseTint(const std::vector<uint8_t>& data, const std::string& context,
     return true;
 }
 
-}  // namespace Evrp
+}  // namespace nevr_evrp

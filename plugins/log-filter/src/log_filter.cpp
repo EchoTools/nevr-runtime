@@ -514,7 +514,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
             line += "\",\"level\":\"";
             line += lvl;
             line += "\",\"msg\":\"";
-            JsonEscape::AppendTo(line, message, len);
+            nevr_json_escape::AppendTo(line, message, len);
             line += "\"}\n";
 
             size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);

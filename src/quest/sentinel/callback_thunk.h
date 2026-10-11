@@ -121,13 +121,17 @@ extern const char __stop_nevr_hook_records[] __attribute__((weak, visibility("hi
 
 namespace sentinel {
 
-template <typename Tag, typename Signature>
+// `kCaller` (default false) makes the handler receive the game's return address as its second
+// argument: `Ret handler(Fn original, const void* caller, Args... args) noexcept`. The address is the
+// instruction after the game's call (LR at entry, through the PLT's `br`), so a handler can tell which
+// call site of a shared import it is serving. Nothing else about the thunk changes.
+template <typename Tag, typename Signature, bool kCaller = false>
 class CallbackThunk;
 
 template <typename T>
 struct IsCallbackThunk : std::false_type {};
-template <typename Tag, typename Signature>
-struct IsCallbackThunk<CallbackThunk<Tag, Signature>> : std::true_type {};
+template <typename Tag, typename Signature, bool kCaller>
+struct IsCallbackThunk<CallbackThunk<Tag, Signature, kCaller>> : std::true_type {};
 
 struct HookRecordAccess;
 
@@ -160,11 +164,12 @@ bool IsRecordedHook(const HookRecord<Thunk>& record) noexcept {
          p >= __start_nevr_hook_records && p + sizeof(record) <= __stop_nevr_hook_records;
 }
 
-template <typename Tag, typename Ret, typename... Args>
-class CallbackThunk<Tag, Ret(Args...)> {
+template <typename Tag, typename Ret, typename... Args, bool kCaller>
+class CallbackThunk<Tag, Ret(Args...), kCaller> {
  public:
   using Fn = Ret (*)(Args...);
-  using Handler = Ret (*)(Fn original, Args... args) noexcept;
+  using Handler = std::conditional_t<kCaller, Ret (*)(Fn original, const void* caller, Args... args) noexcept,
+                                     Ret (*)(Fn original, Args... args) noexcept>;
 
   // The thunk's entry as a function pointer (a constant expression, for NEVR_HOOK_RECORD).
   static constexpr Fn EntryFn() noexcept { return &Entry; }
@@ -218,7 +223,11 @@ class CallbackThunk<Tag, Ret(Args...)> {
     }
     const Handler handler = handler_.load(std::memory_order_acquire);
     if (handler == nullptr) return original(args...);
-    return handler(original, args...);
+    if constexpr (kCaller) {
+      return handler(original, __builtin_return_address(0), args...);
+    } else {
+      return handler(original, args...);
+    }
   }
 
   inline static void* original_ = nullptr;

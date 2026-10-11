@@ -212,7 +212,7 @@ func TestSocialHashConstants(t *testing.T) {
 		"FriendAcceptSuccess":   0x1bbda7fa06af4627,
 		"FriendAddFailure":      0x1ba8b3f009bf4731,
 		"FriendAcceptNotify":    0xc237c84c31d3ae05,
-		"FriendBlockSuccess":    0xc2bf83a08ea3a955,
+		"FriendRemoveResponse":  0xc2bf83a08ea3a955,
 		"FriendRemoveNotify":    0xe06972f49cd72265,
 		"FriendWithdrawnNotify": 0x191aa30801ec6d03,
 		"FriendRejectNotify":    0xb9b86c0ce8e8d0c1,

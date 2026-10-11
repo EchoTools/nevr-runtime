@@ -28,6 +28,7 @@
 
 #include "core/logging.h"
 #include "core/mic_dsp.h"
+#include "core/mic_endpoint_loss.h"
 #include "core/mic_capture_drain.h"
 #include "core/mic_lifecycle.h"
 #include "core/mic_owner_thread.h"
@@ -40,6 +41,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <system_error>
+#include <thread>
 
 // The precompiled header already pulled in <mmdeviceapi.h>/<audioclient.h>
 // (via core/pch.h -> windows.h) without INITGUID, so their DEFINE_GUID
@@ -64,19 +67,33 @@ namespace {
 // Matches pnsrad.dll's own (real, unmodified) MicSampleRate/MicBufferSize —
 // nothing downstream needs to change to accommodate these numbers.
 constexpr uint32_t kTargetSampleRate = 48000;
-constexpr uint32_t kRingCapacitySamples = 24000;  // ~500ms at 48kHz mono
+// The most audio the ring holds, so the most latency the game can ever see (#95): ~200 ms at
+// 48 kHz mono. Audio captured before the game's first read of a stream is dropped outright
+// (MicRingBuffer::NoteReaderActive); this cap bounds what a stalled reader can pile up.
+constexpr uint32_t kRingCapacitySamples = 9600;
 
 // --- Ring buffer -----------------------------------------------------------
 // The pure ring/resample logic lives in core/mic_dsp.{h,cpp} (no windows.h),
 // unit-tested directly in tests/test_mic_dsp.cpp. This file only adapts real
 // WASAPI packets into it.
 MicRingBuffer g_ring(kRingCapacitySamples);
-bool g_ringOverflowLogged = false;
+// Overflow after the game started reading is logged with a count, at most once per interval (#95).
+constexpr uint64_t kOverflowLogIntervalMs = 5000;
+MicOverflowLogGate g_overflowGate(kOverflowLogIntervalMs);
 // How often the game actually reads the microphone (#95): the ring overflows when the game does not
 // drain MicRead, and nothing else says whether it ever calls MicAvailable/MicRead.
 std::atomic<uint64_t> g_availableCalls{0};
 std::atomic<uint64_t> g_readCalls{0};
 std::atomic<uint64_t> g_samplesRead{0};
+// The capture side of the same question (#95): whether samples stopped arriving or the game stopped
+// reading them. Cumulative for the process, like the reader-side counters above.
+std::atomic<uint64_t> g_capturePackets{0};
+std::atomic<uint64_t> g_captureSilentPackets{0};
+std::atomic<uint64_t> g_captureDiscontinuities{0};
+std::atomic<uint64_t> g_samplesPushed{0};
+// The longest gap between two MicAvailable polls (the game's tick) since the last periodic line.
+std::atomic<int64_t> g_lastPollNs{0};
+std::atomic<uint64_t> g_maxPollGapMs{0};
 
 // --- WASAPI state ------------------------------------------------------
 // Every public create/start/stop/destroy call is marshalled onto
@@ -96,6 +113,9 @@ HANDLE g_captureEvent = nullptr;
 HANDLE g_captureThread = nullptr;
 HANDLE g_workerStartupEvent = nullptr;
 std::atomic<bool> g_running{false};
+// Set when a WASAPI call returned AUDCLNT_E_DEVICE_INVALIDATED (#399): the client is dead for good and the
+// default capture endpoint has to be acquired again. Cleared by a successful re-acquisition.
+std::atomic<bool> g_deviceLost{false};
 std::atomic<bool> g_workerSetupSucceeded{false};
 bool g_ownerMustUninitializeCom = false;
 MicCapturePacketAdapter g_captureAdapter;
@@ -137,13 +157,27 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
     const auto now = std::chrono::steady_clock::now();
     if (now - lastReport >= std::chrono::seconds(30)) {
       lastReport = now;
-      Log(EchoVR::LogLevel::Info, "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu",
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu | capture side: "
+          "packets=%llu silent=%llu discontinuities=%llu samples_pushed=%llu samples_dropped=%llu "
+          "max_poll_gap_ms=%llu",
           static_cast<unsigned long long>(g_availableCalls.load()),
           static_cast<unsigned long long>(g_readCalls.load()),
-          static_cast<unsigned long long>(g_samplesRead.load()));
+          static_cast<unsigned long long>(g_samplesRead.load()),
+          static_cast<unsigned long long>(g_capturePackets.load()),
+          static_cast<unsigned long long>(g_captureSilentPackets.load()),
+          static_cast<unsigned long long>(g_captureDiscontinuities.load()),
+          static_cast<unsigned long long>(g_samplesPushed.load()),
+          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          static_cast<unsigned long long>(g_maxPollGapMs.exchange(0)));
     }
   }
   const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+  g_capturePackets.fetch_add(1, std::memory_order_relaxed);
+  if (silent) g_captureSilentPackets.fetch_add(1, std::memory_order_relaxed);
+  if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+    g_captureDiscontinuities.fetch_add(1, std::memory_order_relaxed);
+  }
   const size_t bytes = silent ? 0 : static_cast<size_t>(frameCount) * fmt->nBlockAlign;
   const MicCapturePacketResult result = g_captureAdapter.Process(
       data, frameCount, bytes, fmt->nChannels, fmt->nBlockAlign,
@@ -154,16 +188,50 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
         "[NEVR.MIC] capture packet rejected (status=%u consumed=%u/%u frames)",
         static_cast<unsigned>(result.status), result.consumedFrames, frameCount);
   }
-  if (result.ringOverflow && !g_ringOverflowLogged) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
-        "(game calls so far: MicAvailable=%llu MicRead=%llu samples_read=%llu)",
-        static_cast<unsigned long long>(g_availableCalls.load()),
-        static_cast<unsigned long long>(g_readCalls.load()),
-        static_cast<unsigned long long>(g_samplesRead.load()));
-    g_ringOverflowLogged = true;
+  g_samplesPushed.fetch_add(result.producedSamples, std::memory_order_relaxed);
+  // A full ring before the game's first read of this stream is expected (nobody is listening yet,
+  // the oldest audio is simply not wanted); the warning is for a game that read and then stopped.
+  // It is counted: the first overflow logs at once, later ones at most every kOverflowLogIntervalMs
+  // with how many samples were dropped since the previous line.
+  if (!g_ring.ReaderActive()) {
+    g_overflowGate.Rebase(g_ring.DroppedSamples());
+  } else if (result.ringOverflow) {
+    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    const uint64_t droppedSinceLast = g_overflowGate.Poll(g_ring.DroppedSamples(), nowMs);
+    if (droppedSinceLast > 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
+          "(dropped %llu samples since the last warning, %llu in total; game calls so far: "
+          "MicAvailable=%llu MicRead=%llu samples_read=%llu)",
+          static_cast<unsigned long long>(droppedSinceLast),
+          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          static_cast<unsigned long long>(g_availableCalls.load()),
+          static_cast<unsigned long long>(g_readCalls.load()),
+          static_cast<unsigned long long>(g_samplesRead.load()));
+    }
   }
 }
+
+static_assert(static_cast<int32_t>(AUDCLNT_E_DEVICE_INVALIDATED) == kMicDeviceInvalidated,
+              "mic_endpoint_loss.h must name the audioclient.h value");
+static_assert(static_cast<int32_t>(AUDCLNT_E_RESOURCES_INVALIDATED) == kMicResourcesInvalidated,
+              "mic_endpoint_loss.h must name the audioclient.h value");
+
+// Records a lost endpoint (once per loss) from a capture call that failed with `hr`: the device was
+// invalidated, or the stream's resources were (suspended or disconnected stream).
+void NoteIfDeviceLost(HRESULT hr) {
+  if (!MicHresultMeansEndpointLost(static_cast<int32_t>(hr))) return;
+  if (!g_deviceLost.exchange(true, std::memory_order_acq_rel)) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] capture endpoint lost (0x%lx, %s): the default capture endpoint will be re-acquired",
+        static_cast<unsigned long>(hr),
+        hr == AUDCLNT_E_RESOURCES_INVALIDATED ? "resources invalidated" : "device invalidated");
+  }
+}
+
+// Asks the owner thread to re-acquire the endpoint and start capture again (defined with the dispatcher).
+void RequestRecoveryAfterLoss();
 
 bool CaptureCancelled(void*) { return !g_running.load(std::memory_order_acquire); }
 
@@ -172,6 +240,7 @@ bool CaptureNextPacket(void*, uint32_t* frames) {
   const HRESULT hr = g_captureClient->GetNextPacketSize(&packetFrames);
   if (FAILED(hr)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetNextPacketSize failed: 0x%lx", static_cast<unsigned long>(hr));
+    NoteIfDeviceLost(hr);
     return false;
   }
   *frames = packetFrames;
@@ -185,6 +254,7 @@ bool CaptureAcquirePacket(void*, const void** data, uint32_t* frames, uint32_t* 
   const HRESULT hr = g_captureClient->GetBuffer(&packet, &packetFrames, &packetFlags, nullptr, nullptr);
   if (FAILED(hr)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetBuffer failed: 0x%lx", static_cast<unsigned long>(hr));
+    NoteIfDeviceLost(hr);
     return false;
   }
   *data = packet;
@@ -202,6 +272,7 @@ bool CaptureReleasePacket(void*, uint32_t frames) {
   if (FAILED(hr)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] ReleaseBuffer failed: 0x%lx",
         static_cast<unsigned long>(hr));
+    NoteIfDeviceLost(hr);
     return false;
   }
   return true;
@@ -254,6 +325,9 @@ DWORD WINAPI CaptureThreadProc(LPVOID) {
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture thread exiting");
   if (comMustUninitialize) CoUninitialize();
+  // The capture ended because its device was invalidated: have the owner thread re-acquire the endpoint
+  // (a capture the game stopped meanwhile is not restarted: the lifecycle only recovers a running one).
+  if (g_deviceLost.load(std::memory_order_acquire)) RequestRecoveryAfterLoss();
   return 0;
 }
 
@@ -261,27 +335,22 @@ DWORD WINAPI CaptureThreadProc(LPVOID) {
 
 namespace {
 
-bool CreateWasapiResources(void*) {
-  const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  if (initResult == RPC_E_CHANGED_MODE) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.MIC] MicCreate rejected an existing non-MTA COM apartment; cross-apartment capture is unverified");
-    return false;
-  }
-  g_ownerMustUninitializeCom = MicComInitializationRequiresUninitialize(static_cast<int32_t>(initResult));
-  if (FAILED(initResult)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx",
-        static_cast<unsigned long>(initResult));
-    return false;
-  }
-  const auto fail = [](const char* operation, HRESULT failure, EchoVR::LogLevel level) {
-    Log(level, "[NEVR.MIC] %s failed: 0x%lx", operation, static_cast<unsigned long>(failure));
+// Acquires the current default capture endpoint and makes it ready to Start: the audio client, its
+// event, the worker's startup event and the capture client. `balanceComOnFailure` is true for the first
+// acquisition (a failure undoes the COM initialization MicCreate just made); a re-acquisition keeps
+// the owner thread's COM initialization, which MicDestroy balances.
+bool AcquireEndpoint(bool balanceComOnFailure) {
+  const auto cleanup = [balanceComOnFailure]() {
     ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
+    if (balanceComOnFailure && g_ownerMustUninitializeCom) {
       CoUninitialize();
       g_ownerMustUninitializeCom = false;
     }
     return false;
+  };
+  const auto fail = [&cleanup](const char* operation, HRESULT failure, EchoVR::LogLevel level) {
+    Log(level, "[NEVR.MIC] %s failed: 0x%lx", operation, static_cast<unsigned long>(failure));
+    return cleanup();
   };
 
   HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator,
@@ -304,12 +373,7 @@ bool CreateWasapiResources(void*) {
     const DWORD error = GetLastError();
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(capture) failed: %lu",
         static_cast<unsigned long>(error));
-    ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
-      CoUninitialize();
-      g_ownerMustUninitializeCom = false;
-    }
-    return false;
+    return cleanup();
   }
   hr = g_audioClient->SetEventHandle(g_captureEvent);
   if (FAILED(hr)) return fail("SetEventHandle", hr, EchoVR::LogLevel::Error);
@@ -318,12 +382,7 @@ bool CreateWasapiResources(void*) {
     const DWORD error = GetLastError();
     Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(worker startup) failed: %lu",
         static_cast<unsigned long>(error));
-    ReleaseWasapi();
-    if (g_ownerMustUninitializeCom) {
-      CoUninitialize();
-      g_ownerMustUninitializeCom = false;
-    }
-    return false;
+    return cleanup();
   }
   hr = g_audioClient->GetService(IID_IAudioCaptureClient, reinterpret_cast<void**>(&g_captureClient));
   if (FAILED(hr)) return fail("GetService(IAudioCaptureClient)", hr, EchoVR::LogLevel::Error);
@@ -333,6 +392,40 @@ bool CreateWasapiResources(void*) {
       static_cast<unsigned>(g_mixFormat->nSamplesPerSec), static_cast<unsigned>(g_mixFormat->nChannels),
       static_cast<unsigned>(g_mixFormat->wBitsPerSample), static_cast<unsigned>(g_mixFormat->wFormatTag),
       static_cast<unsigned>(kTargetSampleRate));
+  return true;
+}
+
+
+bool CreateWasapiResources(void*) {
+  const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  if (initResult == RPC_E_CHANGED_MODE) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] MicCreate rejected an existing non-MTA COM apartment; cross-apartment capture is unverified");
+    return false;
+  }
+  g_ownerMustUninitializeCom = MicComInitializationRequiresUninitialize(static_cast<int32_t>(initResult));
+  if (FAILED(initResult)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx",
+        static_cast<unsigned long>(initResult));
+    return false;
+  }
+  return AcquireEndpoint(true);
+}
+
+// The capture device was invalidated (AUDCLNT_E_DEVICE_INVALIDATED, 0x88890004: unplugged, disabled or
+// reconfigured): the IAudioClient is dead for good. Microsoft's recovery for an application that follows
+// the default device is to release every WASAPI interface and activate a client on the current default
+// endpoint again ("Recovering from an Invalid-Device Error", Core Audio APIs). Runs on the owner thread
+// with the worker joined.
+bool RecoverAudio(void*) {
+  ReleaseWasapi();
+  if (!AcquireEndpoint(false)) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] could not re-acquire the default capture endpoint; capture stays stopped until the game starts it again");
+    return false;
+  }
+  g_deviceLost.store(false, std::memory_order_release);
+  Log(EchoVR::LogLevel::Info, "[NEVR.MIC] re-acquired the current default capture endpoint");
   return true;
 }
 
@@ -367,7 +460,7 @@ MicWorkerCreateResult CreateCaptureWorker(void*) {
   const DWORD wait = WaitForSingleObject(g_workerStartupEvent, 2000);
   if (wait == WAIT_OBJECT_0 && g_workerSetupSucceeded.load(std::memory_order_acquire)) {
     // The operator-facing "capture started" line (with caller and owner
-    // thread ids) is written by MicProvider::MicStart once the transition
+    // thread ids) is written by nevr_mic_provider::MicStart once the transition
     // has committed.
     Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture worker ready");
     return MicWorkerCreateResult::Started;
@@ -438,12 +531,13 @@ void ReleaseWasapiResources(void*) {
 void ResetCaptureStream(void*) {
   g_captureAdapter.Reset();
   g_ring.Reset();
-  g_ringOverflowLogged = false;
+  g_overflowGate.Reset();
 }
 
 const MicLifecycleOperations kMicLifecycleOperations = {
     nullptr, CreateWasapiResources, StartAudio, CreateCaptureWorker, RequestCaptureStop,
-    WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream};
+    WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream,
+    RecoverAudio};
 
 const char* StateName(MicLifecycleState state) {
   switch (state) {
@@ -458,7 +552,7 @@ const char* StateName(MicLifecycleState state) {
 }
 
 // --- Owner-thread marshalling (GH #51) ----------------------------------
-enum class MicCall { Create, Start, Stop, Destroy };
+enum class MicCall { Create, Start, Stop, Destroy, Recover };
 
 const char* CallName(MicCall call) {
   switch (call) {
@@ -466,6 +560,7 @@ const char* CallName(MicCall call) {
     case MicCall::Start: return "MicStart";
     case MicCall::Stop: return "MicStop";
     case MicCall::Destroy: return "MicDestroy";
+    case MicCall::Recover: return "MicRecover";
   }
   return "Mic?";
 }
@@ -498,6 +593,9 @@ void RunMicCall(void* context) {
       break;
     case MicCall::Destroy:
       request.result = g_lifecycle.Destroy(ownerThread, kMicLifecycleOperations, 2000);
+      break;
+    case MicCall::Recover:
+      request.result = g_lifecycle.Recover(ownerThread, kMicLifecycleOperations, 2000);
       break;
   }
   request.after = g_lifecycle.State();
@@ -546,14 +644,63 @@ bool DispatchMicCall(MicCall call, MicCallRequest* request) {
   return true;
 }
 
+void RecoverCaptureAfterLoss() {
+  MicCallRequest request{};
+  if (!DispatchMicCall(MicCall::Recover, &request)) return;
+  if (request.result) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture resumed after the device was invalidated (owner thread %lu)",
+        static_cast<unsigned long>(request.ownerThread));
+  } else {
+    // The game stopped capture meanwhile, or no capture device is available: the game's next MicStart
+    // re-acquires the endpoint (the lifecycle's Start does it when the client cannot start).
+    Log(EchoVR::LogLevel::Warning, "[NEVR.MIC] capture not resumed after the device was invalidated (state=%s)",
+        StateName(request.after));
+  }
+}
+
+// Runs on a short-lived thread: the capture worker that noticed the loss is on its way out, and the
+// recovery joins it, so it cannot run on that thread.
+void RequestRecoveryAfterLoss() {
+  try {
+    std::thread(RecoverCaptureAfterLoss).detach();
+  } catch (const std::system_error&) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] could not start the capture recovery thread");
+  }
+}
+
 }  // namespace
 
-uint64_t MicProvider::MicAvailable() {
+// The game's first MicRead of a stream that finds audio waiting drops what was captured before it was
+// listening, so that read gets fresh audio. MicAvailable is only a poll: the game calls it from the moment
+// capture starts and makes its first MicRead hundreds of milliseconds later, so it neither drops nor counts
+// as a consumer (MicRingBuffer::NoteReaderActive).
+static void NoteGameReader() {
+  const uint32_t stale = g_ring.NoteReaderActive();
+  if (stale > 0) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.MIC] first game read of this capture: dropped %u stale samples captured before it "
+        "was listening (ring cap %u samples)",
+        static_cast<unsigned>(stale), static_cast<unsigned>(kRingCapacitySamples));
+  }
+}
+
+uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
+  {
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t previousNs = g_lastPollNs.exchange(nowNs, std::memory_order_relaxed);
+    if (previousNs != 0) {
+      const uint64_t gapMs = static_cast<uint64_t>((nowNs - previousNs) / 1000000);
+      uint64_t seen = g_maxPollGapMs.load(std::memory_order_relaxed);
+      while (gapMs > seen && !g_maxPollGapMs.compare_exchange_weak(seen, gapMs, std::memory_order_relaxed)) {
+      }
+    }
+  }
   return static_cast<uint64_t>(g_ring.Available());
 }
 
-uint64_t MicProvider::MicCreate() {
+uint64_t nevr_mic_provider::MicCreate() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Create, &request)) return 1;
   if (!request.result) {
@@ -565,7 +712,7 @@ uint64_t MicProvider::MicCreate() {
   return 0;
 }
 
-uint64_t MicProvider::MicDetected() {
+uint64_t nevr_mic_provider::MicDetected() {
   if (g_lifecycle.IsCreated()) return 1;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -590,8 +737,9 @@ uint64_t MicProvider::MicDetected() {
   return detected;
 }
 
-uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
+uint64_t nevr_mic_provider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
+  NoteGameReader();
   const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
   const uint64_t got = g_ring.Pop(static_cast<int16_t*>(buffer), count);
   g_readCalls.fetch_add(1, std::memory_order_relaxed);
@@ -599,7 +747,7 @@ uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
   return got;
 }
 
-void MicProvider::MicStart() {
+void nevr_mic_provider::MicStart() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Start, &request)) return;
   if (request.result) {
@@ -620,7 +768,7 @@ void MicProvider::MicStart() {
   }
 }
 
-void MicProvider::MicStop() {
+void nevr_mic_provider::MicStop() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Stop, &request)) return;
   if (!request.result) {
@@ -637,7 +785,7 @@ void MicProvider::MicStop() {
   }
 }
 
-void MicProvider::MicDestroy() {
+void nevr_mic_provider::MicDestroy() {
   MicCallRequest request{};
   if (!DispatchMicCall(MicCall::Destroy, &request)) return;
   if (!request.result) {
@@ -653,12 +801,12 @@ void MicProvider::MicDestroy() {
 
 #else  // !_WIN32
 
-uint64_t MicProvider::MicAvailable() { return 0; }
-uint64_t MicProvider::MicCreate() { return 1; }
-uint64_t MicProvider::MicDetected() { return 0; }
-uint64_t MicProvider::MicRead(void*, uint64_t) { return 0; }
-void MicProvider::MicStart() {}
-void MicProvider::MicStop() {}
-void MicProvider::MicDestroy() {}
+uint64_t nevr_mic_provider::MicAvailable() { return 0; }
+uint64_t nevr_mic_provider::MicCreate() { return 1; }
+uint64_t nevr_mic_provider::MicDetected() { return 0; }
+uint64_t nevr_mic_provider::MicRead(void*, uint64_t) { return 0; }
+void nevr_mic_provider::MicStart() {}
+void nevr_mic_provider::MicStop() {}
+void nevr_mic_provider::MicDestroy() {}
 
 #endif  // _WIN32

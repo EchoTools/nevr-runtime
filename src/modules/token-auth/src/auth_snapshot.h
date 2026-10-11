@@ -7,7 +7,7 @@
 #include <mutex>
 #include <string>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 
 enum class AuthReadiness {
   Starting,
@@ -62,4 +62,4 @@ class AuthCancellation {
   bool stopRequested_ = false;
 };
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

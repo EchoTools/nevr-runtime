@@ -10,3 +10,14 @@ extern "C" const char* fx_read(const char* key, const char* fallback) {
   static const NRadEngine::CJson json{};
   return json.TString(key, fallback, 0U);
 }
+
+// A module that connects through CSysHttp::CreateConnection's PLT slot, like CR15NetStoreTransactions.
+namespace NRadEngine {
+struct CSysHttp {
+  static int CreateConnection(unsigned long& handle, const char* url);
+};
+}  // namespace NRadEngine
+
+extern "C" int fx_connect(const char* url, unsigned long* handle) {
+  return NRadEngine::CSysHttp::CreateConnection(*handle, url);
+}

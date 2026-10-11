@@ -47,7 +47,7 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -73,6 +73,10 @@ void DefaultsWithoutFile() {
   CHECK(!r.config.requested.hwdump && !r.config.effective.hwdump);
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
   CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
+  // The OBB-mount skip (#319) is off until a file turns it on.
+  CHECK(!r.config.requested.obbSkip && !r.config.effective.obbSkip);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+  CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
   CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
   CHECK(!HasLevel(r, LogLevel::kError));
 }
@@ -368,13 +372,167 @@ void HwDumpIsOnlyEverOnByAFileBoolean() {
   }
 }
 
+// The OBB-mount skip (#319) needs nothing else: the file's boolean alone turns it on, and anything but a
+// JSON true leaves it off.
+void ObbSkipIsOnlyEverOnByAFileBoolean() {
+  {
+    const LoadResult r = Load(Full(), R"({"features":{"obb_skip":true}})");
+    CHECK(r.config.requested.obbSkip && r.config.effective.obbSkip);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+    CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
+          !r.config.effective.social && !r.config.effective.hwdump);
+    CHECK(EventsContain(r, "feature=obb_skip requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  for (const char* text : {R"({"features":{"obb_skip":"true"}})", R"({"features":{"obb_skip":1}})",
+                           R"({"obb_skip":true})", R"({"features":{}})"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.obbSkip);
+    CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
+  }
+  // A rejected file contributes nothing, so the feature stays off.
+  const LoadResult rejected = Load(Full(), R"({"features":{"obb_skip":true})");
+  CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
+}
+
+// The no-config gate (the release packages): a build that turns the login features on by default logs in with no
+// nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
+constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
+
+EmbeddedDefaults FullWithFeatures(const char* features) {
+  EmbeddedDefaults d = Full();
+  d.features = features;
+  return d;
+}
+
+void NoConfigFileLogsInFromTheEmbeddedDefaultsAlone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(kLoginFeatures), nullptr);
+  CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.httpUri.source == Source::kEmbedded);
+  CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.serverKey.source == Source::kEmbedded);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kRedirect));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kBridge));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));  // diagnostics stay off
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
+  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
+}
+
+void DefaultFeaturesAreOffWhenTheBuildNamesNone() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(""), nullptr);
+  CHECK(AllOff(r.config.effective));
+}
+
+void AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults() {
+  const LoadResult off = Load(FullWithFeatures(kLoginFeatures), R"({"features":{"social":false}})");
+  CHECK(nevr_quest::FeatureEnabled(off.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(off.config, Feature::kSocial));
+  const LoadResult rejected = Load(FullWithFeatures(kLoginFeatures), "{not json");
+  CHECK(rejected.fileRejected);
+  CHECK(nevr_quest::FeatureEnabled(rejected.config, Feature::kLogin));
+  CHECK(rejected.config.socketUri.source == Source::kEmbedded);
+}
+
+void ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne() {
+  EmbeddedDefaults noKey = FullWithFeatures(kLoginFeatures);
+  noKey.serverKey = "";
+  const LoadResult r = nevr_quest::ResolveConfig(noKey, nullptr);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(EventsContain(r, "forced off"));
+}
+
+void AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything() {
+  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures("login,nonsense"), nullptr);
+  CHECK(EventsContain(r, "embedded default feature ignored reason=unknown_name"));
+  CHECK(!EventsContain(r, "nonsense"));
+}
+
+// Presence names (#393) ride in the social facade's member data: off unless the file asks, forced off without
+// social (so without login), and only a JSON true counts.
+void PresenceNamesNeedSocialAndAreOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_names":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.presenceNames && r.config.effective.presenceNames);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceNames));
+  CHECK(EventsContain(r, "feature=presence_names requested=on effective=on"));
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // Without social it is forced off, with that one reason, and after social's own rules ran.
+  r = Load(Full(), R"({"features":{"presence_names":true}})");
+  CHECK(r.config.requested.presenceNames && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"presence_names":true}})");
+  CHECK(r.config.effective.login && !r.config.effective.social && !r.config.effective.presenceNames);
+  r = Load(Full(), R"({"features":{"social":true,"presence_names":true}})");  // social loses login, so it loses this too
+  CHECK(!r.config.effective.social && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
+
+  // Off by default, and a non-boolean leaves it off.
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.social && !r.config.requested.presenceNames && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=presence_names requested=off effective=off"));
+  for (const char* text : {R"({"features":{"presence_names":"true"}})", R"({"features":{"presence_names":1}})",
+                           R"({"presence_names":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.presenceNames);
+  }
+}
+
+// Presence local (#396) needs the social facade like presence_names, is off unless the file asks, and only a
+// JSON true counts.
+void PresenceLocalNeedsSocialAndIsOffByDefault() {
+  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_local":true}})";
+  LoadResult r = Load(Full(), all);
+  CHECK(r.config.requested.presenceLocal && r.config.effective.presenceLocal);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceLocal));
+  CHECK(EventsContain(r, "feature=presence_local requested=on effective=on"));
+  CHECK(!r.config.effective.presenceNames);  // independent of the names feature
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  r = Load(Full(), R"({"features":{"presence_local":true}})");
+  CHECK(r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local forced off reason=social_not_enabled"));
+
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.social && !r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local requested=off effective=off"));
+  for (const char* text : {R"({"features":{"presence_local":"true"}})", R"({"features":{"presence_local":1}})",
+                           R"({"presence_local":true})"}) {
+    r = Load(Full(), text);
+    CHECK(!r.config.effective.presenceLocal);
+  }
+}
+
+// The Quest `self_check` feature is gone (#451: self-checks are on in every build). A file that still names it is
+// not an error: it is told the feature is retired, by name (the name is one of ours, so nothing a file supplies
+// reaches the log), nothing else about it counts as an unknown feature, and startup carries on.
+void ARetiredFeatureNamedInAFileIsIgnoredByName() {
+  LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
+  CHECK(EventsContain(r, "feature=self_check retired ignored"));
+  CHECK(!EventsContain(r, "unknown feature #"));
+  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
+  CHECK(!AllOff(r.config.effective));
+  // an unrelated unknown name is still only counted, never named
+  r = Load(Full(), R"({"features":{"made_up_name":true}})");
+  CHECK(EventsContain(r, "unknown feature #1 ignored"));
+  CHECK(!EventsContain(r, "made_up_name"));
+  CHECK(!EventsContain(r, "retired"));
+}
+
 int main() {
   DefaultsWithoutFile();
+  NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
+  DefaultFeaturesAreOffWhenTheBuildNamesNone();
+  AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults();
+  ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne();
+  AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything();
   EmptyEmbeddedIsAbsent();
   InvalidEmbeddedIsRejectedWithoutValue();
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
+  ARetiredFeatureNamedInAFileIsIgnoredByName();
   SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();
@@ -389,6 +547,9 @@ int main() {
   ConfigPathIsNeverGameConfigJson();
   RedirectIsGatedByActivation();
   HwDumpIsOnlyEverOnByAFileBoolean();
+  ObbSkipIsOnlyEverOnByAFileBoolean();
+  PresenceNamesNeedSocialAndAreOffByDefault();
+  PresenceLocalNeedsSocialAndIsOffByDefault();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
     return 1;

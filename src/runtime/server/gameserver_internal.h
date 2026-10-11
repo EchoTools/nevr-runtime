@@ -11,7 +11,7 @@
 
 #include "abi/echovr.h"
 #include "runtime/server/gameserver.h"
-#include "runtime/hook/patching.h"  // NevRUPnPConfig
+#include "runtime/hook/patching.h"  // NevrUPnPConfig
 #include "runtime/server/upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
 
@@ -31,7 +31,7 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
 /// A ServerDB bearer token (refreshed or re-minted under the serialized-mint lock); empty with `reason` set on failure.
 std::string AcquireServerDbToken(std::string& reason);
 /// UPnP settings from the runtime's globals.
-bool ReadUPnPConfig(NevRUPnPConfig& out);
+bool ReadUPnPConfig(NevrUPnPConfig& out);
 /// Ask the game to return to the lobby (no-op without a game object).
 void CallScheduleReturnToLobby();
 

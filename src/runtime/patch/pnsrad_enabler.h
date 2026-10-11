@@ -1,7 +1,7 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 #pragma once
 #include <cstdint>
-namespace PnsradEnabler {
+namespace nevr_pnsrad_enabler {
     void Init(uintptr_t base_addr);
     void Shutdown();
 

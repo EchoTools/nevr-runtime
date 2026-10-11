@@ -18,7 +18,7 @@
 /// copies, separate private hook tables — MinHook cannot tell you that another
 /// MinHook already owns the address. The second installer reads our JMP stub and
 /// trampolines off it as if it were the original prologue.
-namespace HookGuard {
+namespace nevr_hook_guard {
 
 /// Snapshot the first bytes at `target` under `name`. Called automatically by
 /// PatchDetour (gamepatches_internal.h) after a successful install, so every
@@ -50,4 +50,4 @@ int RecordedCount();
 void ResetForTest();
 #endif
 
-}  // namespace HookGuard
+}  // namespace nevr_hook_guard

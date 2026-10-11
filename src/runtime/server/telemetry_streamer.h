@@ -18,7 +18,7 @@ struct WebSocketMessage;
 using WebSocketMessagePtr = std::unique_ptr<WebSocketMessage>;
 }  // namespace ix
 
-namespace GameServer {
+namespace nevr_game_server {
 class ServerContext;
 }
 namespace telemetry::v2 {

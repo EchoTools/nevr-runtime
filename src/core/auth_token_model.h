@@ -89,10 +89,10 @@ struct CachedAuthToken {
     /// Expiry from the JWT's own `exp` claim (RFC 7519: seconds since epoch).
     /// Returns 0 when the token carries no usable `exp`.
     ///
-    /// This is the authority for when to refresh. The previous code hardcoded
-    /// now+60 regardless of what the server issued, so the client refreshed on
-    /// its own schedule instead of the token's — and a token that was still
-    /// valid for an hour was thrown away every minute.
+    /// This is the authority for when to refresh. A fixed now+60 would ignore
+    /// what the server issued: the client would refresh on its own schedule
+    /// instead of the token's, and a token still valid for an hour would be
+    /// thrown away every minute.
     uint64_t GetJwtExpiry() const {
         const auto claims = DecodeClaims();
         if (claims.contains("exp") && claims["exp"].is_number_unsigned()) {

@@ -12,7 +12,7 @@
 
 #include "core/nevr_config.h"
 
-namespace BridgePolicy {
+namespace nevr_bridge_policy {
 
 enum class Outcome {
   Start,              // socket_uri configured: start the bridge
@@ -41,4 +41,4 @@ inline bool IsUnrecognized(const char* value) {
   return value != nullptr && value[0] != '\0' && !nevr::ParseBool(value).has_value();
 }
 
-}  // namespace BridgePolicy
+}  // namespace nevr_bridge_policy

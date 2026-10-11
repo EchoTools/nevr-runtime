@@ -27,6 +27,7 @@
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
@@ -35,6 +36,8 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/party_share_check.h"
+#include "runtime/compat/self_check.h"
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -68,12 +71,12 @@ struct Runtime {
   std::atomic<quest_net::SessionBridge*> bridge{nullptr};
   // The router's login gate, kept current by the token-auth poll (TokenIdentitySource::GateFor); the router
   // reads it with its lock held, so it is a plain atomic. Awaiting until the first poll says otherwise.
-  std::atomic<int> loginGate{static_cast<int>(SessionRouter::LoginGate::Awaiting)};
+  std::atomic<int> loginGate{static_cast<int>(nevr_session_router::LoginGate::Awaiting)};
   std::atomic<unsigned> bridgePort{0};
   std::string loopbackUri;  // "ws://127.0.0.2:<port>/<token>/"; written once before the redirect is installed
   std::unique_ptr<TokenIdentitySource> identity;
   bool socialWanted = false;
-  std::atomic<int> socialLevel{0};  // SocialParty::kSocialLevel once the facade is installed
+  std::atomic<int> socialLevel{0};  // nevr_social_party::kSocialLevel once the facade is installed
 };
 
 Runtime& R() {
@@ -95,12 +98,12 @@ void HookLogToDisk(sentinel::LogLevel level, const char* line) {
   }
 }
 
-nevr_quest::LogLevel MapRouter(SessionRouter::LogLevel level) {
+nevr_quest::LogLevel MapRouter(nevr_session_router::LogLevel level) {
   switch (level) {
-    case SessionRouter::LogLevel::Warning: return nevr_quest::LogLevel::kWarn;
-    case SessionRouter::LogLevel::Error: return nevr_quest::LogLevel::kError;
-    case SessionRouter::LogLevel::Debug:
-    case SessionRouter::LogLevel::Info: break;
+    case nevr_session_router::LogLevel::Warning: return nevr_quest::LogLevel::kWarn;
+    case nevr_session_router::LogLevel::Error: return nevr_quest::LogLevel::kError;
+    case nevr_session_router::LogLevel::Debug:
+    case nevr_session_router::LogLevel::Info: break;
   }
   return nevr_quest::LogLevel::kInfo;
 }
@@ -163,6 +166,7 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
+    nevr_self_check::Flush();  // probes and queued results, every poll (cheap: nothing is sent before LoginSuccess)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
   }
@@ -170,9 +174,16 @@ void PollTokenAuthState() {
 
 // --- bridge --------------------------------------------------------------------------------------
 
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len);  // below
+
 bool SendSocialFrame(const std::string& frame) {
   quest_net::SessionBridge* const bridge = R().bridge.load(std::memory_order_acquire);
-  return bridge != nullptr && bridge->SendToLogin(frame);
+  const bool sent = bridge != nullptr && bridge->SendToLogin(frame);
+  if (sent) {
+    // A request the facade sent is not shown to the frame tap; the party_data_share check pairs its answer with it.
+    ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());
+  }
+  return sent;
 }
 
 std::uint64_t SteadySeconds() {
@@ -183,10 +194,10 @@ std::uint64_t SteadySeconds() {
 // The shared redirect policy answers the bare "ws://127.0.0.1:<port>" for a redirected game URL, which the
 // game cannot reach (libr15 dials a non-loopback interface for 127.0.0.1) and which has no access token. The pool receives the tokened URI instead (docs/adr/0003,
 // "Integration"). Only the exact bare value is replaced; anything else is interned as it is.
-nevr_runtime::lifecycle::InternResult InternBridgeAware(std::string_view value) {
+nevr::lifecycle::InternResult InternBridgeAware(std::string_view value) {
   Runtime& rt = R();
   const unsigned port = rt.bridgePort.load(std::memory_order_acquire);
-  return nevr_runtime::lifecycle::InternStableCStr(ReplaceBareBridgeUri(value, port, rt.loopbackUri));
+  return nevr::lifecycle::InternStableCStr(ReplaceBareBridgeUri(value, port, rt.loopbackUri));
 }
 
 nevr_quest::redirect::BridgeState BridgeProbe() {
@@ -196,8 +207,8 @@ nevr_quest::redirect::BridgeState BridgeProbe() {
 
 // --- post-load actions ---------------------------------------------------------------------------
 
-QuestLogin::BuildInfo ThisBuild() {
-  QuestLogin::BuildInfo build;
+nevr_quest_login::BuildInfo ThisBuild() {
+  nevr_quest_login::BuildInfo build;
   build.project_version = NEVR_QUEST_PROJECT_VERSION;
   build.git_commit = NEVR_QUEST_GIT_COMMIT;
   build.git_describe = NEVR_QUEST_GIT_DESCRIBE;
@@ -206,14 +217,14 @@ QuestLogin::BuildInfo ThisBuild() {
 }
 
 // The login library's own records, plus the stage line `login_rewritten` for each login it handled.
-void LoginLog(QuestLogin::Level level, const char* event, const QuestLogin::LogKv* fields, std::size_t count) {
-  QuestLogin::SentinelLog(level, event, fields, count);
+void LoginLog(nevr_quest_login::Level level, const char* event, const nevr_quest_login::LogKv* fields, std::size_t count) {
+  nevr_quest_login::SentinelLog(level, event, fields, count);
   if (std::strcmp(event, "quest_login") != 0) return;
   const char* outcome = "unknown";
   for (std::size_t i = 0; i < count; ++i) {
     if (std::strcmp(fields[i].key, "outcome") == 0 && fields[i].text != nullptr) outcome = fields[i].text;
   }
-  const bool ok = std::strcmp(outcome, QuestLogin::OutcomeName(QuestLogin::Outcome::Rewritten)) == 0;
+  const bool ok = std::strcmp(outcome, nevr_quest_login::OutcomeName(nevr_quest_login::Outcome::Rewritten)) == 0;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "login_rewritten",
                       {{"status", ok ? "ok" : "failed"}, {"class", outcome}});
 }
@@ -230,18 +241,18 @@ ActionResult Staged(const char* stage, ActionResult result) {
 
 ActionResult LoginAction() noexcept {
   try {
-    static const QuestLogin::BuildInfo build = ThisBuild();
-    switch (QuestLogin::TryInstallLoginHook(R().identity.get(), build, &LoginLog)) {
-      case QuestLogin::InstallState::Installed: return Staged("login_hook_installed", {Settle::kDone, "installed"});
-      case QuestLogin::InstallState::AlreadyInstalled:
+    static const nevr_quest_login::BuildInfo build = ThisBuild();
+    switch (nevr_quest_login::TryInstallLoginHook(R().identity.get(), build, &LoginLog)) {
+      case nevr_quest_login::InstallState::Installed: return Staged("login_hook_installed", {Settle::kDone, "installed"});
+      case nevr_quest_login::InstallState::AlreadyInstalled:
         return Staged("login_hook_installed", {Settle::kDone, "already_installed"});
-      case QuestLogin::InstallState::ModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
-      case QuestLogin::InstallState::BuildMismatch:
+      case nevr_quest_login::InstallState::ModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
+      case nevr_quest_login::InstallState::BuildMismatch:
         return Staged("login_hook_installed", {Settle::kGiveUp, "build_mismatch"});
-      case QuestLogin::InstallState::SlotInvalid: return Staged("login_hook_installed", {Settle::kGiveUp, "slot_invalid"});
-      case QuestLogin::InstallState::SymbolMissing:
+      case nevr_quest_login::InstallState::SlotInvalid: return Staged("login_hook_installed", {Settle::kGiveUp, "slot_invalid"});
+      case nevr_quest_login::InstallState::SymbolMissing:
         return Staged("login_hook_installed", {Settle::kGiveUp, "symbol_missing"});
-      case QuestLogin::InstallState::HookFailed: return Staged("login_hook_installed", {Settle::kGiveUp, "hook_failed"});
+      case nevr_quest_login::InstallState::HookFailed: return Staged("login_hook_installed", {Settle::kGiveUp, "hook_failed"});
     }
     return Staged("login_hook_installed", {Settle::kGiveUp, "unknown_state"});
   } catch (const std::exception&) {
@@ -249,11 +260,40 @@ ActionResult LoginAction() noexcept {
   }
 }
 
+void SelfCheckLog(const nevr_self_check::LogRecord& record) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "self_check",
+                      {{"check", record.name.c_str()}, {"pass", record.pass ? 1 : 0},
+                       {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
+}
+
+// Self-check "party_data_share" (#398): hands each message of a frame to the check, which pairs the service's
+// answers (server to game) with the requests that were sent (game to server, and the facade's own through
+// SendSocialFrame, which the frame tap does not show). Runs on the thread that carries the frame: the frame
+// tap's (the router's) for the tap, the facade's caller for a request. It reads a frame's bytes and calls no game
+// code; it is not reached from the redirector's hooked call.
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len) {
+  if (!nevr_self_check::Enabled()) return;
+  const std::string frame(reinterpret_cast<const char*>(data), len);  // ReadMessage takes a std::string
+  std::size_t offset = 0;
+  for (;;) {
+    nevr_evr_codec::Message message;
+    if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
+    if (serverToGame) {
+      nevr_party_share_check::OnServerMessage(message.symbol);
+    } else {
+      nevr_party_share_check::OnClientMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+    }
+    offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
+  }
+}
+
 ActionResult MatchmakingAction() noexcept {
   try {
     const sentinel::GotStatus status = nevr_quest::redirect::InstallMatchmakingRedirect();
     switch (status) {
-      case sentinel::GotStatus::kOk: return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
+      case sentinel::GotStatus::kOk:
+        NoteMatchmakingRedirectInstalled();
+        return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
       case sentinel::GotStatus::kAlreadyInstalled:
         return Staged("matchmaking_redirect_installed", {Settle::kDone, "already_installed"});
       case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
@@ -280,7 +320,8 @@ class ProductionSteps final : public Steps {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "config_loaded",
                         {{"status", "ok"}, {"redirect", cfg.effective.redirect ? 1 : 0},
                          {"bridge", cfg.effective.bridge ? 1 : 0}, {"login", cfg.effective.login ? 1 : 0},
-                         {"social", cfg.effective.social ? 1 : 0},
+                         {"social", cfg.effective.social ? 1 : 0}, {"presence_names", cfg.effective.presenceNames ? 1 : 0},
+                         {"presence_local", cfg.effective.presenceLocal ? 1 : 0},
                          {"socket_uri", nevr_quest::SourceName(cfg.socketUri.source)},
                          {"http_uri", nevr_quest::SourceName(cfg.httpUri.source)},
                          {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
@@ -292,9 +333,10 @@ class ProductionSteps final : public Steps {
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
-  bool RegisterLoginCounters() override { return QuestLogin::RegisterLoginHookCounters(); }
+  bool RegisterLoginCounters() override { return nevr_quest_login::RegisterLoginHookCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
+  bool RegisterObbSkipCounters() override { return nevr_quest::integration::RegisterObbSkipCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -345,6 +387,12 @@ class ProductionSteps final : public Steps {
     return true;
   }
 
+  bool InstallObbSkip(bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallObbSkipHook(countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallLoginPrompt(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -362,9 +410,21 @@ class ProductionSteps final : public Steps {
     quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
+    {
+      // Self-checks (#451) are on in every build: each run-card check's result goes out on the login connection
+      // as the user the service names at LoginSuccess. The runtime adds nothing to the connection for it.
+      SelfCheckHooks hooks;
+      hooks.sender = &SendSocialFrame;
+      hooks.log = &SelfCheckLog;
+      hooks.build = NEVR_QUEST_PROJECT_VERSION;
+      ApplySelfCheck(&config.tap, hooks);
+      nevr_self_check::Register({"matchmaking_reload_redirect",
+                                 "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
+                                 &MatchmakingReloadProbe});
+    }
     config.connector = rt.connector.get();
     config.log = RouterLog();
-    config.loginGate = [] { return static_cast<SessionRouter::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
+    config.loginGate = [] { return static_cast<nevr_session_router::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
     config.identity = [serverKey] {
       quest_net::Identity id;
       nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
@@ -374,6 +434,7 @@ class ProductionSteps final : public Steps {
     };
     if (rt.socialWanted) {
       config.tap.observe = [](bool serverToGame, const std::uint8_t* data, std::size_t len) {
+        ObserveForSelfChecks(serverToGame, data, len);
         quest_social::ObserveFrames(quest_social::ProductionPorts(),
                                     serverToGame ? quest_social::Direction::kServerToGame
                                                  : quest_social::Direction::kGameToServer,
@@ -383,7 +444,7 @@ class ProductionSteps final : public Steps {
         const nevr::quest_auth::Snapshot snap = AuthSnapshot();
         quest_social::SetLocalAccount(account, snap.username.c_str());
       };
-      SocialParty::SetSender(&SendSocialFrame);
+      nevr_social_party::SetSender(&SendSocialFrame);
     }
     if (!quest_net::IsAcceptableRemoteUrl(config.remoteUri)) {
       detail_ = "socket_uri_not_wss";
@@ -415,10 +476,12 @@ class ProductionSteps final : public Steps {
 
   bool InstallSocial() override {
     const char* detail = "unknown";
-    const bool ok = nevr_quest::integration::InstallSocialHook(&detail);
+    const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
+                                                              sentinel::ActiveConfig().effective.presenceNames,
+                                                              sentinel::ActiveConfig().effective.presenceLocal);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
-    if (ok) R().socialLevel.store(SocialParty::kSocialLevel);
+    if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);
     return ok;
   }
 
@@ -463,8 +526,8 @@ class ProductionSteps final : public Steps {
  private:
   const char* detail_ = nullptr;  // set by a step to say why it ended as it did (a fixed token)
   unsigned port_ = 0;
-  static SessionRouter::LogSink RouterLog() {
-    return [](SessionRouter::LogLevel level, const std::string& line) {
+  static nevr_session_router::LogSink RouterLog() {
+    return [](nevr_session_router::LogLevel level, const std::string& line) {
       try {
         sentinel::Emit(MapRouter(level), line);
         // The stage lines (stage_log.h) that only the router's own log can tell: a remote session

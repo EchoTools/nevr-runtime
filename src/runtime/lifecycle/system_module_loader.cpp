@@ -4,7 +4,7 @@
 #include <new>
 #include <string>
 
-namespace Nevr::Lifecycle {
+namespace nevr::lifecycle {
 namespace {
 constexpr wchar_t kDbgCoreSuffix[] = L"\\dbgcore.dll";
 constexpr size_t kDbgCoreSuffixLength = (sizeof(kDbgCoreSuffix) / sizeof(kDbgCoreSuffix[0])) - 1;
@@ -33,4 +33,4 @@ HMODULE LoadSystemDbgCore(GetSystemDirectoryFunction getSystemDirectory,
   }
 }
 
-}  // namespace Nevr::Lifecycle
+}  // namespace nevr::lifecycle

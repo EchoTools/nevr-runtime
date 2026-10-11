@@ -4,7 +4,7 @@
 #include <new>
 #include <string>
 
-namespace nevr_runtime::lifecycle {
+namespace nevr::lifecycle {
 namespace {
 
 InternResult Result(InternStatus status, const char* pointer, std::size_t count, std::size_t bytes) {
@@ -72,4 +72,4 @@ const char* InternStatusName(InternStatus status) noexcept {
   return "unknown";
 }
 
-}  // namespace nevr_runtime::lifecycle
+}  // namespace nevr::lifecycle

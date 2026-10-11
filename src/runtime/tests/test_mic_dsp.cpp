@@ -163,6 +163,142 @@ TEST(MicRingBuffer, PushPopOverflowAndResetPreserveOrder) {
   EXPECT_EQ(ring.Available(), 0u);
 }
 
+// #95: audio captured before the game's first call that finds audio is stale and is dropped; the game
+// counts as a consumer only once a Pop has returned audio.
+TEST(MicRingBuffer, FirstReaderCallDropsAudioCapturedBeforeItAndReportsHowMuch) {
+  MicRingBuffer ring(8);
+  const int16_t before[] = {1, 2, 3, 4, 5};
+  ring.Push(before, 5);
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 5u);
+  EXPECT_FALSE(ring.ReaderActive()) << "a poll that drained nothing is not a consumer";
+  EXPECT_EQ(ring.Available(), 0u);
+  const int16_t fresh[] = {9, 8};
+  ring.Push(fresh, 2);
+  int16_t out[2] = {};
+  EXPECT_EQ(ring.Pop(out, 2), 2u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 2), (std::vector<int16_t>{9, 8}));
+  EXPECT_TRUE(ring.ReaderActive());
+}
+
+// The game polls MicAvailable once the moment capture starts, before any audio exists
+// (nevr-2026-10-10T12-00-22.946, MicAvailable=1 MicRead=0 at +0.234 s). That poll must not use up the drop.
+TEST(MicRingBuffer, ACallOnAnEmptyRingIsNotAReader) {
+  MicRingBuffer ring(8);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_FALSE(ring.ReaderActive());
+  const int16_t before[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  EXPECT_TRUE(ring.Push(before, 10));  // overflows while nobody consumes: the provider stays quiet
+  EXPECT_FALSE(ring.ReaderActive());
+  EXPECT_EQ(ring.NoteReaderActive(), 8u);  // the first call that finds audio drops it
+  EXPECT_FALSE(ring.ReaderActive());
+}
+
+// The second client run (nevr-2026-10-10T12-21-07.530): the game polls MicAvailable from the moment capture
+// starts and makes its first MicRead later than the ring's 200 ms, so the ring overflows before it. No
+// consumer has drained anything yet, so that overflow must stay silent; the warning is for a game that
+// drained and then stopped.
+TEST(MicRingBuffer, OverflowBeforeTheFirstDrainStaysSilentAndAfterItIsAStall) {
+  MicRingBuffer ring(4);
+  const int16_t s[] = {1, 2, 3, 4};
+  ring.Push(s, 4);
+  EXPECT_EQ(ring.NoteReaderActive(), 4u);  // the first MicRead's drop of the stale backlog
+  EXPECT_TRUE(ring.Push(s, 4) == false);
+  EXPECT_TRUE(ring.Push(s, 4));            // refilled and overfilled before the first MicRead
+  EXPECT_FALSE(ring.ReaderActive());       // the provider's warning is gated on this
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);         // the game's first real read
+  EXPECT_TRUE(ring.ReaderActive());
+  ring.Push(s, 4);
+  EXPECT_TRUE(ring.Push(s, 4));            // a stall after consuming: ReaderActive is true, the warning applies
+  EXPECT_TRUE(ring.ReaderActive());
+}
+
+TEST(MicRingBuffer, LaterReaderCallsDropNothing) {
+  MicRingBuffer ring(8);
+  const int16_t first[] = {9};
+  ring.Push(first, 1);
+  EXPECT_EQ(ring.NoteReaderActive(), 1u);
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 0u);
+  EXPECT_EQ(ring.Available(), 3u);
+}
+
+TEST(MicRingBuffer, ResetStartsANewStreamTheNextReaderCallDropsAgain) {
+  MicRingBuffer ring(8);
+  const int16_t s[] = {1, 2, 3};
+  ring.Push(s, 3);
+  ring.NoteReaderActive();
+  int16_t out[3] = {};
+  ring.Push(s, 3);
+  ring.Pop(out, 3);
+  EXPECT_TRUE(ring.ReaderActive());
+  ring.Reset();
+  EXPECT_FALSE(ring.ReaderActive());
+  ring.Push(s, 3);
+  EXPECT_EQ(ring.NoteReaderActive(), 3u);
+}
+
+TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
+  MicRingBuffer ring(4);
+  const int16_t s[] = {1, 2, 3, 4, 5, 6};
+  EXPECT_TRUE(ring.Push(s, 6));
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(out, out + 4), (std::vector<int16_t>{3, 4, 5, 6}));
+}
+
+// #95: the ring reports how many samples it overwrote, so a slow reader and a slow capture can be told
+// apart in the log. The total is cumulative: a new stream (Reset) does not zero it.
+TEST(MicRingBuffer, DroppedSamplesCountsEveryOverwrittenSampleAndSurvivesReset) {
+  MicRingBuffer ring(4);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t three[] = {1, 2, 3};
+  ring.Push(three, 3);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t five[] = {1, 2, 3, 4, 5};
+  EXPECT_TRUE(ring.Push(five, 5));  // 1 free slot, 4 overwritten
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  ring.Reset();
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  const int16_t six[] = {1, 2, 3, 4, 5, 6};
+  ring.Push(six, 6);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // 4 fit, 2 overwritten
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // reading drops nothing
+}
+
+TEST(MicRingBuffer, AZeroCapacityRingDropsEverythingItIsGiven) {
+  MicRingBuffer ring(0);
+  const int16_t three[] = {1, 2, 3};
+  EXPECT_TRUE(ring.Push(three, 3));
+  EXPECT_EQ(ring.DroppedSamples(), 3u);
+}
+
+// The warning line is counted instead of once per stream: the first overflow logs at once and carries the
+// samples dropped since the last line; later ones wait the interval and then carry what piled up.
+TEST(MicOverflowLogGate, FirstOverflowLogsThenWaitsTheIntervalAndCarriesTheAccumulatedCount) {
+  MicOverflowLogGate gate(5000);
+  EXPECT_EQ(gate.Poll(0, 1000), 0u);        // nothing dropped: nothing to say
+  EXPECT_EQ(gate.Poll(480, 1010), 480u);    // first overflow logs immediately
+  EXPECT_EQ(gate.Poll(960, 1020), 0u);      // inside the interval
+  EXPECT_EQ(gate.Poll(1920, 5999), 0u);     // 4989 ms after the line: still inside
+  EXPECT_EQ(gate.Poll(1920, 6010), 1440u);  // 5000 ms: what piled up since the line (1920 - 480)
+  EXPECT_EQ(gate.Poll(1920, 20000), 0u);    // nothing new: silent however long it has been
+}
+
+TEST(MicOverflowLogGate, RebaseHidesDropsFromBeforeTheGameWasReadingAndResetLogsTheNextStreamAtOnce) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(9600);                        // dropped while nobody was listening
+  EXPECT_EQ(gate.Poll(9600, 100), 0u);
+  EXPECT_EQ(gate.Poll(10080, 110), 480u);  // only the drop after the game started reading
+  gate.Reset();                             // a new stream: its first overflow is not held back
+  gate.Rebase(10080);
+  EXPECT_EQ(gate.Poll(10560, 200), 480u);  // 90 ms after the last line, inside the old interval
+}
+
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
   struct RatePair { uint32_t source; uint32_t target; size_t frames; };
   const RatePair rates[] = {

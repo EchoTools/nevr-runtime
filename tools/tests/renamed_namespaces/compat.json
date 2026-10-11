@@ -1,0 +1,10 @@
+{
+  "EvrCodec": "nevr_evr_codec",
+  "EvrCodecTest": "nevr_evr_codec_test",
+  "HmdSerial": "nevr_hmd_serial",
+  "LoginProfile": "nevr_login_profile",
+  "SessionRouter": "nevr_session_router",
+  "SocialNames": "nevr_social_names",
+  "SocialParty": "nevr_social_party",
+  "SocialRoster": "nevr_social_roster"
+}

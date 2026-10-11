@@ -9,7 +9,7 @@
 // Wire format of one message:   [marker(8)][symbol(8)][length(8)][payload(length)]
 // A WebSocket binary frame carries one or more messages back to back. Integers are little endian.
 // LoginRequest payload:         [session UUID(16)][platform code(8)][account id(8)][profile JSON][NUL]
-// The profile JSON is built by LoginProfile::BuildLoginProfileJson (nlohmann::json); this codec only
+// The profile JSON is built by nevr_login_profile::BuildLoginProfileJson (nlohmann::json); this codec only
 // frames it.
 
 #include <cstddef>
@@ -17,8 +17,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
-namespace EvrCodec {
+namespace nevr_evr_codec {
 
 constexpr std::size_t kMarkerSize = 8;
 constexpr std::size_t kHeaderSize = 24;  // marker + symbol + length
@@ -84,6 +85,23 @@ inline constexpr uint64_t kSymConfigFailure = 0x9e687a63dddd3870ULL;            
 // A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
 inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
 
+// SNSLoginRemovedNotify: the service tells a logged-in game its login is gone. The game's own handler
+// (CNSUser::LoginRemovedCB libr15 0x1933a28 -> CR15NetGame::LoginRemovedCB 0x125f908) puts a logged-in game on
+// the login-failed screen, whose RETRY runs the game's own login. DERIVED from the callbacks, never captured:
+// no frame, struct or sender exists in our logs, captures or the service sources (the name only).
+//   fixed part, 0x18 bytes (CTcpBroadcaster::ListenProxy 0x1938358 takes size - 0x18 as the variable part):
+//     +0x00  the user's id, 16 bytes, compared with the game's own (SNSUserID::Compare 0x12ca74c)
+//     +0x10  4 bytes the callbacks do not read
+//     +0x14  reason: 1 = text from the JSON "message" (login-failed screen), 0 = "login replaced"
+//     +0x15  3 bytes padding
+//   then, for reason 1, the JSON (not NUL terminated).
+// The two UNMEASURED parts are one-line constants, the first falsifiers of a headset run.
+inline constexpr uint64_t kSymLoginRemovedNotify = 0x73c0a8cbf5c697abULL;           // SNSLoginRemovedNotify
+inline constexpr std::size_t kLoginRemovedFixedSize = 0x18;
+inline constexpr uint32_t kLoginRemovedWord10 = 0;           // UNMEASURED: the 4 bytes at +0x10
+inline constexpr bool kLoginRemovedUserIdSwapped = false;    // UNMEASURED: (platform, account) as in LoginSuccess
+inline constexpr uint8_t kLoginRemovedReasonText = 1;
+
 // The friend-list subscribe the bridge sends after LoginSuccess (payload ignored by the server).
 inline constexpr uint64_t kSymFriendListSubscribe = 0xcdc02fd1dbee3aaaULL;
 constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;
@@ -93,6 +111,10 @@ constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;
 // requester up under the platform the LoginRequest carried. OVR_ORG in the game's numbering.
 inline constexpr uint64_t kBridgeLoginPlatform = 4;
 
+// Little-endian 64-bit integer helpers, shared with compat/legacy_codec.
+uint64_t ReadLE64(const uint8_t* p);
+void AppendLE64(std::string& buffer, uint64_t value);
+
 // ---- building -------------------------------------------------------------------------------
 
 // One message: marker, symbol, payload length, payload.
@@ -100,7 +122,7 @@ std::string BuildMessage(uint64_t symbol, std::string_view payload);
 
 // A LoginRequest message with an all-zero session UUID (no previous session). nullopt when
 // profileJson contains a NUL byte: the payload is NUL terminated, so the server would read a
-// truncated profile. LoginProfile::BuildLoginProfileJson never emits one (JSON escapes it).
+// truncated profile. nevr_login_profile::BuildLoginProfileJson never emits one (JSON escapes it).
 std::optional<std::string> BuildLoginRequest(uint64_t platformCode, uint64_t accountId,
                                              std::string_view profileJson);
 
@@ -109,6 +131,22 @@ std::optional<std::string> BuildLoginRequest(uint64_t platformCode, uint64_t acc
 std::string BuildLoginSuccess(uint64_t platformCode, uint64_t accountId);
 
 std::string BuildFriendListSubscribe();
+
+// An account as the service names it in LoginSuccess (and the game in SNSUserID): platform code, account id.
+struct UserId {
+  uint64_t platformCode = 0;
+  uint64_t accountId = 0;
+};
+
+// A SNSRemoteLogSetv3 message (kSymRemoteLogSet): `user` as the log's EvrId, the session id and the 16 text
+// bytes left zero, `level` (the game's WriteLog mask: 2 info, 4 warning, 8 error), then the log strings as the
+// game's own string table: u32 count, u32 offsets[count] (offsets[0] is 0, then cumulative), each string NUL
+// terminated. The game service reads the count as a u64 whose high half is offsets[0]; that is the same bytes.
+// Sent without the require flag (see kSymRemoteLogSet). The service keeps at most 50 strings and 256 KiB.
+std::string BuildRemoteLogSet(const UserId& user, uint64_t level, const std::vector<std::string>& logs);
+
+// The SNSLoginRemovedNotify for `user` (see kSymLoginRemovedNotify above). `json` is the whole JSON document.
+std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json);
 
 // ---- parsing --------------------------------------------------------------------------------
 
@@ -138,6 +176,10 @@ struct LoginFailure {
   std::size_t messageBytes = 0;  // length of the server's message text; the text is never read out
 };
 
+// The user id a LoginSuccess names (payload offsets 16..32: after the session UUID); nullopt when the frame's
+// first message is not a complete LoginSuccess.
+std::optional<UserId> ParseLoginSuccessUserId(const std::string& frame);
+
 // The numeric diagnostics of a LoginFailure that is the frame's first message; nullopt when the frame is
 // not one or is truncated.
 std::optional<LoginFailure> ParseLoginFailure(const std::string& frame);
@@ -165,4 +207,4 @@ std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt, c
 // key: a token-auth login sent there arrives unauthenticated.
 bool IsBearerReplacingPath(const std::string& url);
 
-}  // namespace EvrCodec
+}  // namespace nevr_evr_codec

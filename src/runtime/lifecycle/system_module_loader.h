@@ -3,7 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-namespace Nevr::Lifecycle {
+namespace nevr::lifecycle {
 
 using GetSystemDirectoryFunction = UINT(WINAPI*)(LPWSTR, UINT);
 using LoadLibraryFunction = HMODULE(WINAPI*)(LPCWSTR);
@@ -13,4 +13,4 @@ using LoadLibraryFunction = HMODULE(WINAPI*)(LPCWSTR);
 HMODULE LoadSystemDbgCore(GetSystemDirectoryFunction getSystemDirectory,
                           LoadLibraryFunction loadLibrary) noexcept;
 
-}  // namespace Nevr::Lifecycle
+}  // namespace nevr::lifecycle

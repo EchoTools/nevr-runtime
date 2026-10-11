@@ -6,7 +6,7 @@
 find_package(CURL REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-add_library(token_auth STATIC
+add_library(nevr_token_auth STATIC
     src/token_auth.cpp
     src/token_auth.h
     src/auth_snapshot.cpp
@@ -16,33 +16,33 @@ add_library(token_auth STATIC
     src/off_thread_wait.h
 )
 
-target_compile_definitions(token_auth PRIVATE NEVR_MODULE_EXPORTS)
+target_compile_definitions(nevr_token_auth PRIVATE NEVR_MODULE_EXPORTS)
 
-target_include_directories(token_auth PRIVATE
+target_include_directories(nevr_token_auth PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/runtime
     ${CMAKE_SOURCE_DIR}/plugins/common/include
 )
 
-target_link_libraries(token_auth PRIVATE nevr_core CURL::libcurl nlohmann_json::nlohmann_json ole32)
+target_link_libraries(nevr_token_auth PRIVATE nevr_core CURL::libcurl nlohmann_json::nlohmann_json ole32)
 
 # The production target deliberately has no NEVR_TEST_HOOKS.  Build a separate
 # copy only for test_token_auth so its in-memory DeviceAuth state can be driven
 # without cache, refresh-thread, or HTTP side effects.
 if(BUILD_TESTING)
-    add_library(token_auth_test_hooks STATIC
+    add_library(nevr_token_auth_test_hooks STATIC
         src/token_auth.cpp
         src/auth_snapshot.cpp
         src/off_thread_wait.cpp
         "${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
     )
 
-    target_compile_definitions(token_auth_test_hooks PRIVATE
+    target_compile_definitions(nevr_token_auth_test_hooks PRIVATE
         NEVR_MODULE_EXPORTS
         NEVR_TEST_HOOKS
     )
 
-    target_include_directories(token_auth_test_hooks PRIVATE
+    target_include_directories(nevr_token_auth_test_hooks PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/runtime
         ${CMAKE_SOURCE_DIR}/plugins/common/include
@@ -51,7 +51,7 @@ if(BUILD_TESTING)
     set_source_files_properties("${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-    target_link_libraries(token_auth_test_hooks PRIVATE
+    target_link_libraries(nevr_token_auth_test_hooks PRIVATE
         nevr_core CURL::libcurl nlohmann_json::nlohmann_json ole32
     )
 endif()

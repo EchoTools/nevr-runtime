@@ -19,10 +19,12 @@
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/net/frame_tap.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/self_check.h"
 
 // Counts every allocation through the global operator new in this test binary, for the no-allocation check
 // on IdentitySource::Ready (it runs on the Oculus message pump).
@@ -78,8 +80,10 @@ struct FakeSteps final : Steps {
   bool RegisterLoginCounters() override { return Step("reg_login"); }
   bool RegisterSocialCounters() override { return Step("reg_social"); }
   bool RegisterLoginPromptCounters() override { return Step("reg_prompt"); }
+  bool RegisterObbSkipCounters() override { return Step("reg_obb"); }
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
+  bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -120,16 +124,21 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
   // The hardware dump (#335) is off by default and its step says so.
   QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kSkipped);
   QCHECK(std::strcmp(r.at(StepId::kInstallHwDump).reason, "hwdump_off") == 0);
+  // So is the OBB-mount skip (#319).
+  QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kSkipped);
+  QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallObbSkip).reason, "obb_skip_off") == 0);
 }
 
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
   s.config.effective.hwdump = true;
+  s.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
-                                         "reg_login", "reg_social", "reg_prompt", "reporter",     "clock",
-                                         "token",     "prompt",     "bridge",     "redirect",     "social",
-                                         "dlopen",    "hwdump"};
+                                         "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reporter",
+                                         "clock",     "obb",        "token",      "prompt",       "bridge",
+                                         "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
@@ -149,11 +158,54 @@ void TestHwDumpIsIndependentAndContained() {
   for (const char* mode : {"fail", "throw"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.config.effective.hwdump = true;
+    s.config.effective.obbSkip = true;
     if (std::strcmp(mode, "fail") == 0) s.failing = {"hwdump"}; else s.throwing = {"hwdump"};
     const ConstructorReport r = RunConstructorSequence(s);
     for (int i = 0; i < static_cast<int>(StepId::kInstallHwDump); ++i) QCHECK(r.steps[i].state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallHwDump).state != StepState::kOk);
     QCHECK(s.Ran("dlopen") && s.Ran("social"));
+  }
+}
+
+// The OBB-mount skip (#319) needs no other feature, its counters are registered before the single reporter
+// start, it installs right after the clock hook, and a refused counter, a failing or a throwing step leaves
+// every other step as it was.
+void TestObbSkipIsIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    s.config.effective.obbSkip = true;
+    const ConstructorReport r = RunConstructorSequence(s);
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb"};
+    QCHECK(s.calls == want);
+    QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
+    QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
+    QCHECK(!s.Ran("token") && !s.Ran("bridge") && !s.Ran("redirect"));
+  }
+  {  // counters refused: the hook installs nothing (its own rule is called to log the skip) and says why
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    s.failing = {"reg_obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kFailed);
+    QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kSkipped);
+    QCHECK(std::strcmp(r.at(StepId::kInstallObbSkip).reason, "counters_refused") == 0);
+    QCHECK(s.Ran("obb_uncounted") && !s.Ran("obb"));
+    QCHECK(s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"obb"}; else s.throwing = {"obb"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallObbSkip).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+  {  // before the reporter is up nothing installs, and the skip is in before token auth starts
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.config.effective.obbSkip = true;
+    RunConstructorSequence(s);
+    QCHECK(s.Index("reg_obb") < s.Index("reporter"));
+    QCHECK(s.Index("obb") > s.Index("reporter") && s.Index("obb") < s.Index("token"));
   }
 }
 
@@ -389,6 +441,100 @@ void TestPostLoadRetriesUntilSettledThenStops() {
   QCHECK(stats.loginSettled == 1 && stats.matchmakingSettled == 1);
 }
 
+// Self-check "matchmaking_reload_redirect" (#451): the number of distinct libpnsradmatchmaking images is what the
+// once-installed redirect is compared with.
+void TestPostLoadCountsEachDistinctMatchmakingImage() {
+  int imageA = 0;
+  int imageB = 0;
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("libpnsovr.so", &imageA);  // another library: not counted
+  QCHECK(MatchmakingImages() == 0);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // the same handle again: a refcount, not a new image
+  QCHECK(MatchmakingImages() == 1);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageB);  // closed and mapped again elsewhere
+  QCHECK(MatchmakingImages() == 2);
+  AfterDlopen("/x/libpnsradmatchmaking.so", nullptr);  // a failed dlopen is not an image
+  QCHECK(MatchmakingImages() == 2);
+  ResetPostLoad(nullptr, nullptr, Settle::kDone, Settle::kDone);
+  QCHECK(MatchmakingImages() == 0);
+}
+
+// The matchmaking check's probe (self_check_wiring.cpp): an image without an install is not a failure while the
+// matchmaking action is unsettled, and is one once it settled without covering that image.
+void TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce() {
+  int imageA = 0;
+  int imageB = 0;
+  nevr_quest::integration::ResetMatchmakingReloadCheckForTest();
+  nevr_self_check::Observation seen;
+  ResetPostLoad(&FakeLogin, &FakeMatchmaking, Settle::kRetryLater, Settle::kRetryLater);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));  // no image yet
+
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // mapped, the action is retrying: wait
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));
+
+  g_mmSettle = Settle::kDone;
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageA);  // the action settles on this call
+  nevr_quest::integration::NoteMatchmakingRedirectInstalled();
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=1 installs=1" && seen.pass);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));  // said once
+
+  AfterDlopen("/x/libpnsradmatchmaking.so", &imageB);  // another mapping: the once-installed hook misses it
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=2 installs=1" && !seen.pass);
+  QCHECK(!nevr_quest::integration::MatchmakingReloadProbe(&seen));
+}
+
+// The action gave up with the module mapped: the one image has no install, and that is a failure.
+void TestMatchmakingReloadProbeFailsWhenTheActionGaveUp() {
+  int image = 0;
+  nevr_quest::integration::ResetMatchmakingReloadCheckForTest();
+  nevr_self_check::Observation seen;
+  ResetPostLoad(&FakeLogin, &FakeMatchmaking, Settle::kDone, Settle::kGiveUp);
+  AfterDlopen("/x/libpnsradmatchmaking.so", &image);
+  QCHECK(nevr_quest::integration::MatchmakingReloadProbe(&seen));
+  QCHECK(seen.observed == "images=1 installs=0" && !seen.pass);
+}
+
+// The self-check wiring: on in every build, the user the service names, the sender; no debug query anywhere.
+void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
+  static std::vector<std::string> sent;
+  sent.clear();
+  nevr_self_check::ResetForTest();
+  quest_net::FrameTapSinks sinks;
+  int previousCalls = 0;
+  sinks.onLoginUser = [&](std::uint64_t, std::uint64_t) { ++previousCalls; };
+  nevr_quest::integration::SelfCheckHooks hooks;
+  hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
+  hooks.log = [](const nevr_self_check::LogRecord&) {};
+  hooks.build = "5.0.0";
+  QCHECK(!nevr_self_check::Enabled());  // off until the bridge is configured
+  nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
+  QCHECK(nevr_self_check::Enabled());
+  QCHECK(static_cast<bool>(sinks.onLoginUser));
+
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"wiring", "ok", nullptr});
+  nevr_self_check::Report(id, "ok", true);
+  nevr_self_check::Flush();
+  QCHECK(sent.empty());  // not logged in yet
+
+  quest_net::FrameTap tap(sinks);
+  tap.ServerToGame(nevr_evr_codec::BuildLoginSuccess(5, 0x2222ULL));
+  QCHECK(previousCalls == 1);  // the consumer that was there is still called
+  nevr_self_check::Flush();
+  QCHECK(sent.size() == 1);
+  if (sent.size() == 1) {
+    nevr_evr_codec::Message message;
+    QCHECK(nevr_evr_codec::ReadMessage(sent[0], 0, &message) == nevr_evr_codec::ReadStatus::Ok);
+    QCHECK(message.symbol == nevr_evr_codec::kSymRemoteLogSet);
+    QCHECK(nevr_evr_codec::ReadLE64(message.payload) == 5 && nevr_evr_codec::ReadLE64(message.payload + 8) == 0x2222ULL);
+  }
+  nevr_self_check::ResetForTest();
+}
+
 void TestPostLoadGiveUpEndsOnlyThatAction() {
   int dummy = 0;
   ResetPostLoad(&ThrowingLogin, &FakeMatchmaking, Settle::kGiveUp, Settle::kRetryLater);
@@ -424,38 +570,38 @@ nevr::quest_auth::Snapshot Snap(nevr::quest_auth::Readiness r, const char* token
   return s;
 }
 
-QuestLogin::IdentityStatus Fetch(nevr::quest_auth::Snapshot snap, QuestLogin::Identity* out) {
+nevr_quest_login::IdentityStatus Fetch(nevr::quest_auth::Snapshot snap, nevr_quest_login::Identity* out) {
   TokenIdentitySource source([snap] { return snap; });
   return source.Fetch(*out);
 }
 
 void TestIdentitySourceAnswers() {
   using nevr::quest_auth::Readiness;
-  QuestLogin::Identity id;
-  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 4242, "player"), &id) == QuestLogin::IdentityStatus::Ok);
+  nevr_quest_login::Identity id;
+  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 4242, "player"), &id) == nevr_quest_login::IdentityStatus::Ok);
   QCHECK(id.account_id == 4242 && id.access_token == "tok" && id.display_name == "player");
   QCHECK(id.social_level == 0);  // no facade installed: the login declares no social level
   {
     TokenIdentitySource withSocial([] { return Snap(Readiness::Ready, "tok", 4242, "player"); }, [] { return 1; });
-    QuestLogin::Identity declared;
-    QCHECK(withSocial.Fetch(declared) == QuestLogin::IdentityStatus::Ok && declared.social_level == 1);
+    nevr_quest_login::Identity declared;
+    QCHECK(withSocial.Fetch(declared) == nevr_quest_login::IdentityStatus::Ok && declared.social_level == 1);
   }
 
   for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser}) {
-    QuestLogin::Identity none;
-    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == QuestLogin::IdentityStatus::NotReady);
+    nevr_quest_login::Identity none;
+    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NotReady);
     QCHECK(none.access_token.empty() && none.account_id == 0);  // nothing leaks out of a refusal
   }
   for (Readiness r : {Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
-    QuestLogin::Identity none;
-    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == QuestLogin::IdentityStatus::NoToken);
+    nevr_quest_login::Identity none;
+    QCHECK(Fetch(Snap(r, "tok", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NoToken);
     QCHECK(none.access_token.empty());
   }
-  QuestLogin::Identity none;
-  QCHECK(Fetch(Snap(Readiness::Ready, "", 4242, "p"), &none) == QuestLogin::IdentityStatus::NoToken);
-  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 0, "p"), &none) == QuestLogin::IdentityStatus::NoAccount);
+  nevr_quest_login::Identity none;
+  QCHECK(Fetch(Snap(Readiness::Ready, "", 4242, "p"), &none) == nevr_quest_login::IdentityStatus::NoToken);
+  QCHECK(Fetch(Snap(Readiness::Ready, "tok", 0, "p"), &none) == nevr_quest_login::IdentityStatus::NoAccount);
   TokenIdentitySource empty(nullptr);
-  QCHECK(empty.Fetch(none) == QuestLogin::IdentityStatus::NotReady);
+  QCHECK(empty.Fetch(none) == nevr_quest_login::IdentityStatus::NotReady);
 }
 
 // #239: the router holds the login connection exactly while Fetch would say NotReady, opens it when Fetch
@@ -463,7 +609,7 @@ void TestIdentitySourceAnswers() {
 // the login rewrite (a held connection nobody will ever release, or a login let through with no token).
 void TestLoginGateFollowsTheIdentityAnswer() {
   using nevr::quest_auth::Readiness;
-  using SessionRouter::LoginGate;
+  using nevr_session_router::LoginGate;
   // A token is still to come: starting, refreshing, waiting for the player, expired (being replaced).
   for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Expired}) {
     QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Awaiting);
@@ -489,7 +635,7 @@ void TestLoginGateFollowsTheIdentityAnswer() {
 // until the poison is cleared; a new source starts not ready.
 void TestIdentitySourcePublishesTheSharedAttemptGate() {
   using nevr::quest_auth::Readiness;
-  namespace gate = QuestLogin::attempt_gate;
+  namespace gate = nevr_quest_login::attempt_gate;
   TokenIdentitySource source(nullptr);
   QCHECK(!source.Ready() && !gate::IsReady());
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
@@ -497,7 +643,7 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   gate::Poison();  // an attempt's logging-in page was skipped
   QCHECK(gate::IsReady());  // the readiness itself is unchanged: the page-enable skip has stopped
   QCHECK(!source.Ready());  // but that attempt fails its prerequisites, through the base-class call too
-  const QuestLogin::IdentitySource& base = source;
+  const nevr_quest_login::IdentitySource& base = source;
   QCHECK(!base.Ready());
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));  // a later observation does not lift it
   QCHECK(!source.Ready());
@@ -533,14 +679,14 @@ void TestIdentitySourceReadyFollowsObservedState() {
         const nevr::quest_auth::Snapshot snap = Snap(r, token, account, "p");
         // Fetch's answer from a separate source, so the flag below comes from Observe alone.
         TokenIdentitySource fetcher([snap] { return snap; });
-        QuestLogin::Identity id;
-        const bool fetchOk = fetcher.Fetch(id) == QuestLogin::IdentityStatus::Ok;
+        nevr_quest_login::Identity id;
+        const bool fetchOk = fetcher.Fetch(id) == nevr_quest_login::IdentityStatus::Ok;
         for (bool startReady : {false, true}) {  // from either earlier flag value
           TokenIdentitySource source([snap] { return snap; });
           source.Observe(startReady ? Snap(Readiness::Ready, "tok", 4242, "p") : Snap(Readiness::Starting, "", 0, "p"));
           QCHECK(source.Ready() == startReady);
           source.Observe(snap);
-          const QuestLogin::IdentitySource& asBase = source;  // the prerequisites call it through the base
+          const nevr_quest_login::IdentitySource& asBase = source;  // the prerequisites call it through the base
           QCHECK(asBase.Ready() == fetchOk);
           if (!startReady) readyCount += asBase.Ready() ? 1 : 0;
         }
@@ -570,12 +716,12 @@ void TestIdentitySourceReadyFollowsObservedState() {
     nevr::quest_auth::Snapshot state = Snap(Readiness::Ready, "tok", 4242, "p");
     TokenIdentitySource source([&state] { return state; });
     QCHECK(!source.Ready());  // nothing observed yet
-    QuestLogin::Identity id;
-    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::Ok && source.Ready());
+    nevr_quest_login::Identity id;
+    QCHECK(source.Fetch(id) == nevr_quest_login::IdentityStatus::Ok && source.Ready());
     state = Snap(Readiness::Expired, "tok", 4242, "p");
-    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::NoToken && !source.Ready());
+    QCHECK(source.Fetch(id) == nevr_quest_login::IdentityStatus::NoToken && !source.Ready());
     TokenIdentitySource none(nullptr);
-    QCHECK(!none.Ready() && none.Fetch(id) == QuestLogin::IdentityStatus::NotReady && !none.Ready());
+    QCHECK(!none.Ready() && none.Fetch(id) == nevr_quest_login::IdentityStatus::NotReady && !none.Ready());
   }
   static_assert(noexcept(std::declval<const TokenIdentitySource&>().Ready()), "Ready must be noexcept");
   static_assert(noexcept(std::declval<TokenIdentitySource&>().Observe(std::declval<const nevr::quest_auth::Snapshot&>())),
@@ -607,7 +753,7 @@ void TestIdentitySourceReadyDoesNotAllocate() {
 
 // ---- frame tap -------------------------------------------------------------------------------------
 
-std::string LoginSuccessFrame(std::uint64_t account) { return EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, account); }
+std::string LoginSuccessFrame(std::uint64_t account) { return nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, account); }
 
 void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
   std::vector<bool> directions;
@@ -626,15 +772,29 @@ void TestFrameTapSignalsLoginSuccessOnlyFromTheServer() {
 
   // A LoginSuccess behind another message in the same transport frame is found.
   accounts.clear();
-  tap.ServerToGame(EvrCodec::BuildMessage(0x1234, "abc") + success);
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, "abc") + success);
   QCHECK(accounts.size() == 1);
 
   // A truncated one, and other symbols, are not.
   accounts.clear();
   tap.ServerToGame(success.substr(0, success.size() - 3));
-  tap.ServerToGame(EvrCodec::BuildMessage(0x1234, std::string(64, 'x')));
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, std::string(64, 'x')));
   tap.ServerToGame("garbage");
   QCHECK(accounts.empty());
+}
+
+void TestFrameTapNamesThePlatformAndTheAccountOfTheLogin() {
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> users;
+  FrameTapSinks sinks;
+  sinks.onLoginUser = [&](std::uint64_t platform, std::uint64_t account) { users.emplace_back(platform, account); };
+  FrameTap tap(sinks);
+  const std::string success = nevr_evr_codec::BuildLoginSuccess(5, 0x1122334455667788ULL);
+  tap.GameToServer(success);
+  QCHECK(users.empty());
+  tap.ServerToGame(nevr_evr_codec::BuildMessage(0x1234, "abc") + success);
+  QCHECK(users.size() == 1 && users[0].first == 5 && users[0].second == 0x1122334455667788ULL);
+  tap.ServerToGame("garbage");
+  QCHECK(users.size() == 1);
 }
 
 void TestFrameTapContainsAThrowingConsumer() {
@@ -729,6 +889,7 @@ int main() {
   TestEverythingOffInstallsOnlyTheProofHook();
   TestFullStackOrder();
   TestHwDumpIsIndependentAndContained();
+  TestObbSkipIsIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();
@@ -743,6 +904,10 @@ int main() {
   TestConfigFailureLeavesAllFeaturesOff();
   TestPostLoadIgnoresANullHandle();
   TestPostLoadRetriesUntilSettledThenStops();
+  TestPostLoadCountsEachDistinctMatchmakingImage();
+  TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
+  TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
+  TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
   TestPostLoadGiveUpEndsOnlyThatAction();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
@@ -753,6 +918,7 @@ int main() {
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
+  TestFrameTapNamesThePlatformAndTheAccountOfTheLogin();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "integration_sequence_test: %d check(s) failed\n", quest_test::Failures());

@@ -48,7 +48,7 @@
 
 #include "quest/login/login_rewrite.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 enum class InstallState {
   Installed,
@@ -76,4 +76,4 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
 // to whatever sink is installed with sentinel::SetLogSink, the same place the backend's lines go.
 void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_t count);
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

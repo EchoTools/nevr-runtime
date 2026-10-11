@@ -425,14 +425,19 @@ Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
     body["code"] = code;
     const nevr::auth::HttpResponse r = http_.PostJson(
         nevr::auth::BuildDeviceAuthUrl(config_.base_url, config_.http_key, "poll"), body.dump());
-    TokenAuth::DevicePollResponse response;
+    nevr_token_auth::DevicePollResponse response;
+    // What the server did answer, for the per-poll log line (0: no HTTP answer arrived).
+    response.http_code = r.transport_ok ? r.status : 0;
+    response.body_prefix = nevr_token_auth::PollBodyPrefix(r.body, code);
     if (r.transport_ok && r.status == 200) {
-      TokenAuth::DevicePollResponse parsed = TokenAuth::ParseDevicePollResponse(r.body);
+      nevr_token_auth::DevicePollResponse parsed = nevr_token_auth::ParseDevicePollResponse(r.body);
       // The parser reports Error both for the server's own {"error":...} and for a body it could not
       // read (HTML from a captive portal). Only the first is the server's answer.
-      if (parsed.status != TokenAuth::DevicePollStatus::Error || BodyHasErrorKey(r.body)) {
+      parsed.http_code = r.status;
+      parsed.body_prefix = nevr_token_auth::PollBodyPrefix(r.body, code);
+      if (parsed.status != nevr_token_auth::DevicePollStatus::Error || BodyHasErrorKey(r.body)) {
         *consecutive_failures = 0;
-        if (parsed.status == TokenAuth::DevicePollStatus::Error) device_result_ = DeviceResult::Ended;
+        if (parsed.status == nevr_token_auth::DevicePollStatus::Error) device_result_ = DeviceResult::Ended;
         return parsed;
       }
     }
@@ -448,11 +453,11 @@ Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
         Log(LogLevel::Info, "[NEVR.AUTH] device poll request failed (transient, " +
                                 std::to_string(*consecutive_failures) + " consecutive); polling on" + what);
       }
-      response.status = TokenAuth::DevicePollStatus::Pending;
+      response.status = nevr_token_auth::DevicePollStatus::Pending;
     } else {
       Log(LogLevel::Warning, "[NEVR.AUTH] device poll refused by the server; ending the login" + what);
       device_result_ = DeviceResult::Ended;
-      response.status = TokenAuth::DevicePollStatus::Error;
+      response.status = nevr_token_auth::DevicePollStatus::Error;
     }
     return response;
   };

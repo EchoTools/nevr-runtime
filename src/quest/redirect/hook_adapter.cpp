@@ -18,8 +18,10 @@ struct Installation {
   std::mutex mutex;
   sentinel::GotHook libr15Hook;
   sentinel::GotHook matchmakingHook;
+  sentinel::GotHook createConnectionHook;
   ServiceRedirector* redirector = nullptr;  // never freed: a call in flight may still hold it
   InstallOptions options{{sentinel::GotTarget("", "", sentinel::RelocKind::kJumpSlot),
+                          sentinel::GotTarget("", "", sentinel::RelocKind::kJumpSlot),
                           sentinel::GotTarget("", "", sentinel::RelocKind::kJumpSlot)},
                          sentinel::FindLoadedImage, nullptr, nullptr};
   InstallReport report;
@@ -77,6 +79,20 @@ const char* ApplyActive(const char* key, const char* result) noexcept {
   return redirector == nullptr ? result : redirector->Apply(key, result);
 }
 
+const char* ApplyUrlActive(const char* url) noexcept {
+  ServiceRedirector* const redirector = g_redirector.load(std::memory_order_acquire);
+  return redirector == nullptr ? url : redirector->ApplyUrl(url);
+}
+
+// libr15's two slots (the config-string reader and the HTTP connect) are installed together.
+GotStatus InstallLibR15SlotsLocked(Installation& s, sentinel::ImageLookup lookup) {
+  const GotStatus tstring = InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, lookup,
+                                              &s.report.libr15, "libr15_tstring");
+  InstallSlotLocked(Slot::kCreateConnection, s.createConnectionHook, s.options.targets.createConnection, lookup,
+                    &s.report.createConnection, "libr15_create_connection");
+  return tstring;
+}
+
 }  // namespace
 
 bool RegisterRedirectCounters() noexcept {
@@ -88,6 +104,9 @@ bool RegisterRedirectCounters() noexcept {
   ok = sentinel::RegisterReportCounter("redirect_value_too_long", &c.valueTooLong, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("redirect_pool_refused", &c.poolRefused, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("redirect_exceptions", &c.exceptions, sentinel::ReportKind::kFaults) && ok;
+  // The CSysHttp::CreateConnection decisions alone (#408): `redirect_applied` also counts the config-key reads.
+  ok = sentinel::RegisterReportCounter("redirect_url_redirected", &c.urlRedirected) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_url_pass_through", &c.urlPassThrough) && ok;
   return ok;
 }
 
@@ -130,6 +149,7 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
     s.report = InstallReport{};
     s.report.featureEnabled = true;
     SetApply(&ApplyActive);
+    SetApplyUrl(&ApplyUrlActive);
     g_redirector.store(redirector, std::memory_order_release);
   } else {
     LogInstall("redirect", GotStatus::kAlreadyInstalled);
@@ -137,15 +157,14 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
 
   // A repeated call re-attempts whichever slot is not installed (a failed install leaves the
   // redirector in place), and leaves an installed slot's recorded status alone.
-  InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, s.options.lookup,
-                    &s.report.libr15, "libr15_tstring");
+  InstallLibR15SlotsLocked(s, s.options.lookup);
   InstallMatchmakingLocked(s, s.options.lookup);
   return s.report;
 }
 
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config, InternFn intern, BridgeProbe bridge) {
   return InstallRedirectHooksWith(config, {PinnedTargets(), sentinel::FindLoadedImage,
-                                           intern != nullptr ? intern : &nevr_runtime::lifecycle::InternStableCStr,
+                                           intern != nullptr ? intern : &nevr::lifecycle::InternStableCStr,
                                            bridge});
 }
 
@@ -153,8 +172,7 @@ GotStatus InstallLibR15RedirectWith(sentinel::ImageLookup lookup) {
   Installation& s = State();
   const std::lock_guard<std::mutex> lock(s.mutex);
   if (s.redirector == nullptr) return GotStatus::kNotInstalled;
-  return InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, lookup, &s.report.libr15,
-                           "libr15_tstring");
+  return InstallLibR15SlotsLocked(s, lookup);
 }
 
 GotStatus InstallLibR15Redirect() { return InstallLibR15RedirectWith(sentinel::FindLoadedImage); }
@@ -172,9 +190,14 @@ void RemoveRedirectHooks() {
   const std::lock_guard<std::mutex> lock(s.mutex);
   if (s.libr15Hook.installed()) LogInstall("libr15_tstring_remove", s.libr15Hook.Remove());
   if (s.matchmakingHook.installed()) LogInstall("matchmaking_tstring_remove", s.matchmakingHook.Remove());
+  if (s.createConnectionHook.installed()) {
+    LogInstall("libr15_create_connection_remove", s.createConnectionHook.Remove());
+  }
   ArmThunk(Slot::kLibR15, false);
   ArmThunk(Slot::kMatchmaking, false);
+  ArmThunk(Slot::kCreateConnection, false);
   SetApply(nullptr);
+  SetApplyUrl(nullptr);
   g_redirector.store(nullptr, std::memory_order_release);
   s.redirector = nullptr;
   s.report = InstallReport{};
@@ -185,8 +208,10 @@ ServiceRedirector* InstalledRedirectorForTest() { return g_redirector.load(std::
 void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);
   SetApply(redirector != nullptr ? &ApplyActive : nullptr);
+  SetApplyUrl(redirector != nullptr ? &ApplyUrlActive : nullptr);
   ArmThunk(Slot::kLibR15, redirector != nullptr);
   ArmThunk(Slot::kMatchmaking, redirector != nullptr);
+  ArmThunk(Slot::kCreateConnection, redirector != nullptr);
 }
 
 }  // namespace nevr_quest::redirect

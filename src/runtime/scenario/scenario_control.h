@@ -6,7 +6,7 @@
 // never ship. Protocol: src/runtime/scenario/scenario_protocol.h; design:
 // docs/design/2026-10-01-social-scenario-harness.md.
 
-namespace ScenarioControl {
+namespace nevr_scenario_control {
 
 /// Opens the 127.0.0.1 control socket (ephemeral port, logged) and starts its thread. Boot, after
 /// the websocket bridge is up.
@@ -19,4 +19,4 @@ void OnFrame();
 /// Closes the control socket and joins its thread. Graceful-shutdown path.
 void Stop();
 
-}  // namespace ScenarioControl
+}  // namespace nevr_scenario_control

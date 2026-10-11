@@ -9,7 +9,7 @@
 
 #include <mutex>
 
-namespace LoginSession {
+namespace nevr_login_session {
 
 inline std::mutex& Mutex() {
   static std::mutex mutex;
@@ -31,4 +31,4 @@ inline void Set(const GUID& id) {
   Storage() = id;
 }
 
-}  // namespace LoginSession
+}  // namespace nevr_login_session

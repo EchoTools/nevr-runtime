@@ -4,7 +4,7 @@
 #include <array>
 #include <iterator>
 
-namespace GameServer {
+namespace nevr_game_server {
 
 EchoVR::Broadcaster* RecordBroadcasterOwner(ServerContext& context) {
   EchoVR::Lobby* lobby = context.GetLobby();
@@ -86,4 +86,4 @@ size_t UnregisterBroadcasterCallbacks(EchoVR::Broadcaster* liveOwner,
   return removed;
 }
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

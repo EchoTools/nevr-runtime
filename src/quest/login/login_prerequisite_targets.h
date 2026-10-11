@@ -8,7 +8,7 @@
 
 #include "quest/sentinel/got_hook.h"
 
-namespace QuestLogin::PrerequisiteTargets {
+namespace nevr_quest_login::PrerequisiteTargets {
 
 inline constexpr const char* kPnsovr = "libpnsovr.so";
 inline constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
@@ -69,6 +69,55 @@ inline constexpr PinnedSlot kGetLoggedInUser{"ovr_User_GetLoggedInUser", RelocKi
 inline constexpr PinnedSlot kGetAccessToken{"ovr_User_GetAccessToken", RelocKind::kJumpSlot, 0x6dfa68, 0};
 inline constexpr PinnedSlot kGetUserProof{"ovr_User_GetUserProof", RelocKind::kJumpSlot, 0x6e15a8, 0};
 
+// Call sites of ovr_User_GetOrgScopedID that belong to the login: the return address (the instruction after the
+// `bl` to the PLT stub 0x1a8b30) of LogInInternal (0x1ec99c), GotLoggedInUserOrgIdCb's re-request (0x1ecf80) and
+// RadPluginMain (0x2069bc; the user id is the logged-in user, the delegate GotLoggedInUserOrgIdCb). The nine
+// other callers are CNSOVRSocial's (SUserList::Add, JoinedCB, SyncRoom x2, GotRemoteOrgIdCB, AddInvitableUser,
+// GotInvitableUserOrgIdCB, GotFriendOrgIdCB, GotRecentlyMetUserOrgIdCB): their requests carry other users and
+// their callbacks are not ours, so they go to the SDK. tools/pinned_ovr_import_walk.py --sites checks this list
+// against every call site in the real library (tools/pinned_ovr_sites.txt).
+inline constexpr std::uint64_t kOrgRequestLoginReturns[] = {0x1ec9a0, 0x1ecf84, 0x2069c0};
+
+// The same for CNSOVRSocial's nine call sites (SUserList::Add 0x1f22f0, JoinedCB 0x1f4970, SyncRoom 0x1f876c and
+// 0x1f8b94, GotRemoteOrgIdCB 0x1f902c, AddInvitableUser 0x1f998c, GotInvitableUserOrgIdCB 0x1fa0f8, GotFriendOrgIdCB
+// 0x1fcb8c, GotRecentlyMetUserOrgIdCB 0x1fd29c; each +4). Only these are refused once the social facade is selected;
+// a caller this build does not know goes to the SDK. Checked against tools/pinned_ovr_sites.txt like the login's.
+inline constexpr std::uint64_t kOrgRequestSocialReturns[] = {0x1f22f4, 0x1f4974, 0x1f8770, 0x1f8b98, 0x1f9030,
+                                                             0x1f9990, 0x1fa0fc, 0x1fcb90, 0x1fd2a0};
+
+inline bool IsSocialOrgRequestCaller(const void* caller, std::uintptr_t base) noexcept {
+  if (caller == nullptr || base == 0) return false;
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(caller);
+  if (address < base) return false;
+  for (const std::uint64_t site : kOrgRequestSocialReturns) {
+    if (address - base == site) return true;
+  }
+  return false;
+}
+
+inline bool IsLoginOrgRequestCaller(const void* caller, std::uintptr_t base) noexcept {
+  if (caller == nullptr || base == 0) return false;
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(caller);
+  if (address < base) return false;
+  for (const std::uint64_t site : kOrgRequestLoginReturns) {
+    if (address - base == site) return true;
+  }
+  return false;
+}
+
+// The entitlement request (#411): RadPluginMain asks Meta whether the viewer owns the app after the log line
+// "Checking OVR entitlement..." (callers 0x206824 and 0x206ae4) and discards the request id; the only reader of
+// the answer is the message pump (Update 0x207534), which hard-exits the game on an error of that type. The
+// hook answers locally with request id 0, so no request leaves and no message comes back.
+inline constexpr PinnedSlot kEntitlementRequest{"ovr_Entitlement_GetIsViewerEntitled", RelocKind::kJumpSlot, 0x6df638, 0};
+
+// The message-level imports the local answers hook (#411): the pump pops a message, reads its type and
+// request id, and frees it (Update 0x207534).
+inline constexpr PinnedSlot kPopMessage{"ovr_PopMessage", RelocKind::kJumpSlot, 0x6e02d0, 0};
+inline constexpr PinnedSlot kMessageGetType{"ovr_Message_GetType", RelocKind::kJumpSlot, 0x6de8a0, 0};
+inline constexpr PinnedSlot kMessageGetRequestId{"ovr_Message_GetRequestID", RelocKind::kJumpSlot, 0x6e0ce0, 0};
+inline constexpr PinnedSlot kFreeMessage{"ovr_FreeMessage", RelocKind::kJumpSlot, 0x6df448, 0};
+
 // Read, never hooked: what a callback handler uses to report the Oculus error code and to tell a
 // transient error from a permanent one (ovr_Error_GetMessage returns the JSON the game reads
 // "error|is_transient" from).
@@ -82,6 +131,8 @@ inline constexpr PinnedSlot kAll[] = {
     kMessageIsError,      kMessageGetString,     kMessageGetOrgScopedId, kOrgScopedIdGetId,
     kMessageGetUser,      kUserGetOculusId,      kMessageGetUserProof,  kUserProofGetNonce,
     kGetOrgScopedId,      kGetLoggedInUser,      kGetAccessToken,       kGetUserProof,
+    kEntitlementRequest,  kPopMessage,           kMessageGetType,       kMessageGetRequestId,
+    kFreeMessage,
     kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,     kErrorGetMessage,
 };
 
@@ -94,4 +145,4 @@ inline sentinel::GotTarget TargetFor(const PinnedSlot& slot, std::uintptr_t base
   return sentinel::GotTarget(kPnsovr, slot.symbol, slot.kind, kPnsovrBuildId, slot.slot, expected);
 }
 
-}  // namespace QuestLogin::PrerequisiteTargets
+}  // namespace nevr_quest_login::PrerequisiteTargets

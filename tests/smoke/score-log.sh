@@ -82,7 +82,7 @@ B06@@boot@@Built-in log filter installed@@log filter installed@@
 B07@@boot@@Log filter emitting health counters@@\[NEVR\.LOGFILTER\] health emitted=@@CAPTURED ZERO GAME LINES
 B08@@boot@@Optional config.json searched (issue #21)@@Early config loaded from:|no _local/config\.json under@@exists but did not parse|Failed to early-load config
 B09@@boot@@DLL-load hooks installed@@dll load hooks installed|LoadLibrary hooks OK@@
-B10@@boot@@Vectored exception handler installed@@veh installed@@
+B10@@boot@@Vectored exception handler installed@@veh installed|veh skipped reason=wine_client@@
 B11@@boot@@Crash-recovery hooks installed@@crash recovery hooks installed@@
 B12@@boot@@Crash-dump probe hooked@@hooked name=HandleCrashDump@@hook failed name=HandleCrashDump
 B13@@boot@@Crash-reporter launch blocked@@CreateProcess[AW] hook installed@@Failed to find CreateProcess[AW]

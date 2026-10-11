@@ -24,6 +24,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
+#include <string>
 #include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
@@ -134,7 +135,7 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   std::lock_guard<std::mutex> lock(g_testLogMutex);
-  TestLogCap::Append(g_testLogMessages, buffer);
+  nevr_test_log_cap::Append(g_testLogMessages, buffer);
 }
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
@@ -997,7 +998,7 @@ std::string BuildLoginFailureFrame(uint64_t declaredPayloadSize, uint64_t status
 TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
   ClearTestLogs();
   constexpr char kSecret[] = "auth-response-secret-sentinel";
-  LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning, "[NEVR.AUTH] rejected ", 403, kSecret);
+  nevr_log_diagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning, "[NEVR.AUTH] rejected ", 403, kSecret);
 
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   ASSERT_EQ(g_testLogMessages.size(), 1U);
@@ -1006,14 +1007,14 @@ TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
 }
 
 TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
-  const std::string closed = LogDiagnostics::FormatWebSocketCloseDiagnostic("closed ", 1008, 3);
+  const std::string closed = nevr_log_diagnostics::FormatWebSocketCloseDiagnostic("closed ", 1008, 3);
   EXPECT_EQ(closed, "closed code=1008 reconnect_count=3");
-  const std::string failed = LogDiagnostics::FormatWebSocketErrorDiagnostic("failed ", 502, 2, 3);
+  const std::string failed = nevr_log_diagnostics::FormatWebSocketErrorDiagnostic("failed ", 502, 2, 3);
   EXPECT_EQ(failed, "failed http_status=502 retries=2 reconnect_count=3");
-  EXPECT_EQ(LogDiagnostics::FormatCurlFailureDiagnostic("curl ", 28), "curl curl_code=28");
-  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Proxy", 5000, 1, 3),
+  EXPECT_EQ(nevr_log_diagnostics::FormatCurlFailureDiagnostic("curl ", 28), "curl curl_code=28");
+  EXPECT_EQ(nevr_log_diagnostics::FormatBindFailureDiagnostic("Proxy", 5000, 1, 3),
             "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
-  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
+  EXPECT_EQ(nevr_log_diagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
 }
 
@@ -1040,9 +1041,9 @@ TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
 // so the host rewrite must apply to each image on its own.
 namespace {
 std::vector<uint8_t> FreshMatchmakerImage() {
-  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
-  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
-              sizeof(MatchmakerHostPatch::kHostExpected));
+  std::vector<uint8_t> image(nevr_matchmaker_host_patch::kHostRva + nevr_matchmaker_host_patch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + nevr_matchmaker_host_patch::kHostRva, nevr_matchmaker_host_patch::kHostExpected,
+              sizeof(nevr_matchmaker_host_patch::kHostExpected));
   return image;
 }
 bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
@@ -1050,46 +1051,165 @@ bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
   return true;
 }
 const char* HostOf(const std::vector<uint8_t>& image) {
-  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+  return reinterpret_cast<const char*>(image.data() + nevr_matchmaker_host_patch::kHostRva);
 }
 }  // namespace
 
 // The slot is the original string and its NUL: the byte after it belongs to other data
 // (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
 TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
-  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
-  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
-  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, sizeof(nevr_matchmaker_host_patch::kHostExpected));
+  EXPECT_EQ(nevr_matchmaker_host_patch::kHostSlotSize, 48U);
+  EXPECT_TRUE(nevr_matchmaker_host_patch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(0));
+  EXPECT_FALSE(nevr_matchmaker_host_patch::FitsInHostSlot(-1));
 }
 
 TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   std::vector<uint8_t> first = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(first.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
 
   // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
   std::vector<uint8_t> second = FreshMatchmakerImage();
-  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
-  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), nevr_matchmaker_host_patch::kHostExpected);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(second.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
   EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+// The loader-notification path end to end, over fake images: load, unload, reload, with the module name as
+// the loader reports it (UTF-16, any case, no NUL). A write counter proves what does and does not write.
+namespace {
+std::u16string Utf16(const char* ascii) {
+  return std::u16string(ascii, ascii + std::strlen(ascii));
+}
+}  // namespace
+
+TEST(MatchmakerHostPatch, LoadUnloadReloadPatchesEveryLoadAndUnloadWritesNothing) {
+  namespace mm = nevr_matchmaker_host_patch;
+  int writes = 0;
+  auto counted = [&writes](uint8_t* dst, const char* src, size_t len) {
+    ++writes;
+    std::memcpy(dst, src, len);
+    return true;
+  };
+  const std::u16string name = Utf16("pnsradmatchmaking.dll");
+
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  auto r1 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), first.data(), 51234, counted);
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_EQ(*r1, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 1);
+
+  // The unload notification: nothing is written and nothing is held; the image is gone with its patch.
+  auto r2 = mm::OnModuleNotification(mm::kNotificationUnloaded, name.data(), name.size(), first.data(), 51234, counted);
+  EXPECT_FALSE(r2.has_value());
+  EXPECT_EQ(writes, 1);
+
+  // The reload maps a fresh, unpatched image (a different base) and is patched like the first.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  ASSERT_NE(first.data(), second.data());
+  EXPECT_STREQ(HostOf(second), mm::kHostExpected);
+  auto r3 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), second.data(), 51234, counted);
+  ASSERT_TRUE(r3.has_value());
+  EXPECT_EQ(*r3, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 2);
+
+  // A repeated load notification for the same image is idempotent: reported, nothing rewritten.
+  auto r4 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), second.data(), 51234, counted);
+  ASSERT_TRUE(r4.has_value());
+  EXPECT_EQ(*r4, mm::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 2);
+
+  // And a third load after another unload is patched again: no once-only guard anywhere.
+  mm::OnModuleNotification(mm::kNotificationUnloaded, name.data(), name.size(), second.data(), 51234, counted);
+  std::vector<uint8_t> third = FreshMatchmakerImage();
+  auto r5 = mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), third.data(), 51234, counted);
+  ASSERT_TRUE(r5.has_value());
+  EXPECT_EQ(*r5, mm::Result::Patched);
+  EXPECT_STREQ(HostOf(third), "ws://127.0.0.1:51234");
+  EXPECT_EQ(writes, 3);
+}
+
+// Self-check "matchmaking_reload_patch" (#451): the ledger the loader callback feeds says, per change, whether
+// every load of the module had its host default re-applied.
+TEST(MatchmakerHostPatch, ReloadLedgerPassesWhenEveryLoadWasPatchedAndFailsWhenOneWasNot) {
+  namespace mm = nevr_matchmaker_host_patch;
+  mm::ReloadLedger ledger;
+  std::string observed;
+  bool pass = false;
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "no load yet: nothing to report";
+
+  ledger.NoteLoad(mm::Result::Patched);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=1 patched=1");
+  EXPECT_TRUE(pass);
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "unchanged: said once";
+
+  ledger.NoteLoad(mm::Result::Patched);  // the reload of #18, patched again
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=2 patched=2");
+  EXPECT_TRUE(pass);
+
+  ledger.NoteLoad(mm::Result::BytesMismatch);  // a load the patch did not land on
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=3 patched=2");
+  EXPECT_FALSE(pass);
+
+  ledger.NoteLoad(std::nullopt);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=4 patched=2");
+  EXPECT_FALSE(pass);
+}
+
+TEST(MatchmakerHostPatch, OnlyTheMatchmakingModuleByWholeNameAnyCaseIsPatched) {
+  namespace mm = nevr_matchmaker_host_patch;
+  int writes = 0;
+  auto counted = [&writes](uint8_t* dst, const char* src, size_t len) {
+    ++writes;
+    std::memcpy(dst, src, len);
+    return true;
+  };
+  for (const char* other : {"pnsrad.dll", "pnsradmatchmaking.dll.bak", "xpnsradmatchmaking.dll", "pnsradmatchmaking.d",
+                            "pnsradgameserver.dll", ""}) {
+    std::vector<uint8_t> image = FreshMatchmakerImage();
+    const std::u16string name = Utf16(other);
+    EXPECT_FALSE(mm::OnModuleNotification(mm::kNotificationLoaded, name.data(), name.size(), image.data(), 51234, counted)
+                     .has_value())
+        << other;
+    EXPECT_STREQ(HostOf(image), mm::kHostExpected) << other;
+  }
+  EXPECT_EQ(writes, 0);
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  const std::u16string upper = Utf16("PnsRadMatchmaking.DLL");
+  auto r = mm::OnModuleNotification(mm::kNotificationLoaded, upper.data(), upper.size(), image.data(), 4000, counted);
+  ASSERT_TRUE(r.has_value());
+  EXPECT_EQ(*r, mm::Result::Patched);
+  // The loader reports the name as WCHAR; the same function takes it.
+  std::vector<uint8_t> wide = FreshMatchmakerImage();
+  const std::wstring wname = L"pnsradmatchmaking.dll";
+  EXPECT_TRUE(mm::OnModuleNotification(mm::kNotificationLoaded, wname.data(), wname.size(), wide.data(), 4000, counted)
+                  .has_value());
+  EXPECT_EQ(writes, 2);
 }
 
 TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  ASSERT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, CopyWrite), nevr_matchmaker_host_patch::Result::Patched);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 60001, CopyWrite), nevr_matchmaker_host_patch::Result::BytesMismatch);
   EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
 }
 
 TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
   std::vector<uint8_t> image = FreshMatchmakerImage();
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
-  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
-  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
-            MatchmakerHostPatch::Result::WriteFailed);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 0, CopyWrite), nevr_matchmaker_host_patch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), nevr_matchmaker_host_patch::kHostExpected);
+  EXPECT_EQ(nevr_matchmaker_host_patch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            nevr_matchmaker_host_patch::Result::WriteFailed);
 }
 
 // #201: the server's new-location text ends with the code line, which the game's screen drops.
@@ -1241,9 +1361,9 @@ TEST(WsBridgeGameToServerLog, ATruncatedMessageIsNotDecoded) {
   std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   PutU64(frame, 16, 0x1000);  // claim 0x1000 payload bytes while 0x30 are present
   const uint8_t stale = 0;
-  EvrCodec::Message message;
+  nevr_evr_codec::Message message;
   message.payload = &stale;  // a payload left over from an earlier read must not survive a Truncated one
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(message.payload, nullptr);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
@@ -1257,9 +1377,9 @@ TEST(WsBridgeGameToServerLog, AWholeMessageThenATruncatedOneDecodesOnlyTheFirst)
   const std::string first = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   const std::string frame = first + second;
   // Fail fast, before the walk: the first message is whole and the second is truncated.
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Ok);
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, first.size(), &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Ok);
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, first.size(), &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 1);
   EXPECT_TRUE(TestLogContains("FriendInvite: routing=111 target=333 session=222"));
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
@@ -1270,8 +1390,8 @@ TEST(WsBridgeGameToServerLog, ATruncatedPlayerSessionRequestIsNotHexDumped) {
   ClearTestLogs();
   std::string frame = BuildMarkedMessage(kPlayerSessionSym, std::string(4, 'p'));
   PutU64(frame, 16, 16);  // declares 16 payload bytes, has 4
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_FALSE(TestLogContains("PlayerSessionReq payload:"));
 }
@@ -1284,13 +1404,13 @@ TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDecl
   std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   const uint64_t wraps = UINT64_MAX - 23;
   PutU64(frame, 16, wraps);
-  EvrCodec::Message message;
-  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  nevr_evr_codec::Message message;
+  ASSERT_EQ(nevr_evr_codec::ReadMessage(frame, 0, &message), nevr_evr_codec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
 }
 
-// The log sink is capped: a loop that logs on every pass ends the process (TestLogCap::EndProcessOnOverflow)
+// The log sink is capped: a loop that logs on every pass ends the process (nevr_test_log_cap::EndProcessOnOverflow)
 // instead of growing the sink until memory runs out. Here the handler is replaced to observe the overflow.
 static size_t g_capOverflowCalls = 0;
 static size_t g_capOverflowLines = 0;
@@ -1302,8 +1422,8 @@ static void CountCapOverflow(size_t lines) {
 TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
   ClearTestLogs();
   g_capOverflowCalls = 0;
-  TestLogCap::g_overflowHandler = CountCapOverflow;
-  for (size_t i = 0; i < TestLogCap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+  nevr_test_log_cap::g_overflowHandler = CountCapOverflow;
+  for (size_t i = 0; i < nevr_test_log_cap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
   // Empty the sink before the default handler comes back: a Log from another thread in between would
   // otherwise overflow and end the process.
   size_t held = 0;
@@ -1312,9 +1432,9 @@ TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
     held = g_testLogMessages.size();
     g_testLogMessages.clear();
   }
-  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  nevr_test_log_cap::g_overflowHandler = nevr_test_log_cap::EndProcessOnOverflow;
   EXPECT_EQ(held, 10000u);
-  EXPECT_EQ(TestLogCap::kMaxLines, 10000u);
+  EXPECT_EQ(nevr_test_log_cap::kMaxLines, 10000u);
   EXPECT_EQ(g_capOverflowCalls, 50u);
   EXPECT_EQ(g_capOverflowLines, 10000u);
 }
@@ -1324,10 +1444,10 @@ TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
 TEST(TestLogCapSinkDeathTest, TheDefaultHandlerPrintsTheMessageAndExits98) {
   ASSERT_EXIT(
       {
-        for (size_t i = 0; i <= TestLogCap::kMaxLines; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+        for (size_t i = 0; i <= nevr_test_log_cap::kMaxLines; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
         std::_Exit(0);  // reached only if the cap did not end the process
       },
-      ::testing::ExitedWithCode(TestLogCap::kOverflowExitCode),
+      ::testing::ExitedWithCode(nevr_test_log_cap::kOverflowExitCode),
       "FAILED: log capture overflowed: 10000 lines, a loop is spinning \\(in TestLogCapSinkDeathTest\\.");
 }
 
@@ -1395,11 +1515,11 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json.at("access_token"), "access-token");
   EXPECT_TRUE(json.contains("buildversion"));
   ASSERT_TRUE(json.contains("nevr_identity"));
-  const BuildIdentity::Info& identity = BuildIdentity::Get();
+  const nevr_build_identity::Info& identity = nevr_build_identity::Get();
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
-  EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
+  EXPECT_EQ(json.at("nevr_social"), nevr_social_party::kSocialLevel) << "the social level the server gates new messages on";
   // Outside the game there is no headset serial to read: "unknown", which alt detection ignores (#83).
   EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
@@ -1426,7 +1546,7 @@ TEST(WsBridgeLoginRequest, JsonEmitsPositiveCpuAndRamMeasurements) {
 }
 
 TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = 90210;
   inputs.display_name = "Quest \"player\"";
   inputs.access_token = "jwt-\\-token";
@@ -1445,7 +1565,7 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   inputs.social_level = 2;
   inputs.plugins = nlohmann::json::parse(R"([{"name":"example","loaded":true}])");
 
-  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("accountid"), 90210);
   EXPECT_EQ(profile.at("displayname"), inputs.display_name);
   EXPECT_EQ(profile.at("access_token"), inputs.access_token);
@@ -1463,11 +1583,11 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
 }
 
 TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = 90210;
   inputs.display_name = "";
 
-  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("displayname"), "90210");
 }
 
@@ -1477,20 +1597,20 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
   ClearTestLogs();
   int64_t symbol = 0;
-  Evrp::TintData tint;
-  const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
-  EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
+  nevr_evrp::TintData tint;
+  const std::vector<uint8_t> shortBuffer(nevr_evrp::kHeaderSize - 1, 0);
+  EXPECT_FALSE(nevr_evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
   EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
 
   // Exactly the header size is not "too small": it is a header whose data_length promises 80
   // bytes that are not there, so the size check rejects it instead.
   ClearTestLogs();
-  std::vector<uint8_t> headerOnly(Evrp::kHeaderSize, 0);
+  std::vector<uint8_t> headerOnly(nevr_evrp::kHeaderSize, 0);
   const uint8_t header[] = {0x45, 0x56, 0x52, 0x50, 0x01, 0x00, 0x00, 0x00, 0x86, 0xDC, 0xC5, 0x9D,
                             0xD0, 0x28, 0xD2, 0x74, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                             0x50, 0x00, 0x00, 0x00};
   std::copy(std::begin(header), std::end(header), headerOnly.begin());
-  EXPECT_FALSE(Evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
+  EXPECT_FALSE(nevr_evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
   EXPECT_FALSE(TestLogContains("file too small"));
   EXPECT_TRUE(TestLogContains("size mismatch: file=header.evrp"));
 }
@@ -1647,7 +1767,7 @@ TEST(N66_FormatSymbolId, ValidInput_DoesNotOverflow) {
 // ============================================================================
 
 TEST(N65_GateCount, DerivedFromProductionTable) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5)
       << "Gate count must match the 5 entries in HEADLESS_GATE_TABLE";
   // Verify table entries are distinct and have valid metadata.
@@ -1665,7 +1785,7 @@ TEST(N65_GateCount, DerivedFromProductionTable) {
 }
 
 TEST(N65_GateCount, AllGatesInCodeRange) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
   for (int i = 0; i < HEADLESS_GATE_COUNT; i++) {
     EXPECT_GT(HEADLESS_GATE_TABLE[i].rva, 0x100000u)
         << "Gate " << i << " RVA below .text section";
@@ -1706,24 +1826,24 @@ struct GuardScratch {
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);  // NOPs stand in for an untouched prologue
 
-    HookGuard::Record(s.page, "N84_unchanged");
-    EXPECT_EQ(HookGuard::VerifyAll("test:unchanged"), 0)
+    nevr_hook_guard::Record(s.page, "N84_unchanged");
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch s;
     ASSERT_NE(s.page, nullptr);
     memset(s.page, 0x90, 32);
 
-    HookGuard::Record(s.page, "N84_overwritten");
-    ASSERT_EQ(HookGuard::VerifyAll("test:baseline"), 0)
+    nevr_hook_guard::Record(s.page, "N84_overwritten");
+    ASSERT_EQ(nevr_hook_guard::VerifyAll("test:baseline"), 0)
         << "precondition: freshly recorded bytes must match";
 
     // Simulate a second MinHook instance writing its own JMP rel32 over ours.
@@ -1734,14 +1854,14 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
     p[3] = 0x33;
     p[4] = 0x44;
 
-    EXPECT_EQ(HookGuard::VerifyAll("test:overwritten"), 1)
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overwritten"), 1)
         << "guard did NOT detect a foreign detour overwriting a recorded address";
 }
 
 // IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
 // are still our own jump. Recorded and unchanged: yes. Never recorded, or overwritten since: no.
 TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
-    HookGuard::ResetForTest();
+    nevr_hook_guard::ResetForTest();
     GuardScratch ours;
     GuardScratch other;
     ASSERT_NE(ours.page, nullptr);
@@ -1749,41 +1869,41 @@ TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
     memset(ours.page, 0x90, 32);
     memset(other.page, 0x90, 32);
 
-    HookGuard::Record(ours.page, "IsOurDetour_ours");
-    EXPECT_TRUE(HookGuard::IsOurDetour(ours.page));
-    EXPECT_FALSE(HookGuard::IsOurDetour(other.page)) << "an address the runtime never detoured";
-    EXPECT_FALSE(HookGuard::IsOurDetour(nullptr));
+    nevr_hook_guard::Record(ours.page, "IsOurDetour_ours");
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(ours.page));
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(other.page)) << "an address the runtime never detoured";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(nullptr));
 
     static_cast<unsigned char*>(ours.page)[0] = 0xE9;  // someone else's JMP over ours
-    EXPECT_FALSE(HookGuard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
 }
 
 TEST(N84_HookGuard, NullTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
-    HookGuard::Record(nullptr, "N84_null");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
+    nevr_hook_guard::Record(nullptr, "N84_null");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "null target was recorded; a bad call site would occupy a guard slot";
 }
 
 TEST(N84_HookGuard, UnreadableTarget_Ignored) {
-    HookGuard::ResetForTest();
-    const int before = HookGuard::RecordedCount();
+    nevr_hook_guard::ResetForTest();
+    const int before = nevr_hook_guard::RecordedCount();
     // Reserved-but-not-committed: readable-looking pointer, unreadable memory.
     void* reserved = VirtualAlloc(nullptr, 4096, MEM_RESERVE, PAGE_NOACCESS);
     ASSERT_NE(reserved, nullptr);
-    HookGuard::Record(reserved, "N84_unreadable");
-    EXPECT_EQ(HookGuard::RecordedCount(), before)
+    nevr_hook_guard::Record(reserved, "N84_unreadable");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "uncommitted memory was recorded; VerifyAll would fault reading it";
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
-// WOULD-FAIL-IF (N84): delete the memcmp in HookGuard::VerifyAll (hook_guard.cpp)
+// WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
-// WOULD-FAIL-IF (N84-record): delete the Readable() check in HookGuard::Record
+// WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
 //   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
 //      uncommitted page instead of skipping it.
-// WOULD-FAIL-IF (N84-wiring): delete HookGuard::VerifyAll(filename) from
+// WOULD-FAIL-IF (N84-wiring): delete nevr_hook_guard::VerifyAll(filename) from
 //   plugin_loader.cpp -> not caught here (call-site wiring), caught by the
 //   `just verify` grep sensor instead.
 
@@ -1799,7 +1919,7 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
 // ============================================================================
 
 TEST(SystemInfo, ReportsRealCpuAndMemory) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
 
     EXPECT_GT(h.logical_cores, 0u) << "logical core count was never measured";
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
@@ -1827,7 +1947,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {
-    const SystemInfo::Host& h = SystemInfo::Get();
+    const nevr_system_info::Host& h = nevr_system_info::Get();
     // IsWine() must be exactly "we got a version from ntdll", with no second
     // source of truth that could disagree with the string we transmit.
     EXPECT_EQ(h.IsWine(), !h.wine_version.empty());
@@ -1836,7 +1956,7 @@ TEST(SystemInfo, WineDetectionIsTheVersionString) {
 TEST(SystemInfo, IsCachedNotRemeasured) {
     // Callers may hit this on a login path; the probes (CPUID,
     // GetLogicalProcessorInformation) are not free. Same object every call.
-    EXPECT_EQ(&SystemInfo::Get(), &SystemInfo::Get());
+    EXPECT_EQ(&nevr_system_info::Get(), &nevr_system_info::Get());
 }
 
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
@@ -1852,7 +1972,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // ============================================================================
 
 TEST(BuildIdentity, ProjectVersionIsNotFallback) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The CMake-built binary always has a real version. The "0.0.0" fallback
     // only triggers for a manual compiler invocation without -DPROJECT_VERSION.
     EXPECT_NE(id.project_version, "0.0.0");
@@ -1860,19 +1980,19 @@ TEST(BuildIdentity, ProjectVersionIsNotFallback) {
 }
 
 TEST(BuildIdentity, GitCommitIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_commit.empty());
     EXPECT_NE(id.git_commit, "unknown");
 }
 
 TEST(BuildIdentity, GitDescribeIsNotEmpty) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     EXPECT_FALSE(id.git_describe.empty());
     EXPECT_NE(id.git_describe, "unknown");
 }
 
 TEST(BuildIdentity, BuildTypeIsSet) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // "unknown-build-type" would mean CMAKE_BUILD_TYPE was not propagated
     // as a compile definition. Our CMake always sets it.
     EXPECT_NE(id.build_type, "unknown-build-type");
@@ -1880,13 +2000,29 @@ TEST(BuildIdentity, BuildTypeIsSet) {
 }
 
 TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
-    const BuildIdentity::Info& id = BuildIdentity::Get();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The dirty flag is derived from git_describe, not a separate source.
     EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
 }
 
+// The one identity literal the release signer and the CI stamp check read out of the binary:
+// "NEVR-BUILD <version> <commit40>", version and commit from the same definitions as Info.
+TEST(BuildIdentity, IdentityLiteralBindsTheVersionAndTheFullCommit) {
+    const std::string literal = nevr_build_identity::IdentityLiteral();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
+    const std::string prefix = "NEVR-BUILD ";
+    ASSERT_EQ(literal.compare(0, prefix.size(), prefix), 0) << literal;
+    const size_t space = literal.rfind(' ');
+    ASSERT_GT(space, prefix.size());
+    EXPECT_EQ(literal.substr(prefix.size(), space - prefix.size()), id.project_version);
+    const std::string commit = literal.substr(space + 1);
+    EXPECT_EQ(commit.size(), 40u) << commit;
+    EXPECT_EQ(commit.find_first_not_of("0123456789abcdef"), std::string::npos) << commit;
+    EXPECT_EQ(commit.compare(0, id.git_commit.size(), id.git_commit), 0) << "the short commit is its prefix";
+}
+
 TEST(BuildIdentity, IsCachedNotRemeasured) {
-    EXPECT_EQ(&BuildIdentity::Get(), &BuildIdentity::Get());
+    EXPECT_EQ(&nevr_build_identity::Get(), &nevr_build_identity::Get());
 }
 
 // ============================================================================
@@ -1994,18 +2130,18 @@ TEST(S8_CapsPriority, CombinedCapsTakeHighestBand) {
 // #83: the stock HMD serial field choice (hmd_serial.h): the game's 24-byte buffer in VR, "N/A" with
 // the No-VR flag, and "unknown" only when the serial buffer is absent or invalid.
 TEST(HmdSerial, StockChoice) {
-  char serial[HmdSerial::kSerialBytes] = {};
+  char serial[nevr_hmd_serial::kSerialBytes] = {};
   std::memcpy(serial, "1WMHHA1234567", 13);
-  const auto vr = HmdSerial::Select(false, serial);
+  const auto vr = nevr_hmd_serial::Select(false, serial);
   EXPECT_EQ(vr.value, "1WMHHA1234567");
-  EXPECT_EQ(vr.source, HmdSerial::Source::GameBuffer);
-  EXPECT_EQ(HmdSerial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
-  char empty[HmdSerial::kSerialBytes] = {};
-  EXPECT_EQ(HmdSerial::Select(false, empty).value, "unknown");
-  EXPECT_EQ(HmdSerial::Select(false, nullptr).value, "unknown");
-  char garbage[HmdSerial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
-  EXPECT_EQ(HmdSerial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
-  char full[HmdSerial::kSerialBytes];
+  EXPECT_EQ(vr.source, nevr_hmd_serial::Source::GameBuffer);
+  EXPECT_EQ(nevr_hmd_serial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
+  char empty[nevr_hmd_serial::kSerialBytes] = {};
+  EXPECT_EQ(nevr_hmd_serial::Select(false, empty).value, "unknown");
+  EXPECT_EQ(nevr_hmd_serial::Select(false, nullptr).value, "unknown");
+  char garbage[nevr_hmd_serial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
+  EXPECT_EQ(nevr_hmd_serial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
+  char full[nevr_hmd_serial::kSerialBytes];
   std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
-  EXPECT_EQ(HmdSerial::Select(false, full).value, std::string(24, 'Z'));
+  EXPECT_EQ(nevr_hmd_serial::Select(false, full).value, std::string(24, 'Z'));
 }

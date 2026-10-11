@@ -25,6 +25,17 @@ inline constexpr std::chrono::steady_clock::duration kDeviceAuthPollInterval = s
 // returns a value above it on success and 0 on failure).
 inline constexpr intptr_t kBrowserOpenAcceptedAbove = 32;
 
+// How a flow ended, reported once through DeviceFlowOps::on_end.
+enum class FlowEnd {
+  Verified,
+  NoCode,          // the device code request failed
+  BrowserFailed,   // the browser could not be opened and the player dismissed the notice
+  CodeExpired,     // the server answered that the code expired
+  TimedOut,        // the five-minute deadline passed
+  PollErrors,      // too many consecutive failed polls
+  Cancelled,       // the game is closing
+};
+
 struct DeviceFlowOps {
   using Clock = std::chrono::steady_clock;
   std::function<Clock::time_point()> now;
@@ -32,11 +43,16 @@ struct DeviceFlowOps {
   std::function<intptr_t(const std::string&)> open_browser;  // arg: login URL carrying the code
   // Called when open_browser reports failure; returns 0 to abort the flow.
   std::function<int(const std::string&, const std::string&, intptr_t)> show_open_failure;
-  std::function<TokenAuth::DevicePollResponse(const std::string&)> poll;
+  std::function<nevr_token_auth::DevicePollResponse(const std::string&)> poll;
   std::function<void(Clock::duration)> sleep;
   std::function<void(LogLevel, const std::string&)> log;
   // Optional: true once the flow should stop (the game is closing while it waits, #37).
   std::function<bool()> cancelled;
+  // Optional: the code is issued and about to be sent to the browser (login_url carries no code). The
+  // Windows client shows it to the player here; both arguments are secrets' neighbours: do not log the code.
+  std::function<void(const std::string& code, const std::string& login_url)> on_code_issued;
+  // Optional: called once when the flow ends after a code was requested, with how it ended.
+  std::function<void(FlowEnd)> on_end;
   // True when the caller answers a code that runs out with a new one (the Quest session does):
   // the expiry and deadline lines then say so, at Info, instead of asking the player to restart.
   bool renews_expired_codes = false;
@@ -47,7 +63,7 @@ struct DeviceFlowOps {
 
 struct DeviceFlowResult {
   bool verified = false;
-  TokenAuth::DevicePollResponse response;  // meaningful only when verified
+  nevr_token_auth::DevicePollResponse response;  // meaningful only when verified
 };
 
 // `login_url` is the page the player opens, without the code ("?code=<code>" is

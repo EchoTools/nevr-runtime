@@ -30,7 +30,7 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout,
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
 # and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
 worktree-setup:
     tools/worktree-setup.sh
@@ -112,6 +112,8 @@ check-android-static-init: build-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
+    # The sentinel embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -139,12 +141,12 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `apk` is required (the store APK path); the debug keystore is throwaway, NOT prod.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore" workdir="build/android-arm64/repack":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; ks="{{ ks }}"
-    work="$root/build/android-arm64/repack"
+    work="$root/{{ workdir }}"
     for t in unzip patchelf zip zipalign apksigner readelf nm keytool; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
@@ -190,6 +192,57 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo ""
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
+
+# Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
+# tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
+# Read-only (git ls-remote is the only network call; there is no fetch). Run it before `just package-dev`,
+# before pushing a v<x.y.z> release tag and before `gh release create` (tools/release_preflight.py).
+release-preflight base="main":
+    tools/release_preflight.py --base {{ quote(base) }}
+
+# A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
+# Every non-tag build stamps a DEVELOPMENT version, X.Y.(Z+1)-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
+# and the files are named nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-*: this recipe cannot produce a release. A release
+# is a vX.Y.Z tag built by CI (.github/workflows/build.yml); its version is exactly the tag.
+# Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
+# .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
+# otherwise, and refuses a binary whose identity literal is not this commit's development version.
+# `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
+# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
+# the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
+# The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
+# This never tags, uploads or publishes.
+package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
+    tools/release_preflight.py
+    [ -f "{{ ks }}" ] || { echo "package-dev: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    commit=$(git rev-parse HEAD)
+    echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
+    out="build/package-dev/${commit:0:7}"
+    # Windows DLL: its own build tree (build/mingw-dev).
+    # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
+    (
+        unset VCPKG_ROOT
+        just preset=mingw-dev _vcpkg-mingw
+        cmake --preset mingw-dev
+        cmake --build --preset mingw-dev
+    )
+    # Quest sentinel: its own build tree (build/android-dev), the default features.
+    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev \
+        -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so "{{ ks }}" build/android-dev/repack
+    python3 tools/package_release.py --commit "$commit" --out "$out" \
+        --dll build/mingw-dev/bin/BugSplat64.dll \
+        --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
+        --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
+        --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
+        --quest-build-info build/android-dev/generated/nevr_build_info.h
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the
@@ -311,9 +364,10 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
+    cmake --build --preset {{ preset }} --target test_export_trace
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -328,6 +382,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_game_image_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_export_trace.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -415,6 +475,12 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    bin="build/{{ preset }}/bin/test_dll_load_hook.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_plugin_load_plan.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -422,7 +488,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -430,9 +496,9 @@ test-auth-unit:
         fi
         run_test "$bin"
     done
-    # test_broadcaster_bridge / test_broadcaster_guards moved to
-    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin (2026-07-26).
-    # The N72/N73 guards they cover now live and are tested there.
+    # test_broadcaster_bridge / test_broadcaster_guards live in
+    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
+    # holds and tests the N72/N73 guards.
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
@@ -734,6 +800,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
+    # game's callback and wait loop.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
+        src/quest/sentinel/obb_skip_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/obb_skip_hook_test" -ldl
+    timeout 120 "$out/obb_skip_hook_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
@@ -799,6 +872,13 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so"
+    # #411: every ovr_* import the message pump and the login callbacks can reach is hooked or guarded, so a
+    # synthetic message handle never reaches the SDK (tools/pinned_ovr_imports.txt says how each is treated).
+    python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --expect tools/pinned_ovr_imports.txt
+    # #431: ovr_User_GetOrgScopedID has nine Social callers besides the login's three; only the login's are
+    # answered locally, and the list the sentinel gates on equals what the library has.
+    python3 tools/pinned_ovr_import_walk.py "$out/lib/lib/arm64-v8a/libpnsovr.so" --sites tools/pinned_ovr_sites.txt \
+        --header src/quest/login/login_prerequisite_targets.h
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
 # recorded vtable, the facade driven through its vtable, the hook decision through the real callback
@@ -830,7 +910,7 @@ test-quest-social:
     # The frames live across a call into the game carry no exception machinery.
     tools/check_quest_social_frames.sh nm readelf \
         "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_game_calls.o=SlotResetEntry" \
-        "$out/social_install.o=OnSocial" "$out/social_invite_gate.o=OnBoolean"
+        "$out/social_install.o=OnSocial" "$out/social_install.o=OnPresence" "$out/social_invite_gate.o=OnBoolean"
     if err="$(tools/check_quest_social_frames.sh nm readelf "$out/social_facade.o=Facade" 2>&1)"; then
         echo "test-quest-social: the frame checker accepted an object with landing pads (it is blind)" >&2
         exit 1
@@ -902,6 +982,7 @@ test-quest-integration:
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
         src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
         src/quest/net/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/integration/self_check_wiring.cpp src/runtime/compat/self_check.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
     # 2. the hook translation units and the counter budget
@@ -911,7 +992,11 @@ test-quest-integration:
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/sentinel/obb_skip_hook.cpp -o "$out/obb_skip_hook.o"
     "${off[@]}" -c src/quest/login/login_counters.cpp -o "$out/login_counters.o"
+    # login_counters.cpp reads the local-answer counters of login_prerequisites.cpp (#411).
+    "${off[@]}" -c src/quest/login/login_prerequisites.cpp -o "$out/login_prerequisites.o"
+    "${off[@]}" -c src/quest/login/login_standin.cpp -o "$out/login_standin.o"
     "${off[@]}" -c src/quest/auth/prompt_board.cpp -o "$out/prompt_board.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
@@ -933,7 +1018,8 @@ test-quest-integration:
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
-        "$out/login_prompt_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
+        "$out/login_prerequisites.o" "$out/login_standin.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
@@ -985,6 +1071,8 @@ verify:
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
+    # The DLL embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
@@ -993,7 +1081,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1145,7 +1233,7 @@ verify:
     # 571a41b stopped persisting the access token (refresh token only, on disk),
     # which made `HasValidToken()` permanently false in a fresh process — so the
     # cached-token branch became dead code and every server silently fell back to
-    # password auth. Nothing else refreshes in server mode: TokenAuth::Init
+    # password auth. Nothing else refreshes in server mode: nevr_token_auth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
     N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
@@ -1282,8 +1370,8 @@ verify:
     # N36: Log() is unsafe under the loader lock. InitializeAfterGameImageGuard() runs from DllMain, and
     # the Log() fallback to stderr stops applying the moment
     # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
-    # that point in guarded initialization must use BootLogTee::TeeFprintf. Exactly one Log()
-    # call is permitted — the final line, emitted after BootLogTee::Close().
+    # that point in guarded initialization must use nevr_boot_log_tee::TeeFprintf. Exactly one Log()
+    # call is permitted — the final line, emitted after nevr_boot_log_tee::Close().
     N36_RC=0; N36_BODY=$(awk '/^static VOID InitializeAfterGameImageGuard\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
     sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
     sensor_nonempty "N36 Initialize Log census" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
@@ -1294,7 +1382,7 @@ verify:
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
         echo "verify: FAIL — N36 guarded initialization contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
         echo "InitializeAfterGameImageGuard() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
-        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use BootLogTee::TeeFprintf." >&2
+        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use nevr_boot_log_tee::TeeFprintf." >&2
         exit 1
     fi
     # Plugin shutdown can join threads and release module references. DllMain
@@ -1363,15 +1451,15 @@ verify:
     # Literals ("cpu":"Wine", 4 physical cores, 8 logical, 16384 MB total, 8192
     # used) would be emitted as though read from the machine, and nothing could
     # tell, because invented data and a real reading look identical once they are
-    # on the wire. Every field is read from the host (SystemInfo::Get).
+    # on the wire. Every field is read from the host (nevr_system_info::Get).
     #
     # The unit tests cover SystemInfo itself; they cannot see this format string.
     # This sensor is the half that watches the wire format.
     N115_RC=0; N115_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N115_RC=$?
     sensor_stage1 "N115 login system_info measured" "src/runtime/compat/ws_bridge.cpp" "$N115_RC"
     sensor_nonempty "N115 login system_info measured" "non-comment lines of compat/ws_bridge.cpp" "$N115_WS"
-    if ! grep -q 'SystemInfo::Get()' <<<"$N115_WS"; then
-        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (SystemInfo::Get)." >&2
+    if ! grep -q 'nevr_system_info::Get()' <<<"$N115_WS"; then
+        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (nevr_system_info::Get)." >&2
         exit 1
     fi
     # The JSON lives inside a C string literal, so every quote in the source is
@@ -1398,12 +1486,12 @@ verify:
     sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
     sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
     # Whitespace-flattened and matched CONTIGUOUSLY: two separate greps ("some
-    # !g_isServer exists" AND "AssetCDN::Initialize exists") passed blind, because
+    # !g_isServer exists" AND "nevr_asset_cdn::Initialize exists") passed blind, because
     # boot.cpp has OTHER !g_isServer gates — removing THIS gate while leaving the
     # call unconditional still satisfied both. Require the call inside the gate.
     N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
-    if ! grep -qE 'if \( *!g_isServer *\) *\{ *AssetCDN::Initialize\(\)' <<<"$N131_FLAT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
+    if ! grep -qE 'if \( *!g_isServer *\) *\{ *nevr_asset_cdn::Initialize\(\)' <<<"$N131_FLAT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
         echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
         exit 1
     fi
@@ -1411,8 +1499,8 @@ verify:
     N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
     sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
     sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
-    if grep -q 'AssetCDN::Initialize' <<<"$N131_INIT"; then
-        echo "verify: FAIL — N131 AssetCDN::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
+    if grep -q 'nevr_asset_cdn::Initialize' <<<"$N131_INIT"; then
+        echo "verify: FAIL — N131 nevr_asset_cdn::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
         echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
         exit 1
     fi
@@ -1427,7 +1515,7 @@ verify:
     sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
     sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
     if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
-        echo "verify: FAIL — N129 DllLoadHook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
+        echo "verify: FAIL — N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
         echo "It would revert to a bare OK/PARTIAL that hides which search-path hook failed — a silent DLL-hijack gap." >&2
         exit 1
     fi
@@ -1472,17 +1560,15 @@ verify:
         echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
         exit 1
     fi
-    if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
-        echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+    # #361: the block is a DllLoadHook filter. A second detour on LoadLibraryW/ExW fails with
+    # MH_ERROR_ALREADY_CREATED (DllLoadHook owns those targets), which is how N127 went unnoticed.
+    if grep -qE 'PatchDetour\(&Original_LoadLibrary' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK installs its own LoadLibrary detour again." >&2
+        echo "DllLoadHook already hooks LoadLibraryA/W/ExA/ExW; a second detour on the same target fails with MH_ERROR_ALREADY_CREATED." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
-        exit 1
-    fi
-    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
-        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
+    if ! grep -qE 'nevr_dll_load_hook::AddLoadFilter\(' <<<"$N127_MP"; then
+        echo "verify: FAIL — #361 PatchBlockOculusSDK no longer registers its load filter with DllLoadHook." >&2
         exit 1
     fi
 
@@ -1595,11 +1681,11 @@ verify:
     sensor_stage1 "N120 server-fatal plugin guards" "src/runtime/ext/plugin_loader.cpp" "$N120_RC"
     sensor_nonempty "N120 server-fatal plugin guards" "non-comment lines of ext/plugin_loader.cpp" "$N120_LOADER"
 
-    # The HookGuard verdict must be CONSUMED. `HookGuard::VerifyAll(filename);` as
+    # The HookGuard verdict must be CONSUMED. `nevr_hook_guard::VerifyAll(filename);` as
     # a bare statement is the pre-N120 bug: the collision was detected, logged at
     # ERROR, and the plugin loaded anyway — detection that changed nothing.
-    if ! grep -qE '(int|auto) +[a-z_]+ *= *HookGuard::VerifyAll' <<<"$N120_LOADER"; then
-        echo "verify: FAIL — N120 HookGuard::VerifyAll's return is no longer captured." >&2
+    if ! grep -qE '(int|auto) +[a-z_]+ *= *nevr_hook_guard::VerifyAll' <<<"$N120_LOADER"; then
+        echo "verify: FAIL — N120 nevr_hook_guard::VerifyAll's return is no longer captured." >&2
         echo "A discarded verdict means a plugin can re-hook an address this runtime owns, our patch silently stops applying, and the load continues as though nothing happened." >&2
         exit 1
     fi
@@ -1633,7 +1719,7 @@ verify:
     N120_RC3=0; N120_XPID=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/xpid_patch.cpp) || N120_RC3=$?
     sensor_stage1 "N120 xpid outcome observable" "src/runtime/patch/xpid_patch.cpp" "$N120_RC3"
     sensor_nonempty "N120 xpid outcome observable" "non-comment lines of patch/xpid_patch.cpp" "$N120_XPID"
-    if [ "$(grep -c 'BootLogTee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
+    if [ "$(grep -c 'nevr_boot_log_tee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
         echo "verify: FAIL — N120 the XPID patch no longer tees BOTH outcomes to the boot log." >&2
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
@@ -1699,7 +1785,7 @@ verify:
     fi
 
     # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
-    # BinaryBugFixes::Init saves the original byte before writing 0xC3 and restores
+    # nevr_binary_bug_fixes::Init saves the original byte before writing 0xC3 and restores
     # it on Shutdown (N33). A SECOND writer defeats that silently: if it runs first,
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.
@@ -1824,12 +1910,12 @@ verify:
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
     # Both call sites are wiring, invisible to the GTest, so they get a sensor.
-    if ! grep -q 'HookGuard::Record(target, name)' src/runtime/hook/patching.h; then
-        echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
+    if ! grep -q 'nevr_hook_guard::Record(target, name)' src/runtime/hook/patching.h; then
+        echo "verify: FAIL — N84 nevr_hook_guard::Record missing from PatchDetour; new detours would be unguarded." >&2
         exit 1
     fi
-    if ! grep -qE 'HookGuard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
-        echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
+    if ! grep -qE 'nevr_hook_guard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
+        echo "verify: FAIL — N84 nevr_hook_guard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi
     # N85: never hand ixwebsocket an empty std::function. It invokes
@@ -1943,7 +2029,7 @@ verify:
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
     fi
-    if ! grep -q 'Frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'nevr_frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
         exit 1
     fi
@@ -1974,8 +2060,8 @@ verify:
         echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
         exit 1
     fi
-    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
-       || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
+    if ! grep -q 'nevr_serverdb_uri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
+       || ! grep -q 'nevr_serverdb_uri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
     fi
@@ -2027,7 +2113,7 @@ verify:
     fi
     # MARKED needs no stage-1 capture: src/runtime is the repo itself, and a
     # zero count makes MARKED < DECLARED fail closed below (measured direction).
-    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/runtime \
+    MARKED=$(grep -rhoE 'nevr_hook_liveness::Mark\(nevr_hook_liveness::k[A-Za-z]+\)' src/runtime \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
         echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
@@ -2073,7 +2159,7 @@ verify:
         echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
         exit 1
     fi
-    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' <<<"$TICK_CODE"; then
+    if ! grep -q 'nevr_builtin_log_filter::InstallPnsradHook();' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1
@@ -2452,8 +2538,8 @@ verify:
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
-        echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
+    if ! grep -q 'nevr_build_identity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
+        echo "verify: FAIL — N112c: gameserver.cpp does not call nevr_build_identity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
         exit 1
@@ -2478,15 +2564,12 @@ verify:
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     # Wave 10: a deleted unit test must be visible to the closed-loop gate.
-    # The floor is deliberately derived from the current, production-linked
-    # suite; raising it is part of adding tests, while a drop is always a
-    # regression that needs an explicit sensor update and review.
-    TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 183 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 183)." >&2
-        exit 1
-    fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 183)"
+    # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
+    # against this tree): adding tests raises it in the same change, a drop is a regression
+    # that needs an explicit sensor update and review.
+    # #451: the self-check wiring goes through the tested gate functions (source check).
+    python3 tools/verify_self_check_wiring.py
+    python3 tools/verify_gtest_floor.py --floor 872
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

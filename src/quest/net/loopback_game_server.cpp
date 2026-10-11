@@ -22,9 +22,9 @@
 
 namespace quest_net {
 
-using SessionRouter::GameId;
-using SessionRouter::LogLevel;
-using SessionRouter::SendResult;
+using nevr_session_router::GameId;
+using nevr_session_router::LogLevel;
+using nevr_session_router::SendResult;
 
 namespace {
 
@@ -488,6 +488,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   FrameDecoder decoder(config_.maxMessageBytes);
   bool handshaken = false;
   bool sawDataFrame = false;
+  bool silentReported = false;
   std::chrono::steady_clock::time_point upgradedAt;
 
   auto queueWrite = [&](const std::string& bytes, bool bypassCap) {
@@ -532,8 +533,13 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       record["reason"] = "idle_before_first_frame";
       record["idle_ms"] = config_.idleFirstFrameMs;
       Log(LogLevel::Warning, Dump(record));
-      beginClose(SessionRouter::kClosePolicyViolation, "idle");
+      beginClose(nevr_session_router::kClosePolicyViolation, "idle");
       endReason = "idle_before_first_frame";
+    }
+    if (handshaken && opened && !sawDataFrame && !closing && !silentReported &&
+        std::chrono::steady_clock::now() - upgradedAt >= std::chrono::milliseconds(config_.silentNotifyMs)) {
+      silentReported = true;
+      router_->OnGameSilent(id);
     }
     const short interest = static_cast<short>((closing ? 0 : POLLIN) | (wantWrite ? POLLOUT : 0));
     pollfd fds[2] = {{conn->fd, interest, 0}, {conn->wake[0], POLLIN, 0}};
@@ -662,7 +668,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         record["reason"] = "message_too_big";
         record["limit_bytes"] = config_.maxMessageBytes;
         Log(LogLevel::Error, Dump(record));
-        beginClose(SessionRouter::kCloseMessageTooBig, "message too big");
+        beginClose(nevr_session_router::kCloseMessageTooBig, "message too big");
         endReason = "message_too_big";
         break;
       }

@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace SocialFacade {
+namespace nevr_social_facade {
 
 enum class InstallStage { kBoot, kFacadeSelected };
 enum class Probe { kAccessor, kSocialJson, kJsonSet, kJsonNavigateForWrite };
@@ -19,4 +19,4 @@ void InstallHookPlan(InstallStage stage, bool enabled, InstallOne&& installOne) 
   installOne(Probe::kJsonNavigateForWrite);
 }
 
-}  // namespace SocialFacade
+}  // namespace nevr_social_facade

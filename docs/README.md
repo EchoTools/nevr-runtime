@@ -1,4 +1,4 @@
-# NEVR Runtime Documentation
+# nEVR Runtime Documentation
 
 ## Design
 
@@ -7,7 +7,9 @@ Design documents, architecture decisions, and porting analysis.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `2026-07-13-quest-crash-reporter-injection.md` | Quest arm64 crash-reporter injection design via libovrplatformloader.so hijack | Quest porting developers |
+| `2026-09-21-mic-provider-voip-fix.md` | Microphone provider selection and VOIP initialization analysis | Runtime and Quest developers |
 | `2026-10-01-social-scenario-harness.md` | One-client scenario tests for friends and parties: why one client is enough, the owner's constraints, where a scenario may enter the game, and what to build once | Runtime developers and agents testing social features |
+| `2026-10-01-social-nakama-proposal.md` | Nakama-side protocol proposal for social feature support | Runtime and game-service developers |
 | `2026-10-01-social-features-test-plan.md` | Every social feature the game exposes (from the facade slots, session events, SNS messages and UserProviderID callers), prioritized, with status and the scenario that tests each | Runtime developers and agents testing social features |
 
 ## Architecture decisions
@@ -34,6 +36,7 @@ Operational procedures and testing protocols.
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
+| `testing/smoke-checklist.md` | Every feature a tester can check on a PC game client, a Quest game client or a game server, with the player action and the log line that proves it | Testers and release managers |
 | *(see `just --list` for automated test and verification recipes)* | | |
 
 ## Standards
@@ -46,8 +49,15 @@ Coding and verification standards that bind all work in this repo.
 | `verification.md` | Evidence ladder (rank 1–5), falsification discipline, and gate contract | All developers and agents |
 | `planning.md` | Release milestones by outcome, Fibonacci points, sprints by work, story states, and the hygiene rules for issues, PRs, branches and milestones | All developers and agents |
 
+## References
+
+Current behavior and reference material lives in `reference/`; each page covers
+one subsystem, protocol surface, or measured game path.
+
+| Directory | Contents | Audience |
+| --------- | -------- | -------- |
+| `reference/` | Runtime behavior, configuration, protocol surfaces, and test harnesses | Runtime developers and operators |
+
 ## Audits
 
-No audit records are kept in the tree. Findings that were still open when the
-records were retired are tracked as GitHub issues; `audits/README.md` lists each
-retired record with the `git show <sha>:<path>` command that returns it.
+`audits/README.md` indexes the audit records; their open findings are GitHub issues.

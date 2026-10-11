@@ -1,0 +1,7 @@
+{
+  "BuildIdentity": "nevr_build_identity",
+  "JsonEscape": "nevr_json_escape",
+  "LoginSession": "nevr_login_session",
+  "SystemInfo": "nevr_system_info",
+  "TokenAuth": "nevr_token_auth"
+}

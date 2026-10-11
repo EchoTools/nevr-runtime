@@ -18,7 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace CoopAiTrace {
+namespace nevr_coop_ai_trace {
 
 constexpr std::int32_t kNotRun = -1;          // goals/waypoints: the setup has not run for this bot
 constexpr std::int64_t kActorNotRead = -2;    // lookupActor: never read (the lookup was not hooked)
@@ -74,4 +74,4 @@ class BotTable {
   std::array<BotRecord, N> records_{};
 };
 
-}  // namespace CoopAiTrace
+}  // namespace nevr_coop_ai_trace

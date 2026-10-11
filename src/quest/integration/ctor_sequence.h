@@ -21,6 +21,10 @@
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
+//      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
+//                                    AStorageManager_getMountedObbPath); independent of every feature above,
+//                                    runs right after the clock hook so it is in place before libr15 runs
+//                                    CSysFile::Init. Its counters are registered with the others (step 3).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -31,6 +35,7 @@
 //   login counters fail     -> the login hook is not installed (the matchmaking install is unaffected)
 //   social counters fail    -> social is not installed
 //   prompt counters fail    -> the login-prompt hook is not installed
+//   obb counters fail       -> the OBB-mount skip is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -63,8 +68,10 @@ enum class StepId : std::uint8_t {
   kRegisterLoginCounters,
   kRegisterSocialCounters,
   kRegisterLoginPromptCounters,
+  kRegisterObbSkipCounters,
   kStartReporter,
   kInstallClockHook,
+  kInstallObbSkip,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -104,9 +111,14 @@ class Steps {
   virtual bool RegisterLoginCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
   virtual bool RegisterLoginPromptCounters() = 0;
+  // The OBB-mount skip's counters (#319), registered when the obb_skip feature is on.
+  virtual bool RegisterObbSkipCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
+  // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
+  // logs the skip and installs nothing). True when both slots hold their thunks.
+  virtual bool InstallObbSkip(bool countersRegistered) = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

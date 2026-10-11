@@ -91,7 +91,7 @@ def integer_constants(text: str) -> dict[str, int]:
 def add_aliases(text: str, constants: dict[str, int]) -> None:
     aliases = re.findall(
         r"\bconstexpr\s+uintptr_t\s+(\w+)\s*=\s*"
-        r"(?:PatchAddresses::)?(\w+)\s*;",
+        r"(?:nevr_patch_addresses::)?(\w+)\s*;",
         text,
     )
     # Local aliases such as LOGIN_CAP_CHECK deliberately name an existing
@@ -106,7 +106,7 @@ def add_aliases(text: str, constants: dict[str, int]) -> None:
 
 def resolve(expression: str, constants: dict[str, int]) -> int:
     expression = expression.strip()
-    expression = expression.removeprefix("PatchAddresses::")
+    expression = expression.removeprefix("nevr_patch_addresses::")
     if expression.startswith("0x"):
         return int(expression, 16)
     if expression in constants:
@@ -137,7 +137,7 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     # argument must be a resolvable named or literal RVA; otherwise fail closed
     # rather than letting a new form evade the inventory.
     for expression in re.findall(
-        r"\bApplyPatch\s*\(\s*((?:PatchAddresses::)?\w+|0x[0-9a-fA-F]+)\s*,",
+        r"\bApplyPatch\s*\(\s*((?:nevr_patch_addresses::)?\w+|0x[0-9a-fA-F]+)\s*,",
         source,
     ):
         targets.add(resolve(expression, constants))
@@ -161,7 +161,7 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     # the same reviewed change as the rewrite.
     for expression in re.findall(
         r"ProcessMemcpy\s*\(\s*EchoVR::g_GameBaseAddress\s*\+\s*"
-        r"((?:PatchAddresses::)?\w+|0x[0-9a-fA-F]+)",
+        r"((?:nevr_patch_addresses::)?\w+|0x[0-9a-fA-F]+)",
         source,
     ):
         if expression == "offset":
@@ -170,7 +170,7 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
         targets.add(resolve(expression, constants))
 
     spectator_write = re.search(
-        r"uintptr_t\s+addr\s*=.*?\+\s*PatchAddresses::(\w+).*?"
+        r"uintptr_t\s+addr\s*=.*?\+\s*nevr_patch_addresses::(\w+).*?"
         r"ProcessMemcpy\s*\(\s*reinterpret_cast<VOID\*>\(addr\)",
         source,
         re.DOTALL,

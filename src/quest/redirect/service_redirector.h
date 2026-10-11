@@ -66,6 +66,17 @@ inline constexpr std::size_t kMaxValueBytes = 512;
 // passes to TString for each match type). Exact, case-sensitive, allocation-free.
 bool IsServiceHostKey(const char* key) noexcept;
 
+// The game's REST API base URLs: "https://api." and "https://api-" exactly, i.e. "https://api.readyatdawn.com"
+// and the per-environment "https://api-<env>.readyatdawn.com" it passes to CSysHttp::CreateConnection (libr15 0x126c274,
+// 0x126c25c, 0x128958c). Those are not read through CJson::TString, so IsServiceHostKey does not see them.
+bool IsApiBaseUrl(const char* url) noexcept;
+
+// The base URL of the matchmaker queue's connection: CR15NetGame::Initialize (libr15 0x1285f6c) calls
+// CSysHttp::CreateConnection(&queues->+8, "https://graph.oculus.com") at 0x1286520 (string 0x2bad5a5), and the
+// queue's join_queue / poll_queue_position / leave_queue requests go to it (#414). Exactly that host, with an
+// optional path.
+bool IsGraphBaseUrl(const char* url) noexcept;
+
 // The built-in defaults the game passes as fallback for those keys. Used to prewarm the cache.
 struct BuiltinDefault {
   const char* key;    // the primary key read with this fallback
@@ -84,7 +95,7 @@ struct BridgeState {
 };
 // Current state of the local bridge; nullptr means no bridge exists yet.
 using BridgeProbe = BridgeState (*)();
-using InternFn = nevr_runtime::lifecycle::InternResult (*)(std::string_view);
+using InternFn = nevr::lifecycle::InternResult (*)(std::string_view);
 
 enum class Outcome : std::uint8_t {
   kPassThrough,   // original pointer returned
@@ -100,6 +111,10 @@ struct RedirectCounters {
   std::atomic<std::uint64_t> valueTooLong{0};   // fault: value over kMaxValueBytes
   std::atomic<std::uint64_t> poolRefused{0};    // fault: the pool returned a non-success status
   std::atomic<std::uint64_t> exceptions{0};     // fault: std::exception inside Apply
+  // ApplyUrl's decisions, kept apart from `reads`/`redirected` (which Apply's config-key reads share): one
+  // per CSysHttp::CreateConnection URL that is an API or graph base. #408
+  std::atomic<std::uint64_t> urlRedirected{0};    // the connect was sent to the configured HTTP service
+  std::atomic<std::uint64_t> urlPassThrough{0};   // the original URL was kept (no target, feature off, doubt)
 };
 RedirectCounters& GlobalCounters() noexcept;
 void ResetCountersForTest() noexcept;
@@ -126,6 +141,12 @@ class ServiceRedirector {
   // pool pointer. Safe to call from any thread.
   const char* Apply(const char* key, const char* result) noexcept;
 
+  // Decides for one CSysHttp::CreateConnection URL (IsApiBaseUrl or IsGraphBaseUrl only): the same cache and
+  // pool as Apply. An https://api...readyatdawn.com base goes through the shared policy to the configured HTTP
+  // service (nevr_http_uri; never the bridge); the matchmaker queue's graph host goes to nevr_http_uri directly
+  // (the shared policy only rewrites readyatdawn.com hosts). Same failure behaviour: any doubt returns `url`.
+  const char* ApplyUrl(const char* url) noexcept;
+
   // Runs the policy for the built-in defaults so the first game reads are cache hits.
   void Prewarm() noexcept;
 
@@ -136,12 +157,16 @@ class ServiceRedirector {
     bool used = false;
     bool bridgeReady = false;
     unsigned bridgePort = 0;
+    bool graphRule = false;  // computed for a CreateConnection URL: the same text under a config key differs
     std::size_t length = 0;
     const char* redirected = nullptr;  // null: policy declined, return the original
     std::array<char, kMaxValueBytes> original{};
   };
 
-  const char* Resolve(const char* result, std::size_t length, BridgeState bridge, Outcome* outcome);
+  const char* Resolve(const char* result, std::size_t length, BridgeState bridge, Outcome* outcome,
+                      bool graphRule);
+  // The part of Apply after the key rule; `graphRule` is set by ApplyUrl only.
+  const char* ApplyChecked(const char* result, bool graphRule = false) noexcept;
 
   const nevr_quest::ResolvedConfig config_;
   const InternFn intern_;

@@ -505,7 +505,7 @@ constexpr SymbolEntry kSymbolCorpus[] = {
     {0xc16438d366811884ULL, "SNSdelegate_onlobbymembervarchanged"},
     {0xc20e881c3f046e39ULL, "SNS:delegate_OnStun"},
     {0xc237c84c31d3ae05ULL, "FriendAcceptNotify"},
-    {0xc2bf83a08ea3a955ULL, "FriendBlockSuccess"},
+    {0xc2bf83a08ea3a955ULL, "FriendRemoveResponse"},
     {0xc37db17d44d5bb48ULL, "delegate_onpartyjoinerrorversion"},
     {0xc37eba6459d3a348ULL, "delegate_onpartyjoinerrorunknown"},
     {0xc400dea2c8a0d63aULL, "delegate_onpartyjoinerrorfull"},

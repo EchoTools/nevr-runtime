@@ -14,6 +14,11 @@ bool RegisterLoginPromptCounters() noexcept;  // 14 counters
 // login_prompt::InstallIfCounted(countersRegistered): installs only with its counters registered.
 bool InstallLoginPromptHook(bool countersRegistered) noexcept;  // true when all three slots hold their thunks
 
+// The #319 OBB-mount skip (sentinel/obb_skip_hook.h), through this seam for the same reason.
+bool RegisterObbSkipCounters() noexcept;  // 4 counters
+// obb_skip::InstallIfCounted(countersRegistered): true when both slots hold their thunks.
+bool InstallObbSkipHook(bool countersRegistered) noexcept;
+
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;

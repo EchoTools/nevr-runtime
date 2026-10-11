@@ -23,7 +23,7 @@ import (
 // the parser is not blind to one.
 const loginProbeRel = "../../build/android-arm64/login_frames_probe"
 
-var composePlanRe = regexp.MustCompile(`^_ZN10QuestLogin11ComposePlanE`)
+var composePlanRe = regexp.MustCompile(`^_ZN16nevr_quest_login11ComposePlanE`)
 
 func probePath(t *testing.T) string {
 	t.Helper()

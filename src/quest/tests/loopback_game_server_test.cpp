@@ -33,7 +33,7 @@
 #include "runtime/compat/session_router.h"
 
 using namespace quest_net;
-using namespace SessionRouter;
+using namespace nevr_session_router;
 
 namespace {
 
@@ -157,7 +157,7 @@ struct Rig {
     Options options;
     options.limits.maxFrameBytes = maxMessage;
     options.limits.maxOutboundBytes = 64u << 20;  // the slow-reader test queues ~24 MB behind a full socket
-    options.buildLogin = []() { return std::optional<std::string>(EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "L")); };
+    options.buildLogin = []() { return std::optional<std::string>(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "L")); };
     options.log = cfg.log;
     if (gated) {
       // The Quest wiring: the game's own login is the login (no injection), held until the player signs in.
@@ -342,7 +342,7 @@ void TestRoundTrip() {
   QCHECK(rig.remotes.opens[0].role == Role::Config);
 
   rig.router->OnRemoteOpen(remote);
-  const std::string payload = EvrCodec::BuildMessage(0x1234, std::string(40000, 'p'));  // > one TCP chunk
+  const std::string payload = nevr_evr_codec::BuildMessage(0x1234, std::string(40000, 'p'));  // > one TCP chunk
   game.Write(BuildMaskedFrame(Opcode::Binary, payload, kMask), /*oneByteAtATime=*/false);
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.sent.size() == 1; }));
   QCHECK(rig.remotes.sent[0].second == payload);
@@ -527,7 +527,7 @@ void TestSilentUpgradedConnectionsAreClosed() {
   Client talker(port);
   QCHECK(Upgrade(rig, talker));
   talker.Write(BuildMaskedFrame(Opcode::Binary, "hello", kMask));
-  const std::string expected = BuildCloseFrame(SessionRouter::kClosePolicyViolation, "idle");
+  const std::string expected = BuildCloseFrame(nevr_session_router::kClosePolicyViolation, "idle");
   QCHECK(silent.Read(expected.size()) == expected);
   QCHECK(silent.WaitEof());
   QCHECK(rig.server->IdleClosed() == 1);
@@ -548,7 +548,7 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
   const uint16_t port = rig.server->Start();
   Client config(port), login(port);
   QCHECK(Upgrade(rig, config));
-  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));  // the config remote opened
   QCHECK(Upgrade(rig, login));
   QCHECK(rig.WaitForRecord("router_game_conn", "idle_exempt"));
@@ -563,7 +563,7 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
     QCHECK(rig.remotes.opens.size() == 1);  // no login remote yet
   }
   // The game queues its login while it waits; it is delivered, in order, once the remote opens.
-  const std::string loginRequest = EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, "the-login");
+  const std::string loginRequest = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "the-login");
   login.Write(BuildMaskedFrame(Opcode::Binary, loginRequest, kMask));
   rig.gate = static_cast<int>(LoginGate::Ready);
   rig.router->ReevaluateHeldLogins();
@@ -583,7 +583,7 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
     }
     return false;
   }));
-  const std::string reply = EvrCodec::BuildMessage(EvrCodec::kSymLoginSuccess, std::string(32, '\0'));
+  const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0'));
   rig.router->OnRemoteFrame(remote, reply, true);
   const std::string wire = BuildFrame(Opcode::Binary, reply);
   QCHECK(login.Read(wire.size()) == wire);
@@ -623,12 +623,12 @@ void TestHeldLoginIsClosedWhenTheAccountIsRefused() {
   const uint16_t port = rig.server->Start();
   Client config(port), login(port);
   QCHECK(Upgrade(rig, config));
-  config.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
+  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
   QCHECK(Upgrade(rig, login));
   QCHECK(rig.WaitForRecord("router_game_conn", "idle_exempt"));
   rig.gate = static_cast<int>(LoginGate::Refused);
   rig.router->ReevaluateHeldLogins();
-  const std::string expected = BuildCloseFrame(SessionRouter::kCloseInternalError, "the account the login needs will not be available");
+  const std::string expected = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
   QCHECK(login.Read(expected.size()) == expected);
   QCHECK(login.WaitEof());
 }
@@ -730,10 +730,10 @@ void TestListenerThatStopsListeningIsReportedAndRestored() {
 }
 
 // Finding 4 (#240): the listener number is reused by ANOTHER listening socket with connections already
-// queued on it. The router must not accept those -- they are not its connections. Before the fix the
-// accept ran before the identity check, so the router would drain the foreign socket's backlog (and
-// answer each 403) for up to listenerCheckMs; after the fix the pre-accept identity check refuses the
-// replaced descriptor, so the foreign owner can still accept all of its own connections.
+// queued on it. The router must not accept those -- they are not its connections. An accept before the
+// identity check would drain the foreign socket's backlog (and answer each 403) for up to listenerCheckMs;
+// the pre-accept identity check refuses the replaced descriptor, so the foreign owner can still accept all
+// of its own connections.
 void TestReplacedByAnotherListenerIsNotAccepted() {
   Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 2000; });
   const uint16_t port = rig.server->Start();

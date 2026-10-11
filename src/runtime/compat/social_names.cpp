@@ -7,7 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace SocialNames {
+namespace nevr_social_names {
 namespace {
 
 // The profile JSON is a few KB; this bounds what an unexpected frame can make us allocate.
@@ -62,4 +62,4 @@ const bool g_decoderRegistered = (RegisterDefaultDecoder(), true);
 }  // namespace
 #endif
 
-}  // namespace SocialNames
+}  // namespace nevr_social_names

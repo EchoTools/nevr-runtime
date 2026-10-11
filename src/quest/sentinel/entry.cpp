@@ -15,6 +15,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
+#include "obb_skip_hook.h"
 #include "pinned_targets.h"
 #include "quest/integration/entry_hooks.h"
 
@@ -72,6 +73,13 @@ bool InstallClockHook() noexcept {
 }
 
 bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::RegisterCounters(); }
+
+bool RegisterObbSkipCounters() noexcept { return nevr_quest::obb_skip::RegisterCounters(); }
+
+// The OBB-mount skip (#319). A refused install is logged by GotHook and leaves the game's call intact.
+bool InstallObbSkipHook(bool countersRegistered) noexcept {
+    return nevr_quest::obb_skip::InstallIfCounted(countersRegistered);
+}
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

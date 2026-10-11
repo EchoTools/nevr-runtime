@@ -7,9 +7,9 @@
 
 | Step | Runtime code under test |
 | --- | --- |
-| Registration envelope | `GameServer::BuildRegistrationEnvelope` / `FormatRegistrationVersion` (`src/runtime/server/registration_envelope.cpp`); `GameServerLib::RequestRegistration` (`src/runtime/server/gameserver_serverdb.cpp`) and the reconnect handler (`src/runtime/server/gameserver_callbacks.cpp`) both build their envelope through it |
+| Registration envelope | `nevr_game_server::BuildRegistrationEnvelope` / `FormatRegistrationVersion` (`src/runtime/server/registration_envelope.cpp`); `GameServerLib::RequestRegistration` (`src/runtime/server/gameserver_serverdb.cpp`) and the reconnect handler (`src/runtime/server/gameserver_callbacks.cpp`) both build their envelope through it |
 | Connect with the bearer token | `WebSocketClient::Connect` (`src/runtime/server/websocket_client.cpp`); the fake asserts `Authorization: Bearer <token>` on the upgrade |
-| Send | `GameServer::SendProtobufEnvelope` (`src/runtime/server/protobuf_transport.cpp`); the fake asserts the frame magic, the protobuf symbol and the decoded `GameServerRegistrationMessage` fields |
+| Send | `nevr_game_server::SendProtobufEnvelope` (`src/runtime/server/protobuf_transport.cpp`); the fake asserts the frame magic, the protobuf symbol and the decoded `GameServerRegistrationMessage` fields |
 | Receive | the fake answers with a `GameServerRegistrationSuccessMessage` frame; `WebSocketClient::ProcessReceivedMessages` and `ParseServerDbFrame` deliver it and the test decodes it |
 
 The fake is an `ix::WebSocketServer` on a random loopback port. Nothing leaves the machine.

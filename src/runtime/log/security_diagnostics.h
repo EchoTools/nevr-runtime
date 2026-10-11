@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace LogDiagnostics {
+namespace nevr_log_diagnostics {
 
 inline std::string FormatHttpResponseSummary(std::string_view prefix, long status, std::size_t responseBytes) {
   return std::string(prefix) + "http_status=" + std::to_string(status) +
@@ -59,4 +59,4 @@ inline std::string FormatBindFailureDiagnostic(std::string_view listener, uint16
          std::to_string(attempt) + "/" + std::to_string(maxAttempts) + ")";
 }
 
-}  // namespace LogDiagnostics
+}  // namespace nevr_log_diagnostics

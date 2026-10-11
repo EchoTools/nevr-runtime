@@ -1,6 +1,8 @@
 #include "runtime/patch/mode_patches.h"
+#include "runtime/hook/dll_load_hook.h"
 
 #include <algorithm>
+#include <cwchar>
 #include <string>
 
 #include <psapi.h>
@@ -93,7 +95,7 @@ static VOID CEngineConfigCopyHook(PVOID dst, PVOID src) {
 /// <param name="pGame">The pointer to the instance of the game structure.</param>
 /// <returns>None</returns>
 VOID PatchEnableHeadless(PVOID pGame) {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Hook CEngineConfig::operator= (FUN_141547360) to clear renderer-enable
   // bit 0x1 at [CEngine+0x2cfec] AFTER the config copy. Single-caller hook,
@@ -194,7 +196,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // N65: HEADLESS_GATE_TABLE is the single source of truth — adding a gate means
   // adding an entry to the table; the loop mechanically installs it. Call sites
   // CANNOT drift from the table.
-  for (const auto& gate : PatchAddresses::HEADLESS_GATE_TABLE) {
+  for (const auto& gate : nevr_patch_addresses::HEADLESS_GATE_TABLE) {
     // Skip the D3D12 init gate — it has its own expect/patch constants and
     // prologue-validated install above.
     if (gate.rva == HEADLESS_DX12_INIT) continue;
@@ -223,7 +225,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
       return 1;
     };
     SysNetCheckFn target =
-        reinterpret_cast<SysNetCheckFn>(EchoVR::g_GameBaseAddress + PatchAddresses::SYSNET_CHECK);
+        reinterpret_cast<SysNetCheckFn>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::SYSNET_CHECK);
     PatchDetour(&target, reinterpret_cast<PVOID>(static_cast<SysNetCheckFn>(kSysNetHook)), "SysNetCheck");
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected");
@@ -283,7 +285,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchBypassOvrPlatform() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Patch the OVR conditional jump to fall through instead of branching
   // This allows broadcaster initialization and state machine progression
@@ -302,7 +304,7 @@ VOID PatchBypassOvrPlatform() {
   // NOTE: Same address as OFFLINE_TRANSACTION_1 — both patches NOP the same JE for
   // different reasons. The NOP is idempotent.
   {
-    constexpr uintptr_t LOGIN_CAP_CHECK = PatchAddresses::OFFLINE_TRANSACTION_1;
+    constexpr uintptr_t LOGIN_CAP_CHECK = nevr_patch_addresses::OFFLINE_TRANSACTION_1;
     auto* site = (const BYTE*)(EchoVR::g_GameBaseAddress + LOGIN_CAP_CHECK);
     if (site[0] == 0x74 && site[1] == 0x1E) {
       const BYTE nop2[] = {0x90, 0x90};
@@ -327,7 +329,7 @@ VOID PatchBypassOvrPlatform() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDisableLoadingTips() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
   // All three loading tip functions use the same single-byte RET patch
@@ -400,7 +402,7 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 // receives nothing, grep the log for `hook_liveness name=CBroadcaster::Listen` first.
 
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  HookLiveness::Mark(HookLiveness::kBroadcasterListen);
+  nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterListen);
   if (g_isServer) {
     // Check if the structure pointer chain is valid before calling original
     INT64* outerPtr = (INT64*)arg1;
@@ -462,7 +464,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
 // The original protection is preserved; the collateral severance is not.
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  HookLiveness::Mark(HookLiveness::kBroadcasterReceiveLocal);
+  nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     // Exact AV condition from the disassembly above — nothing broader.
     if (arg1 == 0) return;
@@ -489,10 +491,10 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
 }
 
-// Historical record — the body as originally written, and why it was replaced.
+// The unconditional server-mode skip of the broadcaster's listener dispatcher, and why its justification is false.
 [[maybe_unused]] static VOID EngineEntityPropDispatchHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  // !! N83 — THE COMMENT THAT USED TO BE HERE WAS FALSE. Preserved verbatim so
-  // !! the next reader can recognise the shape of the mistake:
+  // !! N83 — the justification below is FALSE. It is quoted so the next reader
+  // !! can recognise the shape of the mistake:
   // !!
   // !!   "Skip entirely in server mode — this function dispatches entity property
   // !!    updates for client-side state (rendering, effects) that doesn't exist in
@@ -533,8 +535,8 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
 /// means a fatal error occurred), the original function calls the crash handler.
 /// In server mode, we restart the game loop instead so the server stays alive.
 // N125: GameMainWrapperHook, GameMain/OriginalGameMainWrapper, the g_gameLoopJmpBuf
-// definition, and InstallGameMainHook moved to lifecycle/crash_recovery.cpp — that
-// file owns the longjmp side, so the setjmp side belongs beside it rather than
+// definition, and InstallGameMainHook live in lifecycle/crash_recovery.cpp — that
+// file owns the longjmp side, so the setjmp side sits beside it rather than
 // coupled across an extern.
 
 // ============================================================================
@@ -584,7 +586,7 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableServer() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Patch server flag checks in command line processing (FUN_140116720 in cr15game.cpp)
   // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
@@ -634,7 +636,7 @@ VOID PatchEnableServer() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableOffline() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Patch multiplayer initialization for offline mode
   const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
@@ -679,7 +681,7 @@ VOID PatchEnableOffline() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchNoOvrRequiresSpectatorStream() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Bypass the error check that requires "-spectatorstream" when using "-noovr"
   const BYTE noOvrPatch[] = {0xEB, 0x35};  // JMP +0x35 (skip error code)
@@ -698,7 +700,7 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDeadlockMonitor() {
-  using namespace PatchAddresses;
+  using namespace nevr_patch_addresses;
 
   // Disable the deadlock monitor's panic condition check
   // This allows debugging with breakpoints without triggering a timeout
@@ -711,69 +713,12 @@ VOID PatchDeadlockMonitor() {
 // Oculus Platform SDK Blocking
 // =============================================================================
 
-typedef HMODULE(WINAPI* LoadLibraryW_t)(LPCWSTR lpLibFileName);
-typedef HMODULE(WINAPI* LoadLibraryExW_t)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
-
-static LoadLibraryW_t Original_LoadLibraryW = nullptr;
-static LoadLibraryExW_t Original_LoadLibraryExW = nullptr;
-
-static HMODULE WINAPI LoadLibraryW_Hook(LPCWSTR lpLibFileName) {
-  if (lpLibFileName != nullptr) {
-    std::wstring dllName(lpLibFileName);
-    std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-
-    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
-      SetLastError(ERROR_MOD_NOT_FOUND);
-      return NULL;
-    }
-  }
-  return Original_LoadLibraryW(lpLibFileName);
-}
-
-static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-  if (lpLibFileName != nullptr) {
-    std::wstring dllName(lpLibFileName);
-    std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-
-    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
-      SetLastError(ERROR_MOD_NOT_FOUND);
-      return NULL;
-    }
-  }
-  return Original_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-}
-
+// The Oculus Platform SDK is refused through DllLoadHook, which owns the LoadLibraryA/W/ExA/ExW detours.
+// It installs no detour of its own: MinHook allows one per target, so a second installer on
+// LoadLibraryW/ExW fails with MH_ERROR_ALREADY_CREATED and the block never takes effect (#361).
 VOID PatchBlockOculusSDK() {
-  Original_LoadLibraryW = LoadLibraryW;
-  Original_LoadLibraryExW = LoadLibraryExW;
-  // N128 (corrects N127). These fail with MH_ERROR_ALREADY_CREATED, NOT a Wine
-  // limitation — my earlier "forwarder thunk" guess was wrong, and the MH_STATUS
-  // capability added in N128 disproved it. DllLoadHook::Install() (N75 search-path
-  // hardening, initialize.cpp:238) hooks LoadLibraryW/ExW FIRST and wins; this
-  // second detour on the same two addresses loses. MinHook allows one detour per
-  // target. So the Oculus filter here never installs — but it is moot on a
-  // headless server anyway (the OVR SDK is never loaded), and DllLoadHook's own
-  // hook does not do Oculus blocking. PatchDetour reports the failure with its
-  // reason (N126/N128), so this log must not claim "Installed" unconditionally.
-  // Proper fix (flagged, not done): fold the ovrplatform filter into DllLoadHook's
-  // HookedLoadLibraryW so one hook serves both, or drop these as redundant.
-  //
-  // Harmless in practice: a headless server never loads the Oculus Platform SDK
-  // (the OVR platform branch is bypassed by PatchBypassOvrPlatform and pnsrad's
-  // OVR-branch NOP, and no captured run ever attempts an ovrplatform LoadLibrary),
-  // so there is nothing for these hooks to block. NOT made fatal deliberately —
-  // "all server errors are fatal" is for degradations that matter; bricking every
-  // Wine server over a redundant optimization that can't install is not that.
-  // PatchDetour logs the concrete failure reason. Report the feature as
-  // installed only when both entry points actually accepted their detours.
-  const BOOL loadLibraryWAttached = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
-  const BOOL loadLibraryExWAttached =
-      PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
-  if (loadLibraryWAttached && loadLibraryExWAttached) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking hooks installed");
-  }
+  nevr_dll_load_hook::AddLoadFilter("oculus-platform-sdk", nevr_dll_load_hook::IsOculusPlatformPath);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking registered with the DLL load hook");
 }
 
 // ===================================================================================================
@@ -796,10 +741,10 @@ static void WINAPI Wwise_RenderAudio_Hook(PVOID context) {}
 VOID PatchDisableWwise() {
   PVOID base = GetModuleHandleA(NULL);
 
-  Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + PatchAddresses::WWISE_INIT);
+  Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + nevr_patch_addresses::WWISE_INIT);
   PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "AK::SoundEngine::Init");
 
-  Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
+  Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + nevr_patch_addresses::WWISE_RENDERAUDIO);
   PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "AK::SoundEngine::RenderAudio");
 
   Log(EchoVR::LogLevel::Debug,
@@ -813,7 +758,7 @@ VOID PatchDisableWwise() {
 // the spectator-stream setup.  NOPping it forces the game into windowed
 // no-VR mode just like the native -spectatorstream flag does.
 VOID PatchSpectatorStreamAlways() {
-  uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + PatchAddresses::SPECTATORSTREAM_CHECK;
+  uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
   static const unsigned char kExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
   if (memcmp(reinterpret_cast<void*>(addr), kExpected, 6) != 0) {
     const unsigned char* actual = reinterpret_cast<const unsigned char*>(addr);
@@ -876,7 +821,7 @@ VOID InstallEntityHooks() {
   // The function dereferences a hash table pointer at +0x5e0 that's uninitialized
   // in dedicated server mode (no player actor / client-side state).
   OriginalEngineEntityLookup =
-      (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_LOOKUP);
+      (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_LOOKUP);
   PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook), "EngineEntityLookup");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
@@ -884,7 +829,7 @@ VOID InstallEntityHooks() {
   // hook now preserves the AV protection 7beccee intended while allowing the
   // broadcaster's listener dispatch through when the structure is valid.
   OriginalEngineEntityPropDispatch =
-      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
+      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_PROP_DISPATCH);
   PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook), "EngineEntityPropDispatch");
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] hooked name=CBroadcaster::ReceiveLocalEvent va=0x140F87AA0 mode=null_guard");
@@ -895,7 +840,7 @@ VOID InstallBugSplatHook() {
   // The handler is called from 5 sites for missing actors, dialogue scenes, etc.
   // These are non-fatal in headless dedicated server mode.
   OriginalBugSplatCrashHandler =
-      (BugSplatCrashHandlerFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::BUGSPLAT_CRASH_HANDLER);
+      (BugSplatCrashHandlerFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BUGSPLAT_CRASH_HANDLER);
   PatchDetour(&OriginalBugSplatCrashHandler, reinterpret_cast<PVOID>(BugSplatCrashHandlerHook), "BugSplatCrashHandler");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)");
 }
@@ -904,7 +849,7 @@ VOID InstallGameSpaceHook() {
   // Hook InitializeGlobalGameSpace to prevent fatal crash in server mode
   // (no local player actor exists in the global gamespace for dedicated servers)
   OriginalInitializeGlobalGameSpace =
-      (InitializeGlobalGameSpaceFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::INIT_GLOBAL_GAMESPACE);
+      (InitializeGlobalGameSpaceFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::INIT_GLOBAL_GAMESPACE);
   PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook), "InitializeGlobalGameSpace");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 }

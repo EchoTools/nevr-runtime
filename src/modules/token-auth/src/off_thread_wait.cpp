@@ -6,7 +6,7 @@
 #include <system_error>
 #include <thread>
 
-namespace TokenAuth {
+namespace nevr_token_auth {
 namespace {
 
 // Runs the flow, turning a thrown std::exception into a false result.
@@ -70,4 +70,4 @@ OffThreadWaitResult RunWhilePumping(const std::function<bool()>& flow, const std
   return r;
 }
 
-}  // namespace TokenAuth
+}  // namespace nevr_token_auth

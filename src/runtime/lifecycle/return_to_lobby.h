@@ -10,7 +10,7 @@
 // (network.empty_server_ttl_seconds: 0, the default) every request goes straight to the game's
 // NetGameScheduleReturnToLobby, as before. With a TTL, a request made while the session has no
 // accepted entrants is held for up to the TTL (decisions: return_to_lobby_hold.h).
-namespace ReturnToLobby {
+namespace nevr_return_to_lobby {
 
 /// Live (accepted) entrants of the current session; 0 when none or no server is running.
 using EntrantCounter = uint64_t (*)();
@@ -28,4 +28,4 @@ void Request(PVOID pGame);
 /// Once per game-thread update: releases or cancels a hold.
 void Poll();
 
-}  // namespace ReturnToLobby
+}  // namespace nevr_return_to_lobby

@@ -1,0 +1,11 @@
+{
+  "BootLines": "nevr_boot_lines",
+  "BootLogTee": "nevr_boot_log_tee",
+  "BootReplay": "nevr_boot_replay",
+  "BuiltinLogFilter": "nevr_builtin_log_filter",
+  "Frame": "nevr_frame",
+  "LogDiagnostics": "nevr_log_diagnostics",
+  "ScenarioControl": "nevr_scenario_control",
+  "ScenarioProtocol": "nevr_scenario_protocol",
+  "TestLogCap": "nevr_test_log_cap"
+}

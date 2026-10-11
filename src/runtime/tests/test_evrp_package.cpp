@@ -35,11 +35,11 @@ std::vector<uint8_t> WorkedExample() {
 constexpr int64_t kSentinelSymbol = 0x1234;
 
 // Parses `bytes`; on rejection the outputs must be left exactly as they were.
-bool Parse(const std::vector<uint8_t>& bytes, int64_t* symbol = nullptr, Evrp::TintData* tint = nullptr) {
+bool Parse(const std::vector<uint8_t>& bytes, int64_t* symbol = nullptr, nevr_evrp::TintData* tint = nullptr) {
   int64_t s = kSentinelSymbol;
-  Evrp::TintData t;
+  nevr_evrp::TintData t;
   std::memset(t.colors, 0xAB, sizeof(t.colors));
-  const bool ok = Evrp::ParseTint(bytes, "test.evrp", s, t);
+  const bool ok = nevr_evrp::ParseTint(bytes, "test.evrp", s, t);
   if (!ok) {
     EXPECT_EQ(s, kSentinelSymbol);
     for (uint8_t b : t.colors) EXPECT_EQ(b, 0xAB);
@@ -50,13 +50,13 @@ bool Parse(const std::vector<uint8_t>& bytes, int64_t* symbol = nullptr, Evrp::T
 }
 
 TEST(EvrpPackage, WorkedExampleIsOneHundredEightBytes) {
-  EXPECT_EQ(WorkedExample().size(), Evrp::kHeaderSize + Evrp::kTintDataLength);
+  EXPECT_EQ(WorkedExample().size(), nevr_evrp::kHeaderSize + nevr_evrp::kTintDataLength);
   EXPECT_EQ(WorkedExample().size(), 108U);
 }
 
 TEST(EvrpPackage, AcceptsTheWorkedExample) {
   int64_t symbol = 0;
-  Evrp::TintData tint;
+  nevr_evrp::TintData tint;
   ASSERT_TRUE(Parse(WorkedExample(), &symbol, &tint));
   EXPECT_EQ(static_cast<uint64_t>(symbol), 0x74d228d09dc5dc86ULL);
 
@@ -70,8 +70,8 @@ TEST(EvrpPackage, AcceptsTheWorkedExample) {
 TEST(EvrpPackage, AcceptsColorsOutsideZeroToOne) {
   std::vector<uint8_t> bytes = WorkedExample();
   const float hdr = 4.0f;  // HDR bloom values above 1.0 must not be rejected
-  std::memcpy(&bytes[Evrp::kHeaderSize], &hdr, sizeof(hdr));
-  Evrp::TintData tint;
+  std::memcpy(&bytes[nevr_evrp::kHeaderSize], &hdr, sizeof(hdr));
+  nevr_evrp::TintData tint;
   ASSERT_TRUE(Parse(bytes, nullptr, &tint));
   float first;
   std::memcpy(&first, tint.colors, sizeof(first));
@@ -80,7 +80,7 @@ TEST(EvrpPackage, AcceptsColorsOutsideZeroToOne) {
 
 TEST(EvrpPackage, RejectsAFileSmallerThanTheHeader) {
   std::vector<uint8_t> bytes = WorkedExample();
-  bytes.resize(Evrp::kHeaderSize - 1);
+  bytes.resize(nevr_evrp::kHeaderSize - 1);
   EXPECT_FALSE(Parse(bytes));
   EXPECT_FALSE(Parse({}));
 }
@@ -124,7 +124,7 @@ TEST(EvrpPackage, RejectsATintDataLengthOtherThanEighty) {
   // The file size is kept consistent with data_length, so only the tint-length rule can fire.
   for (uint32_t length : {79U, 81U}) {
     std::vector<uint8_t> bytes = WorkedExample();
-    bytes.resize(Evrp::kHeaderSize + length, 0);
+    bytes.resize(nevr_evrp::kHeaderSize + length, 0);
     std::memcpy(&bytes[0x18], &length, sizeof(length));
     EXPECT_FALSE(Parse(bytes)) << "data_length " << length;
   }

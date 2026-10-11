@@ -6,7 +6,7 @@
 #include <limits>
 #include <memory>
 
-namespace ServerDbUri {
+namespace nevr_serverdb_uri {
 namespace {
 
 struct QueryParam {
@@ -115,4 +115,4 @@ std::string RemoveQueryParam(std::string_view uri, std::string_view param) {
   return result;
 }
 
-}  // namespace ServerDbUri
+}  // namespace nevr_serverdb_uri

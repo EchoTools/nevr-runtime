@@ -8,7 +8,7 @@
 
 #include "runtime/compat/evr_codec.h"
 
-namespace SessionRouter {
+namespace nevr_session_router {
 
 namespace {
 
@@ -94,16 +94,16 @@ const char* RoleName(Role role) {
 
 Role ClassifyFirstFrame(uint64_t symbol) {
   switch (symbol) {
-    case EvrCodec::kSymConfigRequest:
+    case nevr_evr_codec::kSymConfigRequest:
       return Role::Config;
-    case EvrCodec::kSymMatchmakerStatusRequest:
-    case EvrCodec::kSymFindSessionRequest:
-    case EvrCodec::kSymCreateSessionRequest:
-    case EvrCodec::kSymJoinSessionRequest:
-    case EvrCodec::kSymDirectoryRequest:
-    case EvrCodec::kSymPendingSessionCancel:
-    case EvrCodec::kSymPlayerSessionsRequest:
-    case EvrCodec::kSymLobbyPingResponse:
+    case nevr_evr_codec::kSymMatchmakerStatusRequest:
+    case nevr_evr_codec::kSymFindSessionRequest:
+    case nevr_evr_codec::kSymCreateSessionRequest:
+    case nevr_evr_codec::kSymJoinSessionRequest:
+    case nevr_evr_codec::kSymDirectoryRequest:
+    case nevr_evr_codec::kSymPendingSessionCancel:
+    case nevr_evr_codec::kSymPlayerSessionsRequest:
+    case nevr_evr_codec::kSymLobbyPingResponse:
       return Role::Matchmaker;
     default:
       return Role::Login;  // LogInRequestv2, or anything the login connection could be sending
@@ -112,20 +112,20 @@ Role ClassifyFirstFrame(uint64_t symbol) {
 
 bool IsLoginSessionReply(uint64_t symbol) {
   switch (symbol) {
-    case EvrCodec::kSymLoginSuccess:
-    case EvrCodec::kSymLoginFailure:
-    case EvrCodec::kSymLoginSettings:
-    case EvrCodec::kSymLoggedInUserProfileSuccess:
-    case EvrCodec::kSymLoggedInUserProfileFailure:
-    case EvrCodec::kSymDocumentSuccess:
-    case EvrCodec::kSymDocumentFailure:
-    case EvrCodec::kSymOtherUserProfileSuccess:
-    case EvrCodec::kSymOtherUserProfileFailure:
-    case EvrCodec::kSymUpdateProfileSuccess:
-    case EvrCodec::kSymUpdateProfileFailure:
-    case EvrCodec::kSymServerProfileUpdateSuccess:
-    case EvrCodec::kSymServerProfileUpdateFailure:
-    case EvrCodec::kSymChannelInfoResponse:  // accepted on any peer by the game, but its Unrequire lands where the count is
+    case nevr_evr_codec::kSymLoginSuccess:
+    case nevr_evr_codec::kSymLoginFailure:
+    case nevr_evr_codec::kSymLoginSettings:
+    case nevr_evr_codec::kSymLoggedInUserProfileSuccess:
+    case nevr_evr_codec::kSymLoggedInUserProfileFailure:
+    case nevr_evr_codec::kSymDocumentSuccess:
+    case nevr_evr_codec::kSymDocumentFailure:
+    case nevr_evr_codec::kSymOtherUserProfileSuccess:
+    case nevr_evr_codec::kSymOtherUserProfileFailure:
+    case nevr_evr_codec::kSymUpdateProfileSuccess:
+    case nevr_evr_codec::kSymUpdateProfileFailure:
+    case nevr_evr_codec::kSymServerProfileUpdateSuccess:
+    case nevr_evr_codec::kSymServerProfileUpdateFailure:
+    case nevr_evr_codec::kSymChannelInfoResponse:  // accepted on any peer by the game, but its Unrequire lands where the count is
       return true;
     default:
       return false;
@@ -137,12 +137,12 @@ bool RequestRaisesRequireCount(Role role, uint64_t symbol) {
     case Role::Login:
       // Every login-connection send carries the flag (the login, the profile, channel info, document, update,
       // generic message, match ended, leaderboard, the friends and party sends) except these three.
-      return symbol != EvrCodec::kSymLogOut && symbol != EvrCodec::kSymTelemetryEvent &&
-             symbol != EvrCodec::kSymRemoteLogSet;
+      return symbol != nevr_evr_codec::kSymLogOut && symbol != nevr_evr_codec::kSymTelemetryEvent &&
+             symbol != nevr_evr_codec::kSymRemoteLogSet;
     case Role::Matchmaker:
-      return symbol != EvrCodec::kSymMatchmakerStatusRequest;  // the lobby requests and the PingResponse
+      return symbol != nevr_evr_codec::kSymMatchmakerStatusRequest;  // the lobby requests and the PingResponse
     case Role::Config:
-      return symbol == EvrCodec::kSymConfigRequest;
+      return symbol == nevr_evr_codec::kSymConfigRequest;
   }
   return false;
 }
@@ -151,8 +151,8 @@ bool RequestRaisesRequireCount(Role role, uint64_t symbol) {
 // reply carries its Unrequire inside the same frame; a config reply's comes on the config remote). A login
 // failure is sent as SendEvrUnrequire: the LoginFailure frame, then a standalone Unrequire.
 bool PairsWithUnrequire(uint64_t symbol) {
-  return symbol == EvrCodec::kSymLoginFailure || symbol == EvrCodec::kSymChannelInfoResponse || symbol == EvrCodec::kSymDocumentSuccess ||
-         symbol == EvrCodec::kSymUpdateProfileSuccess || symbol == EvrCodec::kSymLobbyPingRequest;
+  return symbol == nevr_evr_codec::kSymLoginFailure || symbol == nevr_evr_codec::kSymChannelInfoResponse || symbol == nevr_evr_codec::kSymDocumentSuccess ||
+         symbol == nevr_evr_codec::kSymUpdateProfileSuccess || symbol == nevr_evr_codec::kSymLobbyPingRequest;
 }
 
 namespace {
@@ -164,10 +164,10 @@ template <class Fn>
 void ForEachMessage(const std::string& frame, Fn fn) {
   std::size_t offset = 0;
   for (std::size_t index = 0;; ++index) {
-    EvrCodec::Message message;
-    if (EvrCodec::ReadMessage(frame, offset, &message) != EvrCodec::ReadStatus::Ok) return;
+    nevr_evr_codec::Message message;
+    if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
     fn(message.symbol, index);
-    offset += EvrCodec::kHeaderSize + static_cast<std::size_t>(message.length);
+    offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
   }
 }
 
@@ -262,6 +262,17 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
   }
   std::sort(bound.begin(), bound.end());
   const bool wasLogin = (remote == loginRemote_);
+  // The silent case: the login connection had nothing outstanding, so the game raises no Lost event and
+  // reconnects without logging in. With requests outstanding it is the Lost path (-95): the player's RETRY
+  // sends the game's own login and a notice would only get in front of it.
+  // A login socket that closed itself before the failure leaves nothing to reconnect: not armed either.
+  bool outstanding = false;
+  bool loginSocketGone = false;
+  if (wasLogin) {
+    const auto lit = gameTable_.find(loginGame_);
+    loginSocketGone = lit == gameTable_.end() || lit->second.closing;
+    outstanding = !loginSocketGone && lit->second.required != 0;
+  }
   if (wasLogin) {
     loginRemote_ = kNoRemote;
     loginGame_ = kNoGame;
@@ -269,10 +280,17 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     owedUnrequires_.clear();
     connectionCount_ = 1;  // the game's next connection is a login
   }
+  const bool removalDue = wasLogin && !options_.loginRemovedJson.empty() && haveLoginUser_ && !outstanding &&
+                          !loginSocketGone;
+  if (wasLogin) {
+    removalDue_ = removalDue;
+    if (removalDue) ++removalEpoch_;
+  }
   Log(fx, LogLevel::Warning,
-      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s",
+      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s%s",
           Ull(remote), ownerConn, static_cast<unsigned>(code), why, bound.size(),
-          wasLogin ? "; login session forgotten, next connection is a new login" : ""));
+          wasLogin ? "; login session forgotten, next connection is a new login" : "",
+          removalDue ? "; each socket that reconnects is sent one login-removed notice (the game drops it on all but its login peer)" : ""));
   remoteTable_.erase(rit);
   for (const GameId game : bound) {
     Game& g = gameTable_[game];
@@ -347,12 +365,12 @@ bool Router::TakeUnrequireLocked(GameId target) {
 // *quietDrop is set when the frame is dropped on purpose and counted (an Unrequire, a ping with no matchmaker).
 GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quietDrop) {
   *quietDrop = false;
-  const uint64_t symbol = EvrCodec::FirstSymbol(frame);
+  const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
   std::size_t embedded = 0;
   ForEachMessage(frame, [&embedded](uint64_t s, std::size_t index) {
-    if (index > 0 && s == EvrCodec::kSymConnectionUnrequire) ++embedded;
+    if (index > 0 && s == nevr_evr_codec::kSymConnectionUnrequire) ++embedded;
   });
-  if (symbol == EvrCodec::kSymConnectionUnrequire) {
+  if (symbol == nevr_evr_codec::kSymConnectionUnrequire) {
     GameId owner = kNoGame;
     if (!owedUnrequires_.empty()) {
       owner = owedUnrequires_.front();
@@ -365,7 +383,7 @@ GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quie
   }
   const bool matchmakerLive = OnLoginSessionLocked(activeGame_) && gameTable_.at(activeGame_).role == Role::Matchmaker;
   GameId target = kNoGame;
-  if (symbol == EvrCodec::kSymLobbyPingRequest) {
+  if (symbol == nevr_evr_codec::kSymLobbyPingRequest) {
     if (matchmakerLive) target = activeGame_;
   } else if (IsLoginSessionReply(symbol)) {
     target = OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
@@ -386,7 +404,7 @@ GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quie
     owedUnrequires_.push_back(target);  // kNoGame when the message is dropped: its Unrequire is too
     while (owedUnrequires_.size() > 64) owedUnrequires_.pop_front();
   }
-  if (target == kNoGame && symbol == EvrCodec::kSymLobbyPingRequest) {
+  if (target == kNoGame && symbol == nevr_evr_codec::kSymLobbyPingRequest) {
     ++droppedRemoteFrames_;
     *quietDrop = true;
   }
@@ -537,7 +555,7 @@ bool Router::ReleaseRemoteLocked(GameId game, Game& g, Effects& fx) {
 void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx) {
   g.classified = true;
   Role observed = ClassifyFirstFrame(symbol);
-  if (observed == Role::Login && g.role != Role::Login && symbol != EvrCodec::kSymLoginRequest) observed = g.role;
+  if (observed == Role::Login && g.role != Role::Login && symbol != nevr_evr_codec::kSymLoginRequest) observed = g.role;
   if (observed == g.role) return;
   const Role provisional = g.role;
   if (!ReleaseRemoteLocked(game, g, fx)) {
@@ -575,6 +593,7 @@ void Router::OnGameOpen(GameId game) {
       Game g;
       g.connIdx = connectionCount_++;
       g.role = next;
+      g.noticeEpoch = removalDue_ ? removalEpoch_ : 0;
       AttachLocked(game, g, fx);
       gameTable_.emplace(game, std::move(g));
     }
@@ -586,6 +605,15 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
   Effects fx;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!options_.loginRemovedJson.empty()) {
+      // A LogOut anywhere in any game frame ends the account the held id belongs to, whichever connection sent
+      // it and whether or not the frame is then dropped.
+      bool loggedOut = false;
+      ForEachMessage(frame, [&loggedOut](uint64_t s, std::size_t) {
+        if (s == nevr_evr_codec::kSymLogOut) loggedOut = true;
+      });
+      if (loggedOut) ForgetLoginUserLocked();
+    }
     const auto git = gameTable_.find(game);
     if (git == gameTable_.end() || git->second.closing || git->second.remote == kNoRemote) {
       const uint64_t dropped = ++droppedGameFrames_;
@@ -600,7 +628,19 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
               options_.limits.maxFrameBytes));
       CloseGameLocked(game, kCloseMessageTooBig, "frame exceeds the size limit", fx);
     } else {
-      if (!git->second.classified) ClassifyGameLocked(game, git->second, EvrCodec::FirstSymbol(frame), fx);
+      if (!git->second.classified) ClassifyGameLocked(game, git->second, nevr_evr_codec::FirstSymbol(frame), fx);
+      if (!options_.loginRemovedJson.empty() && removalDue_) {
+        // A game that logs in itself needs no notice, on any socket from here on; any other first request on a
+        // socket that reconnected would only get a bare Unrequire, so it is sent the notice (once).
+        if (nevr_evr_codec::FirstSymbol(frame) == nevr_evr_codec::kSymLoginRequest) {
+          removalDue_ = false;
+          Log(fx, LogLevel::Info,
+              Fmt("[router] login removed notice disarmed game=%llu conn=%d: the game sent its own login", Ull(game),
+                  git->second.connIdx));
+        } else {
+          SendLoginRemovedLocked(game, git->second, fx);
+        }
+      }
       const RemoteId remoteId = git->second.remote;
       const auto rit = remoteTable_.find(remoteId);
       if (rit == remoteTable_.end()) {
@@ -654,6 +694,45 @@ void Router::OnGameClose(GameId game) {
       fx.remoteCloses.emplace_back(remote, static_cast<uint16_t>(1000));
     }
     Log(fx, LogLevel::Info, Fmt("[router] game=%llu disconnected conn=%d (%s)", Ull(game), connIdx, RoleName(role)));
+  }
+  Run(fx);
+}
+
+void Router::ForgetLoginUserLocked() {
+  haveLoginUser_ = false;
+  loginUser_ = nevr_evr_codec::UserId();
+  removalDue_ = false;
+}
+
+void Router::SendLoginRemovedLocked(GameId game, Game& g, Effects& fx) {
+  if (options_.loginRemovedJson.empty() || !removalDue_ || !haveLoginUser_ || g.closing || g.noticeSent ||
+      g.noticeEpoch != removalEpoch_) {
+    return;
+  }
+  g.noticeSent = true;
+  std::string frame = nevr_evr_codec::BuildLoginRemovedNotify(loginUser_, nevr_evr_codec::kLoginRemovedReasonText,
+                                                              options_.loginRemovedJson);
+  ++loginsRemoved_;
+  Log(fx, LogLevel::Info,
+      Fmt("[router] login removed notice sent game=%llu conn=%d size=%zu (the game reconnected without a login: it "
+          "shows RETRY and logs in itself)",
+          Ull(game), g.connIdx, frame.size()));
+  if (g.out.bytes + frame.size() > options_.limits.maxOutboundBytes) {
+    CloseGameLocked(game, kCloseTryAgainLater, "outbound buffer to the game is full", fx);
+    return;
+  }
+  g.out.bytes += frame.size();
+  g.out.queue.push_back({std::make_shared<const std::string>(std::move(frame)), true});
+  fx.drainGames.push_back(game);
+}
+
+void Router::OnGameSilent(GameId game) {
+  Effects fx;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto git = gameTable_.find(game);
+    if (git == gameTable_.end() || git->second.closing || git->second.classified) return;
+    SendLoginRemovedLocked(game, git->second, fx);
   }
   Run(fx);
 }
@@ -735,18 +814,26 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
               options_.limits.maxFrameBytes));
       FailSessionLocked(remote, kCloseMessageTooBig, "remote frame exceeds the size limit", true, fx);
     } else {
-      const uint64_t symbol = EvrCodec::FirstSymbol(frame);
-      if (symbol == EvrCodec::kSymLoginFailure) {
+      const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
+      if (symbol == nevr_evr_codec::kSymLoginFailure) {
         // Numeric diagnostics only: the server's message text can carry private data.
-        const std::optional<EvrCodec::LoginFailure> failure = EvrCodec::ParseLoginFailure(frame);
+        const std::optional<nevr_evr_codec::LoginFailure> failure = nevr_evr_codec::ParseLoginFailure(frame);
         Log(fx, LogLevel::Warning,
             Fmt("[router] LOGIN FAILURE remote=%llu status=%llu message_bytes=%zu", Ull(remote),
                 Ull(failure ? failure->statusCode : 0), failure ? failure->messageBytes : static_cast<std::size_t>(0)));
-      } else if (symbol == EvrCodec::kSymLoginSuccess) {
+        if (!options_.loginRemovedJson.empty() && remote == loginRemote_) ForgetLoginUserLocked();
+      } else if (symbol == nevr_evr_codec::kSymLoginSuccess) {
         Log(fx, LogLevel::Info, Fmt("[router] LOGIN SUCCESS remote=%llu", Ull(remote)));
+        if (!options_.loginRemovedJson.empty() && remote == loginRemote_) {
+          if (const auto user = nevr_evr_codec::ParseLoginSuccessUserId(frame)) {
+            loginUser_ = *user;
+            haveLoginUser_ = true;
+            removalDue_ = false;  // the next session is established
+          }
+        }
         if (options_.subscribeFriendList && remote == loginRemote_) {
           PushToRemoteLocked(remote, rit->second,
-                             std::make_shared<const std::string>(EvrCodec::BuildFriendListSubscribe()), true, fx);
+                             std::make_shared<const std::string>(nevr_evr_codec::BuildFriendListSubscribe()), true, fx);
         }
       }
       if (remoteTable_.count(remote) != 0) {
@@ -759,7 +846,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
           }
           // The connection's own remote (config): the same rule, its own count.
-          if (target != kNoGame && symbol == EvrCodec::kSymConnectionUnrequire && !TakeUnrequireLocked(target)) {
+          if (target != kNoGame && symbol == nevr_evr_codec::kSymConnectionUnrequire && !TakeUnrequireLocked(target)) {
             ++droppedUnrequires_;
             quietDrop = true;
             target = kNoGame;
@@ -869,6 +956,7 @@ void Router::Shutdown() {
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     owedUnrequires_.clear();
+    ForgetLoginUserLocked();
     connectionCount_ = 0;
     Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
                                 fx.gameCloses.size()));
@@ -890,9 +978,12 @@ Stats Router::GetStats() const {
   stats.nextConnIdx = connectionCount_;
   stats.droppedGameFrames = droppedGameFrames_;
   stats.droppedRemoteFrames = droppedRemoteFrames_;
+  stats.loginsRemoved = loginsRemoved_;
+  stats.loginUserKnown = haveLoginUser_;
+  stats.loginRemovedDue = removalDue_;
   stats.droppedUnrequires = droppedUnrequires_;
   stats.unmatchedEmbeddedUnrequires = unmatchedEmbeddedUnrequires_;
   return stats;
 }
 
-}  // namespace SessionRouter
+}  // namespace nevr_session_router

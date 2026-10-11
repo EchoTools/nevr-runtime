@@ -63,7 +63,7 @@ numeric-only and cannot do reverse DNS. The only name-resolution call left in th
   a log that ends on that line.
 - That #13's log came from `0x140157bd0` rather than another caller of `0x1401f6fa0`.
 - In server/headless mode the runtime replaces `0x1401f6fa0` with a function that returns 1
-  (`PatchAddresses::SYSNET_CHECK`, `src/runtime/patch/mode_patches.cpp`), so such a run never logs
+  (`nevr_patch_addresses::SYSNET_CHECK`, `src/runtime/patch/mode_patches.cpp`), so such a run never logs
   the SYSNET line; a log that ends on it is a client run. No other address in the table is hooked
   by the runtime (a search of `src/` for those addresses and for `getaddrinfo` finds only the
   SYSNET references).

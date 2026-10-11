@@ -23,7 +23,7 @@
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
-#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from env/.env at configure
+#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from config/public-defaults.env
 
 #ifdef NEVR_TEST_HOOKS
 #include "runtime/tests/service_config_test_hooks.h"
@@ -152,7 +152,7 @@ const nevr::NevrConfig& NevrCfg() {
 
 // --- build-time defaults ---------------------------------------------------
 // The four keys a player needs to reach the service without any config file, embedded at
-// configure time from the environment / .env (cmake/nevr_builtin_defaults.cmake). Applied
+// configure time from config/public-defaults.env (cmake/nevr_builtin_defaults.cmake). Applied
 // at LOOKUP time under the config.yaml value (nevr_cfg::LookupFlatWithDefaults), so a
 // config.yaml can override any of them and a rejected or absent file still leaves them in
 // place. Client mode only: a dedicated server has always been configured explicitly, and
@@ -242,17 +242,17 @@ std::optional<std::string> Flat(const std::string& flatKey) {
 }
 
 const char* InternCStr(std::string_view value, const char* accessor) {
-  nevr_runtime::lifecycle::InternResult result{};
+  nevr::lifecycle::InternResult result{};
 #ifdef NEVR_TEST_HOOKS
   if (g_failInternAccessor == accessor) {
-    result = {nevr_runtime::lifecycle::InternStatus::kAllocationFailure, nullptr, 7, 13};
+    result = {nevr::lifecycle::InternStatus::kAllocationFailure, nullptr, 7, 13};
   } else
 #endif
   {
-    result = nevr_runtime::lifecycle::InternStableCStr(value);
+    result = nevr::lifecycle::InternStableCStr(value);
   }
-  if (result.status != nevr_runtime::lifecycle::InternStatus::kSuccess || result.pointer == nullptr) {
-    FailAccessor(accessor, nevr_runtime::lifecycle::InternStatusName(result.status), result.stringCount,
+  if (result.status != nevr::lifecycle::InternStatus::kSuccess || result.pointer == nullptr) {
+    FailAccessor(accessor, nevr::lifecycle::InternStatusName(result.status), result.stringCount,
                  result.liveBytes);
   }
   return result.pointer;
@@ -273,7 +273,7 @@ const char* AccessorBoundary(const char* accessor, Body body) {
 }  // namespace
 
 #ifdef NEVR_TEST_HOOKS
-namespace nevr_runtime::lifecycle::test {
+namespace nevr::lifecycle::test {
 
 void SetAccessorInputs(const nevr::NevrConfig* config, const nevr_cfg::FlatDefaults* defaults,
                        bool serverMode) {
@@ -295,7 +295,7 @@ void ResetAccessorInputs() {
   g_throwAccessor = {};
 }
 
-}  // namespace nevr_runtime::lifecycle::test
+}  // namespace nevr::lifecycle::test
 #endif
 
 // --- C accessors -----------------------------------------------------------

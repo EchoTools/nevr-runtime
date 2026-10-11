@@ -632,13 +632,13 @@ static std::string GetDefaultLogDir() {
 static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
     if (g_config.file_jsonl) {
         std::string line = "{\"ts\":\"";
-        JsonEscape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
+        nevr_json_escape::AppendTo(line, ts, static_cast<int>(std::strlen(ts)));
         line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
         line += GetRunId();
         line += "\",\"level\":\"";
-        JsonEscape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
+        nevr_json_escape::AppendTo(line, lvl, static_cast<int>(std::strlen(lvl)));
         line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
-        JsonEscape::AppendTo(line, message, len);
+        nevr_json_escape::AppendTo(line, message, len);
         line += "\"}\n";
 
         size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
@@ -655,23 +655,23 @@ static void WriteFileRecord(const char* ts, const char* lvl, const char* message
 }
 
 /* Where the replay of this run's nevr-boot.jsonl stopped (#5). */
-static BootReplay::Cursor g_boot_cursor;
+static nevr_boot_replay::Cursor g_boot_cursor;
 
 /* #5: replay this run's nevr-boot.jsonl lines that are not yet in the main log, so boot and runtime
  * events are one stream. Called at the main log's first open and once more after the boot tee has
- * closed (BuiltinLogFilter::ReplayBootTail); not on rotation. The second call reads from the byte
+ * closed (nevr_builtin_log_filter::ReplayBootTail); not on rotation. The second call reads from the byte
  * offset the first stopped at. The boot file stays where it is: it is the crash spool and is never
  * deleted. The first read looks at the last 1 MiB only (the file accumulates every run). */
 static void ReplayBootLines() {
-    const char* path = BootLogTee::Path();
+    const char* path = nevr_boot_log_tee::Path();
     if (path == nullptr || path[0] == '\0' || !g_log_file) return;
-    std::vector<BootReplay::Line> lines;
+    std::vector<nevr_boot_replay::Line> lines;
     int err = 0;
-    if (!BootReplay::ReadNew(path, GetRunId(), g_boot_cursor, lines, &err)) {
+    if (!nevr_boot_replay::ReadNew(path, GetRunId(), g_boot_cursor, lines, &err)) {
         BlfLog("boot log %s is not readable (errno=%d); its lines are not replayed into this log", path, err);
         return;
     }
-    for (const BootReplay::Line& line : lines) {
+    for (const nevr_boot_replay::Line& line : lines) {
         WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
                         /*fromBoot=*/true);
     }
@@ -699,7 +699,7 @@ static void InitFileLogging() {
     ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
 }
 
-void BuiltinLogFilter::ReplayBootTail() {
+void nevr_builtin_log_filter::ReplayBootTail() {
     std::lock_guard<std::mutex> lock(g_file_mutex);
     ReplayBootLines();
 }
@@ -935,7 +935,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
 /* ------------------------------------------------------------------ */
 /*
  * g_emitted_count / g_suppressed_count were reported only from
- * BuiltinLogFilter::Shutdown(), which runs only from DllMain's DLL_PROCESS_DETACH
+ * nevr_builtin_log_filter::Shutdown(), which runs only from DllMain's DLL_PROCESS_DETACH
  * with lpReserved == NULL (dllmain.cpp:102) — i.e. dynamic unload only. Every real
  * server exit goes ForceFatalExit -> TerminateProcess (crash_recovery.cpp:463),
  * which performs no DLL detach at all. So the one metric that says whether the
@@ -1021,7 +1021,7 @@ static void MaybeEmitHealth() {
         const char* cause;
         if (g_hook_target == nullptr) {
             cause = "the CLog hook is not installed (see the 'hook failed name=CLog::PrintfImpl' line at boot)";
-        } else if (!HookGuard::IsOurDetour(g_hook_target)) {
+        } else if (!nevr_hook_guard::IsOurDetour(g_hook_target)) {
             cause = "another module took the hook target (see the 'hook overwritten name=CLog::PrintfImpl' error)";
         } else {
             cause = "the hook is intact, so the game is idle or blocked (waiting for a login, or on a modal dialog)";
@@ -1147,11 +1147,11 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-void BuiltinLogFilter::PollHealth() {
+void nevr_builtin_log_filter::PollHealth() {
     MaybeEmitHealth();
 }
 
-void BuiltinLogFilter::InstallPnsradHook() {
+void nevr_builtin_log_filter::InstallPnsradHook() {
     // pnsrad.dll has an independent CLog implementation. Hooking it caused a
     // deterministic Wine stack overflow on the first post-install log line,
     // including when it used its own MinHook trampoline. Its output remains
@@ -1164,7 +1164,7 @@ void BuiltinLogFilter::InstallPnsradHook() {
     }
 }
 
-void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
+void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
     evr::InitSymbolCache();
 
     BlfLog("initializing (base=0x%llx, server=%s)",
@@ -1242,10 +1242,10 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
     // detection PatchDetour gives every other hook for free: a second module
     // taking this address is then named by the "hook overwritten" error and by
     // the zero-game-lines health warning instead of being guessed at.
-    HookGuard::Record(g_hook_target, "CLog::PrintfImpl");
+    nevr_hook_guard::Record(g_hook_target, "CLog::PrintfImpl");
 }
 
-void BuiltinLogFilter::Shutdown() {
+void nevr_builtin_log_filter::Shutdown() {
     BlfLog("shutting down");
 
     if (g_hook_target) {

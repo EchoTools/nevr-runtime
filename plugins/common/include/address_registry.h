@@ -4,7 +4,7 @@
 #include <cstdint>
 
 /*
- * Central registry of ALL verified virtual addresses used across nEVR plugins.
+ * Central registry of ALL verified virtual addresses used across NEVR plugins.
  * Every address listed here has been verified in the echovr-reconstruction source.
  * Do NOT add speculative or unverified addresses.
  */

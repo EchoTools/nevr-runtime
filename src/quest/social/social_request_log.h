@@ -29,14 +29,14 @@ inline std::uint64_t PayloadU64(const std::string& payload, std::size_t offset) 
 }
 
 // `party` is the party id the request concerns (0: none).
-inline void LogRequests(const char* what, const std::vector<SocialParty::Message>& messages, bool sent,
+inline void LogRequests(const char* what, const std::vector<nevr_social_party::Message>& messages, bool sent,
                         std::uint64_t party) {
-  for (const SocialParty::Message& m : messages) {
-    const char* name = SocialParty::RequestName(m.symbol);
+  for (const nevr_social_party::Message& m : messages) {
+    const char* name = nevr_social_party::RequestName(m.symbol);
     std::uint64_t target = m.target;
     std::uint64_t arg = 0;
     std::uint64_t param = 0;
-    if (m.symbol == SocialNames::kProfileRequest) {
+    if (m.symbol == nevr_social_names::kProfileRequest) {
       name = "OtherUserProfileRequest";
       target = PayloadU64(m.payload, 8);  // EvrId(platform, account)
     } else if (m.target != 0) {

@@ -31,6 +31,7 @@
 #include "runtime/patch/provider_identity.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
+#include "runtime/compat/self_check.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
@@ -113,9 +114,9 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // The replacement is built from GetMatchmakerBridgePort() at call time: ws_bridge.cpp binds an
 // ephemeral port with retry (a fixed port collides with a still-releasing socket from a just-killed
 // process), so no compile-time constant exists.
-static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = MatchmakerHostPatch::kHostRva;
-static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = MatchmakerHostPatch::kHostSlotSize;
-static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = MatchmakerHostPatch::kHostExpected;
+static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = nevr_matchmaker_host_patch::kHostRva;
+static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = nevr_matchmaker_host_patch::kHostSlotSize;
+static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_host_patch::kHostExpected;
 
 // 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
@@ -188,62 +189,56 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
-static uintptr_t s_pnsradModuleBase = 0;
 
-/* Case-insensitive ASCII wide-string compare, same folding convention as
- * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
- * chars, hence the /sizeof(WCHAR) below at each call site. */
-static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* ascii) {
-    size_t asciiLen = std::strlen(ascii);
-    if (nameLen != asciiLen) return false;
-    for (size_t i = 0; i < asciiLen; i++) {
-        WCHAR c = name[i];
-        if (c >= L'A' && c <= L'Z') c = static_cast<WCHAR>(c - L'A' + L'a');
-        char e = ascii[i];
-        if (e >= 'A' && e <= 'Z') e = static_cast<char>(e - 'A' + 'a');
-        if (c != static_cast<WCHAR>(e)) return false;
-    }
-    return true;
+/* Self-check "matchmaking_reload_patch" (#18, docs/engine/remote-log.md): the game loads
+ * pnsradmatchmaking.dll once per lobby and every load must have its host default re-applied. The loader
+ * callback only counts (it runs under the loader lock); the probe reads the counts on the frame tick. */
+static nevr_matchmaker_host_patch::ReloadLedger s_mmLedger;
+
+static bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
+    return s_mmLedger.Take(&out->observed, &out->pass);
 }
+
+/* Registered from Init (the game's boot, not the DLL's static initialisation: Register allocates). */
+static void RegisterMatchmakingReloadCheck() {
+    nevr_self_check::Register(
+        {"matchmaking_reload_patch",
+         "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
+         &MatchmakingReloadProbe});
+}
+static uintptr_t s_pnsradModuleBase = 0;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
  * matchmaker connection reaches our own listener instead of the dead
  * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
  * the full measurement (RVA, file offset, slot size, exact original bytes). */
-static void PatchMatchmakingHost(uintptr_t base) {
-    // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
-    // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
-    // ordering is observed, not enforced; a zero port is reported below instead of patched in.
-    const uint16_t port = GetMatchmakerBridgePort();
-    auto* image = reinterpret_cast<uint8_t*>(base);
-    DWORD err = 0;
-    const MatchmakerHostPatch::Result result = MatchmakerHostPatch::Apply(
-        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+static void ReportMatchmakingHostResult(nevr_matchmaker_host_patch::Result result, const uint8_t* image,
+                                        uint16_t port, DWORD err) {
     switch (result) {
-    case MatchmakerHostPatch::Result::Patched:
+    case nevr_matchmaker_host_patch::Result::Patched:
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
             "\"%s\" -> \"ws://127.0.0.1:%u\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
             PNSRADMATCHMAKING_HOST_EXPECTED, static_cast<unsigned>(port));
         break;
-    case MatchmakerHostPatch::Result::NoPort:
+    case nevr_matchmaker_host_patch::Result::NoPort:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking matchmaker listener never bound a port — NOT "
             "patching (matchmaking will fail regardless)");
         break;
-    case MatchmakerHostPatch::Result::DoesNotFit:
+    case nevr_matchmaker_host_patch::Result::DoesNotFit:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking replacement does not fit the %zu-byte slot at +0x%x — NOT patched",
             PNSRADMATCHMAKING_HOST_SLOT_SIZE, static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA));
         break;
-    case MatchmakerHostPatch::Result::BytesMismatch:
+    case nevr_matchmaker_host_patch::Result::BytesMismatch:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking host patch skipped rva=0x%x reason=bytes_mismatch "
             "expected=\"%s\" actual=\"%.48s\"",
             static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA), PNSRADMATCHMAKING_HOST_EXPECTED,
             reinterpret_cast<const char*>(image + PNSRADMATCHMAKING_HOST_RVA));
         break;
-    case MatchmakerHostPatch::Result::WriteFailed:
+    case nevr_matchmaker_host_patch::Result::WriteFailed:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking PatchMemory FAILED rva=0x%x error=%lu — bytes matched "
             "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA, err);
@@ -367,7 +362,7 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
  * (runtime/patch/provider_identity.h has the measurement). Same accounting as the
  * NOP patches: validated first, every outcome counted and reported. */
 static void PnsradUserProviderIdPatch(uintptr_t base) {
-    using namespace ProviderIdentity;
+    using namespace nevr_provider_identity;
     uint8_t* site = reinterpret_cast<uint8_t*>(base + kPnsradUserProviderIdRva);
     if (!nevr::ValidatePrologue(site, kPnsradUserProviderIdExpected.data(), kPnsradUserProviderIdExpected.size())) {
         Log(EchoVR::LogLevel::Warning,
@@ -393,7 +388,8 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
 }
 
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
-    if (reason != 1 || !data || !data->BaseDllName) return;
+    // Only loads act (an unload leaves nothing to undo: the image and its patch are gone together).
+    if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName) return;
     const UNICODE_STRING* name = data->BaseDllName;
 
     // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
@@ -405,11 +401,20 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
     // (unpatched) bytes, so a one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
     // uses, since that DLL does not reload) would leave the reloaded copy unpatched and the
     // matchmaker on the dead readyatdawn.com default. No guard: patch on every load.
-    // PatchMatchmakingHost's own memcmp against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a
-    // Warning log) if this exact base was already patched.
-    if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
-                             "pnsradmatchmaking.dll")) {
-        PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
+    // OnModuleNotification's Apply memcmps the slot against PNSRADMATCHMAKING_HOST_EXPECTED, so a second
+    // notification for an image that is already patched no-ops (with a Warning log).
+    if (nevr_matchmaker_host_patch::IsMatchmakingModule(name->Buffer, name->Length / sizeof(WCHAR))) {
+        // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
+        // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
+        // ordering is observed, not enforced; a zero port is reported instead of patched in.
+        const uint16_t port = GetMatchmakerBridgePort();
+        auto* image = reinterpret_cast<uint8_t*>(data->DllBase);
+        DWORD err = 0;
+        const auto result = nevr_matchmaker_host_patch::OnModuleNotification(
+            reason, name->Buffer, name->Length / sizeof(WCHAR), image, port,
+            [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+        if (result) ReportMatchmakingHostResult(*result, image, port, err);
+        s_mmLedger.NoteLoad(result);
     }
 
     if (s_pnsradPatched) return;
@@ -460,7 +465,8 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
  * Public API
  * ==================================================================== */
 
-void PnsradEnabler::Init(uintptr_t base_addr) {
+void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
+    RegisterMatchmakingReloadCheck();
 #ifdef _WIN32
     // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
     // "init complete" summary can show a baseline instead of a bare count.
@@ -574,7 +580,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
 #endif
 }
 
-void PnsradEnabler::Shutdown() {
+void nevr_pnsrad_enabler::Shutdown() {
 #ifdef _WIN32
     if (s_dllNotifCookie) {
         HMODULE ntdll = GetModuleHandleA("ntdll");
@@ -586,6 +592,6 @@ void PnsradEnabler::Shutdown() {
 #endif
 }
 
-uintptr_t PnsradEnabler::GetModuleBase() {
+uintptr_t nevr_pnsrad_enabler::GetModuleBase() {
     return s_pnsradModuleBase;
 }

@@ -24,8 +24,10 @@ const char* StepName(StepId id) {
     case StepId::kRegisterLoginCounters: return "register_login_counters";
     case StepId::kRegisterSocialCounters: return "register_social_counters";
     case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
+    case StepId::kRegisterObbSkipCounters: return "register_obb_skip_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
+    case StepId::kInstallObbSkip: return "install_obb_skip";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -132,9 +134,30 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterLoginPromptCounters, "bridge_and_login_off");
     }
+    // The OBB-mount skip (#319) is independent of every feature above.
+    bool obbCounters = false;
+    if (want.obbSkip) {
+      obbCounters = r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterObbSkipCounters, "obb_skip_off");
+    }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
+
+    // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
+    if (!want.obbSkip) {
+      r.Skip(StepId::kInstallObbSkip, "obb_skip_off");
+    } else if (!obbCounters) {
+      try {
+        steps.InstallObbSkip(false);  // the hook's own rule logs that it installs nothing
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
+      r.Skip(StepId::kInstallObbSkip, "counters_refused");
+    } else {
+      r.Run(StepId::kInstallObbSkip, [&] { return steps.InstallObbSkip(true); });
+    }
 
     bool tokenOk = false;
     if (wantTokenAuth) {

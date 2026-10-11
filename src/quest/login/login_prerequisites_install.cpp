@@ -13,7 +13,7 @@
 #include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 
-namespace QuestLogin {
+namespace nevr_quest_login {
 
 namespace {
 
@@ -41,27 +41,49 @@ NEVR_HOOK_RECORD(kGetUserProofHook, GetUserProofThunk, &OnMessageGetUserProof);
 NEVR_HOOK_RECORD(kUserProofGetNonceHook, UserProofGetNonceThunk, &OnUserProofGetNonce);
 
 // ---- requests --------------------------------------------------------------------------------
-std::uint64_t HandleOrgRequest(OrgRequestThunk::Fn original, std::uint64_t user) noexcept {
-  const std::uint64_t request = original(user);
-  NoteRequest(Prerequisite::OrgScopedId, request);
-  return request;
-}
+// libpnsovr's load bias, written before any hook is installed (InstallLoginPrerequisites, SetPnsovrBase): the
+// org-id handler classifies its caller by return address - base.
+std::atomic<std::uintptr_t> g_pnsovr_base{0};
+
 std::uint64_t HandleUserRequest(UserRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::LoggedInUser);
+    NoteRequest(Prerequisite::LoggedInUser, id);
+    return id;
+  }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::LoggedInUser, request);
   return request;
 }
 std::uint64_t HandleTokenRequest(TokenRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::AccessToken);
+    NoteRequest(Prerequisite::AccessToken, id);
+    return id;
+  }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::AccessToken, request);
   return request;
 }
 std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
+  if (local::Enabled()) {
+    const std::uint64_t id = local::Request(Prerequisite::UserProof);
+    NoteRequest(Prerequisite::UserProof, id);
+    return id;
+  }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::UserProof, request);
   return request;
 }
-NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &HandleOrgRequest);
+NEVR_HOOK_RECORD(kEntitlementRequestHook, EntitlementRequestThunk, &OnEntitlementRequest);
+NEVR_HOOK_RECORD(kPopMessageHook, PopMessageThunk, &local::OnPopMessage);
+NEVR_HOOK_RECORD(kMessageGetTypeHook, MessageGetTypeThunk, &local::OnMessageGetType);
+NEVR_HOOK_RECORD(kMessageGetRequestIdHook, MessageGetRequestIdThunk, &local::OnMessageGetRequestId);
+NEVR_HOOK_RECORD(kFreeMessageHook, FreeMessageThunk, &local::OnFreeMessage);
+NEVR_HOOK_RECORD(kOrgRequestHook, OrgRequestThunk, &OnOrgScopedIdRequest);
 NEVR_HOOK_RECORD(kUserRequestHook, UserRequestThunk, &HandleUserRequest);
 NEVR_HOOK_RECORD(kTokenRequestHook, TokenRequestThunk, &HandleTokenRequest);
 NEVR_HOOK_RECORD(kProofRequestHook, ProofRequestThunk, &HandleProofRequest);
@@ -73,6 +95,8 @@ struct Hooks {
   sentinel::GotHook callbacks[4];
   sentinel::GotHook accessors[8];
   sentinel::GotHook requests[4];
+  sentinel::GotHook entitlement;
+  sentinel::GotHook messages[4];
 };
 Hooks& H() {
   static Hooks* const hooks = new Hooks();
@@ -106,10 +130,41 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 
 }  // namespace
 
+// ovr_User_GetOrgScopedID has twelve call sites: three are the login's, nine are CNSOVRSocial's (friends, room
+// members, invitable users) and ask about other users. Only the login's are answered locally (and only while
+// local answers are on). One of the nine Social sites, while the facade is selected (the game's Social() is not
+// CNSOVRSocial, so nothing should run these), is refused: no Meta call and no data (local::Refuse); that does not
+// depend on local answers being on. Every other caller, the login's own sites with local answers off, and any
+// caller this build does not know, goes to the SDK exactly as it did before local answers.
+std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* caller, std::uint64_t user) noexcept {
+  const std::uintptr_t base = g_pnsovr_base.load(std::memory_order_relaxed);
+  if (local::Enabled() && T::IsLoginOrgRequestCaller(caller, base)) {
+    const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
+    NoteRequest(Prerequisite::OrgScopedId, id);
+    return id;
+  }
+  if (local::SocialSelected() && T::IsSocialOrgRequestCaller(caller, base)) {
+    return local::Refuse(reinterpret_cast<std::uintptr_t>(caller) - base);
+  }
+  const std::uint64_t request = original(user);
+  local::NoteSdkRequestId(request);
+  NoteRequest(Prerequisite::OrgScopedId, request);
+  return request;
+}
+void SetPnsovrBase(std::uintptr_t base) noexcept { g_pnsovr_base.store(base, std::memory_order_relaxed); }
+
+// RadPluginMain discards the id and nothing waits for an answer; the only reader is the message pump, which
+// has no message to read, so no entitlement request reaches Meta and no hard exit can follow from its answer.
+std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcept {
+  static_cast<void>(original);
+  return 0;
+}
+
 PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept {
   const std::lock_guard<std::mutex> lock(InstallMutex());
   if (g_installed.load(std::memory_order_acquire)) return g_result_storage;
   const std::uintptr_t base = image.base;
+  SetPnsovrBase(base);
   Hooks& hooks = H();
   PrerequisiteInstall result;
 
@@ -145,13 +200,31 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.requests += Install(hooks.requests[2], kTokenRequestHook, T::kGetAccessToken, base) ? 1 : 0;
   result.requests += Install(hooks.requests[3], kProofRequestHook, T::kGetUserProof, base) ? 1 : 0;
 
-  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4;
+  // Answered locally: no entitlement request reaches Meta (#411). Independent of substitution: it needs no identity.
+  result.entitlement += Install(hooks.entitlement, kEntitlementRequestHook, T::kEntitlementRequest, base) ? 1 : 0;
+
+  // The message-level imports (#411). Local answers are switched on only when every hook they depend on is in
+  // (all eight accessors with is-error, the four callbacks, the four requests and these four): otherwise a
+  // synthetic handle could reach the SDK, so the request hooks keep forwarding to it.
+  result.messages += Install(hooks.messages[0], kPopMessageHook, T::kPopMessage, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[1], kMessageGetTypeHook, T::kMessageGetType, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[2], kMessageGetRequestIdHook, T::kMessageGetRequestId, base) ? 1 : 0;
+  result.messages += Install(hooks.messages[3], kFreeMessageHook, T::kFreeMessage, base) ? 1 : 0;
+  result.local = result.substitute && result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
+                 result.messages == 4;
+  local::SetEnabled(result.local);
+
+  const bool complete = result.callbacks == 4 && result.accessors == 8 && result.requests == 4 &&
+                        result.entitlement == 1 && result.messages == 4;
   sentinel::LogFields(complete ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError,
                       "quest_login_prerequisites_install",
                       {{"status", complete ? "installed" : "partial"},
                        {"callbacks", result.callbacks},
                        {"accessors", result.accessors},
                        {"requests", result.requests},
+                       {"entitlement_local", result.entitlement},
+                       {"messages", result.messages},
+                       {"local_answers", result.local ? "on" : "off"},
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});
@@ -168,4 +241,4 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   return result;
 }
 
-}  // namespace QuestLogin
+}  // namespace nevr_quest_login

@@ -19,17 +19,19 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # verdict. Without it the script returns only after the game exits (the scenario runner relies on that).
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
+TRACE_EXPORTS=""
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
+    --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
     --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -131,6 +133,11 @@ if [[ -n "$CONFIG" ]]; then
   game_args+=(-config "Z:${CONFIG//\//\\}")
   echo "=== game config: $CONFIG (config.yaml from its directory) ==="
 fi
+if [[ -n "$TRACE_EXPORTS" ]]; then
+  [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }
+  game_args+=(-traceexports "$TRACE_EXPORTS")
+  echo "=== tracing platform DLL exports: $TRACE_EXPORTS (docs/reference/export-tracer.md) ==="
+fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
 # let a previous run's log, last written in the same second the run started, decide the verdict.
@@ -161,7 +168,7 @@ if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
       # 2038), so three of those, or three "Service is unavailable", is a service that is not coming.
       if [[ $(grep -c 'rad15_live failed' "$cur" || true) -ge 3 ]]; then break; fi
       if [[ $(grep -c 'Service is unavailable' "$cur" || true) -ge 3 ]]; then break; fi
-      # A DLL built without the production .env can never log in; do not wait out the deadline.
+      # A DLL that embeds no service endpoints can never log in; do not wait out the deadline.
       if grep -q 'built-in defaults embedded in this build: (none)' "$cur"; then break; fi
     fi
     sleep "$poll" 9>&-
@@ -197,7 +204,7 @@ count() { grep -c "$1" "$run_log" || test $? -eq 1; }
 echo "=== game log: $run_log ==="
 echo "logged_in=$(count 'to logged in') in_game=$(count 'to in game') invalid_header=$(count 'invalid header') service_unavailable=$(count 'Service is unavailable')"
 if grep -q 'built-in defaults embedded in this build: (none)' "$run_log"; then
-  echo "FAIL: this DLL embeds no service endpoints (built without the production .env); the run cannot be judged" >&2
+  echo "FAIL: this DLL embeds no service endpoints (its boot log says built-in defaults: (none)); the run cannot be judged" >&2
   exit 1
 fi
 if [[ $(count 'to logged in') -eq 0 ]]; then

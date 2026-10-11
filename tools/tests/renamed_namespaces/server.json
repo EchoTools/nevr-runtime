@@ -1,0 +1,10 @@
+{
+  "FailureDetail": "nevr_failure_detail",
+  "GameFuncAddr": "nevr_game_func_addr",
+  "GameOffsets": "nevr_game_offsets",
+  "GameServer": "nevr_game_server",
+  "GameStatusHash": "nevr_game_status_hash",
+  "PropertyHash": "nevr_property_hash",
+  "ServerDbAuth": "nevr_serverdb_auth",
+  "ServerDbUri": "nevr_serverdb_uri"
+}

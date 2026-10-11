@@ -15,11 +15,12 @@
 
 namespace nevr_quest::redirect {
 
-enum class Slot : std::uint8_t { kLibR15, kMatchmaking };
+enum class Slot : std::uint8_t { kLibR15, kMatchmaking, kCreateConnection };
 
 struct HookTargets {
-  sentinel::GotTarget libr15;
-  sentinel::GotTarget matchmaking;
+  sentinel::GotTarget libr15;            // CJson::TString in libr15
+  sentinel::GotTarget matchmaking;       // CJson::TString in libpnsradmatchmaking
+  sentinel::GotTarget createConnection;  // CSysHttp::CreateConnection in libr15 (the game's REST host)
 };
 // The pinned production targets (build ID and slot address pinned).
 HookTargets PinnedTargets();
@@ -32,6 +33,12 @@ HookTargets PinnedTargets();
 using ApplyFn = const char* (*)(const char* key, const char* result) noexcept;
 void SetApply(ApplyFn apply) noexcept;  // nullptr: handlers pass the original result through
 
+// The URL decision for CSysHttp::CreateConnection: receives the URL the game passes and answers with it
+// or a stable pointer that outlives the call. Same constraints as ApplyFn (noexcept, no game code,
+// reached through a pointer).
+using ApplyUrlFn = const char* (*)(const char* url) noexcept;
+void SetApplyUrl(ApplyUrlFn apply) noexcept;  // nullptr: the original URL is passed through
+
 // The thunk for one slot. All noexcept; defined in tstring_thunks.cpp (built -fno-exceptions).
 sentinel::GotStatus InstallThunk(Slot slot, sentinel::GotHook& hook, const sentinel::GotTarget& target,
                                  sentinel::ImageLookup lookup) noexcept;
@@ -40,7 +47,7 @@ void** ThunkOriginalOut(Slot slot) noexcept;  // test support: publish a fake or
 void ArmThunk(Slot slot, bool armed) noexcept;
 void ResetThunk(Slot slot) noexcept;          // test support: clears original, handler, counters
 
-// Registers the four thunk counters (calls and faults for each slot) with the sentinel's reporter.
+// Registers the six thunk counters (calls and faults for each slot) with the sentinel's reporter.
 // Every registration must precede StartReporter; returns false if the table is full or the reporter
 // already runs.
 bool RegisterThunkCounters() noexcept;

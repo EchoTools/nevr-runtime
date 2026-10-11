@@ -23,7 +23,7 @@
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/session_router.h"
 
-using namespace SessionRouter;
+using namespace nevr_session_router;
 
 namespace {
 
@@ -32,7 +32,7 @@ constexpr uint64_t kSymLobbySessionSuccess = 0x6d4de3650ee3110fULL;  // SNSLobby
 constexpr uint64_t kSymConfigSuccess = 0xb9cdaf586f7bd012ULL;         // SNSConfigSuccessv2
 const std::string kSecret = "SECRET-TOKEN-VALUE";
 
-std::string Msg(uint64_t symbol, const std::string& payload = "x") { return EvrCodec::BuildMessage(symbol, payload); }
+std::string Msg(uint64_t symbol, const std::string& payload = "x") { return nevr_evr_codec::BuildMessage(symbol, payload); }
 
 struct SentFrame {
   uint64_t id;
@@ -165,7 +165,7 @@ Options WithLogin(const std::string& frame) {
   return o;
 }
 
-const std::string kLogin = Msg(EvrCodec::kSymLoginRequest, "LOGIN-PAYLOAD-" + kSecret);
+const std::string kLogin = Msg(nevr_evr_codec::kSymLoginRequest, "LOGIN-PAYLOAD-" + kSecret);
 
 // Opens game 1 (config), 2 (login), 3 (matchmaker). Remote ids are read back from the open requests.
 void OpenThree(Rig& rig) {
@@ -290,7 +290,7 @@ void TestNoLoginFrameWhenIdentityMissing() {
   const auto sent = rig.remotes.Sent();
   QCHECK(sent.size() == 1);
   QCHECK(rig.logs.Has("login NOT injected", static_cast<int>(LogLevel::Error)));
-  for (const auto& s : sent) QCHECK(EvrCodec::FirstSymbol(s.data) != EvrCodec::kSymLoginRequest);
+  for (const auto& s : sent) QCHECK(nevr_evr_codec::FirstSymbol(s.data) != nevr_evr_codec::kSymLoginRequest);
 }
 
 // A throwing builder is the same as no identity, not a crash.
@@ -435,15 +435,15 @@ void TestLoginSuccessAndFailureHandling() {
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
   QCHECK(rig.games.Sent().size() == 1);
   QCHECK(rig.logs.Has("LOGIN SUCCESS"));
   const auto sent = rig.remotes.Sent();
   QCHECK(sent.size() == 2);  // login, subscribe
-  if (sent.size() == 2) QCHECK(sent[1].data == EvrCodec::BuildFriendListSubscribe());
+  if (sent.size() == 2) QCHECK(sent[1].data == nevr_evr_codec::BuildFriendListSubscribe());
 
   std::string failurePayload;
-  // The codec no longer exports a little-endian appender; the payload layout is three u64 fields.
+  // The codec exports no little-endian appender; the payload layout is three u64 fields, written out here.
   const auto appendLE64 = [&failurePayload](uint64_t v) {
     for (int i = 0; i < 8; ++i) failurePayload.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
   };
@@ -451,7 +451,7 @@ void TestLoginSuccessAndFailureHandling() {
   appendLE64(0);
   appendLE64(7);   // status
   failurePayload += "PRIVATE-SERVER-TEXT";
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failurePayload), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginFailure, failurePayload), true);
   QCHECK(rig.games.Sent().size() == 2);  // forwarded: the client retries
   QCHECK(rig.logs.Has("LOGIN FAILURE"));
   QCHECK(!rig.logs.Has("PRIVATE-SERVER-TEXT"));
@@ -656,9 +656,9 @@ void TestConcurrentProducersKeepPerSourceOrder() {
   bool ordered = true;
   const auto sent = rig.remotes.Sent();
   for (const auto& s : sent) {
-    const uint64_t sym = EvrCodec::FirstSymbol(s.data);
+    const uint64_t sym = nevr_evr_codec::FirstSymbol(s.data);
     if (sym != 2 && sym != 3) continue;
-    const std::string payload = s.data.substr(EvrCodec::kHeaderSize);
+    const std::string payload = s.data.substr(nevr_evr_codec::kHeaderSize);
     int& next = sym == 2 ? next2 : next3;
     if (payload != std::to_string(next)) ordered = false;
     ++next;
@@ -680,9 +680,9 @@ void TestQuestDefaultsInjectNothing() {
   rig.router->OnRemoteOpen(opens[0].remote);
   rig.router->OnRemoteOpen(opens[1].remote);
   QCHECK(rig.remotes.Sent().empty());  // opening a session sends nothing by itself
-  const std::string gameLogin = Msg(EvrCodec::kSymLoginRequest, "the-game's-own-login");
+  const std::string gameLogin = Msg(nevr_evr_codec::kSymLoginRequest, "the-game's-own-login");
   rig.router->OnGameFrame(2, gameLogin, true);
-  rig.router->OnRemoteFrame(opens[1].remote, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnRemoteFrame(opens[1].remote, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
   rig.router->OnGameFrame(3, Msg(kSymSomething, "mm"), true);
   const auto sent = rig.remotes.Sent();
   QCHECK(sent.size() == 2);  // exactly what the game sent, in order
@@ -751,19 +751,19 @@ void TestShutdown() {
 // Failure caught: a symbol landing in the wrong role. Every config and lobby request the game opens a
 // connection with is named; LogInRequestv2, silence and anything else are the login role.
 void TestClassifyFirstFrameTable() {
-  QCHECK(ClassifyFirstFrame(EvrCodec::kSymConfigRequest) == Role::Config);
-  const uint64_t lobby[] = {EvrCodec::kSymMatchmakerStatusRequest, EvrCodec::kSymFindSessionRequest,
-                            EvrCodec::kSymCreateSessionRequest,    EvrCodec::kSymJoinSessionRequest,
-                            EvrCodec::kSymDirectoryRequest,        EvrCodec::kSymPendingSessionCancel,
-                            EvrCodec::kSymPlayerSessionsRequest,   EvrCodec::kSymLobbyPingResponse};
+  QCHECK(ClassifyFirstFrame(nevr_evr_codec::kSymConfigRequest) == Role::Config);
+  const uint64_t lobby[] = {nevr_evr_codec::kSymMatchmakerStatusRequest, nevr_evr_codec::kSymFindSessionRequest,
+                            nevr_evr_codec::kSymCreateSessionRequest,    nevr_evr_codec::kSymJoinSessionRequest,
+                            nevr_evr_codec::kSymDirectoryRequest,        nevr_evr_codec::kSymPendingSessionCancel,
+                            nevr_evr_codec::kSymPlayerSessionsRequest,   nevr_evr_codec::kSymLobbyPingResponse};
   for (const uint64_t symbol : lobby) QCHECK(ClassifyFirstFrame(symbol) == Role::Matchmaker);
-  QCHECK(ClassifyFirstFrame(EvrCodec::kSymLoginRequest) == Role::Login);
+  QCHECK(ClassifyFirstFrame(nevr_evr_codec::kSymLoginRequest) == Role::Login);
   QCHECK(ClassifyFirstFrame(0) == Role::Login);  // nothing sent yet, or a frame shorter than a header
   QCHECK(ClassifyFirstFrame(kSymSomething) == Role::Login);
   // The literal values are the ones the game sends (libr15/libpnsovr, recorded in ADR 0003).
-  QCHECK(EvrCodec::kSymConfigRequest == 0x82869f0b37eb4378ULL);
-  QCHECK(EvrCodec::kSymFindSessionRequest == 0x312c2a01819aa3f5ULL);
-  QCHECK(EvrCodec::kSymConnectionUnrequire == 0x43e6963ac76beee4ULL);
+  QCHECK(nevr_evr_codec::kSymConfigRequest == 0x82869f0b37eb4378ULL);
+  QCHECK(nevr_evr_codec::kSymFindSessionRequest == 0x312c2a01819aa3f5ULL);
+  QCHECK(nevr_evr_codec::kSymConnectionUnrequire == 0x43e6963ac76beee4ULL);
 }
 
 // The smoke failure (#239): the config connection fails at boot (no account token yet), the login
@@ -774,19 +774,19 @@ void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
   Rig rig;
   rig.router->OnGameOpen(1);  // boot config connection
   const RemoteId bootConfig = rig.remotes.Opens()[0].remote;
-  rig.router->OnGameFrame(1, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest), true);
   rig.router->OnRemoteError(bootConfig, 0, "no account token");  // fail-fast: the router closes game 1
   rig.router->OnGameClose(1);
   rig.router->OnGameOpen(2);  // the login connection (silent until the game sends its LogInRequest)
   const RemoteId login = rig.remotes.Opens()[1].remote;
   QCHECK(rig.remotes.Opens()[1].role == Role::Login);
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest, "login"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest, "login"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
 
   rig.router->OnGameOpen(3);  // the post-login config connection: provisionally a matchmaker (order)
   QCHECK(rig.remotes.Opens().size() == 2);  // sharing the login session: no remote yet
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymConfigRequest), true);
   const auto opens = rig.remotes.Opens();
   QCHECK(opens.size() == 3);
   RemoteId config = kNoRemote;
@@ -797,7 +797,7 @@ void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
   }
   rig.router->OnRemoteOpen(config);
 
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);
   rig.router->OnRemoteFrame(config, Msg(kSymConfigSuccess, "config"), true);
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 3);  // LoginSuccess, profile, config
@@ -809,8 +809,8 @@ void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
   // The config request went to the config remote, not the login session.
   bool configOnConfigRemote = false;
   for (const auto& f : rig.remotes.Sent()) {
-    if (EvrCodec::FirstSymbol(f.data) == EvrCodec::kSymConfigRequest && f.id == config) configOnConfigRemote = true;
-    if (EvrCodec::FirstSymbol(f.data) == EvrCodec::kSymConfigRequest) QCHECK(f.id != login);
+    if (nevr_evr_codec::FirstSymbol(f.data) == nevr_evr_codec::kSymConfigRequest && f.id == config) configOnConfigRemote = true;
+    if (nevr_evr_codec::FirstSymbol(f.data) == nevr_evr_codec::kSymConfigRequest) QCHECK(f.id != login);
   }
   QCHECK(configOnConfigRemote);
   QCHECK(rig.logs.Has("first frame symbol=0x82869f0b37eb4378: matchmaker -> config"));
@@ -818,8 +818,8 @@ void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
 
 // The login reply as nakama sends it: one frame, [LogInSuccess, Unrequire, LoginSettings].
 std::string LoginReplyFrame() {
-  return Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')) + Msg(EvrCodec::kSymConnectionUnrequire, "") +
-         Msg(EvrCodec::kSymLoginSettings, "settings");
+  return Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')) + Msg(nevr_evr_codec::kSymConnectionUnrequire, "") +
+         Msg(nevr_evr_codec::kSymLoginSettings, "settings");
 }
 
 // Failure caught: lobby replies going to the login socket (or login replies to a matchmaker), and an
@@ -830,16 +830,16 @@ void TestServerFramesRouteByRole() {
   OpenThree(rig);  // config 1, login 2, matchmaker 3 (provisional)
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest), true);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymDocumentRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymDocumentRequest), true);
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);                      // -> 3
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);   // -> 2, no Unrequire
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);                  // -> 2, then its Unrequire
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);                 // -> 2 (document outstanding)
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymOtherUserProfileSuccess, "other"), true);        // -> 2
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);   // -> 2, no Unrequire
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymDocumentSuccess, "doc"), true);                  // -> 2, then its Unrequire
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);                 // -> 2 (document outstanding)
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymOtherUserProfileSuccess, "other"), true);        // -> 2
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby2"), true);                     // -> 3
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);                 // bare: dropped
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);                 // bare: dropped
   const auto sent = rig.games.Sent();
   const uint64_t expected[] = {3, 2, 2, 2, 2, 3};
   QCHECK(sent.size() == 6);
@@ -856,13 +856,13 @@ void TestInterleavedUnrequiresReachTheConnectionThatOwesThem() {
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymLobbyPingResponse), true);  // flagged on the matchmaker connection
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymLobbyPingResponse), true);  // flagged on the matchmaker connection
   rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);                // -> 2; its Unrequire is inside
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymUpdateProfile, "update"), true);
-  const std::string unrequire = Msg(EvrCodec::kSymConnectionUnrequire, "");
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymUpdateProfileSuccess, "ok"), true);  // goroutine A
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping"), true);    // goroutine B
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymUpdateProfile, "update"), true);
+  const std::string unrequire = Msg(nevr_evr_codec::kSymConnectionUnrequire, "");
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymUpdateProfileSuccess, "ok"), true);  // goroutine A
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLobbyPingRequest, "ping"), true);    // goroutine B
   rig.router->OnRemoteFrame(login, unrequire, true);                                       // A's -> 2
   rig.router->OnRemoteFrame(login, unrequire, true);                                       // B's -> 3
   const auto sent = rig.games.Sent();
@@ -873,8 +873,8 @@ void TestInterleavedUnrequiresReachTheConnectionThatOwesThem() {
 }
 
 // Failure caught (RE M2): ping discovery sends LobbyPingRequest on the login session right after the login
-// and an Unrequire after it. With no matchmaker connection the ping used to fall to the login connection, whose
-// count then went below zero. The ping and the Unrequire that follows it are dropped; the login connection's
+// and an Unrequire after it. With no matchmaker connection the ping must not fall to the login connection, whose
+// count would go below zero. The ping and the Unrequire that follows it are dropped; the login connection's
 // count is untouched, so its own update's Unrequire still arrives.
 void TestPingDiscoveryAfterLoginWithoutAMatchmakerDoesNotWrapTheLoginCount() {
   Rig rig;
@@ -882,19 +882,19 @@ void TestPingDiscoveryAfterLoginWithoutAMatchmakerDoesNotWrapTheLoginCount() {
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
   rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);                                 // -> 2, count 1 -> 0
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping"), true);       // no matchmaker: dropped
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);        // the ping's: dropped
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymUpdateProfile, "update"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymUpdateProfileSuccess, "ok"), true);     // -> 2
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);        // -> 2 (count 1 -> 0)
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLobbyPingRequest, "ping"), true);       // no matchmaker: dropped
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);        // the ping's: dropped
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymUpdateProfile, "update"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymUpdateProfileSuccess, "ok"), true);     // -> 2
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);        // -> 2 (count 1 -> 0)
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 3);
   for (const auto& f : sent) QCHECK(f.id == 2);
-  QCHECK(!sent.empty() && EvrCodec::FirstSymbol(sent[0].data) == EvrCodec::kSymLoginSuccess);
-  QCHECK(sent.size() == 3 && EvrCodec::FirstSymbol(sent[1].data) == EvrCodec::kSymUpdateProfileSuccess);
-  QCHECK(sent.size() == 3 && EvrCodec::FirstSymbol(sent[2].data) == EvrCodec::kSymConnectionUnrequire);
+  QCHECK(!sent.empty() && nevr_evr_codec::FirstSymbol(sent[0].data) == nevr_evr_codec::kSymLoginSuccess);
+  QCHECK(sent.size() == 3 && nevr_evr_codec::FirstSymbol(sent[1].data) == nevr_evr_codec::kSymUpdateProfileSuccess);
+  QCHECK(sent.size() == 3 && nevr_evr_codec::FirstSymbol(sent[2].data) == nevr_evr_codec::kSymConnectionUnrequire);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
   QCHECK(rig.router->GetStats().droppedRemoteFrames == 1);  // the ping
 }
@@ -906,12 +906,12 @@ void TestChannelInfoResponseGoesToTheLoginConnectionWhileAMatchmakerExists() {
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymFindSessionRequest), true);
   rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymChannelInfoRequest, "channel"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymChannelInfoResponse, "info"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymChannelInfoRequest, "channel"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymChannelInfoResponse, "info"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 3);
   for (const auto& f : sent) QCHECK(f.id == 2);  // nothing reaches the matchmaker
@@ -926,13 +926,13 @@ void TestUnflaggedRequestsDoNotCountAndAnExtraUnrequireIsDropped() {
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLogOut), true);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymTelemetryEvent), true);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymRemoteLogSet), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymMatchmakerStatusRequest), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);   // -> 2; nothing was asked
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped: nothing outstanding
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped: nothing owed
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLogOut), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymTelemetryEvent), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymRemoteLogSet), true);
+  rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymMatchmakerStatusRequest), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymDocumentSuccess, "doc"), true);   // -> 2; nothing was asked
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // dropped: nothing outstanding
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // dropped: nothing owed
   QCHECK(rig.games.Sent().size() == 1);
   QCHECK(rig.router->GetStats().droppedUnrequires == 2);
 }
@@ -946,10 +946,10 @@ void TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount() {
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
   rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymDocumentSuccess, "doc"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);
   QCHECK(rig.games.Sent().size() == 2);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
@@ -964,16 +964,16 @@ void TestALoginFailureAndItsUnrequireLowerTheLoginCount() {
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
   std::string failure;
   for (int i = 0; i < 3; ++i) failure.append(8, '\0');  // the three u64 fields; the status is not read here
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failure + "text"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // the login's: delivered
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginFailure, failure + "text"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // the login's: delivered
   QCHECK(rig.games.Sent().size() == 2);
   QCHECK(rig.router->GetStats().droppedUnrequires == 0);
   // The login count is back to zero: an Unrequire after a document nobody asked for is dropped.
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymDocumentSuccess, "doc"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);
   QCHECK(rig.games.Sent().size() == 3);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
@@ -988,19 +988,19 @@ void TestAnEmbeddedUnrequireTheCountCannotCoverIsCounted() {
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest), true);
   std::string failure;
   for (int i = 0; i < 3; ++i) failure.append(8, '\0');
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failure + "text"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // covers the login request
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginFailure, failure + "text"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // covers the login request
   QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 0);
   rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);  // the login that still succeeds: its Unrequire is unowed
   QCHECK(rig.games.Sent().size() == 3);  // the frame is delivered whole
   QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 1);
   QCHECK(rig.router->GetStats().droppedUnrequires == 0);
   // A frame the router drops with its Unrequire inside counts it too (a ping with no matchmaker, batched).
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping") +
-                                       Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLobbyPingRequest, "ping") +
+                                       Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);
   QCHECK(rig.games.Sent().size() == 3);
   QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 2);
 }
@@ -1011,10 +1011,10 @@ void TestConfigConnectionUnrequireNeverExceedsItsRequests() {
   OpenThree(rig);
   const RemoteId config = rig.remotes.Opens()[0].remote;
   rig.router->OnRemoteOpen(config);
-  rig.router->OnGameFrame(1, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest), true);
   rig.router->OnRemoteFrame(config, Msg(0xb9cdaf586f7bd012ULL, "config"), true);
-  rig.router->OnRemoteFrame(config, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // delivered: 1 -> 0
-  rig.router->OnRemoteFrame(config, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped
+  rig.router->OnRemoteFrame(config, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // delivered: 1 -> 0
+  rig.router->OnRemoteFrame(config, Msg(nevr_evr_codec::kSymConnectionUnrequire, ""), true);  // dropped
   QCHECK(rig.games.Sent().size() == 2);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
@@ -1027,7 +1027,7 @@ void TestUnknownFirstFrameKeepsTheProvisionalRole() {
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameFrame(3, Msg(kSymSomething, "unlisted"), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 1 && sent[0].id == 2);
   QCHECK(!rig.logs.Has("-> login"));
@@ -1042,9 +1042,9 @@ void TestReconnectedLoginConnectionTakesOverTheSession() {
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameClose(2);  // the login connection goes
   rig.router->OnGameOpen(4);   // the game's new login connection: the session has no login connection, so it is one
-  rig.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest), true);
   QCHECK(rig.remotes.Opens().size() == 2);  // it rides the live session: no second login remote
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 2);
@@ -1063,7 +1063,7 @@ void TestLoginReplyWithoutALoginConnectionIsDropped() {
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameClose(2);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);
   QCHECK(rig.games.Sent().empty());
   QCHECK(rig.router->GetStats().droppedRemoteFrames == 1);
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
@@ -1078,7 +1078,7 @@ void TestProvisionalLoginThatSendsConfigIsMoved() {
   rig.router->OnGameOpen(1);
   rig.router->OnGameOpen(2);  // provisional login, alone on its session
   const RemoteId provisional = rig.remotes.Opens()[1].remote;
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymConfigRequest), true);
   const auto opens = rig.remotes.Opens();
   QCHECK(opens.size() == 3);
   if (opens.size() == 3) {
@@ -1099,10 +1099,10 @@ void TestLoginConnectionWithSharersKeepsItsRole() {
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymConfigRequest), true);
   QCHECK(rig.remotes.Opens().size() == 2);
   QCHECK(rig.logs.Has("role stays login", static_cast<int>(LogLevel::Warning)));
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);
   QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 2);
 }
 
@@ -1114,9 +1114,9 @@ void TestLoginRequestOnAnotherConnectionTakesOverFromALiveLogin() {
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameOpen(4);  // a live login exists: provisionally a matchmaker
-  rig.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest), true);
   QCHECK(rig.remotes.Opens().size() == 2);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile"), true);
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
   const auto sent = rig.games.Sent();
   QCHECK(sent.size() == 2);
@@ -1153,8 +1153,8 @@ void TestHeldLoginOpensWhenTheAccountAppears() {
   const auto holds = rig.games.Holds();
   QCHECK(holds.size() == 1 && holds[0].first == 2 && holds[0].second);
   QCHECK(rig.logs.Has("(login) held"));
-  const std::string loginRequest = Msg(EvrCodec::kSymLoginRequest, "the-login");
-  const std::string next = Msg(EvrCodec::kSymConfigRequest, "after");
+  const std::string loginRequest = Msg(nevr_evr_codec::kSymLoginRequest, "the-login");
+  const std::string next = Msg(nevr_evr_codec::kSymConfigRequest, "after");
   rig.router->OnGameFrame(2, loginRequest, true);
   rig.router->OnGameFrame(2, next, true);
   QCHECK(rig.router->GetStats().pendingFrames == 2);
@@ -1183,7 +1183,7 @@ void TestHeldLoginOpensWhenTheAccountAppears() {
   if (sent.size() == 2) QCHECK(sent[0].data == loginRequest && sent[1].data == next);
   QCHECK(rig.games.Closes().empty());
   // Replies reach the login connection once the session is up.
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnRemoteFrame(login, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);
   QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 2);
 }
 
@@ -1270,14 +1270,14 @@ void TestOnlyTheLoginConnectionIsIdleExempt() {
   Rig other;
   other.router->OnGameOpen(1);
   other.router->OnGameOpen(2);  // provisional login: exempt
-  other.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);  // it was the config connection
+  other.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymConfigRequest), true);  // it was the config connection
   holds = other.games.Holds();
   QCHECK(holds.size() == 2 && holds[0] == std::make_pair(GameId(2), true) && holds[1] == std::make_pair(GameId(2), false));
   // A matchmaker that takes over the login role gets it.
   Rig third;
   OpenThree(third);
   third.router->OnGameOpen(4);
-  third.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  third.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest), true);
   holds = third.games.Holds();
   bool fourExempt = false, twoReleased = false;
   for (const auto& h : holds) {
@@ -1289,7 +1289,383 @@ void TestOnlyTheLoginConnectionIsIdleExempt() {
 
 }  // namespace
 
+// ---- login removal notice after a lost session (#320, option B) -----------------------------------------
+// On Quest the game sends its own login. When the remote session ends with nothing outstanding on the login
+// connection the game reconnects its login socket WITHOUT logging in again. Instead of replaying a credential
+// the router sends the game an SNSLoginRemovedNotify for the account it last saw logged in, on that login
+// socket, once per lost session; the game puts itself on the login-failed screen and RETRY logs it in.
+
+const std::string kRemovedJson = "{\"message\":\"Connection lost. Select RETRY to sign in again.\"}";
+constexpr uint64_t kTestPlatform = 4;
+constexpr uint64_t kTestAccount = 0x1122334455667788ULL;
+
+Options RemovalOptions() {
+  Options o;
+  o.loginRemovedJson = kRemovedJson;  // no buildLogin: the game's own login is the only login
+  return o;
+}
+
+std::string ExpectedRemoved() {
+  return nevr_evr_codec::BuildLoginRemovedNotify({kTestPlatform, kTestAccount}, nevr_evr_codec::kLoginRemovedReasonText,
+                                                 kRemovedJson);
+}
+
+// Config (1), login (2) and matchmaker (3) connections; the login session open, the game's own login sent and
+// answered by a LoginSuccess whose Unrequire is in the same frame (nothing outstanding afterwards).
+std::vector<RemoteOpenRequest> EstablishedForRemoval(Rig& rig) {
+  OpenThree(rig);
+  const auto opens = rig.remotes.Opens();
+  rig.router->OnRemoteOpen(opens[0].remote);
+  rig.router->OnRemoteOpen(opens[1].remote);
+  rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLoginRequest, "GAME-LOGIN-" + kSecret), true);
+  rig.router->OnRemoteFrame(opens[1].remote,
+                            nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount) +
+                                Msg(nevr_evr_codec::kSymConnectionUnrequire, "u"),
+                            true);
+  return opens;
+}
+
+// The session fails under the game; its sockets close and the game's login socket comes back as game 4.
+RemoteId LoseAndReconnect(Rig& rig, RemoteId failed) {
+  rig.router->OnRemoteError(failed, 0, "network error");
+  rig.router->OnGameClose(2);
+  rig.router->OnGameClose(3);
+  const std::size_t before = rig.remotes.Opens().size();
+  rig.router->OnGameOpen(4);
+  const auto opens = rig.remotes.Opens();
+  return opens.size() == before + 1 ? opens.back().remote : kNoRemote;
+}
+
+std::vector<std::string> SentToGame(Rig& rig, GameId game) {
+  std::vector<std::string> out;
+  for (const SentFrame& f : rig.games.Sent()) {
+    if (f.id == game) out.push_back(f.data);
+  }
+  return out;
+}
+
+int CountNotices(Rig& rig) {
+  int n = 0;
+  for (const SentFrame& f : rig.games.Sent()) {
+    if (nevr_evr_codec::FirstSymbol(f.data) == nevr_evr_codec::kSymLoginRemovedNotify) ++n;
+  }
+  return n;
+}
+
+// The fixed part is 0x18 bytes. Run first in main(): with a shorter constant BuildLoginRemovedNotify throws
+// (the padding length underflows), which would end the process before any CHECK printed. Failure caught: a
+// changed fixed size is reported as a failed check, not as an abort.
+void TestLoginRemovedFixedSizeIsPinned() {
+  QCHECK(nevr_evr_codec::kLoginRemovedFixedSize == 0x18);
+}
+
+// The frame layout the game's handler reads (libr15 ListenProxy 0x1938358: size - 0x18 is the JSON; callbacks
+// 0x1933a28 / 0x125f908). Failure caught: a shifted offset, a wrong size, the id words in the wrong order.
+void TestLoginRemovedFrameLayout() {
+  const std::string frame = ExpectedRemoved();
+  nevr_evr_codec::Message m;
+  QCHECK(nevr_evr_codec::ReadMessage(frame, 0, &m) == nevr_evr_codec::ReadStatus::Ok);
+  QCHECK(m.symbol == nevr_evr_codec::kSymLoginRemovedNotify && m.symbol == 0x73c0a8cbf5c697abULL);
+  QCHECK(m.length == nevr_evr_codec::kLoginRemovedFixedSize + kRemovedJson.size());
+  QCHECK(nevr_evr_codec::kLoginRemovedFixedSize == 0x18);
+  const uint8_t* p = m.payload;
+  auto le64 = [](const uint8_t* q) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; --i) v = (v << 8) | q[i];
+    return v;
+  };
+  QCHECK(!nevr_evr_codec::kLoginRemovedUserIdSwapped);
+  QCHECK(le64(p) == kTestPlatform && le64(p + 8) == kTestAccount);  // the EvrId as LoginSuccess carries it
+  const uint32_t word10 = p[0x10] | (p[0x11] << 8) | (p[0x12] << 16) | (static_cast<uint32_t>(p[0x13]) << 24);
+  QCHECK(word10 == nevr_evr_codec::kLoginRemovedWord10 && word10 == 0);  // pinned: changing the unmeasured word is an edit here too
+  QCHECK(p[0x14] == nevr_evr_codec::kLoginRemovedReasonText && p[0x14] == 1);
+  QCHECK(p[0x15] == 0 && p[0x16] == 0 && p[0x17] == 0);
+  const std::string json(reinterpret_cast<const char*>(p + 0x18), static_cast<std::size_t>(m.length - 0x18));
+  QCHECK(json == kRemovedJson);
+}
+
+// LoginSuccess names the account at payload 16..32 (after the session UUID).
+void TestLoginSuccessUserIdIsParsed() {
+  const auto id = nevr_evr_codec::ParseLoginSuccessUserId(nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount));
+  QCHECK(id.has_value() && id->platformCode == kTestPlatform && id->accountId == kTestAccount);
+  QCHECK(!nevr_evr_codec::ParseLoginSuccessUserId(Msg(nevr_evr_codec::kSymLoginSuccess, "short")).has_value());
+  QCHECK(!nevr_evr_codec::ParseLoginSuccessUserId(Msg(kSymSomething, std::string(40, 'x'))).has_value());
+}
+
+// Failure caught: the reconnected login socket left on an unauthenticated session with a game that believes it
+// is logged in. The silent login socket gets exactly one notice, with the account the service logged in, and
+// the new session is not sent the old login (nothing is replayed, nothing credential-like is kept).
+void TestSilentLoginSocketAfterTheLossIsSentOneNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  QCHECK(rig.router->GetStats().loginUserKnown);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  QCHECK(fresh != kNoRemote);
+  QCHECK(rig.router->GetStats().loginRemovedDue);
+  QCHECK(rig.logs.Has("login-removed notice"));
+  QCHECK(SentToGame(rig, 4).empty());  // nothing yet: the connection has not shown it is the login socket
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameSilent(4);
+  const auto toGame = SentToGame(rig, 4);
+  QCHECK(toGame.size() == 1 && toGame[0] == ExpectedRemoved());
+  QCHECK(rig.router->GetStats().loginsRemoved == 1);
+  QCHECK(rig.router->GetStats().loginRemovedDue);  // stays armed: this socket may not be the login peer
+  rig.router->OnGameSilent(4);  // idempotent
+  QCHECK(CountNotices(rig) == 1);
+  // The new session was never sent the game's old login or anything else of its own.
+  for (const SentFrame& f : rig.remotes.Sent()) {
+    if (f.id == fresh) QCHECK(f.data != Msg(nevr_evr_codec::kSymLoginRequest, "GAME-LOGIN-" + kSecret));
+  }
+  QCHECK(!rig.logs.Has(kSecret));
+}
+
+// Failure caught (the review's HIGH): the router cannot tell the login socket from the others, so a notice
+// consumed by a guess left the real login socket on the unauthenticated session. Every socket that reconnects
+// is sent it, once. The game drops it on any peer but its login peer (CNSUser::LoginRemovedCB 0x1933a64).
+void TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId provisional = LoseAndReconnect(rig, opens[1].remote);  // game 4: provisional login role
+  rig.router->OnRemoteOpen(provisional);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // it is the config socket
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 4)[0] == ExpectedRemoved());
+  QCHECK(rig.router->GetStats().loginRemovedDue);  // still armed: the login socket has not been heard
+  rig.router->OnGameOpen(5);                       // the real login socket (a matchmaker by order), quiet
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
+  // Never twice to one socket, whatever it does next.
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymConfigRequest, "cfg2"), true);
+  rig.router->OnGameFrame(5, Msg(kSymSomething, "profile"), true);
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 5).size() == 1);
+  QCHECK(CountNotices(rig) == 2 && rig.router->GetStats().loginsRemoved == 2);
+}
+
+// A socket that was already open when the session failed did not reconnect: it is never sent the notice.
+void TestASocketOpenedBeforeTheLossIsNeverSentTheNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // game 1 predates the loss
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg-again"), true);
+  rig.router->OnGameSilent(1);
+  QCHECK(SentToGame(rig, 1).empty());
+  rig.router->OnGameSilent(4);
+  QCHECK(SentToGame(rig, 4).size() == 1);
+}
+
+// The review's path (a): a matchmaker socket reconnects first and stays quiet; the real login socket (a
+// matchmaker by order, silent) comes after. Each gets exactly one.
+void TestQuietMatchmakerFirstThenTheLoginSocketEachGetOneNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: quiet
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameOpen(5);  // game 5: the real login socket, a matchmaker by order, quiet
+  rig.router->OnGameSilent(4);
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 4).size() == 1 && SentToGame(rig, 4)[0] == ExpectedRemoved());
+  QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
+  QCHECK(CountNotices(rig) == 2);
+}
+
+// The review's path (b): the real login socket is guessed as a matchmaker and the first socket spoke as
+// matchmaker; the notice must still reach the real one (a notice on a socket that spoke is not the last).
+void TestRealLoginSocketGuessedAsMatchmakerStillGetsItsNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);  // game 4: provisional login
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymFindSessionRequest, "find"), true);  // a matchmaker
+  QCHECK(SentToGame(rig, 4).size() == 1);
+  rig.router->OnGameOpen(5);  // the real login socket, a matchmaker by order
+  QCHECK(SentToGame(rig, 5).empty());
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 5).size() == 1 && SentToGame(rig, 5)[0] == ExpectedRemoved());
+  QCHECK(CountNotices(rig) == 2);
+}
+
+// A silent matchmaker by order is sent it too: it cannot be told from the real login socket.
+void TestSilentMatchmakerByOrderIsSentOneNoticeLikeTheRest() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameOpen(5);  // a second connection on the live session: matchmaker role
+  rig.router->OnGameSilent(5);
+  QCHECK(SentToGame(rig, 5).size() == 1);
+  rig.router->OnGameSilent(4);
+  QCHECK(SentToGame(rig, 4).size() == 1);
+  QCHECK(CountNotices(rig) == 2);
+}
+
+// Failure caught (the RETRY path): the login connection ended with a request outstanding. The game takes its
+// own Lost path (-95, RETRY runs its login); a notice would only get in front of it.
+void TestNoNoticeWhenTheLoginConnectionHadRequestsOutstanding() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  rig.router->OnGameFrame(2, Msg(kSymSomething, "profile-request"), true);  // raises the count, no Unrequire
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  QCHECK(fresh != kNoRemote);
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameSilent(4);
+  QCHECK(SentToGame(rig, 4).empty());
+  QCHECK(rig.router->GetStats().loginsRemoved == 0);
+}
+
+// Failure caught: a game that logs in itself being sent a notice that pulls it off the screen it is using.
+void TestOwnLoginFirstGetsNoNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest, "OWN-" + kSecret), true);
+  QCHECK(SentToGame(rig, 4).empty());
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  QCHECK(rig.logs.Has("login removed notice disarmed"));
+  rig.router->OnGameSilent(4);  // ignored: it has spoken
+  QCHECK(SentToGame(rig, 4).empty());
+  // Disarmed for every socket: one that reconnects (or speaks) after the game's own login is sent nothing.
+  rig.router->OnGameOpen(5);
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameFrame(5, Msg(kSymSomething, "profile"), true);
+  QCHECK(SentToGame(rig, 5).empty() && CountNotices(rig) == 0);
+}
+
+// The next session being established (LoginSuccess on it) disarms the notice for sockets that come later.
+void TestLoginSuccessOnTheNextSessionDisarmsTheNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  QCHECK(rig.router->GetStats().loginRemovedDue);
+  rig.router->OnRemoteFrame(fresh, nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount), true);
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  rig.router->OnGameOpen(5);
+  rig.router->OnGameSilent(5);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 0);
+}
+
+// The review's LOW: the login socket closed itself before the failure, so nothing reconnects onto it and
+// `outstanding` reads false; the notice is not armed.
+void TestNoNoticeWhenTheLoginSocketAlreadyClosed() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  rig.router->OnGameClose(2);  // the login socket closes itself; the session lives on for the matchmaker
+  rig.router->OnRemoteError(opens[1].remote, 0, "network error");
+  QCHECK(!rig.router->GetStats().loginRemovedDue);
+  rig.router->OnGameClose(3);
+  rig.router->OnGameOpen(4);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 0);
+}
+
+// Failure caught: a login-role request (no login) after the reconnect: the notice goes to that connection.
+void TestLoginRoleRequestAfterTheReconnectGetsTheNotice() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "profile-request"), true);
+  const auto toGame = SentToGame(rig, 4);
+  QCHECK(toGame.size() == 1 && toGame[0] == ExpectedRemoved());
+}
+
+// Failure caught: the account outliving the player's logout, a rejected login, or the router.
+void TestTheAccountIdIsClearedByLogOutRejectionAndShutdown() {
+  {  // dropped: the session already ended and the game's login socket has no live remote
+    Rig rig(RemovalOptions());
+    const auto opens = EstablishedForRemoval(rig);
+    rig.router->OnRemoteError(opens[1].remote, 0, "network error");
+    QCHECK(rig.router->GetStats().loginUserKnown && rig.router->GetStats().loginRemovedDue);
+    rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLogOut, "bye"), true);  // dropped: no live session
+    QCHECK(!rig.router->GetStats().loginUserKnown);
+    QCHECK(!rig.router->GetStats().loginRemovedDue);
+    QCHECK(rig.router->GetStats().droppedGameFrames == 1);
+  }
+  {  // on a connection that is not the login connection
+    Rig rig(RemovalOptions());
+    EstablishedForRemoval(rig);
+    rig.router->OnGameFrame(3, Msg(nevr_evr_codec::kSymLogOut, "bye"), true);
+    QCHECK(!rig.router->GetStats().loginUserKnown);
+  }
+  {  // embedded after another message
+    Rig rig(RemovalOptions());
+    EstablishedForRemoval(rig);
+    rig.router->OnGameFrame(2, Msg(kSymSomething, "x") + Msg(nevr_evr_codec::kSymLogOut, "bye"), true);
+    QCHECK(!rig.router->GetStats().loginUserKnown);
+  }
+  {  // after a logout nothing is sent at the reconnect
+    Rig rig(RemovalOptions());
+    const auto opens = EstablishedForRemoval(rig);
+    rig.router->OnGameFrame(2, Msg(nevr_evr_codec::kSymLogOut, "bye"), true);
+    const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+    rig.router->OnRemoteOpen(fresh);
+    rig.router->OnGameSilent(4);
+    QCHECK(SentToGame(rig, 4).empty());
+  }
+  {  // a rejected login
+    Rig rig(RemovalOptions());
+    OpenThree(rig);
+    const auto opens = rig.remotes.Opens();
+    rig.router->OnRemoteOpen(opens[1].remote);
+    rig.router->OnRemoteFrame(opens[1].remote, nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount), true);
+    QCHECK(rig.router->GetStats().loginUserKnown);
+    rig.router->OnRemoteFrame(opens[1].remote, Msg(nevr_evr_codec::kSymLoginFailure, std::string(24, '\0')), true);
+    QCHECK(!rig.router->GetStats().loginUserKnown);
+  }
+  {  // Shutdown
+    Rig rig(RemovalOptions());
+    EstablishedForRemoval(rig);
+    QCHECK(rig.router->GetStats().loginUserKnown);
+    rig.router->Shutdown();
+    QCHECK(!rig.router->GetStats().loginUserKnown);
+    QCHECK(!rig.router->GetStats().loginRemovedDue);
+  }
+}
+
+// Failure caught: the feature on for a wiring that did not ask for it (the PC bridge).
+void TestNoNoticeWhenTheOptionIsOff() {
+  Rig rig;  // default Options
+  const auto opens = EstablishedForRemoval(rig);
+  QCHECK(!rig.router->GetStats().loginUserKnown);
+  const RemoteId fresh = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(fresh);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 0);
+  QCHECK(rig.router->GetStats().loginsRemoved == 0);
+}
+
+// One notice per lost session, and again after the next loss.
+void TestOneNoticePerLostSession() {
+  Rig rig(RemovalOptions());
+  const auto opens = EstablishedForRemoval(rig);
+  const RemoteId second = LoseAndReconnect(rig, opens[1].remote);
+  rig.router->OnRemoteOpen(second);
+  rig.router->OnGameSilent(4);
+  QCHECK(CountNotices(rig) == 1);
+  // The game now logs in itself (RETRY) on the same session, and is logged in again.
+  rig.router->OnGameFrame(4, Msg(nevr_evr_codec::kSymLoginRequest, "RETRY-" + kSecret), true);
+  rig.router->OnRemoteFrame(second,
+                            nevr_evr_codec::BuildLoginSuccess(kTestPlatform, kTestAccount) +
+                                Msg(nevr_evr_codec::kSymConnectionUnrequire, "u"),
+                            true);
+  QCHECK(CountNotices(rig) == 1);
+  rig.router->OnRemoteError(second, 0, "network error again");
+  rig.router->OnGameClose(4);
+  rig.router->OnGameOpen(6);
+  rig.router->OnGameSilent(6);
+  QCHECK(CountNotices(rig) == 2);
+  QCHECK(SentToGame(rig, 6).size() == 1);
+}
+
 int main() {
+  TestLoginRemovedFixedSizeIsPinned();
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "session_router_test: the login-removed frame size is not 0x18; stopping before it is built\n");
+    return 1;
+  }
   TestConnectionIdentity();
   TestConfigRemoteEndDoesNotEndTheLoginSession();
   TestLoginIsFirstThenQueuedFramesInOrder();
@@ -1316,6 +1692,22 @@ int main() {
   TestGameBackpressureOverflowClosesTheGame();
   TestConcurrentProducersKeepPerSourceOrder();
   TestQuestDefaultsInjectNothing();
+  TestLoginRemovedFrameLayout();
+  TestLoginSuccessUserIdIsParsed();
+  TestSilentLoginSocketAfterTheLossIsSentOneNotice();
+  TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice();
+  TestASocketOpenedBeforeTheLossIsNeverSentTheNotice();
+  TestQuietMatchmakerFirstThenTheLoginSocketEachGetOneNotice();
+  TestRealLoginSocketGuessedAsMatchmakerStillGetsItsNotice();
+  TestSilentMatchmakerByOrderIsSentOneNoticeLikeTheRest();
+  TestNoNoticeWhenTheLoginConnectionHadRequestsOutstanding();
+  TestOwnLoginFirstGetsNoNotice();
+  TestLoginSuccessOnTheNextSessionDisarmsTheNotice();
+  TestNoNoticeWhenTheLoginSocketAlreadyClosed();
+  TestLoginRoleRequestAfterTheReconnectGetsTheNotice();
+  TestTheAccountIdIsClearedByLogOutRejectionAndShutdown();
+  TestNoNoticeWhenTheOptionIsOff();
+  TestOneNoticePerLostSession();
   TestMatchmakerConnectionsAreCapped();
   TestExtraConnectionNeverBecomesASecondLogin();
   TestShutdown();

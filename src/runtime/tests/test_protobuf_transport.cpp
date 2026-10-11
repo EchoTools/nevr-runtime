@@ -34,7 +34,7 @@ void ExpectEncodedEnvelope(const std::string& frame, const gameservice::v1::Enve
   std::memcpy(&symbol, frame.data() + sizeof(magic), sizeof(symbol));
   std::memcpy(&payloadSize, frame.data() + sizeof(magic) + sizeof(symbol), sizeof(payloadSize));
   EXPECT_EQ(magic, kWireMagic);
-  EXPECT_EQ(symbol, GameServer::kProtobufMessageSymbol);
+  EXPECT_EQ(symbol, nevr_game_server::kProtobufMessageSymbol);
   ASSERT_EQ(payloadSize, frame.size() - kHeaderSize);
   gameservice::v1::Envelope decoded;
   ASSERT_TRUE(decoded.ParseFromArray(frame.data() + kHeaderSize, static_cast<int>(payloadSize)));
@@ -45,7 +45,7 @@ void ExpectEncodedEnvelope(const std::string& frame, const gameservice::v1::Enve
 TEST(ProtobufTransport, QueuedEnvelopeIsSerializedAsAParseableWireEnvelope) {
   WebSocketClient client;
   const auto envelope = MakeEnvelope();
-  EXPECT_EQ(GameServer::SendProtobufEnvelope(client, envelope), GameServer::ProtobufSendResult::AcceptedQueued);
+  EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, envelope), nevr_game_server::ProtobufSendResult::AcceptedQueued);
   const auto pending = client.TestCopyPendingMessages();
   ASSERT_EQ(pending.size(), 1U);
   ExpectEncodedEnvelope(pending.front(), envelope);
@@ -55,9 +55,9 @@ TEST(ProtobufTransport, QueueCapacityRejectsTheNextMessage) {
   WebSocketClient client;
   const auto envelope = MakeEnvelope();
   for (size_t index = 0; index < 256; ++index) {
-    EXPECT_EQ(GameServer::SendProtobufEnvelope(client, envelope), GameServer::ProtobufSendResult::AcceptedQueued);
+    EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, envelope), nevr_game_server::ProtobufSendResult::AcceptedQueued);
   }
-  EXPECT_EQ(GameServer::SendProtobufEnvelope(client, envelope), GameServer::ProtobufSendResult::TransportRejected);
+  EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, envelope), nevr_game_server::ProtobufSendResult::TransportRejected);
   EXPECT_EQ(client.TestCopyPendingMessages().size(), 256U);
 }
 
@@ -69,7 +69,7 @@ TEST(ProtobufTransport, ConnectedTransportFailureIsNotReportedAsAccepted) {
     ++attempts;
     return false;
   });
-  EXPECT_EQ(GameServer::SendProtobufEnvelope(client, MakeEnvelope()), GameServer::ProtobufSendResult::TransportRejected);
+  EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, MakeEnvelope()), nevr_game_server::ProtobufSendResult::TransportRejected);
   EXPECT_EQ(attempts, 1U);
 }
 
@@ -77,7 +77,7 @@ TEST(ProtobufTransport, ConnectedTransportSuccessIsReportedAsSent) {
   WebSocketClient client;
   client.TestSetConnected(true);
   client.TestSetTransportHandler([](const std::string&) { return true; });
-  EXPECT_EQ(GameServer::SendProtobufEnvelope(client, MakeEnvelope()), GameServer::ProtobufSendResult::AcceptedSent);
+  EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, MakeEnvelope()), nevr_game_server::ProtobufSendResult::AcceptedSent);
 }
 
 // Issue #43. The receive handler forwards payloads to CBroadcaster::ReceiveLocalEvent

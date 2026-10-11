@@ -13,7 +13,7 @@
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/lifecycle/config.h"
 
-namespace PartyInviteGate {
+namespace nevr_party_invite_gate {
 namespace {
 
 constexpr std::uint64_t kBooleanVA = 0x1405EE870;
@@ -223,4 +223,4 @@ void Install(std::uintptr_t gameBase) {
                  reinterpret_cast<PVOID>(&RespondInviteNodeHook), "R15NetPartyRespondToInviteNode");
 }
 
-}  // namespace PartyInviteGate
+}  // namespace nevr_party_invite_gate

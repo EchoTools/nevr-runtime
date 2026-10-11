@@ -9,7 +9,7 @@
 #include "runtime/patch/broadcaster_guard.h"
 #include <cstdio>
 
-namespace BroadcasterGuard {
+namespace nevr_broadcaster_guard {
 
 void Install(uintptr_t) {
     /* Deliberately empty. The ServerLib ABI shim lives in initialize.cpp's
@@ -29,4 +29,4 @@ void Install(uintptr_t) {
 
 void Shutdown() {}
 
-} // namespace BroadcasterGuard
+} // namespace nevr_broadcaster_guard

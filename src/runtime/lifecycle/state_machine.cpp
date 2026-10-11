@@ -87,7 +87,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // Session ended: we were in-game and now returning to lobby. Exit cleanly
     // so the fleet manager can spawn a fresh instance.
     if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
-      const GUID endedSession = LoginSession::Get();
+      const GUID endedSession = nevr_login_session::Get();
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] session ended session_id=%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X "
           "— server exiting via graceful shutdown",
@@ -104,7 +104,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   // By this point the Lobby is initialized and localEntrants contains the server's
   // own login session at entrant[0]. The GUID was set by pnsrad.dll's LoginIdResponseCB
   // after the WebSocket login completed. We read it from the Lobby structure.
-  if (state == EchoVR::NetGameState::Lobby && LoginSession::Get().Data1 == 0 && g_pGame) {
+  if (state == EchoVR::NetGameState::Lobby && nevr_login_session::Get().Data1 == 0 && g_pGame) {
     // The game's CR15NetGame has a lobby at a known offset. The IServerLib::Initialize
     // already receives the Lobby*. But here we read it from the Lobby's localEntrants
     // pool, which contains LoginSession GUIDs for each entrant.
@@ -145,7 +145,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
                 captured.Data2 = static_cast<USHORT>(d2);
                 captured.Data3 = static_cast<USHORT>(d3);
                 for (int i = 0; i < 8; i++) captured.Data4[i] = static_cast<BYTE>(d4[i]);
-                LoginSession::Set(captured);
+                nevr_login_session::Set(captured);
               }
             }
           }
@@ -154,7 +154,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
       }
     }
 
-    const GUID session = LoginSession::Get();
+    const GUID session = nevr_login_session::Get();
     if (session.Data1 != 0) {
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] Captured login session: %08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",

@@ -9,7 +9,7 @@ namespace gameservice::v1 {
 class Envelope;
 }
 
-namespace GameServer {
+namespace nevr_game_server {
 
 using EnvelopeSender = std::function<ProtobufSendResult(const gameservice::v1::Envelope&)>;
 using ServerLifecycleAction = std::function<void()>;
@@ -33,4 +33,4 @@ SessionEndResult UnregisterRegisteredServer(ServerContext& context,
                                             const ServerLifecycleAction& unregisterCallbacks,
                                             const ServerLifecycleAction& disconnect);
 
-}  // namespace GameServer
+}  // namespace nevr_game_server

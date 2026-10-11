@@ -1,0 +1,14 @@
+{
+  "AssetCDN": "nevr_asset_cdn",
+  "BinaryBugFixes": "nevr_binary_bug_fixes",
+  "BroadcasterGuard": "nevr_broadcaster_guard",
+  "CoopAiTrace": "nevr_coop_ai_trace",
+  "EarlyQuitLockout": "nevr_early_quit_lockout",
+  "Evrp": "nevr_evrp",
+  "MatchmakerHostPatch": "nevr_matchmaker_host_patch",
+  "MicProvider": "nevr_mic_provider",
+  "PartyInviteGate": "nevr_party_invite_gate",
+  "PnsradEnabler": "nevr_pnsrad_enabler",
+  "ProviderIdentity": "nevr_provider_identity",
+  "SocialFacade": "nevr_social_facade"
+}

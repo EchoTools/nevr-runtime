@@ -1,11 +1,7 @@
 # Social scenario harness: one-client tests for friends and parties
 
-2026-10-01. Status: built. The runtime's control endpoint (`src/runtime/scenario/`, compiled only by
-the `mingw-scenario` preset and checked absent from release DLLs by
-`tools/verify_scenario_control_absent.py`), the runner (`tools/scenario/`, `just scenario NAME`,
-`just scenario-all`) and the YAML scenarios under `tools/scenario/scenarios/` implement it. The
-endpoint is a loopback TCP listener, not the named pipe this design first described. The rest of this
-document is the design and the owner's constraints.
+2026-10-01. Status: built. How the harness works now is in `docs/reference/social-scenario-harness.md`;
+this document keeps the reasoning and the owner's constraints.
 
 ## Why
 
@@ -125,65 +121,3 @@ cached, with no request sent. Outgoing side, once allowed: act through the
 friends UI's remove handler, check `SNSFriendRemoveRequest`
 (0x78908988b7fe6db4) with F's id, inject `SNSFriendRemoveResponse` and check
 the same roster change.
-
-## What is the same in every scenario
-
-1. **Bring the client up and down.** Install the build, launch on :101, wait
-   for "logged in" and the social accessor, and on exit clear the prefix (the
-   #53 exit hang).
-2. **Put the game in a state.** Inject server->game messages.
-3. **Make the game act.** Fire a game entry point, or deliver a message.
-4. **Assert on the run's own log.** An ordered list of expected lines with
-   timeouts: frame log (by message name), facade slot trace (slot, args,
-   result), session events.
-
-Only the message names, fields, the entry point and the expected lines differ.
-
-## What the harness consists of
-
-- **A control endpoint in the runtime**, compiled in test builds only behind a
-  CMake option and absent from release DLLs, because it can inject messages
-  into a live session. A loopback TCP listener on an OS-assigned port, with three verbs:
-  - inject (message name + fields as JSON, encoded by the runtime's existing
-    wire builders so the format is the code's, not the test's)
-  - fire (a game entry point, such as a UI handler; facade slots only in a
-    diagnostic mode that cannot produce a pass)
-  - state (roster and party snapshot as JSON)
-- **A runner that extends `launch-client.sh`:** install, launch nested, wait for
-  logged in, play a scenario, check expectations against the run's log, tear
-  down, print PASS/FAIL with the failing expectation. Exit 1 on fail; no
-  `|| true`.
-- **Scenario files** (YAML): setup injections, the action, expected log lines
-  in order with timeouts. A new feature test is a new file of about 20 lines and
-  a run of a couple of minutes, with no human.
-- **Unit replay:** each scenario's message sequence can also be fed to the
-  party and roster state machines in `src/runtime/tests/test_social_facade.cpp`
-  for a loop that needs no game.
-
-## State when this document was written
-
-- The invite fix (first-match override plus event trace,
-  `src/runtime/patch/party_invite_gate.cpp`, installed from the social
-  accessor) had not been exercised in a client run; the first slice below did that.
-- Facade: `src/runtime/patch/social_facade_object.cpp`. Party state machine and
-  wire builders: `src/runtime/compat/social_party.h`. Roster:
-  `src/runtime/compat/social_roster.h`.
-
-## First slice, landed 2026-10-01
-
-- Control endpoint: `src/runtime/scenario/scenario_control.cpp` (TCP on 127.0.0.1,
-  ephemeral port logged as "[NEVR.SCENARIO] control listening on ..."), protocol in
-  `src/runtime/scenario/scenario_protocol.h`. Ops: state, inject FriendStatusNotify,
-  fire friend_invite. CMake option NEVR_SCENARIO_CONTROL, preset mingw-scenario.
-  `tools/verify_scenario_control_absent.py` runs in `just verify` against the release DLL.
-- "fire friend_invite" does what the friend row's script node (echovr.exe 0x140dddf60)
-  does: SNSUserID on the row's id string, then posts the invite handler 0x14018aa90 on
-  the NetGame deferred queue. It enters below the widget and above everything else.
-- Runner: `tools/scenario/run_scenario.py`; scenario: `tools/scenario/scenarios/invite.yaml`;
-  `just scenario invite`. Run folders under /var/tmp/work-nevr-runtime/scenario-runs/.
-- What the first runs found: the handler dropped every invite silently on its provider
-  check. pnsrad's UserProviderID reported "RAD", which the game maps to code 0, while
-  every "OVR-ORG-" id maps to 4. Fixed by making that export return "OVR"
-  (`src/runtime/patch/provider_identity.h`). Before the fix the scenario failed at
-  "game called the facade's SendInvite slot"; after it, all eight steps pass.
-

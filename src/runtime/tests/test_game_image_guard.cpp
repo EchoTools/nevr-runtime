@@ -13,7 +13,7 @@
 namespace {
 
 constexpr DWORD kExpectedTimestamp = 0x6452dff6;
-constexpr DWORD kChildExitCode = GameImageGuard::kUnsupportedImageExitCode;
+constexpr DWORD kChildExitCode = nevr_game_image_guard::kUnsupportedImageExitCode;
 
 class TestImage {
  public:
@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
   if (argc == 2 && (strcmp(argv[1], "--child-dllmain-load") == 0 ||
                     strcmp(argv[1], "--child-launcher-load") == 0 ||
                     strcmp(argv[1], "--child-full-pipe") == 0)) {
-    GameImageGuard::RunWithSupportedGameModule(
+    nevr_game_image_guard::RunWithSupportedGameModule(
         reinterpret_cast<HMODULE>(uintptr_t{1}), &InitializeChildModule);
     return 0;
   }
@@ -163,21 +163,21 @@ TEST(GameImageGuard, AcceptsOnlySupportedTimestampFromReadablePe32PlusHeaders) {
   TestImage image;
   ASSERT_TRUE(image.valid());
   image.MakeValid();
-  EXPECT_TRUE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_TRUE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
 }
 
 TEST(GameImageGuard, RejectsNullBadDosAndInvalidOffsets) {
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(nullptr));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(nullptr));
   TestImage image;
   ASSERT_TRUE(image.valid());
   image.MakeValid();
   image.base()[0] = 0;
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
   image.MakeValid();
   image.PutDosHeader(image.base(), -1);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
   image.PutDosHeader(image.base(), 0x100001);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
 }
 
 TEST(GameImageGuard, RejectsUnexpectedTimestampAndTruncatedOptionalHeader) {
@@ -185,11 +185,11 @@ TEST(GameImageGuard, RejectsUnexpectedTimestampAndTruncatedOptionalHeader) {
   ASSERT_TRUE(image.valid());
   image.PutDosHeader(image.base(), sizeof(IMAGE_DOS_HEADER));
   image.PutNtHeaders(image.base() + sizeof(IMAGE_DOS_HEADER), kExpectedTimestamp + 1);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
   image.PutNtHeaders(image.base() + sizeof(IMAGE_DOS_HEADER));
   auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(image.base() + sizeof(IMAGE_DOS_HEADER));
   nt->FileHeader.SizeOfOptionalHeader = sizeof(WORD);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
 }
 
 TEST(GameImageGuard, RejectsPeHeaderSplitAcrossUncommittedPageBoundary) {
@@ -199,7 +199,7 @@ TEST(GameImageGuard, RejectsPeHeaderSplitAcrossUncommittedPageBoundary) {
   ASSERT_NE(VirtualFree(second_page, image.page_size(), MEM_DECOMMIT), FALSE);
   const LONG pe_offset = static_cast<LONG>(image.page_size() - sizeof(WORD) - sizeof(IMAGE_DOS_HEADER));
   image.PutDosHeader(image.base(), pe_offset);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
 }
 
 TEST(GameImageGuard, RejectsGuardAndNoAccessHeaderPages) {
@@ -209,10 +209,10 @@ TEST(GameImageGuard, RejectsGuardAndNoAccessHeaderPages) {
   image.PutDosHeader(image.base(), pe_offset);
   DWORD prior = 0;
   ASSERT_NE(VirtualProtect(image.base() + image.page_size(), image.page_size(), PAGE_NOACCESS, &prior), FALSE);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
   ASSERT_NE(VirtualProtect(image.base() + image.page_size(), image.page_size(), PAGE_READWRITE, &prior), FALSE);
   ASSERT_NE(VirtualProtect(image.base() + image.page_size(), image.page_size(), PAGE_READWRITE | PAGE_GUARD, &prior), FALSE);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(image.base()));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(image.base()));
 }
 
 TEST(GameImageGuard, RejectsModulePointerThatIsNotAllocationBase) {
@@ -220,12 +220,12 @@ TEST(GameImageGuard, RejectsModulePointerThatIsNotAllocationBase) {
   ASSERT_TRUE(image.valid());
   BYTE* suballocation = image.base() + image.page_size();
   image.MakeValid(suballocation);
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(suballocation));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(suballocation));
 }
 
 TEST(GameImageGuard, RejectsAddressArithmeticOverflowBeforeReading) {
   const uintptr_t near_limit = UINTPTR_MAX - 16;
-  EXPECT_FALSE(GameImageGuard::IsSupportedGameModule(reinterpret_cast<HMODULE>(near_limit)));
+  EXPECT_FALSE(nevr_game_image_guard::IsSupportedGameModule(reinterpret_cast<HMODULE>(near_limit)));
 }
 
 TEST(GameImageGuard, DllMainLoadAndLauncherChildrenTerminateWithExactCode) {

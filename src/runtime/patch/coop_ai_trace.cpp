@@ -11,7 +11,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/patch/coop_ai_trace_rules.h"
 
-namespace CoopAiTrace {
+namespace nevr_coop_ai_trace {
 namespace {
 
 // CR15AIBBNetbot fields (the update 0x1412c1a30 and the phase mapper 0x1412c2100).
@@ -177,4 +177,4 @@ void Install(std::uintptr_t gameBase) {
               "CoopAiBlackboardUpdate");
 }
 
-}  // namespace CoopAiTrace
+}  // namespace nevr_coop_ai_trace

@@ -5,7 +5,7 @@
 # Configure with the android-arm64 preset (NDK r26d, arm64-v8a, API 26,
 # static libc++).  See docs/design/2026-07-13-quest-crash-reporter-injection.md.
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.23)
 project(nevr_quest LANGUAGES C CXX)
 
 if(NOT ANDROID)
@@ -40,6 +40,14 @@ add_library(nevr_quest_evr_codec STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/evr_codec.cpp")
 target_include_directories(nevr_quest_evr_codec PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_compile_options(nevr_quest_evr_codec PRIVATE -Wall -Wextra -Werror)
+
+# The self-check unit (runtime/compat/self_check.cpp): the registry and the remote log frame a run-card check's
+# result goes out in. No Windows headers, no sockets; the same source the Windows runtime compiles.
+add_library(nevr_quest_self_check STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/self_check.cpp")
+target_include_directories(nevr_quest_self_check PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_self_check PUBLIC nevr_quest_evr_codec nlohmann_json::nlohmann_json)
+target_compile_options(nevr_quest_self_check PRIVATE -Wall -Wextra -Werror)
 
 # Android-linkable codec test; the same file runs on the host in `just test-quest-shared`.
 add_executable(evr_codec_test tests/evr_codec_test.cpp)
@@ -114,10 +122,13 @@ target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
 
-# Build-time defaults embedded from the environment or <root>/.env at configure time (never read
+# Build-time defaults embedded from <root>/config/public-defaults.env at configure time (never read
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
+# The version (with its commit) and the features on by default.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_info.cmake")
+nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 # ── Token auth (device-code login, refresh, cache) ──────────────────────
 # The platform-neutral core (src/core) is the SAME source the Windows runtime
@@ -210,7 +221,8 @@ if(TARGET nevr_quest_got_hook)
   # archive so the install, its thunks and the backend are present.
   add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
-  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
+  # -fno-exceptions: the test arms the entitlement hook's thunk (callback_thunk.h refuses other units).
+  target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 
   add_executable(login_standin_test tests/login_standin_test.cpp login/login_standin.cpp)
   target_link_libraries(login_standin_test PRIVATE nevr_quest_login)

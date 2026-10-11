@@ -1,0 +1,32 @@
+# The ovr_* / ovrID_* imports of the pinned libpnsovr.so that the game's message pump (Update 0x207534), the four
+# login callbacks, CNSOVRMailbox::FulfillRequest and the delegate proxies can reach by direct calls
+# (tools/pinned_ovr_import_walk.py), and how the sentinel keeps a SYNTHETIC message handle away from each
+# (src/quest/login/login_local_answers.h). `just test-quest-hooks-pinned` compares this list with the library:
+# an import that is reachable and not listed, or listed and no longer reachable, fails it.
+#
+# hooked  = a GOT hook answers for a synthetic handle without calling the SDK
+# guarded = the callback handler never calls it on a synthetic handle
+# no handle = takes no message handle at all
+
+ovr_PopMessage                       # hooked: delivers a queued synthetic handle (held until Ready), else the real pop
+ovr_Message_GetType                  # hooked: a type no listener handles
+ovr_Message_GetRequestID             # hooked: the local request id the game registered its delegate under
+ovr_FreeMessage                      # hooked: releases the synthetic slot, never reaches the SDK
+ovr_Message_IsError                  # hooked (login claim logic): never the real function for a synthetic handle
+ovr_Message_GetError                 # guarded: the callback handler skips the real call for a synthetic handle
+ovr_Error_GetCode                    # guarded: only on the error object ovr_Message_GetError returned
+ovr_Error_GetHttpCode                # guarded: same
+ovr_Error_GetMessage                 # guarded: same
+ovr_Message_GetString                # hooked
+ovr_Message_GetUser                  # hooked
+ovr_Message_GetOrgScopedID           # hooked
+ovr_Message_GetUserProof             # hooked
+ovr_User_GetOculusID                 # hooked (derived handle)
+ovr_OrgScopedID_GetID                # hooked (derived handle)
+ovr_UserProof_GetNonce               # hooked (derived handle)
+ovr_User_GetLoggedInUser             # hooked request: answered locally, never sent
+ovr_User_GetOrgScopedID              # hooked request: answered locally, never sent
+ovr_User_GetAccessToken              # hooked request: answered locally, never sent
+ovr_User_GetUserProof                # hooked request: answered locally, never sent
+ovrID_FromString                     # no handle: parses a string (the pump's notification branch)
+ovr_VoipDecoder_GetDecodedPCM        # no message handle: the voice decoder's own handle, not on a message path

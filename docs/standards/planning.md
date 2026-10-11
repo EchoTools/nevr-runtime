@@ -86,7 +86,8 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 
 **Branches**
 - A branch whose PR merged is deleted (GitHub keeps it restorable from the PR).
-- A branch with no PR and no commit across two sprints is listed for its author to keep or drop.
+- A branch with no PR is opened as one or deleted within 24 hours, by the seat that created it (`AGENTS.md`,
+  "Branch lifecycle"); nothing is left to age across sprints.
 
 **Milestones**
 - The title is `vX.Y.Z — theme`, or `Future`.

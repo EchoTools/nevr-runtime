@@ -1,5 +1,5 @@
 /*
- * plugin.cpp — Behavioral Acceptance Criterion (BAC) for the nEVR plugin API v5.
+ * plugin.cpp — Behavioral Acceptance Criterion (BAC) for the NEVR plugin API v5.
  *
  * THIS FILE IS THE REFERENCE. Community plugin authors copy from it. Every plugin
  * feature the host supports is demonstrated here with comments that explain WHY,

@@ -34,7 +34,7 @@ static MiniDumpWriteDump_t g_realMiniDumpWriteDump = nullptr;
 static void LoadRealDbgCore() {
   if (g_realDbgCore) return;
 
-  g_realDbgCore = Nevr::Lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
+  g_realDbgCore = nevr::lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
   if (g_realDbgCore) {
     g_realMiniDumpWriteDump =
         (MiniDumpWriteDump_t)::GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");
@@ -94,10 +94,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // dead and joining would deadlock under the loader lock.
       if (lpReserved == NULL) {
         UnloadModules();
-        AssetCDN::Shutdown();
-        BinaryBugFixes::Shutdown();
-        BroadcasterGuard::Shutdown();
-        BuiltinLogFilter::Shutdown();
+        nevr_asset_cdn::Shutdown();
+        nevr_binary_bug_fixes::Shutdown();
+        nevr_broadcaster_guard::Shutdown();
+        nevr_builtin_log_filter::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
         // Dynamic unload only: FreeLibrary during process termination can leave a module in use

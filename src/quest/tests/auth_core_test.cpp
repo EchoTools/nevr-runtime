@@ -405,7 +405,7 @@ TEST(refresh_is_due_inside_the_lead_window_and_not_before) {
 // ---------------------------------------------------------------- device flow
 struct FlowRig {
   uint64_t now_s = 0;  // fake steady clock, seconds
-  std::vector<TokenAuth::DevicePollResponse> polls;
+  std::vector<nevr_token_auth::DevicePollResponse> polls;
   size_t poll_index = 0;
   int sleeps = 0;
   bool cancel = false;
@@ -427,9 +427,9 @@ struct FlowRig {
     o.show_open_failure = [this](const std::string&, const std::string&, intptr_t) { return ui; };
     o.poll = [this](const std::string&) {
       now_s += poll_takes_s;
-      TokenAuth::DevicePollResponse r = poll_index < polls.size() ? polls[poll_index] : TokenAuth::DevicePollResponse{};
+      nevr_token_auth::DevicePollResponse r = poll_index < polls.size() ? polls[poll_index] : nevr_token_auth::DevicePollResponse{};
       if (poll_index < polls.size()) ++poll_index;
-      else r.status = TokenAuth::DevicePollStatus::Pending;
+      else r.status = nevr_token_auth::DevicePollStatus::Pending;
       return r;
     };
     o.sleep = [this](std::chrono::steady_clock::duration d) {
@@ -443,10 +443,10 @@ struct FlowRig {
   }
 };
 
-TokenAuth::DevicePollResponse Poll(TokenAuth::DevicePollStatus s) {
-  TokenAuth::DevicePollResponse r;
+nevr_token_auth::DevicePollResponse Poll(nevr_token_auth::DevicePollStatus s) {
+  nevr_token_auth::DevicePollResponse r;
   r.status = s;
-  if (s == TokenAuth::DevicePollStatus::Verified) {
+  if (s == nevr_token_auth::DevicePollStatus::Verified) {
     r.access_token = "access";
     r.refresh_token = "refresh";
   }
@@ -455,8 +455,8 @@ TokenAuth::DevicePollResponse Poll(TokenAuth::DevicePollStatus s) {
 
 TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) {
   FlowRig rig;
-  rig.polls = {Poll(TokenAuth::DevicePollStatus::Pending), Poll(TokenAuth::DevicePollStatus::Pending),
-               Poll(TokenAuth::DevicePollStatus::Verified)};
+  rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Pending), Poll(nevr_token_auth::DevicePollStatus::Pending),
+               Poll(nevr_token_auth::DevicePollStatus::Verified)};
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/login");
   CHECK(r.verified);
   CHECK_EQ(r.response.refresh_token, std::string("refresh"));
@@ -476,13 +476,13 @@ TEST(flow_gives_up_at_the_five_minute_deadline) {
 TEST(flow_stops_on_server_expiry_error_cancel_and_undeliverable_link) {
   {
     FlowRig rig;
-    rig.polls = {Poll(TokenAuth::DevicePollStatus::Expired)};
+    rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Expired)};
     CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
     CHECK(rig.log.All().find("Device code expired") != std::string::npos);
   }
   {
     FlowRig rig;
-    rig.polls = {Poll(TokenAuth::DevicePollStatus::Error)};
+    rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Error)};
     CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
     CHECK(rig.log.All().find("polling aborted") != std::string::npos);
   }
@@ -514,8 +514,8 @@ TEST(flow_takes_a_verified_answer_that_arrives_after_the_deadline) {
   // 280 s, the eleventh poll starts at 283 s (before the deadline) and answers at 308 s (after it).
   FlowRig rig;
   rig.poll_takes_s = 25;
-  rig.polls.assign(10, Poll(TokenAuth::DevicePollStatus::Pending));
-  rig.polls.push_back(Poll(TokenAuth::DevicePollStatus::Verified));
+  rig.polls.assign(10, Poll(nevr_token_auth::DevicePollStatus::Pending));
+  rig.polls.push_back(Poll(nevr_token_auth::DevicePollStatus::Verified));
   const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/login");
   CHECK(r.verified);
   CHECK_EQ(rig.now_s, uint64_t(308));
@@ -526,14 +526,14 @@ TEST(flow_takes_a_verified_answer_that_arrives_after_the_deadline) {
 TEST(flow_says_a_new_code_follows_when_the_caller_renews_and_restart_when_it_does_not) {
   {
     FlowRig rig;  // Windows: the code running out ends the login
-    rig.polls = {Poll(TokenAuth::DevicePollStatus::Expired)};
+    rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Expired)};
     CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
     CHECK_EQ(rig.log.Count(LogLevel::Warning, "Device code expired. Please restart to try again."), size_t(1));
   }
   {
     FlowRig rig;  // Quest: a new code follows
     rig.renews = true;
-    rig.polls = {Poll(TokenAuth::DevicePollStatus::Expired)};
+    rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Expired)};
     CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
     CHECK_EQ(rig.log.Count(LogLevel::Info, "Device code expired before a sign-in; a new code will be requested"),
              size_t(1));
@@ -557,10 +557,10 @@ SessionConfig TestConfig() {
   return c;
 }
 
-void DeviceHandler(FakeHttp& http, int pending_polls, uint64_t access_exp) {
+void DeviceHandler(FakeHttp& http, int pending_polls, uint64_t access_exp, const std::string& code = "DEVCODE") {
   auto polls = std::make_shared<std::atomic<int>>(0);
   http.handler = [=](const std::string& endpoint, const std::string&) -> HttpResponse {
-    if (endpoint == "request") return Ok({{"code", "DEVCODE"}});
+    if (endpoint == "request") return Ok({{"code", code}});
     if (endpoint == "poll") {
       if (polls->fetch_add(1) < pending_polls) return Ok({{"status", "pending"}});
       return Ok({{"status", "verified"}, {"access_token", MakeJwt(access_exp)}, {"refresh_token", "rt-dev"},
@@ -596,6 +596,37 @@ TEST(session_device_login_succeeds_publishes_the_token_and_persists_only_the_ref
   CHECK(all.find("rt-dev") == std::string::npos);
   CHECK(all.find("eyJ") == std::string::npos);
   CHECK(all.find("http_key") == std::string::npos);
+  // The per-poll line says what the server answered (#397): HTTP code, parsed status, never "none".
+  CHECK(all.find("poll #1 http=200 status=pending server_status=\"pending\"") != std::string::npos);
+  CHECK(all.find("poll #3 http=200 status=verified") != std::string::npos);
+  CHECK(all.find("http=none") == std::string::npos);
+  s.Stop();
+}
+
+TEST(session_poll_line_reports_a_server_error_status_and_no_unknown_status_warning) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto polls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [=](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "DEVCODE"}});
+    if (endpoint == "poll") {
+      if (polls->fetch_add(1) == 0) return Status(503, "<html>down</html>");
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt-dev"},
+                 {"refresh_token_expires_in", 2592000}, {"user_id", "u9"}, {"username", "nine"}});
+    }
+    return Status(404);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(3);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  const std::string all = log.All();
+  CHECK(all.find("poll #1 http=503 status=pending") != std::string::npos);
+  CHECK(all.find("unknown status") == std::string::npos);
+  CHECK(all.find("DEVCODE") == std::string::npos);
   s.Stop();
 }
 
@@ -963,6 +994,41 @@ TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) 
   CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));  // what the player types, no scheme
   CHECK_EQ(lines[2], std::string("and enter the code ABCDEFGHI"));
   CHECK(text.size() <= prompt_board::kCapacity);
+}
+
+// #394: the service now issues 4-character, dashless codes (nakama server/evr_device_auth.go). Nothing on
+// the client assumes the old XXXX-XXXX shape: the prompt is the page and "and enter the code " + the code.
+TEST(a_four_character_dashless_code_is_shown_whole) {
+  LoginPrompt p = SamplePrompt();
+  p.url = "https://echovrce.com/login/device";
+  p.code = "K7RX";
+  std::string text, why;
+  CHECK(FormatGamePromptText(p, text, why));
+  CHECK(why.empty());
+  const std::vector<std::string> lines = SplitLines(text);
+  CHECK_EQ(lines.size(), prompt_board::kMaxLines);
+  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));
+  CHECK_EQ(lines[2], std::string("and enter the code K7RX"));
+  CHECK(text.find("K7RX-") == std::string::npos);  // no dash appended
+}
+
+TEST(session_device_login_with_a_four_character_code_presents_it_and_never_logs_it) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  DeviceHandler(http, 1, kT0 + 3600, "K7RX");
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(2);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK_EQ(presenter.last_url, std::string("https://login.test/device?code=K7RX"));
+  const std::string all = log.All();
+  CHECK(all.find("K7RX") == std::string::npos);
+  CHECK(all.find("<4 chars masked>") != std::string::npos);
+  s.Stop();
 }
 
 TEST(a_game_prompt_the_game_would_cut_short_is_refused_with_the_reason) {

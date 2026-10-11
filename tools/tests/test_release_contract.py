@@ -214,8 +214,8 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
         self.assertIn("mtrojnar/osslsigncode.git", dockerfile)  # not in Arch's official repos: pinned build
         self.assertIn("- name: Toolchain versions", workflow)
-        # The publish job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
-        # there (#79); the build job has no apt-get.
+        # The repack job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
+        # there; the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
@@ -223,16 +223,21 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        # Release signing is Microsoft Artifact Signing in the `codesign` environment (#78): the only
-        # environment Azure's federated credential trusts. The private-CA secrets are gone from CI.
-        self.assertIn("azure/artifact-signing-action@v2", workflow)
-        self.assertIn("environment: codesign", workflow)
-        self.assertIn("id-token: write", workflow)
-        self.assertIn("Get-AuthenticodeSignature", workflow)
+        # Signing is stubbed until the policy signer (a private repository) exists: no Windows runner, no
+        # cloud login, no signing environment, and the files are passed through UNSIGNED. The release
+        # files get a build-provenance attestation instead (not code signing).
+        self.assertIn('name: "sign: stubbed, policy signer not built yet"', workflow)
+        self.assertIn("PLACEHOLDER: the signer dispatch goes here", workflow)
+        self.assertIn("actions/attest-build-provenance@", workflow)
+        self.assertNotIn("azure/", workflow)
+        self.assertNotIn("environment: codesign", workflow)
+        self.assertNotIn("windows-latest", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
         self.assertIn("          dist/*.zip", workflow)
-        self.assertIn("          dist/*.tar.zst", workflow)
+        # Zips only are release assets; the .tar.zst archives are kept as a workflow artifact.
+        self.assertNotIn("          dist/*.tar.zst", workflow)
+        self.assertIn("name: dist-tar-zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
 
     def test_distribution_signs_before_archiving_and_keeps_existing_outputs(self):

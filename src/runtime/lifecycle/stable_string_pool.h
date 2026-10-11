@@ -38,7 +38,7 @@
 #include <string>
 #include <string_view>
 
-namespace nevr_runtime::lifecycle {
+namespace nevr::lifecycle {
 
 inline constexpr std::size_t kStableStringMaxCount = 1024;
 inline constexpr std::size_t kStableStringMaxPayloadBytes = 1024 * 1024;
@@ -137,4 +137,4 @@ InternResult InternStableCStr(std::string_view value);
 
 const char* InternStatusName(InternStatus status) noexcept;
 
-}  // namespace nevr_runtime::lifecycle
+}  // namespace nevr::lifecycle

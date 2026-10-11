@@ -1,5 +1,5 @@
 /*
- * nevr_plugin_interface.h - Plugin interface for nEVR game patches
+ * nevr_plugin_interface.h - Plugin interface for NEVR game patches
  *
  * This header defines the interface that gamepatches and legacy
  * use to load and manage plugins. Plugins export a set of C functions

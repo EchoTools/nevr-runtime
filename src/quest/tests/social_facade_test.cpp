@@ -18,6 +18,7 @@
 #include "quest/social/social_frames.h"
 #include "quest/social/social_request_log.h"
 #include "quest/tests/test_check.h"
+#include "runtime/compat/evr_codec.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -28,16 +29,16 @@ using namespace quest_social;
 
 // ---- harness --------------------------------------------------------------------------------
 
-std::vector<SocialParty::Message> g_sent;
+std::vector<nevr_social_party::Message> g_sent;
 std::vector<std::uint64_t> g_sentAt;  // g_now when each entry of g_sent was handed to the sender
 std::vector<std::string> g_lines;
 bool g_sendOk = true;
 bool g_sendThrows = false;
 std::uint64_t g_now = 1000;
 
-bool RecordingSend(const std::vector<SocialParty::Message>& messages) {
+bool RecordingSend(const std::vector<nevr_social_party::Message>& messages) {
   if (g_sendThrows) throw std::runtime_error("send failed");
-  for (const SocialParty::Message& m : messages) {
+  for (const nevr_social_party::Message& m : messages) {
     g_sent.push_back(m);
     g_sentAt.push_back(g_now);
   }
@@ -46,16 +47,16 @@ bool RecordingSend(const std::vector<SocialParty::Message>& messages) {
 
 std::size_t SentCount(std::uint64_t symbol) {
   std::size_t n = 0;
-  for (const SocialParty::Message& m : g_sent) n += m.symbol == symbol ? 1 : 0;
+  for (const nevr_social_party::Message& m : g_sent) n += m.symbol == symbol ? 1 : 0;
   return n;
 }
 
 std::uint64_t Clock() { return g_now; }
 
 struct World {
-  SocialParty::State party;
-  SocialRoster::Roster friends;
-  SocialRoster::RecentList recent;
+  nevr_social_party::State party;
+  nevr_social_roster::Roster friends;
+  nevr_social_roster::RecentList recent;
   Ports ports;
   std::unique_ptr<Facade> facade;
 
@@ -72,7 +73,7 @@ struct World {
     g_sendThrows = false;
     g_now = 1000;
     SetGameJson(GameJson{});
-    SocialNames::GlobalResolver().Reset();
+    nevr_social_names::GlobalResolver().Reset();
     ResetFacadeCountersForTest();
     g_lines.clear();
   }
@@ -110,20 +111,20 @@ std::uint64_t Get64(void* object, std::size_t offset) {
 
 std::string Le(std::uint64_t value, int bytes) {
   std::string out;
-  SocialParty::AppendLe(out, value, bytes);
+  nevr_social_party::AppendLe(out, value, bytes);
   return out;
 }
 
 void Feed(World& w, std::uint64_t symbol, const std::string& payload) {
-  SocialParty::Message m;
+  nevr_social_party::Message m;
   m.symbol = symbol;
   m.payload = payload;
-  const std::string frame = SocialParty::Frame(m);
+  const std::string frame = nevr_social_party::Frame(m);
   ObserveFrames(w.ports, Direction::kServerToGame, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size(), g_now);
 }
 
 void FeedParty(World& w, const char* reply, std::uint64_t a, std::uint64_t b) {
-  Feed(w, SocialParty::ReplySymbol(reply), Le(a, 8) + Le(b, 8));
+  Feed(w, nevr_social_party::ReplySymbol(reply), Le(a, 8) + Le(b, 8));
 }
 
 // ---- the game's callbacks -------------------------------------------------------------------
@@ -235,7 +236,7 @@ void TestObjectShape() {
   for (std::size_t i = 0; i < kSlotCount; ++i) QCHECK(vtable[i] != 0);
   for (std::size_t i = 1; i < kSlotCount; ++i) QCHECK(vtable[i] != vtable[i - 1]);  // one entry per slot
   QCHECK(Get64(obj, kOffOwner) != 0);
-  QCHECK(Get32(obj, kOffJoinPolicy) == SocialParty::kJoinPolicyEveryone);
+  QCHECK(Get32(obj, kOffJoinPolicy) == nevr_social_party::kJoinPolicyEveryone);
   QCHECK(Get64(obj, kOffMemberJson) != 0);
   // The base reset state: state word (state & ~1) | 2, no lobby, no members.
   QCHECK((Get32(obj, kOffFlags) & kFlagJoinable) != 0);
@@ -272,8 +273,10 @@ void TestInitializeChecksTheProviderIdentity() {
 }
 
 // Failure caught (smoke 4): a sampled INFO line every 600 calls from the per-frame slots put several
-// social_slot lines a second into logcat. A slot logs its first call once and counts the rest.
-void TestPerFrameSlotsLogOnlyTheirFirstCall() {
+// social_slot lines a second into logcat. #391 needs a button's later calls too ("slot=46 call=7"). A
+// slot's first calls are logged with their number; after that one line per slot per gap; every call is
+// counted.
+void TestSlotTraceIsNumberedAndBounded() {
   World w;
   w.party.SetSelf(kSelf, "alice");
   void* obj = w.Obj();
@@ -282,9 +285,38 @@ void TestPerFrameSlotsLogOnlyTheirFirstCall() {
     SlotFn<U32_0>(obj, kFriendCount)(obj);
     SlotFn<U32_0>(obj, kOnlineFriendCount)(obj);
   }
-  QCHECK(CountLines("\"event\":\"social_slot\"") == 2);  // one first-call line per slot, nothing sampled
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 16);  // eight each, then nothing within the gap
+  QCHECK(CountLines("\"call\":7}") == 2 && CountLines("\"call\":9}") == 0);
   QCHECK(w.facade->SlotCalls(kFriendCount) == 2500 && w.facade->SlotCalls(kOnlineFriendCount) == 2500);
   QCHECK(w.facade->SlotCalls(kSlotCount) == 0);
+  g_now += 9;
+  SlotFn<U32_0>(obj, kFriendCount)(obj);
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 16);
+  g_now += 1;  // the gap has passed: the next call is logged at once, with its running number
+  SlotFn<U32_0>(obj, kFriendCount)(obj);
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 17 && CountLines("\"call\":2502}") == 1);
+
+  // Ten minutes of both polled at 60 Hz: one line a gap each, not 72000.
+  g_lines.clear();
+  for (int second = 0; second < 600; ++second) {
+    for (int frame = 0; frame < 60; ++frame) {
+      SlotFn<U32_0>(obj, kFriendCount)(obj);
+      SlotFn<U32_0>(obj, kOnlineFriendCount)(obj);
+    }
+    g_now += 1;
+  }
+  const int polled = CountLines("\"event\":\"social_slot\"");
+  QCHECK(polled >= 2 * 59 && polled <= 2 * 61);
+
+  // A slot nothing polls shows each press: the tenth press of a button is "call":10 only after the gap, but
+  // presses 2..8 are all there.
+  g_lines.clear();
+  using OpenUiTarget = void (*)(void*, std::uint32_t, std::uint64_t);
+  for (int press = 0; press < 12; ++press) SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
+  QCHECK(CountLines("\"event\":\"social_slot\",\"slot\":44") == 8 && CountLines("\"call\":7}") == 1);
+  g_now += 10;
+  SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
+  QCHECK(CountLines("\"event\":\"social_slot\",\"slot\":44") == 9 && CountLines("\"call\":13}") == 1);
 }
 
 void TestInitializeAndShutdown() {
@@ -325,33 +357,33 @@ void TestFriendRoster() {
   QCHECK(SlotFn<U64_U32>(obj, kFriendId)(obj, 7) == 0);  // out of range answers 0
   // Each friend's name was asked for once.
   int profileRequests = 0;
-  for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
+  for (const nevr_social_party::Message& m : g_sent) profileRequests += m.symbol == nevr_social_names::kProfileRequest ? 1 : 0;
   QCHECK(profileRequests == 0);  // no profile decoder is registered, so no reply could be read: none asked for
   // The friend tab refresh sends the refresh request, once per rate-limit window: the tab opened again
   // inside it sends nothing, and after it asks again (#57).
   g_sent.clear();
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kFriendListRefreshRequest);
   g_sent.clear();
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
   QCHECK(g_sent.empty());
-  g_now += SocialParty::State::kFriendRefreshMinSeconds;
+  g_now += nevr_social_party::State::kFriendRefreshMinSeconds;
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kFriendListRefreshRequest);
   // A tab held open is polled (#57): while the game keeps reading the list, Update refreshes it every
   // kFriendPollSeconds, and a closed tab (no read for the idle window) sends nothing.
   g_sent.clear();
   const std::uint64_t pollStart = g_now;
   std::size_t polled = 0;
-  for (std::uint64_t i = 0; i < 3 * SocialParty::State::kFriendPollSeconds; ++i) {
+  for (std::uint64_t i = 0; i < 3 * nevr_social_party::State::kFriendPollSeconds; ++i) {
     g_now = pollStart + 1 + i;
     SlotFn<U32_0>(obj, kFriendCount)(obj);  // the tab draws
     Update(w, 0);
   }
-  for (const SocialParty::Message& m : g_sent) polled += m.symbol == SocialParty::kFriendListRefreshRequest ? 1 : 0;
+  for (const nevr_social_party::Message& m : g_sent) polled += m.symbol == nevr_social_party::kFriendListRefreshRequest ? 1 : 0;
   QCHECK(polled == 3);
   g_sent.clear();
-  for (std::uint64_t i = 0; i < 2 * SocialParty::State::kFriendPollSeconds; ++i) {
+  for (std::uint64_t i = 0; i < 2 * nevr_social_party::State::kFriendPollSeconds; ++i) {
     g_now += 1;
     Update(w, 0);  // the tab was closed: no reads
   }
@@ -359,7 +391,7 @@ void TestFriendRoster() {
   // A friend change from the server asks for the list again.
   g_sent.clear();
   Feed(w, 0xc237c84c31d3ae05ULL, Le(0, 8) + Le(2002, 8));  // SNSFriendAcceptNotify
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendListRefreshRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kFriendListRefreshRequest);
 }
 
 void TestPartyCreateAndSlots() {
@@ -370,7 +402,7 @@ void TestPartyCreateAndSlots() {
   w.party.SetSelf(kSelf, "alice");
   void* obj = w.Obj();
   Update(w, 1);  // flags bit 0: the game wants a party
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kCreateRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kCreateRequest);
   g_now += 1;
   Update(w, 1);  // a create is in flight: no second request, whatever the clock says
   QCHECK(g_sent.size() == 1);
@@ -400,7 +432,7 @@ void TestNoCreateBeforeLogin() {
   QCHECK(g_sent.empty());
   w.party.SetSelf(kSelf, "alice");
   Update(w, 1);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kCreateRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kCreateRequest);
 }
 
 void TestCreateRetriesAfterInterval() {
@@ -443,7 +475,7 @@ void TestMembersJoinAndLeave() {
   Update(w, 0);
   g_sent.clear();
   SlotFn<Void_U32>(obj, kPassOwnership)(obj, 1);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kPassRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kPassRequest);
   Update(w, 0);
   QCHECK(SlotFn<U64_0>(obj, kHost)(obj) == 4004);
   QCHECK(SlotFn<U32_0>(obj, kIsHost)(obj) == 0);
@@ -475,7 +507,7 @@ void TestInvitesAndJoin() {
   Update(w, 0);
   g_rec.gate = 1;
   SlotFn<Void_U32>(obj, kAcceptInvite)(obj, 0);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteResponse);
   Update(w, 0);  // the slots read the view the last Update published
   QCHECK(SlotFn<U32_0>(obj, kInviteCount)(obj) == 0);
 
@@ -495,7 +527,7 @@ void TestInvitesAndJoin() {
   Update(w, 0);
   g_sent.clear();
   SlotFn<Void_U32>(obj, kDismissInvite)(obj, 0);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteResponse);
 }
 
 void TestFriendInvitable() {
@@ -525,6 +557,34 @@ void TestFriendInvitable() {
   QCHECK(SlotFn<U32_U32>(obj, kFriendIsInvitable)(obj, 99) == 0);
 }
 
+// #318: the party tab's "Invite Members" reaches OpenNewSendInviteUI with no target. There is no friend picker,
+// so nothing is sent (inviting every online friend would send invites nobody asked for); opening the tab
+// (OpenPartyUI, with or without a user) never invites; OpenNewSendInviteUI naming the user sends exactly that invite.
+void TestPartyTabInviteUiSlots() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  using OpenUiTarget = void (*)(void*, std::uint32_t, std::uint64_t);
+
+  g_sent.clear();
+  SlotFn<Void_U32>(obj, kOpenNewSendInviteUI)(obj, 0);  // Invite Members, no target
+  SlotFn<Void_U32>(obj, kOpenSendInviteUI)(obj, 0);
+  QCHECK(g_sent.empty());
+
+  SlotFn<Void_U32>(obj, kOpenPartyUI)(obj, 0);  // the Party tab opens
+  QCHECK(g_sent.empty());
+
+  SlotFn<OpenUiTarget>(obj, kOpenNewSendInviteUITarget)(obj, 0, 2002);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteRequest);
+  QCHECK(g_sent[0].payload.size() >= 0x28 && std::memcmp(g_sent[0].payload.data() + 0x20, "\xd2\x07", 2) == 0);  // 2002 LE
+
+  // OpenPartyUI(target) opens the party UI for a user; nothing shows it comes from an invite action.
+  g_sent.clear();
+  SlotFn<OpenUiTarget>(obj, kOpenPartyUITarget)(obj, 0, 2002);
+  QCHECK(g_sent.empty());
+}
+
 void TestSendingFromSlots() {
   World w;
   Init(w, MakeCallbacks());
@@ -532,21 +592,21 @@ void TestSendingFromSlots() {
   void* obj = w.Obj();
   g_sent.clear();
   SlotFn<Void_U64>(obj, kSendInviteInternal)(obj, 2002);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteRequest);
   QCHECK(g_sent[0].payload.size() >= 0x28 && std::memcmp(g_sent[0].payload.data() + 0x20, "\xd2\x07", 2) == 0);  // 2002 LE
   g_sent.clear();
   using OpenFriend = void (*)(void*, std::uint32_t, std::uint64_t);
   SlotFn<OpenFriend>(obj, kOpenFriendRequestUI)(obj, 0, 9009);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kFriendInviteRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kFriendInviteRequest);
   g_sent.clear();
   SlotFn<Void_U32>(obj, kSetJoinPolicy)(obj, 1);
   QCHECK(Get32(obj, kOffJoinPolicy) == 1);
   QCHECK(SlotFn<U32_0>(obj, kJoinPolicy)(obj) == 1);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kSetJoinPolicyRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kSetJoinPolicyRequest);
   // Lock and unlock follow SetJoinableInternal.
   g_sent.clear();
   SlotFn<Void_U32>(obj, kSetJoinableInternal)(obj, 0);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kLockRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kLockRequest);
   // A sender that reports failure is logged and does not disturb the game (the slot still returns).
   g_sendOk = false;
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
@@ -557,7 +617,7 @@ void TestSendingFromSlots() {
   SlotFn<Void0>(obj, kLeave)(obj);
   QCHECK(g_sent.empty());  // a party of one is not left
   SlotFn<Void0>(obj, kReset)(obj);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kLeaveRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kLeaveRequest);
   QCHECK(Get32(obj, kOffLocalCount) == 0 && Get32(obj, kOffMemberCount) == 0);
   SlotFn<Void_U32>(obj, kAddMember)(obj, 3);  // only local user 0 exists
   QCHECK(Get32(obj, kOffLocalCount) == 0 && Get32(obj, kOffMemberCount) == 0);
@@ -599,7 +659,7 @@ void TestRecentlyMet() {
   void* obj = w.Obj();
   QCHECK(SlotFn<U32_0>(obj, kRefreshingRecentlyMetUsers)(obj) == 0);
   SlotFn<Void0>(obj, kRefreshRecentlyMetUsers)(obj);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kRecentlyMetRefreshRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kRecentlyMetRefreshRequest);
   QCHECK(SlotFn<U32_0>(obj, kRefreshingRecentlyMetUsers)(obj) == 1);
   // A refresh whose request could not be sent ends at once, so the game's poll does not hang.
   World failing;
@@ -607,6 +667,147 @@ void TestRecentlyMet() {
   g_sendOk = false;
   SlotFn<Void0>(failing.Obj(), kRefreshRecentlyMetUsers)(failing.Obj());
   QCHECK(SlotFn<U32_0>(failing.Obj(), kRefreshingRecentlyMetUsers)(failing.Obj()) == 0);
+}
+
+// #405: an incoming friend request (SNSFriendInviteNotify) is listed first in the recently-met list, online, with
+// the request text; the requester's profile is asked for; the accept, a remove, a withdrawal or a rejection ends it.
+// The server's own recently-met list does not displace it. The sender's side logs the server's answers.
+constexpr std::uint64_t kSymInviteNotify = 0xca09b0b36bd981b7ULL;
+constexpr std::uint64_t kSymAcceptSuccess = 0x1bbda7fa06af4627ULL;
+constexpr std::uint64_t kSymWithdrawnNotify = 0x191aa30801ec6d03ULL;
+constexpr std::uint64_t kSymInviteSuccess = 0x7f0c6a3ac83c6f77ULL;
+constexpr std::uint64_t kSymInviteFailure = 0x7f197e30c72c6e61ULL;
+
+void TestIncomingFriendRequestIsListedInRecentlyMet() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  nevr_social_names::SetDecoder([](const std::uint8_t*, std::size_t, std::uint64_t* id, std::string* name) {
+    *id = 3003;
+    *name = "Chromium";
+    return true;
+  });
+  g_lines.clear();
+  g_sent.clear();
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 0);
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 3003);
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserName)(obj, 0)) == "3003");  // the id until the profile arrives
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserStatusString)(obj, 0)) == "Sent you a friend request");
+  QCHECK(SlotFn<U32_U32>(obj, kRecentlyMetUserStatus)(obj, 0) == 2);  // online: first
+  QCHECK(CountLines("\"event\":\"social_friend_request\",\"result\":\"received\",\"account\":3003,\"pending\":1") == 1);
+  int profileRequests = 0;
+  for (const nevr_social_party::Message& m : g_sent) profileRequests += m.symbol == nevr_social_names::kProfileRequest ? 1 : 0;
+  QCHECK(profileRequests == 1);  // the requester's profile, once
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(3003, 8));  // a repeat is not a second request
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  QCHECK(CountLines("\"result\":\"received\"") == 1);
+
+  Feed(w, nevr_social_names::kProfileSuccess, Le(0, 16));
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserName)(obj, 0)) == "Chromium");
+  QCHECK(CountLines("\"result\":\"named\",\"account\":3003") == 1);
+
+  // The server's list arrives (the refresh the game polls): the request stays first, once.
+  std::vector<nevr_social_roster::Entry> people(2);
+  people[0].id = 4004;
+  people[0].name = "Other";
+  people[1].id = 3003;
+  people[1].name = "Chromium (server)";
+  people[1].online = true;
+  w.recent.SetList(people);
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 3003);
+  QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 1) == 4004);
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kRecentlyMetUserStatusString)(obj, 0)) == "Sent you a friend request");
+
+  // Accepted (our add came back as FriendAcceptSuccess): gone, with the reason.
+  g_lines.clear();
+  Feed(w, kSymAcceptSuccess, Le(0, 8) + Le(3003, 8) + Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);  // the server's own two entries remain
+  QCHECK(CountLines("\"result\":\"cleared\",\"account\":3003,\"reason\":\"FriendAcceptSuccess\",\"pending\":0") == 1);
+
+  // A withdrawal clears a pending one; one for somebody who is not pending changes nothing.
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(5005, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 3);
+  Feed(w, kSymWithdrawnNotify, Le(0, 8) + Le(9999, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 3);
+  Feed(w, kSymWithdrawnNotify, Le(0, 8) + Le(5005, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+
+  // A message too short to carry the account is ignored.
+  Feed(w, kSymInviteNotify, Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+  nevr_social_names::SetDecoder(nullptr);
+}
+
+// Every message that ends a request does so end to end, through the frame observer and the facade's slots:
+// the accept (ours came back, or theirs), a remove (notify and the response to our own), a withdrawal, and
+// a rejection. Each names its reason.
+void TestEveryMessageThatEndsARequestClearsIt() {
+  struct Path {
+    const char* reason;
+    std::uint64_t symbol;
+    std::uint32_t payloadBytes;  // after the header: id(8) [+ status(8) for the 0x18 messages]
+  };
+  const Path paths[] = {
+      {"FriendAcceptSuccess", 0x1bbda7fa06af4627ULL, 0x18},
+      {"FriendAcceptNotify", 0xc237c84c31d3ae05ULL, 0x18},
+      {"FriendRemoveNotify", 0xe06972f49cd72265ULL, 0x10},
+      {"FriendRemoveResponse", 0xc2bf83a08ea3a955ULL, 0x10},
+      {"FriendWithdrawnNotify", 0x191aa30801ec6d03ULL, 0x10},
+      {"FriendRejectNotify", 0xb9b86c0ce8e8d0c1ULL, 0x10},
+  };
+  for (const Path& path : paths) {
+    World w;
+    w.party.SetSelf(kSelf, "alice");
+    void* obj = w.Obj();
+    Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+    Feed(w, kSymInviteNotify, Le(0, 8) + Le(7007, 8));
+    QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 2);
+    g_lines.clear();
+    std::string payload = Le(0, 8) + Le(6006, 8);
+    if (path.payloadBytes == 0x18) payload += Le(0, 8);
+    Feed(w, path.symbol, payload);
+    QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);                       // only that one went
+    QCHECK(SlotFn<U64_U32>(obj, kRecentlyMetUserId)(obj, 0) == 7007);
+    QCHECK(CountLines((std::string("\"reason\":\"") + path.reason + "\",\"pending\":1").c_str()) == 1);
+  }
+}
+
+// A new session starts with no pending requests: a login (a reconnect or another account is one too) clears the
+// ones the last session had, and the server's replay after the subscribe puts this player's back.
+void TestANewSessionClearsPendingRequests() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  g_lines.clear();
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 0);
+  QCHECK(CountLines("\"result\":\"cleared\",\"reason\":\"login_success\",\"removed\":1") == 1);
+  // The replay re-fills it (once per request, as at the first login).
+  Feed(w, kSymInviteNotify, Le(0, 8) + Le(6006, 8));
+  QCHECK(SlotFn<U32_0>(obj, kRecentlyMetUserCount)(obj) == 1);
+  // A login with nothing pending says nothing.
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  g_lines.clear();
+  Feed(w, nevr_evr_codec::kSymLoginSuccess, Le(0, 8) + Le(0, 8));
+  QCHECK(CountLines("\"reason\":\"login_success\"") == 0);
+}
+
+void TestFriendRequestAnswersAreLoggedForTheSender() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  g_lines.clear();
+  Feed(w, kSymInviteSuccess, Le(0, 8) + Le(793214038254419978ULL, 8));
+  QCHECK(CountLines("\"event\":\"social_frame\",\"dir\":\"server_to_game\",\"name\":\"FriendInviteSuccess\"") == 1);
+  QCHECK(CountLines("\"result\":\"sent\",\"account\":793214038254419978") == 1);
+  // The second request while the first is pending: the server answers the sender only, with error 4.
+  Feed(w, kSymInviteFailure, Le(0, 8) + Le(793214038254419978ULL, 8) + Le(4, 1) + Le(0, 7));
+  QCHECK(CountLines("\"name\":\"FriendInviteFailure\"") == 1);
+  QCHECK(CountLines("\"result\":\"failed\",\"account\":793214038254419978,\"error\":4,\"reason\":\"pending\"") == 1);
 }
 
 void TestExceptionContainment() {
@@ -628,10 +829,10 @@ void TestLocalAccount() {
   QCHECK(&Facade::Instance() == &Facade::Instance());  // constructed on first use, one object
   // The process-wide model: SetLocalAccount makes the account the facade's local member.
   SetLocalAccount(4242, "bob");
-  const SocialParty::View view = SocialParty::Global().Snapshot();
+  const nevr_social_party::View view = nevr_social_party::Global().Snapshot();
   QCHECK(view.selfId == 4242 && view.selfName == "bob");
   SetLocalAccount(4242, nullptr);  // no name: the id stays, the name is not invented
-  QCHECK(SocialParty::Global().Snapshot().selfId == 4242);
+  QCHECK(nevr_social_party::Global().Snapshot().selfId == 4242);
 }
 
 
@@ -731,7 +932,7 @@ void TestInviteNotificationsAreMerged() {
 
 // The carry queue's drop policy. 256 is the soft limit. Events that say something nothing later repeats
 // (Created, MemberJoined, JoinFailed, HostChanged) are never dropped to make room; the oldest Updated or
-// MemberUpdated is. Dropping the newest (the old policy) loses the tail, dropping the oldest of any kind loses
+// MemberUpdated is. Dropping the newest loses the tail, dropping the oldest of any kind loses
 // the head: both are pinned here.
 void TestEventQueueDropsOnlyWhatALaterEventRepeats() {
   World w;
@@ -866,7 +1067,7 @@ void TestFailedSendsDoNotStickTheModel() {
   g_sendOk = true;
   g_now += 5;  // past the retry interval
   Update(w, 1);
-  QCHECK(g_sent.size() == 2 && g_sent[1].symbol == SocialParty::kCreateRequest);
+  QCHECK(g_sent.size() == 2 && g_sent[1].symbol == nevr_social_party::kCreateRequest);
   QCHECK(w.party.Snapshot().creating);  // now genuinely in flight
   // ... and after the server answers, a join is not deferred forever.
   FeedParty(w, "PartyCreateSuccess", 777, kSelf);
@@ -881,7 +1082,7 @@ void TestFailedSendsDoNotStickTheModel() {
   g_sendOk = true;
   g_sent.clear();
   SlotFn<Void_U64>(v.Obj(), kSendInviteInternal)(v.Obj(), 2002);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kCreateRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kCreateRequest);
 
   // Join: the request is refused, so the model is not left "joining".
   World j;
@@ -904,7 +1105,7 @@ void TestFailedSendsDoNotStickTheModel() {
   g_sendOk = true;
   g_sent.clear();
   SlotFn<Void_U32>(l.Obj(), kSetJoinableInternal)(l.Obj(), 0);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kLockRequest);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kLockRequest);
 }
 
 void TestDeferredJoinLogsOncePerParty() {
@@ -1046,7 +1247,7 @@ void TestReceivedMemberDataIsLoadedBeforeTheCallbacks() {
   void* obj = w.Obj();
   g_rec.calls.clear();
   // The data of a member the party has not heard of yet adds the member (MemberJoined), with its data.
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
   Update(w, 0);
   const std::string joined = "u" + std::to_string(kCbMemberJoined) + ":1";
   const std::string updated = "u" + std::to_string(kCbMemberUpdated) + ":1";
@@ -1059,7 +1260,7 @@ void TestReceivedMemberDataIsLoadedBeforeTheCallbacks() {
 
   // New data for the same member replaces it; the same data again changes nothing.
   g_rec.calls.clear();
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 2, "{\"headsettype\":4}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3001, 2, "{\"headsettype\":4}"));
   Update(w, 0);
   QCHECK(DocText(MemberJson(obj, 1)) == "{\"headsettype\":4}");
   QCHECK(CalledCount(updated) == 1);
@@ -1069,7 +1270,7 @@ void TestReceivedMemberDataIsLoadedBeforeTheCallbacks() {
 
   // The member leaves: its slot is cleared, and the member after it moves up with its data.
   FeedParty(w, "PartyJoinNotify", 777, 3002);
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3002, 1, "{\"headsettype\":5}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3002, 1, "{\"headsettype\":5}"));
   Update(w, 0);
   QCHECK(DocText(MemberJson(obj, 2)) == "{\"headsettype\":5}");
   FeedParty(w, "PartyLeaveNotify", 777, 3001);
@@ -1092,7 +1293,7 @@ void TestPartyDataIsLoadedForAMemberNotForTheLeader() {
   FeedParty(w, "PartyJoinSuccess", 556, 2002);
   Update(w, 0);
   g_rec.calls.clear();
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(556, 0, 1, "{\"lobbyid\":\"abc\"}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(556, 0, 1, "{\"lobbyid\":\"abc\"}"));
   Update(w, 0);
   QCHECK(DocText(PartyJson(obj)) == "{\"lobbyid\":\"abc\"}");
   QCHECK(CalledCount("v" + std::to_string(kCbUpdated)) == 1);
@@ -1104,7 +1305,7 @@ void TestPartyDataIsLoadedForAMemberNotForTheLeader() {
   Init(l, MakeCallbacks());
   CreateParty(l, 777);
   g_lines.clear();
-  Feed(l, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 0, 1, "{\"lobbyid\":\"mine\"}"));
+  Feed(l, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 0, 1, "{\"lobbyid\":\"mine\"}"));
   Update(l, 0);
   QCHECK(DocOf(PartyJson(l.Obj())) == nullptr);
   QCHECK(FacadeCountersView().framesIgnored.load() == 1);
@@ -1118,9 +1319,9 @@ void TestUnreadablePartyDataIsIgnoredAndSaysWhy() {
   UseFakeJson();
   CreateParty(w, 777);
   g_lines.clear();
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "[1,2]"));  // not an object
-  Feed(w, SocialParty::kPartyDataNotify, Le(777, 8));                                // shorter than its header
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(999, 3001, 1, "{\"a\":1}"));  // another party
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "[1,2]"));  // not an object
+  Feed(w, nevr_social_party::kPartyDataNotify, Le(777, 8));                                // shorter than its header
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(999, 3001, 1, "{\"a\":1}"));  // another party
   QCHECK(FacadeCountersView().framesIgnored.load() == 3);
   QCHECK(CountLines("\"why\":\"party_data_not_a_json_object\"") == 1);
   QCHECK(CountLines("\"why\":\"party_data_unreadable\"") == 1);
@@ -1136,7 +1337,7 @@ void TestDataWaitsForTheGamesFunctions() {
   CreateParty(w, 777);
   void* obj = w.Obj();
   FeedParty(w, "PartyJoinNotify", 777, 3001);
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
   g_lines.clear();
   Update(w, 0);
   Update(w, 0);
@@ -1154,7 +1355,7 @@ void TestARejectedLoadIsCounted() {
   Init(w, MakeCallbacks());
   CreateParty(w, 777);
   FeedParty(w, "PartyJoinNotify", 777, 3001);
-  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"BAD\":1}"));
+  Feed(w, nevr_social_party::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"BAD\":1}"));
   g_lines.clear();
   g_rec.calls.clear();
   Update(w, 0);
@@ -1182,15 +1383,15 @@ void TestWrittenDataIsSharedWithTheServer() {
   Update(w, 0);  // entering the party shares both (the game's documents are empty: "{}")
   const auto shared = [&](std::uint64_t scope) {
     std::vector<std::string> texts;
-    for (const SocialParty::Message& m : g_sent) {
-      if (m.symbol != SocialParty::kPartyDataUpdateRequest) continue;
+    for (const nevr_social_party::Message& m : g_sent) {
+      if (m.symbol != nevr_social_party::kPartyDataUpdateRequest) continue;
       if (PayloadU64(m.payload, 0x20) != scope) continue;
       texts.push_back(m.payload.substr(0x28 + 8));  // seq(4) length(4) then the text
     }
     return texts;
   };
-  QCHECK(shared(SocialParty::kPartyDataScopeParty) == std::vector<std::string>{"{}"});
-  QCHECK(shared(SocialParty::kPartyDataScopeMember) == std::vector<std::string>{"{}"});
+  QCHECK(shared(nevr_social_party::kPartyDataScopeParty) == std::vector<std::string>{"{}"});
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember) == std::vector<std::string>{"{}"});
 
   // The game writes the party data and marks it (bit 0): shared once, the bit cleared.
   SetDoc(PartyJson(obj), "{\"lobbyid\":\"abc\"}");
@@ -1198,27 +1399,38 @@ void TestWrittenDataIsSharedWithTheServer() {
   std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &flags, sizeof(flags));
   g_sent.clear();
   Update(w, 0);
-  QCHECK(shared(SocialParty::kPartyDataScopeParty) == std::vector<std::string>{"{\"lobbyid\":\"abc\"}"});
-  QCHECK(shared(SocialParty::kPartyDataScopeMember).empty());
+  QCHECK(shared(nevr_social_party::kPartyDataScopeParty) == std::vector<std::string>{"{\"lobbyid\":\"abc\"}"});
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember).empty());
   QCHECK((Get32(obj, kOffFlags) & kFlagDataWritten) == 0);
   g_sent.clear();
   Update(w, 0);
-  QCHECK(shared(SocialParty::kPartyDataScopeParty).empty());  // not again until the game marks it
+  QCHECK(shared(nevr_social_party::kPartyDataScopeParty).empty());  // not again until the game marks it
 
   // The game takes the member's JSON (slot 31) and writes the headset type: shared as the member's.
   SetDoc(MemberJson(obj, 0), "{\"headsettype\":2}");
   SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
   g_sent.clear();
   Update(w, 0);
-  QCHECK(shared(SocialParty::kPartyDataScopeMember) == std::vector<std::string>{"{\"headsettype\":2}"});
-  QCHECK(shared(SocialParty::kPartyDataScopeParty).empty());
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember) == std::vector<std::string>{"{\"headsettype\":2}"});
+  QCHECK(shared(nevr_social_party::kPartyDataScopeParty).empty());
+
+  // #393: the status text the game wrote is logged with the share (the line the headset run reads), and a
+  // document without one says so.
+  QCHECK(CountLines("\"event\":\"social_member_status\"") >= 1 && CountLines("\"status\":\"(absent)\"") >= 1);
+  SetDoc(MemberJson(obj, 0), "{\"status\":\"Social Lobby | EchoVR\",\"headsettype\":2}");
+  SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
+  g_lines.clear();
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(CountLines("\"event\":\"social_member_status\",\"status\":\"Social Lobby | EchoVR\"") == 1);
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember).size() == 1);
 
   // A game JSON that cannot be read out is counted, and nothing is sent.
   SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
   g_encodeFails = 1;
   g_sent.clear();
   Update(w, 0);
-  QCHECK(shared(SocialParty::kPartyDataScopeMember).empty());
+  QCHECK(shared(nevr_social_party::kPartyDataScopeMember).empty());
   QCHECK(FacadeCountersView().jsonFailed.load() == 1);
   FreeDocs(obj);
 }
@@ -1236,8 +1448,8 @@ void TestAMemberDoesNotShareThePartyData() {
   const std::uint32_t flags = Get32(obj, kOffFlags) | kFlagDataWritten;
   std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &flags, sizeof(flags));
   Update(w, 0);
-  for (const SocialParty::Message& m : g_sent) {
-    QCHECK(!(m.symbol == SocialParty::kPartyDataUpdateRequest && PayloadU64(m.payload, 0x20) == SocialParty::kPartyDataScopeParty));
+  for (const nevr_social_party::Message& m : g_sent) {
+    QCHECK(!(m.symbol == nevr_social_party::kPartyDataUpdateRequest && PayloadU64(m.payload, 0x20) == nevr_social_party::kPartyDataScopeParty));
   }
   FreeDocs(obj);
 }
@@ -1256,14 +1468,14 @@ void TestRefusedLockIsRetriedOnABackoff() {
   g_sent.clear();
   g_lines.clear();
   for (int i = 0; i < 100; ++i) Update(w, 0);  // one second, a hundred frames
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1);
   QCHECK(CountLines("\"name\":\"PartyLockRequest\"") == 1);
   QCHECK(FacadeCountersView().sendFailed.load() == 1);
   for (int i = 0; i < 100; ++i) {  // a hundred seconds, a frame each
     g_now += 1;
     Update(w, 0);
   }
-  const std::size_t attempts = SentCount(SocialParty::kLockRequest);
+  const std::size_t attempts = SentCount(nevr_social_party::kLockRequest);
   QCHECK(attempts >= 19 && attempts <= 21);  // one per 5 s
   QCHECK(CountLines("\"name\":\"PartyLockRequest\"") == attempts);  // one log line per attempt
   // The sender recovers: the next attempt after the interval goes through and is not repeated.
@@ -1271,9 +1483,9 @@ void TestRefusedLockIsRetriedOnABackoff() {
   g_now += 5;
   g_sent.clear();
   Update(w, 0);
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1);
   Update(w, 0);
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1);
 }
 
 // A request the sender took and the server never answers is failed after 10 s like a refused one. Frame
@@ -1282,7 +1494,7 @@ void TestUnansweredCreateTimesOut() {
   World w;
   w.party.SetSelf(kSelf, "alice");
   Update(w, 1);  // t = 1000: the create is sent and taken
-  QCHECK(SentCount(SocialParty::kCreateRequest) == 1 && w.party.Snapshot().creating);
+  QCHECK(SentCount(nevr_social_party::kCreateRequest) == 1 && w.party.Snapshot().creating);
   g_now += 9;
   Update(w, 1);
   QCHECK(w.party.Snapshot().creating && FacadeCountersView().requestTimeout.load() == 0);  // not yet
@@ -1290,13 +1502,13 @@ void TestUnansweredCreateTimesOut() {
   Update(w, 1);  // t = 1010
   QCHECK(FacadeCountersView().requestTimeout.load() == 1);
   QCHECK(CountLines("social_request_timeout") == 1);
-  QCHECK(SentCount(SocialParty::kCreateRequest) == 2);  // rolled back, and the game still wants a party: asked again
+  QCHECK(SentCount(nevr_social_party::kCreateRequest) == 2);  // rolled back, and the game still wants a party: asked again
   // 600 more seconds of silence, jittered frame times: one attempt per 10 s at most, never faster.
   for (std::size_t i = 0; i < 400 && g_now < 1610; ++i) {
     g_now += Jitter(i);
     Update(w, 1);
   }
-  const std::size_t creates = SentCount(SocialParty::kCreateRequest);
+  const std::size_t creates = SentCount(nevr_social_party::kCreateRequest);
   QCHECK(creates >= 40 && creates <= 62);
   for (std::size_t i = 1; i < g_sentAt.size(); ++i) QCHECK(g_sentAt[i] - g_sentAt[i - 1] >= 10);
   QCHECK(FacadeCountersView().requestTimeout.load() + 1 >= creates && FacadeCountersView().requestTimeout.load() <= creates);
@@ -1314,14 +1526,14 @@ void TestAnsweredCreateAndLockDoNotTimeOut() {
   const std::uint32_t closed = Get32(obj, kOffFlags) & ~kFlagJoinable;
   std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &closed, sizeof(closed));
   Update(w, 0);  // the lock request goes out
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1);
   FeedParty(w, "PartyLockSuccess", 777, 0);  // and is answered
   for (std::size_t i = 0; i < 100; ++i) {
     g_now += Jitter(i);
     Update(w, 1);
   }
   QCHECK(FacadeCountersView().requestTimeout.load() == 0);
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1 && SentCount(SocialParty::kCreateRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1 && SentCount(nevr_social_party::kCreateRequest) == 1);
 }
 
 void TestUnansweredLockTimesOut() {
@@ -1335,12 +1547,12 @@ void TestUnansweredLockTimesOut() {
   g_sentAt.clear();
   const std::uint64_t start = g_now;
   Update(w, 0);  // taken, never answered
-  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kLockRequest) == 1);
   for (std::size_t i = 0; i < 400 && g_now < start + 600; ++i) {
     g_now += Jitter(i);
     Update(w, 0);
   }
-  const std::size_t attempts = SentCount(SocialParty::kLockRequest);
+  const std::size_t attempts = SentCount(nevr_social_party::kLockRequest);
   QCHECK(attempts >= 40 && attempts <= 62);
   for (std::size_t i = 1; i < g_sentAt.size(); ++i) QCHECK(g_sentAt[i] - g_sentAt[i - 1] >= 10);
   QCHECK(FacadeCountersView().requestTimeout.load() + 1 >= attempts);
@@ -1356,13 +1568,13 @@ void TestUnansweredJoinFailsToTheGame() {
   w.party.SetSelf(kSelf, "alice");
   Update(w, 1);  // a create, taken and never answered
   SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);  // deferred behind it
-  QCHECK(SentCount(SocialParty::kJoinRequest) == 0);
+  QCHECK(SentCount(nevr_social_party::kJoinRequest) == 0);
   g_rec.calls.clear();
-  for (std::size_t i = 0; i < 100 && SentCount(SocialParty::kJoinRequest) == 0; ++i) {
+  for (std::size_t i = 0; i < 100 && SentCount(nevr_social_party::kJoinRequest) == 0; ++i) {
     g_now += Jitter(i);
     Update(w, 1);
   }
-  QCHECK(SentCount(SocialParty::kJoinRequest) == 1);  // went out once the create was given up
+  QCHECK(SentCount(nevr_social_party::kJoinRequest) == 1);  // went out once the create was given up
   const std::uint64_t joinSentAt = g_sentAt[g_sentAt.size() - 1];
   QCHECK(w.party.Snapshot().joining);
   // 600 s of silence: the join fails once, to the game, and is not sent again by the facade.
@@ -1373,7 +1585,7 @@ void TestUnansweredJoinFailsToTheGame() {
   QCHECK(!w.party.Snapshot().joining);
   QCHECK(CalledCount("u" + std::to_string(kCbJoinFailed) + ":0") == 1);
   QCHECK((Get32(w.Obj(), kOffFlags) & kFlagJoining) == 0);
-  QCHECK(SentCount(SocialParty::kJoinRequest) == 1);
+  QCHECK(SentCount(nevr_social_party::kJoinRequest) == 1);
   QCHECK(FacadeCountersView().requestTimeout.load() == 2);  // the create and the join
 }
 
@@ -1392,7 +1604,7 @@ void TestRefusedInviteJoinKeepsTheInviteAndTellsTheGame() {
   g_sendOk = false;
   g_sent.clear();
   SlotFn<Void_U32>(obj, kAcceptInvite)(obj, 0);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteResponse);
   QCHECK(!w.party.Snapshot().joining);
   QCHECK(w.party.Snapshot().invites.size() == 1);  // given back
   Update(w, 0);
@@ -1403,7 +1615,7 @@ void TestRefusedInviteJoinKeepsTheInviteAndTellsTheGame() {
   g_sendOk = true;
   g_sent.clear();
   SlotFn<Void_U64>(obj, kJoinInternal)(obj, 556);
-  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == nevr_social_party::kInviteResponse);
   QCHECK(g_sent.size() == 1 && g_sent[0].target == 2002);
   QCHECK(w.party.Snapshot().joining);
 }
@@ -1459,7 +1671,7 @@ void TestInviteIsQueuedOnce() {
   g_sent.clear();
   FeedParty(w, "PartyCreateSuccess", 777, kSelf);
   std::size_t invites = 0;
-  for (const SocialParty::Message& m : g_sent) invites += m.symbol == SocialParty::kInviteRequest ? 1 : 0;
+  for (const nevr_social_party::Message& m : g_sent) invites += m.symbol == nevr_social_party::kInviteRequest ? 1 : 0;
   QCHECK(invites == 1);
 }
 
@@ -1487,7 +1699,7 @@ void TestSendLogsStableIds() {
 void TestNamesAreAskedForOnlyWithADecoder() {
   World w;
   w.party.SetSelf(kSelf, "alice");
-  SocialNames::SetDecoder([](const std::uint8_t*, std::size_t, std::uint64_t* id, std::string* name) {
+  nevr_social_names::SetDecoder([](const std::uint8_t*, std::size_t, std::uint64_t* id, std::string* name) {
     *id = 2002;
     *name = "Zed";
     return true;
@@ -1495,14 +1707,14 @@ void TestNamesAreAskedForOnlyWithADecoder() {
   Feed(w, kSymFriendListResponse, Le(0, 8) + Le(0, 4) + Le(0, 4) + Le(1, 4) + Le(0, 4) + Le(0, 4) + Le(0, 4));
   Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(2002, 8) + Le(0, 1) + Le(0, 7));
   int profileRequests = 0;
-  for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
+  for (const nevr_social_party::Message& m : g_sent) profileRequests += m.symbol == nevr_social_names::kProfileRequest ? 1 : 0;
   QCHECK(profileRequests == 1);
   QCHECK(CountLines("\"name\":\"OtherUserProfileRequest\"") == 1);  // the log names the account asked about
   QCHECK(CountLines("\"target\":2002") >= 1);
-  Feed(w, SocialNames::kProfileSuccess, Le(0, 16));
+  Feed(w, nevr_social_names::kProfileSuccess, Le(0, 16));
   void* obj = w.Obj();
   QCHECK(std::string(SlotFn<Str_U32>(obj, kFriendName)(obj, 0)) == "Zed");
-  SocialNames::SetDecoder(nullptr);
+  nevr_social_names::SetDecoder(nullptr);
 }
 
 void CheckInstanceSurvivesExit() {
@@ -1518,21 +1730,21 @@ void TestFrameWalker() {
   World w;
   w.party.SetSelf(kSelf, "alice");
   // Two messages in one transport frame, the second truncated: the first is applied, the walk stops.
-  SocialParty::Message a{SocialParty::ReplySymbol("PartyCreateSuccess"), Le(10, 8) + Le(kSelf, 8)};
-  SocialParty::Message b{SocialParty::ReplySymbol("PartyJoinNotify"), Le(10, 8) + Le(77, 8)};
-  std::string frame = SocialParty::Frame(a) + SocialParty::Frame(b);
+  nevr_social_party::Message a{nevr_social_party::ReplySymbol("PartyCreateSuccess"), Le(10, 8) + Le(kSelf, 8)};
+  nevr_social_party::Message b{nevr_social_party::ReplySymbol("PartyJoinNotify"), Le(10, 8) + Le(77, 8)};
+  std::string frame = nevr_social_party::Frame(a) + nevr_social_party::Frame(b);
   frame.resize(frame.size() - 3);
   const FrameStats stats = ObserveFrames(w.ports, Direction::kServerToGame, reinterpret_cast<const std::uint8_t*>(frame.data()),
                                          frame.size(), g_now);
   QCHECK(stats.messages == 1 && stats.consumed == 1 && stats.malformed == 1);
   // A bad marker stops the walk; client-to-server frames are logged, never applied.
-  std::string bad = SocialParty::Frame(a);
+  std::string bad = nevr_social_party::Frame(a);
   bad[0] = 0;
   QCHECK(ObserveFrames(w.ports, Direction::kServerToGame, reinterpret_cast<const std::uint8_t*>(bad.data()), bad.size(), g_now)
              .malformed == 1);
   World other;
   other.party.SetSelf(kSelf, "alice");
-  const std::string good = SocialParty::Frame(a);
+  const std::string good = nevr_social_party::Frame(a);
   const FrameStats up = ObserveFrames(other.ports, Direction::kGameToServer, reinterpret_cast<const std::uint8_t*>(good.data()),
                                       good.size(), g_now);
   QCHECK(up.messages == 1 && up.consumed == 0);
@@ -1545,7 +1757,7 @@ int main() {
   std::atexit(&CheckInstanceSurvivesExit);
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLog);
   TestObjectShape();
-  TestPerFrameSlotsLogOnlyTheirFirstCall();
+  TestSlotTraceIsNumberedAndBounded();
   TestInitializeChecksTheProviderIdentity();
   TestInitializeAndShutdown();
   TestFriendRoster();
@@ -1556,8 +1768,13 @@ int main() {
   TestInvitesAndJoin();
   TestFriendInvitable();
   TestSendingFromSlots();
+  TestPartyTabInviteUiSlots();
   TestLobbyFields();
   TestRecentlyMet();
+  TestIncomingFriendRequestIsListedInRecentlyMet();
+  TestEveryMessageThatEndsARequestClearsIt();
+  TestANewSessionClearsPendingRequests();
+  TestFriendRequestAnswersAreLoggedForTheSender();
   TestExceptionContainment();
   TestFrameWalker();
   TestGameExceptionThroughUpdate();

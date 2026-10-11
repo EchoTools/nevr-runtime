@@ -22,7 +22,7 @@ State 2 waits until that queued request has been consumed (compares the queue co
 `RefreshFriends` slot 45 of the social facade (`src/runtime/patch/social_facade_object.cpp`,
 `TRACED(45, RefreshFriends)`; `src/runtime/scenario/scenario_control.cpp`
 `kRefreshFriendsHandlerVA`). On our side that slot sends `FriendListRefreshRequest`
-(`SocialParty::RefreshFriends`, `src/runtime/compat/social_party.h`).
+(`nevr_social_party::RefreshFriends`, `src/runtime/compat/social_party.h`).
 
 ## Which script runs the node
 
@@ -51,9 +51,7 @@ No other file under `echovr/bin/win10` posts it, and neither `revault search cod
 ## What this says about the UI
 
 - The friends list is drawn by the social script `e9b0db765f1eb096`, and the refresh is requested
-  through its `evt_refresh_friends` event. The existing run record in
-  `docs/design/2026-10-01-social-features-test-plan.md` (row 1) says the 2026-09-30 owner run showed
-  names and presence.
+  through its `evt_refresh_friends` event.
 - `d74afbc03c66a45e` ties a refresh to a page being enabled (`delegate_onpage2enabled`) while
   logged in: its node-transition table runs the logged-in check (`0xe44da977`) between the
   page-enable delegate (`0x95d4d232`) and the nodes after it.

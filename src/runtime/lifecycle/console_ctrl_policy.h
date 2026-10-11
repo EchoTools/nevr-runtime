@@ -11,7 +11,7 @@
 // A server that never got as far as GameServerLib::Initialize would otherwise wait out the shutdown
 // watchdog and exit 1 on a clean operator stop (#241).
 
-namespace ConsoleCtrlPolicy {
+namespace nevr_console_ctrl_policy {
 
 inline bool ShouldDeferToGame(bool gameHandlerBehindUs, bool gameServerLibStarted) {
   return gameHandlerBehindUs && gameServerLibStarted;
@@ -24,4 +24,4 @@ inline const char* NoDeferReason(bool gameHandlerBehindUs, bool gameServerLibSta
   return "deferring";
 }
 
-}  // namespace ConsoleCtrlPolicy
+}  // namespace nevr_console_ctrl_policy

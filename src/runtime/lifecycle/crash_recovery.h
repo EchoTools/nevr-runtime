@@ -8,8 +8,8 @@ void InstallCrashRecoveryHooks();
 
 /// Hooks the game-main wrapper to establish the setjmp recovery point. On a
 /// null-pointer AV in server mode the VEH here longjmps back to it, holding the
-/// process alive instead of terminating. Moved from mode_patches (N125) to sit
-/// with its longjmp counterpart. Called from Initialize.
+/// process alive instead of terminating. It sits with its longjmp counterpart
+/// (N125). Called from Initialize.
 void InstallGameMainHook();
 
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
@@ -17,7 +17,8 @@ void InstallGameMainHook();
 /// Also snapshots the module table (N70 — the handler must never enumerate,
 /// which would take the loader lock) and reserves crash-handler stack for the
 /// calling thread (N69).
-void InstallVEH();
+/// Returns true when the handler was installed, false when it was skipped (Wine client).
+bool InstallVEH();
 
 /// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
 /// path. Purely diagnostic — always calls the original.

@@ -40,12 +40,19 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 5> kFeatures = {{
+// Feature names that existed and are gone. A file that still names one is told so, by name: the name is one of
+// ours, so logging it leaks nothing a file could supply. Anything else unknown is only counted.
+constexpr std::array<const char*, 1> kRetiredFeatures = {"self_check"};  // self-checks are on in every build (#451)
+
+constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
     {"social", Feature::kSocial, &Features::social},
     {"hwdump", Feature::kHwDump, &Features::hwdump},
+    {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
+    {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
+    {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -114,6 +121,25 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
       continue;
     }
     (config.*kKeys[i].slot) = {raw, Source::kEmbedded};
+  }
+  // Default-on features: a name this build does not know is reported once and ignored.
+  const std::string_view list = d.features == nullptr ? "" : d.features;
+  std::size_t start = 0;
+  while (start < list.size()) {
+    std::size_t end = list.find(',', start);
+    if (end == std::string_view::npos) end = list.size();
+    const std::string_view name = list.substr(start, end - start);
+    start = end + 1;
+    if (name.empty()) continue;
+    const FeatureSpec* spec = nullptr;
+    for (const FeatureSpec& f : kFeatures) {
+      if (name == f.name) spec = &f;
+    }
+    if (spec != nullptr) {
+      config.requested.*spec->flag = true;
+    } else if (events != nullptr) {
+      events->push_back({LogLevel::kWarn, "embedded default feature ignored reason=unknown_name"});
+    }
   }
 }
 
@@ -206,7 +232,14 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
       if (item.key() == f.name) spec = &f;
     }
     if (spec == nullptr) {
-      warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
+      bool retired = false;
+      for (const char* name : kRetiredFeatures) {
+        if (item.key() == name) {
+          warn(std::string("config file feature=") + name + " retired ignored (self-checks are on in every build)");
+          retired = true;
+        }
+      }
+      if (!retired) warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
       continue;
     }
     if (!item.value().is_boolean()) {
@@ -263,6 +296,15 @@ void Derive(LoadResult& r) {
     c.effective.social = false;
     force_off("social", "login_not_enabled");
   }
+  // After social: the names ride in the facade's member data.
+  if (c.effective.presenceNames && !c.effective.social) {
+    c.effective.presenceNames = false;
+    force_off("presence_names", "social_not_enabled");
+  }
+  if (c.effective.presenceLocal && !c.effective.social) {
+    c.effective.presenceLocal = false;
+    force_off("presence_local", "social_not_enabled");
+  }
 }
 
 void ReportState(LoadResult& r) {
@@ -287,7 +329,7 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
   } else {
     ApplyFile(r, *fileText);
     if (r.fileRejected) {
-      // A rejected file contributes nothing: values are the embedded defaults, features all off.
+      // A rejected file contributes nothing: values and features are the embedded defaults.
       r.config = ResolvedConfig();
       ApplyEmbedded(r.config, defaults, nullptr);
     }

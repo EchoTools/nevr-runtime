@@ -6,11 +6,11 @@
 
 #include <cstdint>
 
-namespace CoopAiTrace {
+namespace nevr_coop_ai_trace {
 
 // Hooks CR15AIBBNetbot vslot 4 (0x1412c1a30), the goals lookup (0x1412c10f0) and the waypoints lookup
 // (0x1412c13d0). Each hook is installed only after its prologue is validated; a mismatch is logged and
 // that hook is skipped. Server only; call after the CLI is parsed.
 void Install(std::uintptr_t gameBase);
 
-}  // namespace CoopAiTrace
+}  // namespace nevr_coop_ai_trace

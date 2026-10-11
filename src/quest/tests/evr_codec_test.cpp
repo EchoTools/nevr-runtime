@@ -36,13 +36,13 @@ uint64_t U64At(const std::string& bytes, std::size_t offset) {
 }  // namespace
 
 int main() {
-  LoginProfile::LoginProfileInputs inputs;
+  nevr_login_profile::LoginProfileInputs inputs;
   inputs.account_id = 4242;
   inputs.display_name = "Quest \"Player\"";
-  const std::string json = LoginProfile::BuildLoginProfileJson(inputs);
+  const std::string json = nevr_login_profile::BuildLoginProfileJson(inputs);
 
   const std::optional<std::string> frame =
-      EvrCodec::BuildLoginRequest(EvrCodec::kBridgeLoginPlatform, inputs.account_id, json);
+      nevr_evr_codec::BuildLoginRequest(nevr_evr_codec::kBridgeLoginPlatform, inputs.account_id, json);
   Expect(frame.has_value(), "login request builds");
   if (!frame.has_value()) return 1;
 
@@ -61,32 +61,32 @@ int main() {
     ++g_failures;
   }
 
-  EvrCodecTest::LoginRequestFields fields;
-  Expect(EvrCodecTest::ParseLoginRequest(*frame, &fields) == EvrCodecTest::LoginRequestStatus::Ok,
+  nevr_evr_codec_test::LoginRequestFields fields;
+  Expect(nevr_evr_codec_test::ParseLoginRequest(*frame, &fields) == nevr_evr_codec_test::LoginRequestStatus::Ok,
          "round trip status");
   Expect(fields.platformCode == 4 && fields.accountId == 4242 && fields.profileJson == json, "round trip fields");
 
-  const std::string batched = EvrCodec::BuildMessage(1, "a") + EvrCodec::BuildFriendListSubscribe();
-  EvrCodec::Message message;
-  Expect(EvrCodec::ReadMessage(batched, 0, &message) == EvrCodec::ReadStatus::Ok && message.symbol == 1,
+  const std::string batched = nevr_evr_codec::BuildMessage(1, "a") + nevr_evr_codec::BuildFriendListSubscribe();
+  nevr_evr_codec::Message message;
+  Expect(nevr_evr_codec::ReadMessage(batched, 0, &message) == nevr_evr_codec::ReadStatus::Ok && message.symbol == 1,
          "first batched message");
-  Expect(EvrCodec::ReadMessage(batched, 25, &message) == EvrCodec::ReadStatus::Ok &&
-             message.symbol == EvrCodec::kSymFriendListSubscribe && message.length == 0x20,
+  Expect(nevr_evr_codec::ReadMessage(batched, 25, &message) == nevr_evr_codec::ReadStatus::Ok &&
+             message.symbol == nevr_evr_codec::kSymFriendListSubscribe && message.length == 0x20,
          "second batched message");
-  Expect(EvrCodec::ReadMessage(batched, batched.size() - 1, &message) == EvrCodec::ReadStatus::End, "end of frame");
-  Expect(EvrCodec::IsBearerReplacingPath("wss://host/ws?format=evr") &&
-             !EvrCodec::IsBearerReplacingPath("wss://host/nevr?format=evr"),
+  Expect(nevr_evr_codec::ReadMessage(batched, batched.size() - 1, &message) == nevr_evr_codec::ReadStatus::End, "end of frame");
+  Expect(nevr_evr_codec::IsBearerReplacingPath("wss://host/ws?format=evr") &&
+             !nevr_evr_codec::IsBearerReplacingPath("wss://host/nevr?format=evr"),
          "bearer-replacing path");
 
   // Truncation: a declared payload longer than what remains, including a length that wraps to 0 when
   // the header size is added to it (2^64 - 24).
-  std::string truncated = EvrCodec::BuildMessage(5, "12345678");
+  std::string truncated = nevr_evr_codec::BuildMessage(5, "12345678");
   truncated.pop_back();
-  Expect(EvrCodec::ReadMessage(truncated, 0, &message) == EvrCodec::ReadStatus::Truncated, "truncated payload");
-  std::string wrapping = EvrCodec::BuildMessage(5, "");
+  Expect(nevr_evr_codec::ReadMessage(truncated, 0, &message) == nevr_evr_codec::ReadStatus::Truncated, "truncated payload");
+  std::string wrapping = nevr_evr_codec::BuildMessage(5, "");
   const uint64_t wraps = UINT64_MAX - 23;
   for (std::size_t i = 0; i < 8; ++i) wrapping[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
-  Expect(EvrCodec::ReadMessage(wrapping, 0, &message) == EvrCodec::ReadStatus::Truncated,
+  Expect(nevr_evr_codec::ReadMessage(wrapping, 0, &message) == nevr_evr_codec::ReadStatus::Truncated,
          "a declared length that wraps with the header is Truncated");
 
   if (g_failures != 0) return 1;

@@ -6,13 +6,24 @@ shared today (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/compat/ev
 The social facade is implemented and host-tested in `src/quest/social/`. The rest is not
 implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
-## Outcome
+## Context
+
+The Quest client needs to reach the same community services as PCVR while using Android-specific
+loading, game ABI, hook installation, configuration, logging, and socket integration. Duplicating
+protocol behavior would make the clients diverge.
+
+## Decision
+
+Keep protocol and social rules in shared source and isolate platform-specific behavior in adapters.
+The Quest client must use the same implementation of each nEVR protocol and social rule as PCVR.
+
+## Consequences
 
 The Android/arm64 Quest client reaches the community service, completes config and login,
 connects to matchmaking, enters a social lobby, and supports the Windows client's friends and
-party behavior. There is one implementation of each NEVR protocol and social rule. Android
-supplies its own loader, game ABI, hook installation, logging, configuration discovery and
-socket adapter, and the original Oculus loader stays available to the game.
+party behavior. Android supplies its own loader, game ABI, hook installation, logging,
+configuration discovery and socket adapter, and the original Oculus loader stays available to
+the game.
 
 Scope is the client. The dedicated server, `src/legacy/` and production server deployment are
 out of scope.
@@ -126,8 +137,9 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
 - `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines and
   calls `SetErrorMessage`, which writes the error block at `CR15NetGame+0x63308` (a byte that is 0
   for one line and 1 for two or four, then four 64-byte lines), logs `[NETGAME] %s %s %s %s`, and
-  builds a JSON record of the lines that it hands to a logger through an indirect call
-  (`0x12413f4`). `CR15NetErrorMessageExpression`
+  builds a JSON record of the lines in a stack-allocated temporary string that it finishes through
+  the temporary's own vtable (the indirect call at `0x12413f4`/`0x1241858`) and frees; the record is
+  not passed to a logger or anything else. `CR15NetErrorMessageExpression`
   (`0x23225d0`) copies the block to the UI script.
 - The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
@@ -414,8 +426,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows the Quest config path never names one.
    `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
-   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
-   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
+   time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
+   from the repository's Actions variables, at configure time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
    `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
    is off unless the file turns it on, and is forced off while its prerequisite is missing
    (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
@@ -522,6 +534,27 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    in place (PR #221), is the only login: `SessionBridge::Config` has no login builder, the
    Quest router runs with the defaults, and `TestQuestDefaultsInjectNothing` pins that it sends
    exactly the frames the game sent. Enabling both would send two logins.
+
+   **A lost login session under a silent game (#320).** When the remote session ends and the game's login
+   connection has nothing outstanding, `SConnection::DisconnectCB` (`libr15.so` `0x24fc17c`) raises no Lost
+   event and the game reconnects the socket without logging in, so the new session would sit
+   unauthenticated. The router does not replay a login and keeps no credential: with
+   `Options::loginRemovedJson` set (Quest) it keeps the 16-byte account id of the last `LoginSuccess` and
+   sends the game an `SNSLoginRemovedNotify` (`nevr_evr_codec::BuildLoginRemovedNotify`) on each
+   game socket that reconnects, once per socket. The game's own handler (`CNSUser::LoginRemovedCB` `0x1933a28`,
+   `CR15NetGame::LoginRemovedCB` `0x125f908`) acts only on the login peer, for the account it holds, when
+   it is logged in: reason 1 shows the JSON `message` on the login-failed screen (`SwitchTo(-94)`), whose
+   RETRY runs the game's own login with the current token. Nothing in that path persists anything (every
+   call is listed in the PR for #320). The router cannot tell the login socket from the others (connection order and silence are guesses),
+   so the notice goes to every socket that reconnects after the loss: on its first frame, or when it has
+   stayed silent for `silentNotifyMs` (`Router::OnGameSilent`), once per socket; the game drops it on any
+   peer but its login peer. It stays armed until the game sends its own `LoginRequest` or the next session
+   answers `LoginSuccess`, and is not armed when the login connection had requests outstanding (the
+   game's Lost path, -95, already shows RETRY) or its socket had already closed. The
+   fixed part of the frame (0x18 bytes) is derived from the callbacks, not captured: the 4 bytes at `+0x10`
+   and the id word order are the constants `kLoginRemovedWord10` and `kLoginRemovedUserIdSwapped`, the first
+   things a headset run checks. The player leaves the current lobby when it arrives (`QuitOnError` ->
+   `CR15Game::EndMultiplayer`, the same as any login failure from a logged-in state).
 
    `src/quest/net/` holds the Android adapters.
    - `loopback_game_server`: a POSIX WebSocket server bound to `127.0.0.2` (`kListenAddress`) on an
@@ -634,7 +667,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    provider adapter over the same models with the 76-slot Quest vtable (section "Social provider").
    `nevr_social` is declared
    only when the social feature is effective AND the social facade is actually installed;
-   otherwise the login carries 0. The shared value is `SocialParty::kSocialLevel`
+   otherwise the login carries 0. The shared value is `nevr_social_party::kSocialLevel`
    (`runtime/compat/social_level.h`, the PCVR login's constant); the production
    `IdentitySource` sets `Identity::social_level` to it when, and only when, both conditions
    hold, and the default is 0. The server sends friend presence, recently met, the lobby tablet
@@ -746,11 +779,21 @@ analysis found. Paths that can still reach Ready At Dawn with the redirect on, m
 PCVR redirects an `https://...readyatdawn.com` value under any key; Quest redirects values only under the
 service keys above.
 
-HTTP is not covered by this hook. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
-`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
+HTTP does not go through `TString`. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
+`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`; so does
 `CR15NetStoreTransactions::InitializeHttp`, which reads the key `env` (`0x126c214`) and, when it is
 not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateConnection`
-(`0x126c25c`). An HTTP hook is a separate tranche.
+(`0x126c25c`). `CreateConnection(unsigned long&, char const*)` is defined in `libr15.so` (`0xf96c08`) and
+called through its own PLT (JUMP_SLOT `0x36e8028`), the same shape as the `TString` slot, so it has its own
+thunk (`Slot::kCreateConnection`, installed with libr15's `TString` slot): a URL that starts `https://api.` or
+`https://api-` goes through `ServiceRedirector::ApplyUrl`, the same shared policy and string pool, so it
+reaches `nevr_http_uri` (never the bridge) before the original connects; the handle slot, the result and every
+other URL pass through. The strings of the game's service-status request
+(`status/services,news?env=%s&projectid=rad14`, `libr15.so` `0x2baa0d2`) and of its matchmaker queue API
+(`ready_at_dawn/join_queue`, `poll_queue_position`, `leave_queue`, `0x2bad4ea`, `0x2bad390`, `0x2bad547`) are in
+`libr15.so`, and the PC build sends both on the connection `InitializeHttp`-style code opens to the same base
+URL, so this redirect is what lets nakama answer them on Quest (nevr-runtime#408, #414); which libr15 function
+sends each on Quest is not decoded here.
 
 The PCVR runtime redirects by value for every key (`config.cpp`, `RedirectServiceUrl`) and uses a
 key list only for the login override. Quest keeps the shared value policy
@@ -1011,6 +1054,60 @@ calls `BeginLogIn`); nothing was shown to re-enter login on its own. In both smo
 stayed alive for over a minute after the failure. The player restarts the game after signing in, and
 a cached token makes `Ready` true at the next startup; an automatic in-process retry is not claimed.
 
+The entitlement request is answered without Meta. `RadPluginMain` (`0x20671c`) logs "Checking OVR
+entitlement..." and calls `ovr_Entitlement_GetIsViewerEntitled` (PLT `0x1afc70`, call sites `0x206824` and
+`0x206ae4`) unless the plugin config key `skipentitlement` is nonzero, and discards the request id. Nothing
+waits for the answer; its only reader is the message pump (`Update`, `0x207534`), which calls `CSysOS::HardExit(1)`
+on an error message of type `0x186b58b1`. The JUMP_SLOT (`0x6df638`) is hooked (`kEntitlementRequest`,
+`OnEntitlementRequest`) and the handler returns request id 0 without calling the SDK, so no request leaves and
+no message of that type is ever queued. It needs no identity, so it is independent of `IdentitySource::Ready`
+and of substitution; `prereq_entitlement_local_calls` counts the requests that did not reach Meta.
+
+The four user requests are answered without Meta either (local answers, `login_prerequisites.h` namespace
+`local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
+the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
+`ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
+`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
+code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
+`ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
+are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
+pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
+when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
+new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
+`prereq_local_delivered`, `prereq_local_deferred` (a pop that had an answer ready while the game still held
+all eight handles: the answer waits) and `prereq_local_id_collisions` (an SDK request id in the local range)
+are the counters. A pending answer takes no storage: local ids are sequential, so the pending set is the id
+range not yet popped and a request can neither fail nor reach Meta; a handle exists only while the pump holds
+the message. The SDK's own request ids are small per-process counts (recorded device runs: 5, 6, 7 for user,
+org id and token, 13-16 for the proof requests), which is why the high word `0x4E455652` is free; an id the
+SDK returns there is counted.
+
+`ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
+`GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
+`GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
+`CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
+the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`). The nine `CNSOVRSocial` sites
+(`kOrgRequestSocialReturns`, compared with `tools/pinned_ovr_sites.txt` by `pinned_ovr_import_walk.py --sites`) are
+refused locally once the Social() hook has selected the facade (`quest_social::Counters().selected`, read through
+`local::SetSocialSelectedProbe`; independent of local answers being on): the game then drives the facade, not
+`CNSOVRSocial` (`Update`, `Initialize` and the Refresh* slots are the only ways into those nine sites), so the lookup
+is one nobody asked for and a Meta user id has no NEVR account id to answer it with. A refused request gets an id from its own space (bit 31 of the local id
+range, `local::Refuse`), no handle, no queued answer and never reaches the SDK; it is counted as a fault
+(`prereq_social_org_refused`) and logged once per call site (`quest_social_org_request_refused`, the offset in
+libpnsovr). If one ever ran, its callback would never run: the original object's friend or room batch would wait for
+that entry (`GotFriendOrgIdCB` collects a batch), so the refresh would stay "refreshing"; nothing on the facade path
+waits on it. With the facade not selected (stock Meta social), and for any caller this build does not know, the
+request goes to the SDK as before. The other
+three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
+in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
+and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
+by the walk: `blr`/`br` and a PLT stub into the library's own exports.
+`UpdateInternal` re-issues `ovr_User_GetUserProof` only on the branch where `LogInInternal` did not, and clears
+its flag first, so one `GotUserProofCB` runs per `LogIn` call.
+
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
@@ -1090,7 +1187,7 @@ needs no protobuf matchmaking frame and no mixed-format session. A public endpoi
 | EVR client route | Upgrade URL and header | Behavior |
 | --- | --- | --- |
 | Token-auth account | `/nevr?format=evr` with `Authorization: Bearer <Nakama account JWT>`, no `discordid/password` query | The `/nevr` ingress forwards the bearer; Nakama validates the JWT and links the login XPID to the account. The production `/ws` catch-all replaces Authorization with its server key, so the JWT is not sent there (issue #52). |
-| Configured legacy account | `/nevr?format=evr&discordid=<percent-encoded id>&password=<percent-encoded password>` with `Authorization: Bearer <public socket server key>` | The ingress admits the upgrade with the server key and Nakama authenticates from the URL credentials. `ServerDbUri::BuildBridgeCredentialUri` percent-encodes; a password is never concatenated into a URL. With URL credentials present, the bridge chooses the server key over a JWT. |
+| Configured legacy account | `/nevr?format=evr&discordid=<percent-encoded id>&password=<percent-encoded password>` with `Authorization: Bearer <public socket server key>` | The ingress admits the upgrade with the server key and Nakama authenticates from the URL credentials. `nevr_serverdb_uri::BuildBridgeCredentialUri` percent-encodes; a password is never concatenated into a URL. With URL credentials present, the bridge chooses the server key over a JWT. |
 
 The Quest adapter selects the route from the auth material it actually has and logs only route
 names. Missing JWT and missing configured credentials are a login failure, not permission to
@@ -1211,7 +1308,7 @@ pnsrad exports no `Social`, so on PCVR the social accessor (`echovr.exe` 0x14061
 runtime's social facade (`src/runtime/patch/social_facade*.cpp`) supplies a `CNSISocial` object whose
 vtable mirrors `CNSOVRSocial`'s, and `ObserveSocialFrames` in `src/runtime/compat/ws_bridge.cpp` feeds
 `SocialRoster` and `SocialParty` from the service's SNS messages. Every id in that path is a NEVR
-account id (`SocialParty::MemberUuid` derives the party UUID from `OVR-ORG-<id>`). On PCVR the enabler is
+account id (`nevr_social_party::MemberUuid` derives the party UUID from `OVR-ORG-<id>`). On PCVR the enabler is
 what removes the Oculus provider; the facade is what provides the social object. Both are needed there.
 
 ### Id spaces on Quest
@@ -1243,7 +1340,7 @@ Traced in the pinned libraries (ELF vaddrs):
   match gives 0. pnsovr's `UserProviderID` and `ProviderID` exports both return the word at libpnsovr 0x70e380 (.bss,
   written at run time; no store to it was found by static search). pnsovr's own `SNSUserID` constructor and
   `OpenFriendRequestUI` compare that word with the same "OVR" hash and make code 4, and the login rewrite refuses to run
-  unless `CNSOVRUser`'s platform word is 4 (the platform the NEVR login carries and `SocialParty::MemberUuid`
+  unless `CNSOVRUser`'s platform word is 4 (the platform the NEVR login carries and `nevr_social_party::MemberUuid`
   derives ids for: `OVR-ORG-<id>`). So the chain is consistent when the word holds the "OVR" hash, which is what pnsovr's
   native friend flow needs; the value itself was not read from a running process. `Initialize` reads the word once and
   logs `social_provider` (symbol, the platform code the game will derive, the code the login carries, match yes/NO), at
@@ -1322,7 +1419,7 @@ Traced in the pinned libraries (ELF vaddrs):
   service's messages fill; the local member is the account passed to `SetLocalAccount`.
 - **Frames.** `ObserveFrames` walks the EVR frames the loopback bridge relays and applies the
   server-to-game ones by CSymbol64 hash, as `ObserveSocialFrames` does by name. Requests the models ask
-  for go out through `SocialParty::SetSender`.
+  for go out through `nevr_social_party::SetSender`.
 - **Exceptions.** None crosses between game frames and sentinel frames in either direction
   (`callback_thunk.h`). The slots that call the game (`Update` delivering the party callbacks,
   `JoinInternal` and `AcceptInvite` asking the accept gate) are in `social_game_calls.cpp`, built
@@ -1347,7 +1444,7 @@ Traced in the pinned libraries (ELF vaddrs):
   reports no local member.
 - **Refused requests.** A create, join or lock request the sender refuses (no `SetSender` yet, a closed
   connection) is logged `NOT_sent`, counted (`social_send_failed`) and rolled back in the model
-  (`SocialParty::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
+  (`nevr_social_party::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
   "creating" or "joining" and defer every later join. What happens next differs by request. A create is asked
   again by `Update` once the game still wants a party and five seconds have passed since the last attempt
   (pnsovr's own interval, libpnsovr 0x2045f4, `cmp w8, #5`). A lock is asked again by `Update` on the same
@@ -1367,7 +1464,7 @@ Traced in the pinned libraries (ELF vaddrs):
   applied as usual. A create asked twice is not two parties: Nakama leaves the caller's current party before it
   creates the new one (`snsPartyCreateRequest`), so the later `PartyCreateSuccess` is the party the model ends
   in. Reply times of a live server were not measured.
-- **Sender contract.** `SocialParty::Send` returns false when any frame of the batch was refused, and still
+- **Sender contract.** `nevr_social_party::Send` returns false when any frame of the batch was refused, and still
   hands the remaining frames of the batch to the sender; a false return means that frame was not written. The
   PCVR sender returns false only with no login connection or when the websocket refused the frame, and true
   for a frame queued while the connection opens, which is the unanswered case above. The Quest network
@@ -1401,7 +1498,7 @@ Traced in the pinned libraries (ELF vaddrs):
 Party and member data (headset type per member, the lobby id a non-host member follows) is carried as on the PC:
 
 - **Receive.** `ObserveFrames` takes `SNSPartyDataNotify` (`social_frames.cpp`), checks it is a JSON object and hands
-  it to `SocialParty::State::ReceiveData`. The first `Update` after it loads it into the game's CJson before the
+  it to `nevr_social_party::State::ReceiveData`. The first `Update` after it loads it into the game's CJson before the
   callbacks fire (a `MemberJoined` callback already finds the member's `headsettype`, `PartyMemberJoinedCB`
   0x126f8ac): each remote member's data into its slot of the member array at +0x248 (16 bytes per slot, slot 0 is the
   local member's own and is never loaded), the party's into +0x1f0 for a member (the leader's party data is its own).
@@ -1452,7 +1549,7 @@ sentinel, which links `-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and
 game's `libr15.so` and `libpnsovr.so` each export their own 138 `ZSTD_*` symbols, which a hidden static copy does
 not meet). The PC registers the decoder from a namespace-scope initializer, which the sentinel may not carry
 (`tools/check_quest_static_init.sh`), so the Quest compile defines `NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION` and
-`InstallSocialHook` calls `SocialNames::RegisterDefaultDecoder()`. Without that call no profile is requested and
+`InstallSocialHook` calls `nevr_social_names::RegisterDefaultDecoder()`. Without that call no profile is requested and
 rows show account ids. `social_names_test` decodes the real zstd frame the PC tests use and shows the name on a
 friend row.
 
@@ -1515,7 +1612,7 @@ What the integration commit calls, and when:
    different slots, no shared state.
 3. **Login adapter:** `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the
    login (the NEVR account id, the id space of everything the facade reports).
-4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then a
+4. **Network adapter:** `nevr_social_party::SetSender(fn)` before the first request can be sent (until then a
    request logs `NOT_sent`, is counted and is rolled back; the create and the lock are asked again by `Update`,
    a join is reported to the game as failed), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
    nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
@@ -1556,6 +1653,16 @@ absent from the file. The only consumer is the install call above.
   package does not install; if the owner wants it zeroed, that is a separate change. (c) **The
   invitable-users refresh goes away** (`RefreshInvitableUsers`, bit 1 of `Update`'s flags, libpnsovr
   0x20455c): the facade's friend list is the NEVR service's, so there is nothing to refresh.
+- Rich presence to Meta (`presence_local`, #396). `CNSOVRRichPresence` stays on pnsovr but its three slots that talk
+  to Meta's platform service are wrapped on the same pinned object as the trace: `ShareData` (slot 0, `0x1f044c`,
+  `group_presence set`), `RefreshDestinations` (slot 11, `0x1f1c2c`, `get_destinations`) and `Clear` (slot 16,
+  `0x1f1cf0`, `group_presence clear`). With the feature on they are answered locally and the object's state word
+  (`this+0x30`: bit 0 dirty, bit 1 share in flight, bit 2 clear in flight) is left as the game's own versions leave
+  it once the answer has come back (`Clear` sets bit 2 and `ClearUserPresenceCB` takes it down again, so locally it
+  stays down), so the game sees a completed share and no request leaves. The status text
+  the player sees is the game's member JSON (destination names from the `presence_names` table); a friend's
+  status is derived by the game service from the match they are in (nakama `server/evr_friend_presence.go`), so
+  nothing is published from the client. Off by default; needs the social facade.
 - Name pointers: the facade returns `const char*` from the roster and party views. The three callers
   checked copy them into a 64-byte buffer before returning (`CR15NetFriendExpression` 0x2322db0,
   `CR15NetRecentlyMetUserExpression` 0x2332768, `CR15NetPartyMemberExpression` 0x232c098), so no pointer is
@@ -1587,13 +1694,13 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
 thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage`, `CR15NetGame::Update` and
 `CR15UIPage2EnablePageNode::Enter` slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
-prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
+prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` and `CSysHttp::CreateConnection` redirect on libr15;
 (10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
 installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:
-clock 2, redirect 10, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
-prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 64 of the reporter's 96
+clock 2, redirect 12, dlopen 1, login 2 (the `SendLogInRequest` thunk's calls and faults, #237), login
+prerequisites 16 (one calls counter per hook, #338), social 19, login prompt 14, 66 of the reporter's 96
 slots (`integration_hooks_test` runs the sequence against the real registration functions). The production identity source answers the prerequisites'
-`IdentitySource::Ready()` from a lock-free `QuestLogin::ReadyFlag` (one atomic load, no allocation): the
+`IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
 (token auth Ready with an access token and a NEVR account) and clear it in every other state, so a
 stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). It can trail a state
@@ -1625,7 +1732,7 @@ no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
 `nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `quest_net::SessionBridge` (`net/session_bridge.cpp`); its
 `Config::tap` (`net/frame_tap.cpp`) sees every relayed frame, which feeds `quest_social::ObserveFrames` and, on the
 service's `LoginSuccess` (account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's
-requests go out through `SocialParty::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
+requests go out through `nevr_social_party::SetSender` and `SessionBridge::SendToLogin`, a side channel that refuses
 until the login is accepted.
 
 **Sensor annotation.** `NEVR_OUTSIDE_GAME_CALL` (`sentinel/outside_game_call.h`) places a function in the

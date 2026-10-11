@@ -8,9 +8,9 @@
 
 namespace {
 
-using ReturnToLobbyHold::PollVerdict;
-using ReturnToLobbyHold::Policy;
-using ReturnToLobbyHold::RequestVerdict;
+using nevr_return_to_lobby_hold::PollVerdict;
+using nevr_return_to_lobby_hold::Policy;
+using nevr_return_to_lobby_hold::RequestVerdict;
 
 constexpr uint64_t kTtl = 20ULL * 60ULL * 1000ULL;
 
@@ -22,24 +22,24 @@ Policy WithTtl(uint64_t ttlMs) {
 
 TEST(ReturnToLobbyHold, TtlParsesWholeSecondsAndRejectsTheRest) {
   std::string problem;
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds(nullptr, &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds(nullptr, &problem), 0U);
   EXPECT_TRUE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("", &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("", &problem), 0U);
   EXPECT_TRUE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("1200", &problem), 1200U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("1200", &problem), 1200U);
   EXPECT_TRUE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("0", &problem), 0U);
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("20m", &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("0", &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("20m", &problem), 0U);
   EXPECT_FALSE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("-5", &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("-5", &problem), 0U);
   EXPECT_FALSE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("1.5", &problem), 0U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("1.5", &problem), 0U);
   EXPECT_FALSE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("86400", &problem), 86400U);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("86400", &problem), 86400U);
   EXPECT_TRUE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("86401", &problem), ReturnToLobbyHold::kMaxTtlSeconds);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("86401", &problem), nevr_return_to_lobby_hold::kMaxTtlSeconds);
   EXPECT_FALSE(problem.empty());
-  EXPECT_EQ(ReturnToLobbyHold::ParseTtlSeconds("99999999999999999999999", nullptr), ReturnToLobbyHold::kMaxTtlSeconds);
+  EXPECT_EQ(nevr_return_to_lobby_hold::ParseTtlSeconds("99999999999999999999999", nullptr), nevr_return_to_lobby_hold::kMaxTtlSeconds);
 }
 
 TEST(ReturnToLobbyHold, ZeroTtlNeverHolds) {
@@ -121,7 +121,7 @@ TEST(ReturnToLobbyHold, PollAtZeroTtlCallsNothing) {
   int counted = 0;
   int shutdownChecks = 0;
   for (int frame = 0; frame < 1000; ++frame) {
-    EXPECT_EQ(ReturnToLobbyHold::PollIfActive(
+    EXPECT_EQ(nevr_return_to_lobby_hold::PollIfActive(
                   policy, frame, [&] { ++counted; return uint64_t{0}; }, [&] { ++shutdownChecks; return false; }),
               PollVerdict::Keep);
   }
@@ -135,8 +135,8 @@ TEST(ReturnToLobbyHold, PollWithATtlStillDecides) {
   int counted = 0;
   const auto count = [&] { ++counted; return uint64_t{0}; };
   const auto noShutdown = [] { return false; };
-  EXPECT_EQ(ReturnToLobbyHold::PollIfActive(policy, 2000, count, noShutdown), PollVerdict::Keep);
-  EXPECT_EQ(ReturnToLobbyHold::PollIfActive(policy, 1000 + kTtl, count, noShutdown), PollVerdict::Release);
+  EXPECT_EQ(nevr_return_to_lobby_hold::PollIfActive(policy, 2000, count, noShutdown), PollVerdict::Keep);
+  EXPECT_EQ(nevr_return_to_lobby_hold::PollIfActive(policy, 1000 + kTtl, count, noShutdown), PollVerdict::Release);
   EXPECT_EQ(counted, 2);
 }
 

@@ -9,7 +9,7 @@
 #include <vector>
 #endif
 
-namespace SystemInfo {
+namespace nevr_system_info {
 namespace {
 
 #ifdef _WIN32
@@ -137,4 +137,4 @@ const Host& Get() {
   return cached;
 }
 
-}  // namespace SystemInfo
+}  // namespace nevr_system_info
