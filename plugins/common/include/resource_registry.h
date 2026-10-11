@@ -30,8 +30,10 @@ inline RegisterResourceOverrideFn g_fnRegister = nullptr;
 inline DeregisterResourceOverridesFn g_fnDeregister = nullptr;
 inline ResetResourceOverridesFn g_fnReset = nullptr;
 
-// The modules that may export the override functions, in the order they are tried.
-inline constexpr const char* kResourceHostModules[] = {"dbgcore.dll"};
+// The modules that may export the override functions, in the order they are tried: the runtime's deployed
+// name (it masquerades as the game's crash reporter), then the legacy dbgcore.dll name. plugin_assets.h
+// resolves its exports from the same list in the same order.
+inline constexpr const char* kResourceHostModules[] = {"BugSplat64.dll", "dbgcore.dll"};
 
 struct ResourceExports {
     RegisterResourceOverrideFn registerFn = nullptr;
@@ -70,6 +72,13 @@ inline void ResolveResourceExports() {
     g_fnRegister = found.registerFn;
     g_fnDeregister = found.deregisterFn;
     g_fnReset = found.resetFn;
+    if (!found.registerFn) {
+        // One line, once per plugin DLL (call_once): a plugin that ignores the false return would otherwise
+        // lose its overrides silently.
+        LogResourceExportsMissing(
+            "resource override exports not found in BugSplat64.dll or dbgcore.dll: resource overrides "
+            "from this plugin will be ignored");
+    }
 }
 
 } // namespace detail
