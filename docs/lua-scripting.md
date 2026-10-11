@@ -99,6 +99,35 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   with "memory" in the reason.
 - **Errors.** Script errors carry `<file>:<line>: <message>`.
 
+## Typed API stubs and the checker
+
+`GenerateLuauDefinitions` (`src/scripting/script_stubs.h`) writes a Luau definition file from what the runtime
+registered. The types therefore come from the ABI tables, not from a second list kept by hand.
+
+- **Override keys and hook names** are singleton string types.
+- **Each hook point has two call types,** one per phase. Each type's `set` accepts only the fields writable in
+  that phase, and only the pre type has `skip`.
+
+`luau-lsp` loads the file through `luau-lsp.types.definitionFiles`. `nevr_script_check`
+(`src/scripting/check/`, a host tool built on upstream's `Luau.Analysis`) type-checks scripts against it in strict
+mode, without running them, and prints `<file>:<line>:<column>: TypeError: ...`.
+
+`src/scripting/check/check_test.sh` runs the checker on the sample script `src/scripting/samples/low_gravity.lua`,
+which must check clean. It also runs one sample per mistake, and each must be rejected on its line:
+
+| Sample | Mistake |
+| --- | --- |
+| `bad_key.lua` | misspelt key |
+| `bad_value.lua` | `"yes"` for a boolean key |
+| `bad_read_only.lua` | `h:set("a", …)` after the call |
+| `bad_skip_in_post.lua` | `h:skip()` in a post callback |
+| `bad_hook.lua` | misspelt hook name |
+
+```sh
+cmake -S src/scripting/check -B build/script-check -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/script-check
+src/scripting/check/check_test.sh <build>/nevr_script_stubs_test build/script-check/nevr_script_check /tmp/nevr-check
+```
+
 ## Build and test
 
 The prototype is a standalone CMake project, built with the same toolchains as the real targets:
@@ -146,10 +175,8 @@ At `lane-lua/design`, both targets give the same results: mingw-w64 under wine a
      on the tick path.
 3. **The first real hook point.** A named game function, detoured once by the runtime and invoked through
    `Registry::Invoke`.
-4. **Typed API stubs.** Generate Luau definition files (for `luau-lsp`) from the registered override points and
-   hook points, so they come from the ABI tables, not a second list.
-5. **Per-script memory.** One shared state with a `luaL_sandboxthread` per script and `lua_setmemcat`
+4. **Per-script memory.** One shared state with a `luaL_sandboxthread` per script and `lua_setmemcat`
    accounting, measured against today's ~370 KB per script.
-6. **Real arm64 timing.** Run `nevr_script_conformance --bench` on a Quest (adb, no game).
-7. **Report the manifests.** Add the script manifests to the login's plugin report
+5. **Real arm64 timing.** Run `nevr_script_conformance --bench` on a Quest (adb, no game).
+6. **Report the manifests.** Add the script manifests to the login's plugin report
    (`src/runtime/ext/plugin_manifest.h`).

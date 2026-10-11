@@ -157,6 +157,10 @@ class Registry {
   // Runtime side. Names are unique; a second registration of a name returns null.
   HookPoint* RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields);
   HookPoint* FindHookPoint(const char* name) const;
+  // What the runtime registered, sorted by name: the source the typed API stubs
+  // are generated from (script_stubs.h).
+  std::vector<std::pair<std::string, NevrValueType>> OverridePoints() const;
+  std::vector<const HookPoint*> HookPoints() const;
   // Runs the pre chain, the original (unless a pre callback asked to skip it),
   // then the post chain. `fields` holds one value per declared field, in order.
   void Invoke(const HookPoint* hook, NevrValue* fields, OriginalFn original, void* ctx);

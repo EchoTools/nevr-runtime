@@ -329,6 +329,18 @@ HookPoint* Registry::FindHookPoint(const char* name) const {
   return it == hooks_.end() ? nullptr : it->second.get();
 }
 
+std::vector<std::pair<std::string, NevrValueType>> Registry::OverridePoints() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return {override_points_.begin(), override_points_.end()};
+}
+
+std::vector<const HookPoint*> Registry::HookPoints() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  std::vector<const HookPoint*> points;
+  for (const auto& entry : hooks_) points.push_back(entry.second.get());
+  return points;
+}
+
 NevrStatus Registry::OverrideSet(NevrOwner* owner, const char* key, const NevrValue* value) {
   if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
   if (!key || !*key || !ValidValue(value)) {
