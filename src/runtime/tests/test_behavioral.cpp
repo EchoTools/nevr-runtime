@@ -1135,6 +1135,37 @@ TEST(MatchmakerHostPatch, LoadUnloadReloadPatchesEveryLoadAndUnloadWritesNothing
   EXPECT_EQ(writes, 3);
 }
 
+// Self-check "matchmaking_reload_patch" (#451): the ledger the loader callback feeds says, per change, whether
+// every load of the module had its host default re-applied.
+TEST(MatchmakerHostPatch, ReloadLedgerPassesWhenEveryLoadWasPatchedAndFailsWhenOneWasNot) {
+  namespace mm = nevr_matchmaker_host_patch;
+  mm::ReloadLedger ledger;
+  std::string observed;
+  bool pass = false;
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "no load yet: nothing to report";
+
+  ledger.NoteLoad(mm::Result::Patched);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=1 patched=1");
+  EXPECT_TRUE(pass);
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "unchanged: said once";
+
+  ledger.NoteLoad(mm::Result::Patched);  // the reload of #18, patched again
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=2 patched=2");
+  EXPECT_TRUE(pass);
+
+  ledger.NoteLoad(mm::Result::BytesMismatch);  // a load the patch did not land on
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=3 patched=2");
+  EXPECT_FALSE(pass);
+
+  ledger.NoteLoad(std::nullopt);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=4 patched=2");
+  EXPECT_FALSE(pass);
+}
+
 TEST(MatchmakerHostPatch, OnlyTheMatchmakingModuleByWholeNameAnyCaseIsPatched) {
   namespace mm = nevr_matchmaker_host_patch;
   int writes = 0;

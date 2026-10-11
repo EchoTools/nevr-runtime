@@ -27,6 +27,7 @@
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
@@ -35,6 +36,7 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/self_check.h"
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -163,6 +165,7 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
+    nevr_self_check::Flush();  // probes and queued results, every poll (a no-op unless the feature is on)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
   }
@@ -249,11 +252,19 @@ ActionResult LoginAction() noexcept {
   }
 }
 
+void SelfCheckLog(const nevr_self_check::LogRecord& record) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "self_check",
+                      {{"check", record.name.c_str()}, {"pass", record.pass ? 1 : 0},
+                       {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
+}
+
 ActionResult MatchmakingAction() noexcept {
   try {
     const sentinel::GotStatus status = nevr_quest::redirect::InstallMatchmakingRedirect();
     switch (status) {
-      case sentinel::GotStatus::kOk: return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
+      case sentinel::GotStatus::kOk:
+        NoteMatchmakingRedirectInstalled();
+        return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
       case sentinel::GotStatus::kAlreadyInstalled:
         return Staged("matchmaking_redirect_installed", {Settle::kDone, "already_installed"});
       case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
@@ -370,6 +381,18 @@ class ProductionSteps final : public Steps {
     quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
+    if (cfg.effective.selfCheck) {
+      // Self-checks (#451): ask the game service for every remote log category, and report each run-card
+      // check's result on the login connection as the user the service names at LoginSuccess.
+      SelfCheckHooks hooks;
+      hooks.sender = &SendSocialFrame;
+      hooks.log = &SelfCheckLog;
+      hooks.build = NEVR_QUEST_PROJECT_VERSION;
+      ApplySelfCheck(&config.tap, &config.remoteDebugQuery, hooks);
+      nevr_self_check::Register({"matchmaking_reload_redirect",
+                                 "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
+                                 &MatchmakingReloadProbe});
+    }
     config.connector = rt.connector.get();
     config.log = RouterLog();
     config.loginGate = [] { return static_cast<nevr_session_router::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };

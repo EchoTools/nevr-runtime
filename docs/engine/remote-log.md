@@ -177,31 +177,28 @@ it is not an error, it is not acted on, and it is kept by the journal.
 Triggers precedent: `RemoteLogLoadStats` with `ClientLoadTime > 45` posts a Discord notice to the guild's
 operator channel (`server/evr_runtime_event_remotelogset.go:556`).
 
-## 4. The runtime today
+## 4. The runtime
 
-- The runtime does not parse or originate remote logs. Messages pass through its bridges as bytes. The only
-  places that name `SNSRemoteLogSetv3`: `src/runtime/compat/evr_codec.h:79` (`kSymRemoteLogSet`, "no require
-  flag") and `src/runtime/compat/session_router.cpp:141` (`RequestRaisesRequireCount`: a login-connection
-  send of it does not raise the router's outstanding-request count).
-- `docs/reference/legacy-translator.md:116`: the v2/v3 header words are not identified.
-- The runtime has **no** `debug=true` today (`git grep` for `debug=true`, `enable_all_remote`, `remote_log_`
-  in `src`, `plugins`, `tools`, `docs`, config: only the symbol tables and the game's own key strings).
+- The game's own remote logs pass through the bridges as bytes: the runtime does not parse or rewrite them.
+  The places that name `SNSRemoteLogSetv3`: `src/runtime/compat/evr_codec.h` (`kSymRemoteLogSet`, "no require
+  flag", and `BuildRemoteLogSet`, the frame the self-checks send) and `src/runtime/compat/session_router.cpp`
+  `RequestRaisesRequireCount` (a login-connection send of it does not raise the router's outstanding-request
+  count).
+- `docs/reference/legacy-translator.md`: the v2/v3 header words are not identified.
+- The runtime originates remote logs only for the self-checks (section 6).
 
-The two places the websocket URL is built:
+Where the websocket URL is built, and what it carries:
 
-| Platform | Where | Current query |
+| Platform | Where | Query |
 | --- | --- | --- |
-| PC | `src/runtime/compat/ws_bridge.cpp:1004` `std::string remoteUrl = g_remoteUri;` (target set by `SetWebSocketBridgeTarget`, `:856`), then `nevr_serverdb_uri::BuildBridgeCredentialUri` (`src/runtime/server/serverdb_uri.cpp:81`) appends `discordid`/`password`; for connections >= 2 (matchmaker) `format=evr` is removed (`:1042`) | configured `socket_uri` (may already carry `format=evr`, `token`), plus `discordid`, `password` when configured |
-| Quest | `src/quest/net/session_bridge.cpp` `SessionBridge::BuildRequest`: `out.url = config_.remoteUri;` then the same `BuildBridgeCredentialUri` | configured `socket_uri`, plus `discordid`, `password` when configured |
+| PC | `src/runtime/compat/ws_bridge.cpp`: `remoteUrl = g_remoteUri`, then `nevr_serverdb_uri::BuildBridgeCredentialUri` appends `discordid`/`password`; the login connection (index 1) of a self-check build then gets `debug=true` (`AppendRemoteDebugParam`); for connections >= 2 (matchmaker) `format=evr` is removed | the configured `socket_uri` (may already carry `format=evr`, `token`), plus the credentials when configured, plus `debug=true` on the login connection of a self-check build |
+| Quest | `src/quest/net/session_bridge.cpp` `SessionBridge::BuildRequest`: the configured `remoteUri`, the same `BuildBridgeCredentialUri`, then `AppendRemoteDebugParam` on a login-role request when `Config::remoteDebugQuery` is set (the `self_check` feature) | same |
 
-`AppendQuery` (`serverdb_uri.cpp:35`) is the existing percent-encoding query builder both use.
+`AppendQuery` (`src/runtime/server/serverdb_uri.cpp`) is the percent-encoding query builder both use.
 
-Primitives for a runtime-originated message exist: `nevr_evr_codec::BuildMessage(symbol, payload)`
-(`src/runtime/compat/evr_codec.cpp:38`) frames an evr message, and on Quest `SessionBridge::SendToLogin`
-(`src/quest/net/session_bridge.cpp:138`, used at `src/quest/integration/production_steps.cpp:175`) sends one
-on the login connection once `LoginSuccess` has been seen. PC's injection of `LogInRequest` is in
-`ws_bridge.cpp` (the `Open` handler on connection index 1). *Unverified*: a PC sender for a post-login
-message does not exist yet.
+Senders for a runtime-built message on the login connection: PC `SendFrameToServer`
+(`ws_bridge.cpp`, queues while the remote is connecting; also the party requests' sender), Quest
+`SessionBridge::SendToLogin` (refused until `LoginSuccess` has been seen).
 
 ## 5. Whole-project search
 
@@ -226,7 +223,50 @@ Hits are in three places only; no script DLL or Quest twin names a remote log:
 No hit in `pnsdemo.dll`, `pnsovr.dll`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `test-foo.so` or any hash-named
 binary.
 
-## 6. What is not established
+## 6. Self-checks
+
+A release candidate reports its own run-card checks through this path (`src/runtime/compat/self_check.h`, one
+source for the PC runtime and the Quest sentinel).
+
+- **On:** PC when the build's STAMPED version is a release candidate (`<x.y.z>-rc.<N>`, set only by a CI build of
+  the matching tag, `cmake/nevr_rc_label.cmake`), or with `-DNEVR_SELF_CHECKS=ON`. A local `just package-dev` build
+  is stamped `-dev` and leaves it off (`cmake/nevr_self_checks.cmake`, `tools/tests/test_self_checks_flag.py`).
+  Quest when the `self_check` feature is on: `features.self_check` in `nevr-quest.json`, or the build's default
+  features (`NEVR_QUEST_DEFAULT_FEATURES`); `just package-dev` does not name it, so the tester APK it builds does
+  not self-report unless `features="...,self_check"` is passed or the file turns it on. It needs `login`.
+  Off: no `debug=true`, nothing sent, nothing in the log; the unit's idle cost is one registration at boot, two
+  atomic increments per matchmaking load and a lock-free flag read per flush. Never on a dedicated game server.
+- **Connection:** the login connection's upgrade query carries `debug=true` (PC `ws_bridge.cpp`, Quest
+  `SessionBridge::BuildRequest`), which section 1 turns into every `remote_log_*` category.
+- **Sender:** PC `SendFrameToServer` (the login pair), Quest `SessionBridge::SendToLogin`. Nothing is sent
+  before `LoginSuccess` (the service drops remote logs from a session with no user); results wait in a queue
+  of 64 and the frame carries the user the service named. On Quest the flush runs on the token-auth poll, so a
+  build without `nevr_http_uri` and `nevr_http_key` (no token auth) logs its results but never sends them.
+- **One result, one string:** `{"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":...,
+  "check":...,"pass":...,"expected":...,"observed":...,"seq":...,"build":...}`; each text is cut at 160 bytes.
+  At most 8 results per check per session (PC; Quest never sees a login end, so there it is per process), then
+  one with `"observed":"capped"`; at most 16 strings per frame.
+  The same result is written to the build's own log at Info: PC `[NEVR.SELFCHECK] check=... pass=...`, Quest
+  `self_check {check, pass, expected, observed}`.
+- **Adding a check** is one registration and one call at the event:
+
+  ```cpp
+  static const auto kCheck = nevr_self_check::Register({"party_data_share", "the answer is PartyUpdateSuccess", nullptr});
+  // ... at the event:
+  nevr_self_check::Report(kCheck, "PartyUpdateFailure", /*pass=*/false);
+  ```
+
+  An event seen only from a hooked game function, a loader callback or an `-fno-exceptions` translation unit
+  does not call `Report`: it bumps an atomic it already owns and registers a `probe`, which `Flush` (the frame
+  tick on PC, the 2 s token-auth poll on Quest) calls on a thread that may allocate.
+
+| Check | PC | Quest |
+| --- | --- | --- |
+| `matchmaking_reload_patch` / `matchmaking_reload_redirect` (#18) | `pnsrad_enabler.cpp` `OnDllLoaded` feeds `nevr_matchmaker_host_patch::ReloadLedger`; passes when every load of `pnsradmatchmaking.dll` was patched | `post_load.cpp` `MatchmakingImages` (distinct handles the game's `dlopen` returned) against the redirect installs in `production_steps.cpp`; passes when installs >= images. A reload mapped at the same address returns the same handle and is not seen |
+
+Run-card checks not registered yet are listed in issue #451.
+
+## 7. What is not established
 
 - The broadcaster's own joining of header and blob (`0x140f8a460` vtable +0xa8): the contiguous layout is inferred from nakama's decoder.
 - Whether a dedicated game server ever receives `SNSLoginSettings` (the server flush `0x140119070` reads

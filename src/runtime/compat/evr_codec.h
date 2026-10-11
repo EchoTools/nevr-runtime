@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace nevr_evr_codec {
 
@@ -136,6 +137,13 @@ struct UserId {
   uint64_t platformCode = 0;
   uint64_t accountId = 0;
 };
+
+// A SNSRemoteLogSetv3 message (kSymRemoteLogSet): `user` as the log's EvrId, the session id and the 16 text
+// bytes left zero, `level` (the game's WriteLog mask: 2 info, 4 warning, 8 error), then the log strings as the
+// game's own string table: u32 count, u32 offsets[count] (offsets[0] is 0, then cumulative), each string NUL
+// terminated. The game service reads the count as a u64 whose high half is offsets[0]; that is the same bytes.
+// Sent without the require flag (see kSymRemoteLogSet). The service keeps at most 50 strings and 256 KiB.
+std::string BuildRemoteLogSet(const UserId& user, uint64_t level, const std::vector<std::string>& logs);
 
 // The SNSLoginRemovedNotify for `user` (see kSymLoginRemovedNotify above). `json` is the whole JSON document.
 std::string BuildLoginRemovedNotify(const UserId& user, uint8_t reason, std::string_view json);

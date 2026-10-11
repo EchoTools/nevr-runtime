@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal, kSelfCheck };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -61,6 +61,10 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. Off until a headset run confirms it; needs the social facade.
   bool presenceLocal = false;
+  // Report the run-card checks as remote logs to the game service (runtime/compat/self_check.h) and connect
+  // with debug=true so the service asks the game for every log category. A release candidate turns it on;
+  // needs the login (the results go out on the login connection).
+  bool selfCheck = false;
 };
 
 struct LogEvent {

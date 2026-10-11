@@ -84,6 +84,22 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
   return AppendQuery(remoteUri, {{"discordid", discordId, false}, {"password", password, false}});
 }
 
+std::optional<std::string> AppendRemoteDebugParam(std::string_view uri) {
+  // An existing debug parameter is left alone (an operator's own URL wins).
+  const size_t q = uri.find('?');
+  if (q != std::string_view::npos) {
+    std::string_view rest = uri.substr(q + 1);
+    while (!rest.empty()) {
+      const size_t amp = rest.find('&');
+      const std::string_view pair = rest.substr(0, amp);
+      if (pair.substr(0, pair.find('=')) == "debug") return std::string(uri);
+      if (amp == std::string_view::npos) break;
+      rest.remove_prefix(amp + 1);
+    }
+  }
+  return AppendQuery(uri, {{"debug", "true", false}});
+}
+
 std::string RemoveQueryParam(std::string_view uri, std::string_view param) {
   std::string result(uri);
   if (param.empty()) return result;

@@ -11,7 +11,7 @@ set(NEVR_QUEST_DEFAULT_FEATURES "" CACHE STRING
 
 function(nevr_generate_build_info root)
   set_project_version_from_git()
-  set(known redirect bridge login social hwdump obb_skip)
+  set(known redirect bridge login social hwdump obb_skip self_check)
   string(REPLACE "," ";" features "${NEVR_QUEST_DEFAULT_FEATURES}")
   foreach(feature IN LISTS features)
     if(NOT feature IN_LIST known)

@@ -31,6 +31,7 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/compat/self_check.h"  // Flush
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
 #include "runtime/hook/hook_guard.h"
@@ -47,6 +48,7 @@ volatile LONG g_tickReentry = 0;
 uint64_t g_lastTickUs = 0;
 
 constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
+constexpr uint64_t kSelfCheckIntervalUs = 250000;  // self-check probes and sends: four times a second
 
 /// Ticks between periodic liveness reports: ~30s at 8ms.
 constexpr LONG kLivenessReportEvery = 3750;
@@ -64,6 +66,15 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
     nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
+
+    // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
+    {
+        static uint64_t s_lastSelfCheckUs = 0;
+        if (!g_isServer && nowUs - s_lastSelfCheckUs >= kSelfCheckIntervalUs) {
+            s_lastSelfCheckUs = nowUs;
+            nevr_self_check::Flush();
+        }
+    }
 
     // Liveness + N83/N84 evidence.
     {
