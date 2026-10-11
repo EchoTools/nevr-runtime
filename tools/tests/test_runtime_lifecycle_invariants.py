@@ -329,7 +329,9 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(gone, patches)
         for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
-            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", extract_braced_function(patches, hook))
+            body = extract_braced_function(patches, hook)
+            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
+            self.assertRegex(body, r"if\s*\(\s*!nevr_broadcaster_guard::TryReadListenerTable\(")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
