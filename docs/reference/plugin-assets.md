@@ -10,7 +10,7 @@ This page is the contract for plugin authors. The declarations are in `src/exten
 
 ## The two exports
 
-The runtime module (deployed as `dbgcore.dll`) exports:
+The runtime module (deployed as `BugSplat64.dll`; older deployments name it `dbgcore.dll`) exports:
 
 ```c
 int  NEVR_RegisterAsset(uint64_t type_hash, uint64_t name_hash,

@@ -72,7 +72,7 @@ offset plus the previous compressed size.
    manager `+0x00` (rebasing `chunk` and package index by what is already there), appends the chunks at `+0x80`,
    opens each package file into the handle table at `+0x128`;
 3. merges the file records into the table at `+0x40`;
-4. refuses (`cpackagemanifest.cpp` `0xb7` / `0xdb`) when any resource it contains is already loaded.
+4. refuses (the game's cpackagemanifest.cpp, source lines `0xb7` / `0xdb`) when any resource it contains is already loaded.
 
 A manifest therefore cannot add a resource without a package file the engine can open, which is why plugin
 assets are served at the completion instead (`plugin-assets.md`).
