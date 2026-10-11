@@ -26,6 +26,15 @@ set(NEVR_LUAU_WARNINGS -Wall -Wimplicit-fallthrough -Wsign-compare)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   list(APPEND NEVR_LUAU_WARNINGS -Wno-unused -Wno-maybe-uninitialized)
 endif()
+# Upstream source on a PE target only; our own targets keep these warnings.
+#   -Wno-attributes  luaconf.h gives every internal function visibility("hidden")
+#                    under __GNUC__; PE has no symbol visibility, so GCC ignores it.
+#   -Wno-format      Common.h marks the bytecode dump helpers format(printf), which
+#                    mingw GCC checks as ms_printf, and that rejects upstream's %zu.
+#                    The binding never calls those dump helpers.
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  list(APPEND NEVR_LUAU_WARNINGS -Wno-attributes -Wno-format)
+endif()
 
 function(nevr_luau_lib name)
   add_library(${name} STATIC ${ARGN})
