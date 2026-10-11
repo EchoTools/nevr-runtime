@@ -3,6 +3,8 @@
 // load filter on DllLoadHook now; this runs the real hooks and checks the filter vetoes a load.
 
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/hook_guard.h"
+#include "core/logging.h"
 
 #include <MinHook.h>
 #include <gtest/gtest.h>
@@ -16,9 +18,13 @@ bool BlocksVersionDll(const wchar_t* lowerPath) { return std::wcsstr(lowerPath, 
 
 }  // namespace
 
+VOID Log(EchoVR::LogLevel, const CHAR*, ...) {}
+
 TEST(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAlone) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
+  EXPECT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
+  EXPECT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryExW)));
 
   // Before a filter exists the load goes through.
   ASSERT_NE(LoadLibraryW(L"version.dll"), nullptr) << "precondition: version.dll loads";

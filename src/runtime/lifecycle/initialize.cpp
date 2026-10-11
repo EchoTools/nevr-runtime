@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/patch/mic_policy.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
@@ -362,13 +363,26 @@ static VOID InitializeAfterGameImageGuard() {
         nevr_boot_log_tee::TeeFprintf(
             "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
         g_bootHookFailed = true;
-      } else if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-                     reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-                 MH_EnableHook(sym_target) == MH_OK) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
       } else {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol\n");
-        g_bootHookFailed = true;
+        const MH_STATUS created = MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+                                                 reinterpret_cast<void**>(&g_original_GetSymbol));
+        const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(sym_target) : created;
+        if (enabled == MH_OK) {
+          nevr_hook_guard::Record(sym_target, "CSysDLL_GetSymbol");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
+        } else {
+          if (created == MH_OK) {
+            const MH_STATUS cleanup = MH_RemoveHook(sym_target);
+            if (cleanup != MH_OK) {
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_GetSymbol reason=%s\n",
+                                            MH_StatusToString(cleanup));
+            }
+          }
+          g_original_GetSymbol = nullptr;
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
+                                        created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
+          g_bootHookFailed = true;
+        }
       }
   }
 
@@ -378,13 +392,26 @@ static VOID InitializeAfterGameImageGuard() {
       static const unsigned char kLoadModulePrologue[8] = {0x40, 0x53, 0x48, 0x81, 0xEC, 0x20, 0x04, 0x00};
       if (memcmp(load_target, kLoadModulePrologue, sizeof(kLoadModulePrologue)) != 0) {
         nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook skipped name=CSysDLL_Load va=0x14105aa70 reason=prologue_mismatch\n");
-      } else if (MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
-                     reinterpret_cast<void**>(&g_original_LoadModule)) == MH_OK &&
-                 MH_EnableHook(load_target) == MH_OK) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
       } else {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load\n");
-        g_bootHookFailed = true;
+        const MH_STATUS created = MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
+                                                 reinterpret_cast<void**>(&g_original_LoadModule));
+        const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(load_target) : created;
+        if (enabled == MH_OK) {
+          nevr_hook_guard::Record(load_target, "CSysDLL_Load");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
+        } else {
+          if (created == MH_OK) {
+            const MH_STATUS cleanup = MH_RemoveHook(load_target);
+            if (cleanup != MH_OK) {
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_Load reason=%s\n",
+                                            MH_StatusToString(cleanup));
+            }
+          }
+          g_original_LoadModule = nullptr;
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load stage=%s reason=%s\n",
+                                        created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
+          g_bootHookFailed = true;
+        }
       }
   }
 

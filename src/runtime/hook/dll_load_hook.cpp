@@ -15,6 +15,7 @@
  */
 
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/hook_guard.h"
 #include "core/hooking.h"
 
 #include <cstdio>
@@ -224,11 +225,20 @@ void Install() {
 
     int okCount = 0;
     for (const auto& s : specs) {
-        MH_STATUS st = MH_CreateHook(s.target, s.detour, s.original);
-        if (st == MH_OK) st = MH_EnableHook(s.target);
+        const MH_STATUS created = MH_CreateHook(s.target, s.detour, s.original);
+        const MH_STATUS st = created == MH_OK ? MH_EnableHook(s.target) : created;
         if (st == MH_OK) {
+            nevr_hook_guard::Record(s.target, s.name);
             okCount++;
         } else {
+            if (created == MH_OK) {
+                const MH_STATUS cleanup = MH_RemoveHook(s.target);
+                if (cleanup != MH_OK) {
+                    fprintf(stderr, "[NEVR.DLLHOOK] failed-hook cleanup FAILED name=%s reason=%s\n",
+                            s.name, MH_StatusToString(cleanup));
+                }
+            }
+            *s.original = nullptr;
             fprintf(stderr,
                     "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
                     "hardening inactive for this variant\n",

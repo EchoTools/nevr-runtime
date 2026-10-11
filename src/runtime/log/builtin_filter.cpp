@@ -1217,6 +1217,7 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
             MH_StatusToString(status));
+        g_hook_target = nullptr;
         return;
     }
 
@@ -1230,6 +1231,14 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
             MH_StatusToString(status));
+        const MH_STATUS cleanup = MH_RemoveHook(g_hook_target);
+        if (cleanup != MH_OK) {
+            Log(EchoVR::LogLevel::Error,
+                "[NEVR.PATCH] CLog::PrintfImpl failed-hook cleanup status=%s",
+                MH_StatusToString(cleanup));
+        }
+        g_hook_target = nullptr;
+        orig_PrintfImpl = nullptr;
         return;
     }
 

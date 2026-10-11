@@ -21,15 +21,21 @@ struct GuardedSite {
   const void* target;
   const char* name;  // string literal from the call site; not owned
   unsigned char bytes[kSnapshotBytes];
-  bool reported;  // true once this site's overwrite ERROR has been logged —
+  volatile LONG published;  // release-published only after all fields are filled
+  volatile LONG reported;  // true once this site's overwrite ERROR has been logged —
                   // a collision that stays overwritten (nothing un-overwrites
                   // one) must not re-log the identical ERROR every ~30s
                   // periodic check for the rest of the process lifetime.
 };
 
 GuardedSite g_sites[kMaxGuarded];
-volatile LONG g_count = 0;
-bool g_overflowed = false;
+volatile LONG g_reserved = 0;
+volatile LONG g_recorded = 0;
+volatile LONG g_overflowed = 0;
+
+#ifdef NEVR_TEST_HOOKS
+void (*g_beforePublishForTest)() = nullptr;
+#endif
 
 /// Committed+readable check that does not use IsBadReadPtr (deprecated, and
 /// unreliable under Wine).
@@ -61,40 +67,48 @@ void Record(const void* target, const char* name) {
   if (target == nullptr) return;
   if (!Readable(target, kSnapshotBytes)) return;
 
-  const LONG idx = InterlockedIncrement(&g_count) - 1;
-  if (idx >= kMaxGuarded) {
-    InterlockedDecrement(&g_count);
-    if (!g_overflowed) {
-      g_overflowed = true;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] hook guard table full cap=%d — further detours unguarded",
-          kMaxGuarded);
+  LONG idx = 0;
+  for (;;) {
+    idx = InterlockedCompareExchange(&g_reserved, 0, 0);
+    if (idx >= kMaxGuarded) {
+      if (InterlockedCompareExchange(&g_overflowed, 1, 0) == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook guard table full cap=%d — further detours unguarded",
+            kMaxGuarded);
+      }
+      return;
     }
-    return;
+    if (InterlockedCompareExchange(&g_reserved, idx + 1, idx) == idx) break;
   }
 
   g_sites[idx].target = target;
   g_sites[idx].name = name != nullptr ? name : "(unnamed)";
-  g_sites[idx].reported = false;
   memcpy(g_sites[idx].bytes, target, kSnapshotBytes);
+#ifdef NEVR_TEST_HOOKS
+  if (g_beforePublishForTest != nullptr) g_beforePublishForTest();
+#endif
+  InterlockedExchange(&g_sites[idx].published, 1);
+  InterlockedIncrement(&g_recorded);
 }
 
 bool IsOurDetour(const void* target) {
   if (target == nullptr || !Readable(target, kSnapshotBytes)) return false;
-  const LONG n = g_count;
+  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
   for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
+    if (InterlockedCompareExchange(&g_sites[i].published, 0, 0) == 0) continue;
     if (g_sites[i].target == target) return memcmp(target, g_sites[i].bytes, kSnapshotBytes) == 0;
   }
   return false;
 }
 
 int VerifyAll(const char* context) {
-  const LONG n = g_count;
+  const LONG n = InterlockedCompareExchange(&g_reserved, 0, 0);
   int mismatches = 0;
   int newlyReported = 0;
 
   for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
     GuardedSite& s = g_sites[i];
+    if (InterlockedCompareExchange(&s.published, 0, 0) == 0) continue;
     if (s.target == nullptr) continue;
     if (!Readable(s.target, kSnapshotBytes)) continue;
 
@@ -106,8 +120,7 @@ int VerifyAll(const char* context) {
     // Edge-triggered: log this site's ERROR once, the first check that finds
     // it overwritten. Nothing un-overwrites a clobbered hook, so without this
     // gate the identical line repeats every ~30s periodic check forever.
-    if (s.reported) continue;
-    s.reported = true;
+    if (InterlockedCompareExchange(&s.reported, 1, 0) != 0) continue;
     newlyReported++;
 
     char expected[kSnapshotBytes * 2 + 1];
@@ -140,13 +153,17 @@ int VerifyAll(const char* context) {
   return mismatches;
 }
 
-int RecordedCount() { return static_cast<int>(g_count); }
+int RecordedCount() { return static_cast<int>(InterlockedCompareExchange(&g_recorded, 0, 0)); }
 
 #ifdef NEVR_TEST_HOOKS
+void SetBeforePublishForTest(void (*callback)()) { g_beforePublishForTest = callback; }
+
 void ResetForTest() {
-  InterlockedExchange(&g_count, 0);
+  InterlockedExchange(&g_reserved, 0);
+  InterlockedExchange(&g_recorded, 0);
   memset(g_sites, 0, sizeof(g_sites));
-  g_overflowed = false;
+  InterlockedExchange(&g_overflowed, 0);
+  g_beforePublishForTest = nullptr;
 }
 #endif
 

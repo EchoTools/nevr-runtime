@@ -25,6 +25,7 @@
 #include <mutex>
 #include <signal.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
@@ -1823,6 +1824,14 @@ struct GuardScratch {
     }
 };
 
+HANDLE g_guardEntered = nullptr;
+HANDLE g_guardContinue = nullptr;
+
+void WaitBeforeGuardPublish() {
+    SetEvent(g_guardEntered);
+    WaitForSingleObject(g_guardContinue, 5000);
+}
+
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
@@ -1834,6 +1843,36 @@ TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
     nevr_hook_guard::Record(s.page, "N84_unchanged");
     EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
+}
+
+TEST(N84_HookGuard, ReadersSkipReservedEntryUntilWriterPublishesIt) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    g_guardEntered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_guardContinue = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ASSERT_NE(g_guardEntered, nullptr);
+    ASSERT_NE(g_guardContinue, nullptr);
+    nevr_hook_guard::SetBeforePublishForTest(&WaitBeforeGuardPublish);
+
+    std::thread writer([&] { nevr_hook_guard::Record(s.page, "N84_pending"); });
+    const DWORD entered = WaitForSingleObject(g_guardEntered, 5000);
+    if (entered == WAIT_OBJECT_0) {
+        EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
+        EXPECT_FALSE(nevr_hook_guard::IsOurDetour(s.page));
+        EXPECT_EQ(nevr_hook_guard::VerifyAll("test:pending"), 0);
+    }
+    SetEvent(g_guardContinue);
+    writer.join();
+    nevr_hook_guard::SetBeforePublishForTest(nullptr);
+    EXPECT_EQ(entered, WAIT_OBJECT_0);
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(s.page));
+    CloseHandle(g_guardEntered);
+    CloseHandle(g_guardContinue);
+    g_guardEntered = nullptr;
+    g_guardContinue = nullptr;
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {

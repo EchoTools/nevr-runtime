@@ -4,7 +4,6 @@
 #include "core/logging.h"
 #include "core/globals.h"
 #include "runtime/hook/addresses.h"
-#include <MinHook.h>
 // N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
 // its Log() output reached neither the console log nor nevr-boot.jsonl — so
 // across every captured run the patch reported NOTHING, success or failure, and
@@ -98,11 +97,17 @@ VOID PatchDscProvider() {
   static_assert(sizeof(kDscDash)  == XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
   static_assert(sizeof(kDscShort) == XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE);
 
-  ApplyPatch(XPID_PLATFORM_SHORT_NAME,  kDscShort, sizeof(kDscShort));
-  ApplyPatch(XPID_PLATFORM_DASH_PREFIX, kDscDash,  sizeof(kDscDash));
-  ApplyPatch(XPID_PLATFORM_COMPACT_NAME, kDscShort, sizeof(kDscShort));
-  ApplyPatch(XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, sizeof(kDscDash));
-  ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
+  bool allPatched = true;
+  allPatched &= ApplyPatch(XPID_PLATFORM_SHORT_NAME,  kDscShort, sizeof(kDscShort));
+  allPatched &= ApplyPatch(XPID_PLATFORM_DASH_PREFIX, kDscDash,  sizeof(kDscDash));
+  allPatched &= ApplyPatch(XPID_PLATFORM_COMPACT_NAME, kDscShort, sizeof(kDscShort));
+  allPatched &= ApplyPatch(XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, sizeof(kDscDash));
+  allPatched &= ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
+
+  if (!allPatched) {
+    ServerFatal("XPID provider-string patch failed — identity strings are inconsistent");
+    return;
+  }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
   nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
@@ -128,16 +133,15 @@ static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
 VOID PatchProviderPrefixOvrOrg() {
   using namespace nevr_patch_addresses;
   void* target = EchoVR::g_GameBaseAddress + GET_PROVIDER_PREFIX;
-  MH_STATUS st = MH_CreateHook(target, (void*)GetProviderPrefixHook,
-                                (void**)&g_RealGetProviderPrefix);
-  if (st == MH_OK) st = MH_EnableHook(target);
-  if (st == MH_OK) {
+  g_RealGetProviderPrefix = reinterpret_cast<GetProviderPrefixFn>(target);
+  if (PatchDetour(&g_RealGetProviderPrefix, reinterpret_cast<PVOID>(GetProviderPrefixHook),
+                  "GetProviderPrefix")) {
     Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
-        target, MH_StatusToString(st));
+        target, Hooking::LastAttachError());
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
-                           MH_StatusToString(st));
+                           Hooking::LastAttachError());
   }
 }
