@@ -180,6 +180,7 @@ class Registry {
   };
 
   NevrStatus Undeclared(NevrOwner* owner, const char* what, const char* name);
+  NevrStatus RefusedDisabled(NevrOwner* owner, const char* what, const char* name);
   void Emit(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* other,
             const char* target, const std::string& detail);
   NevrStatus Fail(NevrOwner* owner, NevrStatus status, std::string why);

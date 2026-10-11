@@ -202,6 +202,12 @@ void Registry::Record(NevrLogLevel level, const char* event, const NevrOwner* ow
   Emit(level, event, owner, nullptr, target, detail);
 }
 
+NevrStatus Registry::RefusedDisabled(NevrOwner* owner, const char* what, const char* name) {
+  Emit(NEVR_LOG_WARNING, "refused_disabled", owner, nullptr, name,
+       std::string(what) + " refused: " + owner->name + " is disabled");
+  return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
+}
+
 NevrStatus Registry::Undeclared(NevrOwner* owner, const char* what, const char* name) {
   Emit(NEVR_LOG_ERROR, "undeclared", owner, nullptr, name,
        std::string(what) + " is not in the owner's manifest");
@@ -225,7 +231,6 @@ NevrOwner* Registry::FindOwner(const std::string& name) const {
 }
 
 NevrStatus Registry::Fail(NevrOwner* owner, NevrStatus status, std::string why) {
-  if (status == NEVR_ERR_DISABLED) Emit(NEVR_LOG_WARNING, "refused_disabled", owner, nullptr, nullptr, why);
   t_last_error[owner] = std::move(why);
   return status;
 }
@@ -366,7 +371,7 @@ NevrStatus Registry::OverrideSet(NevrOwner* owner, const char* key, const NevrVa
     return Fail(owner, NEVR_ERR_INVALID_ARG, "override needs a non-empty key and a typed value");
   }
   std::lock_guard<std::mutex> lock(mu_);
-  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
+  if (owner->disabled.load()) return RefusedDisabled(owner, "override", key);
   if (owner->declared && !DeclarationCoversKey(owner->declaration, key)) {
     return Undeclared(owner, "override", key);
   }
@@ -418,7 +423,7 @@ NevrStatus Registry::HookAdd(NevrOwner* owner, const char* hook, NevrHookPhase p
     return Fail(owner, NEVR_ERR_INVALID_ARG, "hook_add needs a hook name, a phase and a function");
   }
   std::lock_guard<std::mutex> lock(mu_);
-  if (owner->disabled.load()) return Fail(owner, NEVR_ERR_DISABLED, owner->name + " is disabled");
+  if (owner->disabled.load()) return RefusedDisabled(owner, "hook", hook);
   if (owner->declared && std::find(owner->declaration.hooks.begin(), owner->declaration.hooks.end(),
                                    hook) == owner->declaration.hooks.end()) {
     return Undeclared(owner, "hook", hook);

@@ -1,6 +1,7 @@
 // Unit tests for the host API registry (src/scripting/host_registry.h): the
 // override and hook-point contract every plugin and script binding relies on.
 #include "scripting/host_registry.h"
+#include "scripting/memory_policy.h"
 
 #include <atomic>
 #include <cstring>
@@ -306,6 +307,8 @@ TEST(disabled_owner_is_skipped_and_loses_its_overrides) {
   // N2 (re-review of #458): what a disabled owner is refused, and a breach on an
   // owner already disabled, are recorded.
   CHECK_EQ(f.Count("refused_disabled"), 2);
+  const Captured* refused = f.Find("refused_disabled");
+  CHECK(refused && refused->target == "k");  // names what was refused
   f.reg.DisableOwner(a, "time budget exceeded");
   CHECK_EQ(f.Count("owner_disabled"), 2);
   CHECK(f.log.back().detail.find("already disabled; time budget exceeded") != std::string::npos);
@@ -506,6 +509,20 @@ TEST(quiesce_from_the_owners_own_callback_is_refused) {
   CHECK(!g_quiesce_from_inside);
   const Captured* c = f.Find("quiesce_failed");
   CHECK(c && c->detail.find("wait on itself") != std::string::npos);
+}
+
+TEST(cap_hit_verdicts) {
+  using nevr_script::CapHit;
+  using nevr_script::CapVerdict;
+  using nevr_script::JudgeCapHit;
+  const size_t cap = 16;
+  CHECK(JudgeCapHit(CapHit{2, 4, cap, 1}) == CapVerdict::kGarbage);
+  CHECK(JudgeCapHit(CapHit{2, 4, cap, 2}) == CapVerdict::kGarbage);
+  CHECK(JudgeCapHit(CapHit{2, 4, cap, 3}) == CapVerdict::kRepeated);  // the third call in a row
+  CHECK(JudgeCapHit(CapHit{9, 4, cap, 1}) == CapVerdict::kLiveSetTooLarge);
+  CHECK(JudgeCapHit(CapHit{8, 8, cap, 1}) == CapVerdict::kGarbage);  // exactly half is not over half
+  CHECK(JudgeCapHit(CapHit{2, 9, cap, 1}) == CapVerdict::kRequestTooLarge);
+  CHECK(JudgeCapHit(CapHit{9, 9, cap, 3}) == CapVerdict::kLiveSetTooLarge);  // the most specific reason first
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

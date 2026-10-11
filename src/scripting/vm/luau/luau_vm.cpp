@@ -27,6 +27,7 @@
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
+#include "scripting/memory_policy.h"
 #include "scripting/script_vm.h"
 
 namespace nevr_script {
@@ -509,17 +510,13 @@ std::string PopError(lua_State* L) {
 //
 // The cap counts what the allocator has handed out, garbage included, and Luau
 // has no emergency collection inside the allocator. So when an allocation hit
-// the cap, collect first and judge the live set: if it is under half the cap and
-// no single refused request was over half the cap, the failure was garbage
-// outrunning the collector; that call failed, but the script is not disabled.
-// One request past half the cap (string.rep of 64 MiB) is a breach whatever is
-// live, and so is reaching the cap with garbage on kGarbageRefusalLimit calls in
-// a row: the collection here is not timed against the call's budget, so a script
-// must not be able to make every call pay for one. The collector is tuned to
-// keep up within a call (see Load), so a script that is not trying should not
-// get here at all.
-constexpr int kGarbageRefusalLimit = 3;
-
+// the cap, collect first and judge it with JudgeCapHit (memory_policy.h): the
+// call merely failed when the live set and every refused request are within
+// half the cap and the cap has not been reached on kCapHitsInARowLimit calls in
+// a row; otherwise the owner is disabled. The collection here is not timed
+// against the call's budget, which is why repeats count. The collector is tuned
+// and assisted within the call (Load, Interrupt), so a script that is not trying
+// should not get here at all.
 void ApplyBreach(State* s) {
   const size_t cap = s->limits.memory_bytes;
   if (!s->mem_failed.load()) s->garbage_refusals = 0;
@@ -528,7 +525,9 @@ void ApplyBreach(State* s) {
     const size_t live = s->used.load();
     s->live_after_gc = live;
     const size_t refused = s->largest_refused.exchange(0);
-    if (live <= cap / 2 && refused <= cap / 2 && ++s->garbage_refusals < kGarbageRefusalLimit) {
+    const int hits = ++s->garbage_refusals;
+    const CapVerdict verdict = JudgeCapHit(CapHit{live, refused, cap, hits});
+    if (verdict == CapVerdict::kGarbage) {
       s->mem_failed.store(false);
       s->breach.clear();
       s->memory_breach = false;
@@ -538,9 +537,9 @@ void ApplyBreach(State* s) {
       s->api->log(s->owner, NEVR_LOG_WARNING, note.c_str());
       return;
     }
-    s->breach = "memory limit exceeded: " + std::to_string(live) + " bytes live after collection, largest refused request " +
-                std::to_string(refused) + " bytes, " + std::to_string(s->garbage_refusals) +
-                " call(s) in a row at the cap; the cap is " + std::to_string(cap) + " bytes";
+    s->breach = std::string("memory limit exceeded: ") + CapVerdictReason(verdict) + " (" + std::to_string(live) +
+                " bytes live after collection, largest refused request " + std::to_string(refused) + " bytes, " +
+                std::to_string(hits) + " call(s) in a row at the cap; the cap is " + std::to_string(cap) + " bytes)";
   }
   if (!s->breach.empty()) s->registry->DisableOwner(s->owner, s->breach);
 }
