@@ -186,7 +186,7 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}
   "${CMAKE_SOURCE_DIR}/src")
 
-# Build-time defaults embedded into the runtime (environment or .env; see
+# Build-time defaults embedded into the runtime (config/public-defaults.env; see
 # cmake/nevr_builtin_defaults.cmake). The header lands in ${CMAKE_BINARY_DIR}/generated/.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}")

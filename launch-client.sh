@@ -168,7 +168,7 @@ if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
       # 2038), so three of those, or three "Service is unavailable", is a service that is not coming.
       if [[ $(grep -c 'rad15_live failed' "$cur" || true) -ge 3 ]]; then break; fi
       if [[ $(grep -c 'Service is unavailable' "$cur" || true) -ge 3 ]]; then break; fi
-      # A DLL built without the production .env can never log in; do not wait out the deadline.
+      # A DLL that embeds no service endpoints can never log in; do not wait out the deadline.
       if grep -q 'built-in defaults embedded in this build: (none)' "$cur"; then break; fi
     fi
     sleep "$poll" 9>&-
@@ -204,7 +204,7 @@ count() { grep -c "$1" "$run_log" || test $? -eq 1; }
 echo "=== game log: $run_log ==="
 echo "logged_in=$(count 'to logged in') in_game=$(count 'to in game') invalid_header=$(count 'invalid header') service_unavailable=$(count 'Service is unavailable')"
 if grep -q 'built-in defaults embedded in this build: (none)' "$run_log"; then
-  echo "FAIL: this DLL embeds no service endpoints (built without the production .env); the run cannot be judged" >&2
+  echo "FAIL: this DLL embeds no service endpoints (its boot log says built-in defaults: (none)); the run cannot be judged" >&2
   exit 1
 fi
 if [[ $(count 'to logged in') -eq 0 ]]; then

@@ -114,7 +114,7 @@ target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
 
-# Build-time defaults embedded from the environment or <root>/.env at configure time (never read
+# Build-time defaults embedded from <root>/config/public-defaults.env at configure time (never read
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
