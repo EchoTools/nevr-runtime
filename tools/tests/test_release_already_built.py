@@ -52,6 +52,15 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"))
         self.assertIn("RELEASE-NOTES.md", result.stderr)
 
+    def test_every_one_of_the_seven_is_required(self):
+        every = self.names().split()
+        self.assertEqual(len(every), 7)
+        for name in every:
+            with self.subTest(missing=name):
+                result = self.run_script(FAKE_ASSETS=self.names(drop=name))
+                self.assertEqual(result.stdout.strip(), "false")
+                self.assertIn(name, result.stderr)
+
     def test_extra_assets_do_not_matter(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "something-else.txt\n")
         self.assertEqual(result.stdout.strip(), "true")
