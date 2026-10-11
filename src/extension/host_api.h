@@ -1,5 +1,5 @@
 /*
- * host_api.h - the nEVR host API: data overrides and named hook points.
+ * host_api.h - the host API: data overrides and named hook points.
  *
  * A plain C ABI over named things. A native plugin and a script binding (Lua)
  * call the same function table, so the binding wraps it one to one (#440).
