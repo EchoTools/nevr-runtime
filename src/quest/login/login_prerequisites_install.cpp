@@ -52,6 +52,7 @@ std::uint64_t HandleUserRequest(UserRequestThunk::Fn original) noexcept {
     return id;
   }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::LoggedInUser, request);
   return request;
 }
@@ -62,6 +63,7 @@ std::uint64_t HandleTokenRequest(TokenRequestThunk::Fn original) noexcept {
     return id;
   }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::AccessToken, request);
   return request;
 }
@@ -72,6 +74,7 @@ std::uint64_t HandleProofRequest(ProofRequestThunk::Fn original) noexcept {
     return id;
   }
   const std::uint64_t request = original();
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::UserProof, request);
   return request;
 }
@@ -138,6 +141,7 @@ std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* cal
     return id;
   }
   const std::uint64_t request = original(user);
+  local::NoteSdkRequestId(request);
   NoteRequest(Prerequisite::OrgScopedId, request);
   return request;
 }
