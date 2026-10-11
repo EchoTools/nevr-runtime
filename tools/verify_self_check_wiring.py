@@ -33,6 +33,10 @@ REQUIRED = [
      "the Quest bridge config is not wired through ApplySelfCheck"),
     ("src/quest/integration/self_check_wiring.cpp", r"nevr_self_check::SetEnabled\(true\);",
      "ApplySelfCheck does not turn the unit on"),
+    ("src/runtime/compat/ws_bridge.cpp", r"if \(fromServer\) nevr_party_share_check::OnServerMessage\(sym\);",
+     "the PC observer does not hand server-to-game symbols to the party_data_share check"),
+    ("src/quest/integration/production_steps.cpp", r"if \(serverToGame\) ObserveForSelfChecks\(data, len\);",
+     "the Quest observer does not hand server-to-game frames to the self-checks"),
 ]
 
 # Tokens that must not appear in the runtime sources: a switch by build type or feature, or a debug query.
