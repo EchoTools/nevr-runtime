@@ -218,7 +218,7 @@ class ReleaseContractTest(unittest.TestCase):
         # there; the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
-        self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", dockerfile)
+        self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
