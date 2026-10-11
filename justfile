@@ -1949,10 +1949,12 @@ verify:
         exit 1
     fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
-    # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
-    # generic branch still exists, and the attribution table is still populated
+    # generic null-ptr branch, NOT by per-site hooks. The VEH must call the
+    # policy that enforces the low-address and game-loop-thread conditions, and
+    # the attribution table must remain populated
     # (without it a fire reports a bare RVA and the class is unrecognisable).
-    if ! grep -q 'target < 0x10000' src/runtime/lifecycle/crash_recovery.cpp; then
+    if ! grep -q 'if (nevr_veh_policy::ShouldRecoverNullPointerAv(' src/runtime/lifecycle/crash_recovery.cpp \
+       || ! grep -q 'return isServer && target < 0x10000 && jumpBufferValid && gameLoopThreadId != 0 &&' src/runtime/lifecycle/veh_policy.h; then
         echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
         echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
         exit 1

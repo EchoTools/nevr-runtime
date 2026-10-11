@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/pch.h"
+#include "runtime/lifecycle/veh_policy.h"
 
 /// Installs CreateProcessA, CreateProcessW, ExitProcess, and TerminateProcess hooks
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.
@@ -17,8 +18,8 @@ void InstallGameMainHook();
 /// Also snapshots the module table (N70 — the handler must never enumerate,
 /// which would take the loader lock) and reserves crash-handler stack for the
 /// calling thread (N69).
-/// Returns true when the handler was installed, false when it was skipped (Wine client).
-bool InstallVEH();
+/// Reports whether the handler is active, deferred until CLI preflight, or failed to install.
+nevr_veh_policy::InstallResult InstallVEH();
 
 /// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
 /// path. Purely diagnostic — always calls the original.

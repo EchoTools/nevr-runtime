@@ -462,9 +462,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
-  const bool vehInstalled = InstallVEH();
+  const nevr_veh_policy::InstallResult vehResult = InstallVEH();
   InstallCrashFilterInstrumentation();
-  nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehInstalled));
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehResult));
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");

@@ -219,11 +219,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "a Hooking::Attach call's result is not captured in a variable")
 
     def test_veh_boot_line_comes_from_the_result_of_install_veh(self):
-        # #339: InstallVEH skips installing on a Wine client, so the boot line is derived from its
-        # return value, never written as a literal that is true on only one platform.
+        # The boot line must distinguish an early Wine deferral from an installation failure.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
-        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertRegex(source, r"\bconst\s+nevr_veh_policy::InstallResult\s+vehResult\s*=\s*InstallVEH\s*\(\s*\)\s*;")
+        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehResult\s*\)")
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
 
