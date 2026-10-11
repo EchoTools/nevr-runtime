@@ -644,6 +644,37 @@ void ConnectUrlRedirectIsStableAndCountedWithoutLogging() {
   QCHECK(Lines().empty());  // a hooked call never logs
 }
 
+// #408: ApplyUrl's decisions have counters of their own (`redirected` and `reads` are shared with the config-key
+// reads, `http_create_connection_calls` counts every connect). One per API or graph URL; any other URL is not a
+// decision and moves neither. No line is logged.
+void UrlDecisionsHaveTheirOwnCounters() {
+  {
+    Scenario s(Config(kRedirectOn));
+    Lines().clear();
+    ResetCountersForTest();
+    unsigned long handle = 0;
+    ConnectEntry()(&handle, "https://api.readyatdawn.com");
+    ConnectEntry()(&handle, "https://api.readyatdawn.com");
+    ConnectEntry()(&handle, "https://graph.oculus.com");
+    QCHECK(GlobalCounters().urlRedirected.load() == 3);
+    QCHECK(GlobalCounters().urlPassThrough.load() == 0);
+    ConnectEntry()(&handle, "https://apiary.example");  // not an API or graph base: not a decision
+    ConnectEntry()(&handle, nullptr);
+    QCHECK(GlobalCounters().urlRedirected.load() == 3);
+    QCHECK(GlobalCounters().urlPassThrough.load() == 0);
+    QCHECK(Lines().empty());
+  }
+  {
+    Scenario s(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));  // no http target
+    ResetCountersForTest();
+    unsigned long handle = 0;
+    ConnectEntry()(&handle, "https://api.readyatdawn.com");
+    QCHECK(GlobalCounters().urlRedirected.load() == 0);
+    QCHECK(GlobalCounters().urlPassThrough.load() == 1);
+  }
+  ResetCountersForTest();
+}
+
 // All 16 slots computed under the current bridge state: a further value is not remembered. A change
 // of bridge state makes those entries stale, and a stale slot is recycled.
 void CacheFullAndStaleBridgeBehaviour() {
@@ -933,6 +964,7 @@ int main(int argc, char** argv) {
   TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature();
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
+  UrlDecisionsHaveTheirOwnCounters();
   CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();
