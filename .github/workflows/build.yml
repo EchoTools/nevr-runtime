@@ -40,7 +40,7 @@ jobs:
     outputs:
       built: ${{ steps.check.outputs.built }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Does this release already carry its assets
       id: check
@@ -88,7 +88,7 @@ jobs:
       WINEDEBUG: "-all"
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: recursive
         fetch-depth: 0
@@ -137,7 +137,7 @@ jobs:
         echo "release version: '${version}' (empty: a branch build, which stamps a development version)"
 
     - name: Setup pinned just
-      uses: extractions/setup-just@v4
+      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       with:
         just-version: '1.58.0'
 
@@ -176,7 +176,7 @@ jobs:
     # for the same vcpkg.json.
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -202,7 +202,7 @@ jobs:
     # Saved right after the install, so a failure in a later step does not lose the dependency build.
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -278,7 +278,7 @@ jobs:
 
     - name: Upload the release tree
       if: steps.release.outputs.version != ''
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: unsigned-release-tree
         path: release-stage/
@@ -289,7 +289,7 @@ jobs:
     # archives are never published.
     - name: Upload the unsigned packages for signing
       if: github.event_name == 'release'
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: unsigned-packages
         path: |
@@ -311,13 +311,13 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       if: github.event_name == 'release'
       with:
         name: unsigned-packages
         path: packages
 
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       if: needs.build.outputs.version != ''
       with:
         name: unsigned-release-tree
@@ -336,7 +336,7 @@ jobs:
           echo "UNSIGNED passthrough: $f"
         done
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: packages-unsigned
         path: packages
@@ -355,9 +355,9 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         name: packages-unsigned
         path: staged
@@ -371,7 +371,7 @@ jobs:
         (cd release-assets && sha256sum -c SHA256SUMS)
         ls -la release-assets
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: release-unsigned
         path: release-assets
@@ -392,7 +392,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install archive tools
       run: |
@@ -400,7 +400,7 @@ jobs:
         sudo apt-get install -y zstd
         python -m pip install cmake==4.4.4
 
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         name: packages-unsigned
         path: staged
@@ -434,20 +434,20 @@ jobs:
     # The .tar.zst archives are built and checked but are not release assets: the public set is zips only
     # (what Windows users use, and what a signer can sign). They stay here as a workflow artifact.
     - name: Keep the .tar.zst archives as a workflow artifact
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: dist-tar-zst
         path: dist/*.tar.zst
         if-no-files-found: error
         retention-days: 7
 
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
         name: release-unsigned
         path: release-assets
 
     - name: Attest build provenance of the release files
-      uses: actions/attest-build-provenance@v4
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
       with:
         subject-path: |
           dist/*.zip
@@ -459,7 +459,7 @@ jobs:
     # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
     # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
     - name: Upload dist artifacts
-      uses: softprops/action-gh-release@v3
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
       with:
         fail_on_unmatched_files: true
         files: |
@@ -469,7 +469,7 @@ jobs:
 
     # The release's sealed zip, its checksums and the notes: the declared public set (all attested above).
     - name: Upload the release files
-      uses: softprops/action-gh-release@v3
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
       with:
         fail_on_unmatched_files: true
         files: |
