@@ -7,3 +7,6 @@
 [submodule "extern/lss"]
 	path = extern/lss
 	url = https://chromium.googlesource.com/linux-syscall-support
+[submodule "extern/luau"]
+	path = extern/luau
+	url = https://github.com/luau-lang/luau.git
