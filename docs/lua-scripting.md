@@ -172,11 +172,13 @@ At `lane-lua/design`, both targets give the same results: mingw-w64 under wine a
 
 | Executable | Result |
 | --- | --- |
-| `nevr_script_registry_test` | 16/16 |
+| `nevr_script_registry_test` | 19/19 |
 | `nevr_script_host_test` | 10/10 |
-| `nevr_script_conformance` | 23/23; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
-| `--pattern-dos` | stopped |
-| `--gc-dos` | stopped |
+| `nevr_script_conformance` | 24/24; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
+| `--pattern-dos` | stopped: the owner is disabled |
+| `--gc-dos` | returns; the finalizer never runs (Luau has no script finalizers) |
+
+`nevr_script_stubs_test` (3/3) and `src/scripting/check/check_test.sh` run on the host.
 
 ## What is left
 
