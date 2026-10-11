@@ -199,6 +199,30 @@ TEST_F(SelfCheck, RegisteringANameAgainReturnsTheSameCheck) {
   EXPECT_NE(first, other);
 }
 
+namespace {
+int g_sessionResets = 0;
+void CountSessionReset() { ++g_sessionResets; }
+}  // namespace
+
+TEST_F(SelfCheck, ASessionChangeRunsTheRegisteredResetsAndRestartsTheCaps) {
+  g_sessionResets = 0;
+  nevr_self_check::RegisterSessionReset(&CountSessionReset);
+  nevr_self_check::RegisterSessionReset(&CountSessionReset);  // the same function is registered once
+  const auto id = nevr_self_check::Register({"capped_check", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  EXPECT_EQ(g_sessionResets, 1);
+  for (std::size_t i = 0; i < nevr_self_check::kMaxResultsPerCheck + 3; ++i) nevr_self_check::Report(id, "ok", true);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 2});  // the next LoginSuccess
+  EXPECT_EQ(g_sessionResets, 2);
+  nevr_self_check::Report(id, "again", true);  // the cap started over: this one is a result, not "capped"
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_FALSE(results.empty());
+  EXPECT_EQ(results.back()["observed"], "again");
+  nevr_self_check::SetLoggedIn(false);
+  EXPECT_EQ(g_sessionResets, 3);
+}
+
 TEST_F(SelfCheck, DisabledUnitRecordsNothing) {
   nevr_self_check::SetEnabled(false);
   const auto id = nevr_self_check::Register({"x", "y", nullptr});

@@ -72,6 +72,25 @@ class PartyShareCheck : public ::testing::Test {
     nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 77});
   }
   static uint64_t Sym(const char* name) { return nevr_social_party::ReplySymbol(name); }
+
+  // One of the runtime's own requests, as the sender sees it (the 0x28 header with TargetParam last).
+  static void Send(uint64_t symbol, uint64_t targetParam) {
+    const nevr_social_party::Uuid self{};
+    const nevr_social_party::Message m = nevr_social_party::Standard(symbol, self, targetParam);
+    nevr_party_share_check::OnClientMessage(
+        symbol, reinterpret_cast<const std::uint8_t*>(m.payload.data()), m.payload.size());
+  }
+  static void ShareParty() { Send(nevr_social_party::kPartyDataUpdateRequest, nevr_social_party::kPartyDataScopeParty); }
+  static void ShareMember() { Send(nevr_social_party::kPartyDataUpdateRequest, nevr_social_party::kPartyDataScopeMember); }
+  static void SetJoinPolicy() { Send(nevr_social_party::kSetJoinPolicyRequest, 1); }
+  static void Answer(const char* name) { nevr_party_share_check::OnServerMessage(Sym(name)); }
+  static std::vector<nlohmann::json> Of(const char* check) {
+    std::vector<nlohmann::json> out;
+    for (const auto& r : Results()) {
+      if (r["check"] == check) out.push_back(r);
+    }
+    return out;
+  }
 };
 
 }  // namespace
@@ -98,34 +117,74 @@ TEST_F(PartyShareCheck, OtherSymbolsAreNotAnswers) {
   EXPECT_FALSE(AnswerOf(0).has_value());
 }
 
-TEST_F(PartyShareCheck, TheFirstSuccessIsReportedOnceAndLaterOnesAreCountedNotSent) {
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateSuccess"));
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateSuccess"));
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateMemberSuccess"));
+// PartyUpdateSuccess/Failure also answer the leader's set-join-policy request (nakama
+// evr_pipeline_party_policy.go) and a party metadata update (evr_pipeline_party.go). The check pairs each answer
+// with the request that is next in line, so only a share's answer counts.
+TEST_F(PartyShareCheck, AJoinPolicyAnswerIsNotAShareAndTheNextRealShareFailureIsReported) {
+  SetJoinPolicy();
+  Answer("PartyUpdateSuccess");  // the first PartyUpdateSuccess of #398's log: not a data share
+  ShareParty();
+  Answer("PartyUpdateFailure");  // the share that failed
   nevr_self_check::Flush();
-  const auto results = Results();
-  ASSERT_EQ(results.size(), 1u);
-  EXPECT_EQ(results[0]["check"], "party_data_share");
-  EXPECT_EQ(results[0]["pass"], true);
-  EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateSuccess ok=1 failed=0");
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 1u) << "a policy answer must not be reported as a passed share";
+  EXPECT_EQ(results[0]["pass"], false);
+  EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateFailure ok=0 failed=1");
 }
 
-TEST_F(PartyShareCheck, EveryFailureIsReportedWithItsScopeAndTheRunningCounts) {
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateSuccess"));
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateFailure"));
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateMemberFailure"));
+TEST_F(PartyShareCheck, AnswersAreMatchedInOrderPerFamily) {
+  ShareParty();
+  SetJoinPolicy();
+  ShareParty();
+  Answer("PartyUpdateSuccess");  // the first share
+  Answer("PartyUpdateSuccess");  // the policy: not counted
+  Answer("PartyUpdateFailure");  // the second share
   nevr_self_check::Flush();
-  const auto results = Results();
-  ASSERT_EQ(results.size(), 3u);
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 2u);
+  EXPECT_EQ(results[0]["pass"], true);
+  EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateSuccess ok=1 failed=0");
   EXPECT_EQ(results[1]["pass"], false);
   EXPECT_EQ(results[1]["observed"], "scope=party answer=PartyUpdateFailure ok=1 failed=1");
-  EXPECT_EQ(results[2]["pass"], false);
-  EXPECT_EQ(results[2]["observed"], "scope=member answer=PartyUpdateMemberFailure ok=1 failed=2");
+}
+
+TEST_F(PartyShareCheck, AnAnswerWithNoRequestBehindItReportsNothing) {
+  Answer("PartyUpdateSuccess");
+  Answer("PartyUpdateFailure");
+  Answer("PartyUpdateMemberFailure");
+  nevr_self_check::Flush();
+  EXPECT_TRUE(Of("party_data_share").empty());
+}
+
+TEST_F(PartyShareCheck, TheFirstSuccessIsReportedOnceAndLaterOnesAreCountedNotSent) {
+  ShareParty();
+  ShareParty();
+  ShareMember();
+  Answer("PartyUpdateSuccess");
+  Answer("PartyUpdateSuccess");
+  Answer("PartyUpdateMemberSuccess");
+  nevr_self_check::Flush();
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["pass"], true);
+  EXPECT_EQ(results[0]["observed"], "scope=party answer=PartyUpdateSuccess ok=1 failed=0");
+  EXPECT_EQ(nevr_party_share_check::Counts().ok, 3u);
+}
+
+TEST_F(PartyShareCheck, MemberScopeSharesPairWithMemberAnswers) {
+  ShareMember();
+  Answer("PartyUpdateMemberFailure");
+  nevr_self_check::Flush();
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["pass"], false);
+  EXPECT_EQ(results[0]["observed"], "scope=member answer=PartyUpdateMemberFailure ok=0 failed=1");
 }
 
 TEST_F(PartyShareCheck, NotAnAnswerReportsNothing) {
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateNotify"));
-  nevr_party_share_check::OnServerMessage(Sym("PartyLockSuccess"));
+  ShareParty();
+  Answer("PartyUpdateNotify");
+  Answer("PartyLockSuccess");
   nevr_party_share_check::OnServerMessage(0xdeadbeefULL);
   nevr_self_check::Flush();
   EXPECT_TRUE(g_frames.empty());
@@ -133,22 +192,57 @@ TEST_F(PartyShareCheck, NotAnAnswerReportsNothing) {
 
 TEST_F(PartyShareCheck, NothingIsSentBeforeLoginAndEverythingAfter) {
   nevr_self_check::SetLoggedIn(false);
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateFailure"));
+  ShareParty();
+  Answer("PartyUpdateFailure");
   nevr_self_check::Flush();
   EXPECT_TRUE(g_frames.empty());
   nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 77});
   nevr_self_check::Flush();
-  ASSERT_EQ(Results().size(), 1u);
-  EXPECT_EQ(Results()[0]["pass"], false);
+  ASSERT_FALSE(Of("party_data_share").empty());
 }
 
-TEST_F(PartyShareCheck, AFailureAfterTheCapStillCountsInTheRunningTotals) {
-  for (int i = 0; i < 12; ++i) nevr_party_share_check::OnServerMessage(Sym("PartyUpdateFailure"));
+// Past the per-check cap the failures stop being sent one by one, so the running totals ride their own check at
+// 1, 2, 4, 8, 16 ... answers: #398's 9 failures and 3 successes would otherwise read "failed=8" then "capped".
+TEST_F(PartyShareCheck, TheRunningTotalsAreSentPastTheCap) {
+  for (int i = 0; i < 20; ++i) {
+    ShareParty();
+    Answer("PartyUpdateFailure");
+  }
   nevr_self_check::Flush();
-  const auto results = Results();
+  const auto results = Of("party_data_share");
   ASSERT_EQ(results.size(), nevr_self_check::kMaxResultsPerCheck + 1u);
   EXPECT_EQ(results.back()["observed"], "capped");
-  nevr_party_share_check::OnServerMessage(Sym("PartyUpdateSuccess"));  // counted, and its first-success line is capped out
-  EXPECT_EQ(nevr_party_share_check::Counts().ok, 1u);
-  EXPECT_EQ(nevr_party_share_check::Counts().failed, 12u);
+  const auto totals = Of("party_data_share_totals");
+  ASSERT_GE(totals.size(), 5u);
+  EXPECT_EQ(totals[0]["observed"], "answers=1 ok=0 failed=1 other=0 unmatched=0");
+  EXPECT_EQ(totals.back()["observed"], "answers=16 ok=0 failed=16 other=0 unmatched=0");
+  EXPECT_EQ(totals.back()["pass"], false);
+}
+
+// A new login is a new session: the totals of the one that ended are sent (as the user it was), and the counts,
+// the pending requests and the first-success latch start over.
+TEST_F(PartyShareCheck, ANewSessionStartsOverAndSendsTheEndedSessionsTotals) {
+  ShareParty();
+  Answer("PartyUpdateSuccess");
+  ShareParty();
+  Answer("PartyUpdateFailure");
+  SetJoinPolicy();  // still unanswered when the session ends
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 88});  // the next LoginSuccess
+  EXPECT_EQ(nevr_party_share_check::Counts().ok, 0u);
+  EXPECT_EQ(nevr_party_share_check::Counts().failed, 0u);
+  ShareParty();
+  Answer("PartyUpdateSuccess");  // the first success of the NEW session is reported again
+  nevr_self_check::Flush();
+  const auto results = Of("party_data_share");
+  ASSERT_EQ(results.size(), 3u);
+  EXPECT_EQ(results[2]["observed"], "scope=party answer=PartyUpdateSuccess ok=1 failed=0");
+  EXPECT_EQ(results[2]["userid"], "OVR-ORG-88");
+  bool sawEnded = false;
+  for (const auto& r : Of("party_data_share_totals")) {
+    if (r["observed"] == "answers=2 ok=1 failed=1 other=0 unmatched=0") {
+      sawEnded = true;
+      EXPECT_EQ(r["userid"], "OVR-ORG-77") << "the ended session's totals are the user it was";
+    }
+  }
+  EXPECT_TRUE(sawEnded);
 }
