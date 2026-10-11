@@ -179,11 +179,64 @@ int main() {
     QCHECK(g_orgOriginalCalls == 2 && g_orgOriginalUser == 79);
     QCHECK(L::Requested() == 1);
 
+    // The social facade is selected: CNSOVRSocial is not driven, so the same Social site is refused locally. A local
+    // id from the refused space, the SDK untouched, no handle, counted; a login site is still answered as before.
+    static bool selected = true;
+    L::SetSocialSelectedProbe([]() noexcept { return selected; });
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb90);
+    const auto linesBeforeRefusal = g_lines;
+    const std::uint64_t refused_id = GameCallsOrgRequest(entry, 81);
+    QCHECK(g_lines == linesBeforeRefusal + 1);  // the first refusal from a call site names it
+    QCHECK(refused_id >= L::kRequestIdBase);
+    QCHECK((refused_id & L::kRefusedIdBit) != 0);
+    QCHECK(g_orgOriginalCalls == 2);
+    QCHECK(L::Refused() == 1);
+    QCHECK(L::Requested() == 1);               // not a delivered request: no answer is queued behind it
+    const std::uint64_t second = GameCallsOrgRequest(entry, 82);
+    QCHECK(second != refused_id && (second & L::kRefusedIdBit) != 0);  // ids are distinct
+    QCHECK(g_lines == linesBeforeRefusal + 1);  // the same site is not logged again
+    nevr_quest_login::SetPnsovrBase(caller - 0x1f8770);
+    static_cast<void>(GameCallsOrgRequest(entry, 85));  // another Social site
+    QCHECK(g_lines == linesBeforeRefusal + 2);
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb90);
+    QCHECK(L::Refused() == 3);
+    QCHECK(L::Refused() == 3 && g_orgOriginalCalls == 2);
+    nevr_quest_login::SetPnsovrBase(caller - 0x2069c0);
+    QCHECK((GameCallsOrgRequest(entry, 83) & L::kRefusedIdBit) == 0);   // the login's own call
+    QCHECK(L::Refused() == 3 && L::Requested() == 2);
+    // The facade not selected (stock Meta social): forwarded as before.
+    selected = false;
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb90);
+    QCHECK(GameCallsOrgRequest(entry, 84) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 3 && g_orgOriginalUser == 84 && L::Refused() == 3);
+    // Not a known Social site (an unknown caller: base unknown, or an offset the build does not list): forwarded
+    // even with the facade selected. The refusal is for the nine CNSOVRSocial sites only.
+    selected = true;
+    nevr_quest_login::SetPnsovrBase(0);
+    QCHECK(GameCallsOrgRequest(entry, 86) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 4 && g_orgOriginalUser == 86 && L::Refused() == 3);
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb94);  // 4 past a listed site's return address
+    QCHECK(GameCallsOrgRequest(entry, 87) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 5 && L::Refused() == 3);
+    // The login's own site with local answers off and the facade selected: the SDK, as before local answers
+    // (the refusal must not capture it).
+    L::SetEnabled(false);
+    nevr_quest_login::SetPnsovrBase(caller - 0x2069c0);
+    QCHECK(GameCallsOrgRequest(entry, 88) == 0x1234);
+    QCHECK(g_orgOriginalCalls == 6 && g_orgOriginalUser == 88 && L::Refused() == 3 && L::Requested() == 2);
+    // A Social site with local answers off and the facade selected is still refused (it is not the login's).
+    nevr_quest_login::SetPnsovrBase(caller - 0x1fcb90);
+    QCHECK((GameCallsOrgRequest(entry, 89) & L::kRefusedIdBit) != 0);
+    QCHECK(g_orgOriginalCalls == 6 && L::Refused() == 4);
+    L::SetEnabled(true);
+    selected = false;
+    L::SetSocialSelectedProbe(nullptr);
+
     // Local answers off (an incomplete install): even a login site goes to the SDK.
     L::SetEnabled(false);
     nevr_quest_login::SetPnsovrBase(caller - 0x1ecf84);
     QCHECK(GameCallsOrgRequest(entry, 80) == 0x1234);
-    QCHECK(g_orgOriginalCalls == 3 && L::Requested() == 1);
+    QCHECK(g_orgOriginalCalls == 7 && L::Requested() == 2);
 
     Thunk::Disarm();
     Thunk::Reset();
