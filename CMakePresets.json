@@ -99,6 +99,11 @@
             "cacheVariables": {
                 "NEVR_SCENARIO_CONTROL": "ON"
             }
+        },
+        {
+            "name": "mingw-rc",
+            "displayName": "MinGW Release for a release candidate (just package-rc): its own build tree",
+            "inherits": "mingw-release"
         }
     ],
     "buildPresets": [
@@ -136,6 +141,11 @@
             "name": "mingw-scenario",
             "displayName": "Build MinGW (Release + scenario control, test only)",
             "configurePreset": "mingw-scenario"
+        },
+        {
+            "name": "mingw-rc",
+            "displayName": "Build MinGW (Release candidate)",
+            "configurePreset": "mingw-rc"
         }
     ]
 }

@@ -5,8 +5,20 @@ name: Build
 # gate is the local capped `just verify`, and CI runs by hand with
 # `gh workflow run build.yml --ref <branch>`. The toolchain is reinstalled from scratch every run
 # (~29 billed minutes), which is why it is not automatic.
+#
+# A release candidate (`just package-rc <N>` locally) is also built here: a release whose tag is
+# v<x.y.z>-rc.<N>, or a manual run with rc_number, builds with -rc.<N> in the version, gates the DLL and
+# assembles the package tree (tools/package_rc.py tree), passes it through the signing stub, and seals it
+# (tools/package_rc.py seal). Nothing here is code-signed yet: the policy signer (a private repository) is
+# not built, the `sign` job is a stub that says so, and every file, checksum list and release note says
+# UNSIGNED. The whole workflow runs on ubuntu-latest: no Windows runner, no cloud login.
 on:
   workflow_dispatch:
+    inputs:
+      rc_number:
+        description: "Build release candidate rc.<N> (gate, tree, seal; UNSIGNED) and upload it as a workflow artifact; nothing is published. Empty: the usual build and verify"
+        type: string
+        default: ""
   release:
     types: [created]
 
@@ -20,6 +32,8 @@ jobs:
     permissions:
       contents: read
       packages: read
+    outputs:
+      rc_label: ${{ steps.rc.outputs.label }}
     # The toolchain is the prebuilt builder image (.github/builder/Dockerfile, built by
     # builder-image.yml): Arch's MinGW-w64 GCC and headers from pacman, the toolchain development
     # uses (#81), not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
@@ -30,15 +44,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
-    # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
-    # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
-    # keys makes them extractable from the published DLL: setting those secrets is the owner's call.
     env:
-      NEVR_SOCKET_URI: ${{ github.event_name == 'release' && secrets.NEVR_SOCKET_URI || '' }}
-      NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
-      NEVR_PUBLIC_API_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_API_KEY || '' }}
-      NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
       # just verify runs the C++ tests under Wine. The container runs as root but HOME (/github/home)
       # belongs to the runner user, and Wine refuses a prefix there ("'/github/home' is not owned by
       # you", run 37149598909); give it a root-owned prefix, and skip the Mono/Gecko install prompts.
@@ -54,6 +60,36 @@ jobs:
 
     - name: Trust the workspace for git
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+    # The build embeds config/public-defaults.env and reads nothing else; it is git-ignored, so it is
+    # written here from the repository's Actions variables (and fails when one is unset).
+    - name: Write the public client defaults
+      uses: ./.github/actions/write-public-defaults
+      with:
+        socket-uri: ${{ vars.NEVR_SOCKET_URI }}
+        http-uri: ${{ vars.NEVR_HTTP_URI }}
+        public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
+        public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
+
+    # rc.<N> for a release candidate (a release tagged v<x.y.z>-rc.<N>, or a dispatch with rc_number), else empty.
+    - name: Release candidate label
+      id: rc
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        TAG: ${{ github.event.release.tag_name }}
+        RC_NUMBER: ${{ inputs.rc_number }}
+      run: |
+        set -euo pipefail
+        label=""
+        if [ "$EVENT" = release ] && [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.([0-9]+)$ ]]; then
+          label="rc.${BASH_REMATCH[1]}"
+        elif [ "$EVENT" = workflow_dispatch ] && [ -n "$RC_NUMBER" ]; then
+          [[ "$RC_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "rc_number must be a positive integer" >&2; exit 1; }
+          label="rc.$RC_NUMBER"
+        fi
+        echo "label=$label" >> "$GITHUB_OUTPUT"
+        echo "release candidate label: '${label}'"
 
     - name: Setup pinned just
       uses: extractions/setup-just@v4
@@ -134,14 +170,17 @@ jobs:
         just proto
 
     - name: Configure CMake
-      # Never signs here: release binaries are signed by the `sign` job with Microsoft Artifact Signing.
+      # Never signs here, and nothing in this workflow signs yet: the `sign` job is a stub that passes the files
+      # through unsigned (the policy signer is not built).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_RC_LABEL=${{ steps.rc.outputs.label }}
 
     - name: Build
       run: cmake --build --preset mingw-release
 
+    # A release-candidate dry run (rc_number) skips the full gate: it is the usual dispatch.
     - name: Verify
+      if: ${{ inputs.rc_number == '' }}
       run: just verify
 
     - name: Get version
@@ -179,6 +218,28 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
+    # The release-candidate package tree (the Windows zip's contents, no checksums yet) is gated here:
+    # the DLL embeds exactly config/public-defaults.env and carries -rc.<N> and this commit.
+    - name: Gate and assemble the release candidate tree (unsigned)
+      if: steps.rc.outputs.label != ''
+      shell: bash
+      env:
+        LABEL: ${{ steps.rc.outputs.label }}
+      run: |
+        set -euo pipefail
+        python3 tools/package_rc.py tree --n "${LABEL#rc.}" --commit "$GITHUB_SHA" --out rc-stage \
+          --dll build/mingw-release/bin/BugSplat64.dll \
+          --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
+
+    - name: Upload the unsigned release candidate tree
+      if: steps.rc.outputs.label != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: unsigned-rc-tree
+        path: rc-stage/
+        if-no-files-found: error
+        retention-days: 7
+
     # The unpacked package trees (dist/<name>/, normal and lite) go to the sign job; the unsigned
     # archives are never published.
     - name: Upload the unsigned packages for signing
@@ -192,70 +253,111 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-  # Microsoft Artifact Signing (#78). Azure trusts exactly the OIDC subject
-  # repo:EchoTools/nevr-runtime:environment:codesign, so this job must run in the `codesign`
-  # environment. The values below are identifiers, not secrets.
+  # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
+  # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
+  # ubuntu-latest and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
+  # Nothing downstream labels these files signed: the artifact is named packages-unsigned, the seal
+  # records UNSIGNED, and the release notes and SIGNING.txt say UNSIGNED.
   sign:
+    name: "sign: stubbed, policy signer not built yet"
     needs: build
-    if: github.event_name == 'release'
-    runs-on: windows-latest
-    environment: codesign
+    if: github.event_name == 'release' || inputs.rc_number != ''
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
     steps:
     - uses: actions/download-artifact@v8
+      if: github.event_name == 'release'
       with:
         name: unsigned-packages
         path: packages
 
-    - name: Azure login (OIDC)
-      uses: azure/login@v3
+    - uses: actions/download-artifact@v8
+      if: needs.build.outputs.rc_label != ''
       with:
-        client-id: e01842c0-2630-49dd-b305-d2b2e866a747
-        tenant-id: d3ce3222-f299-41bb-8231-dbde3b35abc9
-        allow-no-subscriptions: true
+        name: unsigned-rc-tree
+        path: packages/rc
 
-    - name: Sign BugSplat64.dll and echovr_server.exe (normal and lite)
-      uses: azure/artifact-signing-action@v2
-      with:
-        endpoint: https://eus.codesigning.azure.net/
-        signing-account-name: sprockeesigning
-        certificate-profile-name: andrew-bates-public
-        files-folder: ${{ github.workspace }}\packages
-        files-folder-filter: dll,exe
-        files-folder-recurse: true
-        file-digest: SHA256
-        timestamp-rfc3161: http://timestamp.acs.microsoft.com
-        timestamp-digest: SHA256
-
-    - name: Verify every signature (fail if any file is unsigned)
-      shell: pwsh
+    # PLACEHOLDER: the signer dispatch goes here. Intended flow, once the signer exists: dispatch the
+    # private signer repository with this run's `packages` artifact (the policy engine decides what may
+    # be signed), wait for it, download the signed files over `packages/`, and let `rc-seal` seal with
+    # --require-signed. Until then this step does not call anything.
+    - name: "sign: stubbed, policy signer not built yet (files pass through UNSIGNED)"
+      shell: bash
       run: |
-        $files = Get-ChildItem -Path packages -Recurse -Include *.dll,*.exe
-        if ($files.Count -lt 4) { throw "expected BugSplat64.dll and echovr_server.exe in both packages, found $($files.Count) files" }
-        $bad = 0
-        foreach ($f in $files) {
-          $s = Get-AuthenticodeSignature -FilePath $f.FullName
-          "{0}  status={1}  signer={2}  timestamp={3}" -f $f.FullName, $s.Status, $s.SignerCertificate.Subject, $s.TimeStamperCertificate.Subject
-          if ($s.Status -ne 'Valid') { $bad++ }
-        }
-        if ($bad -ne 0) { throw "$bad file(s) not validly signed" }
+        set -euo pipefail
+        echo "::warning::sign is stubbed: the policy signer is not built yet; these files are UNSIGNED"
+        find packages -type f \( -name '*.dll' -o -name '*.exe' -o -name '*.ps1' \) | sort | while read -r f; do
+          echo "UNSIGNED passthrough: $f"
+        done
 
     - uses: actions/upload-artifact@v7
       with:
-        name: signed-packages
+        name: packages-unsigned
         path: packages
         if-no-files-found: error
         retention-days: 7
 
-  # Repack the signed trees into the same archives the build job made, check them, publish.
-  publish:
-    needs: sign
-    if: github.event_name == 'release'
+  # Seal the release candidate: the zip with SHA256SUMS regenerated from the files as they are (checked with
+  # sha256sum -c) and a SIGNING.txt that says UNSIGNED. A release candidate's release must carry the APK
+  # (built locally by `just package-rc`): it is put under the checksums, and its absence fails the job. A
+  # dry run (rc_number) has no release and ends here: the sealed files are a workflow artifact.
+  rc-seal:
+    needs: [build, sign]
+    if: needs.build.outputs.rc_label != ''
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: packages-unsigned
+        path: staged
+
+    - name: Seal the release candidate (UNSIGNED)
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        TAG: ${{ github.event.release.tag_name }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        tree=$(ls -d staged/rc/nevr-runtime-v*-windows)
+        apk_args=()
+        if [ "$EVENT" = release ]; then
+          # A release candidate ships both artifacts: a missing or undownloadable APK fails the job.
+          apk=$(tools/rc_release_apk.sh "$TAG" "$GITHUB_REPOSITORY" apk)
+          apk_args=(--apk "$apk")
+        else
+          echo "dry run: no release, so no Quest APK; SHA256SUMS covers the Windows zip only"
+        fi
+        # Not --require-signed: nothing is signed yet, and the seal records exactly that (UNSIGNED).
+        python3 tools/package_rc.py seal --tree "$tree" --out rc-dist "${apk_args[@]}"
+        (cd rc-dist && sha256sum -c SHA256SUMS)
+        ls -la rc-dist
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-candidate-unsigned
+        path: rc-dist
+        if-no-files-found: error
+        retention-days: 7
+
+  # Repack the trees into the same archives the build job made, check them, attest their provenance and
+  # publish. The files are UNSIGNED (signing is stubbed above) and are published as such.
+  publish:
+    needs: [sign, rc-seal]
+    if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.rc-seal.result) }}
+    runs-on: ubuntu-latest
+    # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
+    # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
+    # features"). They are not code signing.
+    permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
     - uses: actions/checkout@v7
 
@@ -267,17 +369,17 @@ jobs:
 
     - uses: actions/download-artifact@v8
       with:
-        name: signed-packages
-        path: signed
+        name: packages-unsigned
+        path: staged
 
-    - name: Repack the signed packages
+    - name: Repack the packages (UNSIGNED, passed through unchanged)
       shell: bash
       env:
-        CODESIGN_SKIP: "1"  # the files are already signed; the packager must not touch them
+        CODESIGN_SKIP: "1"  # signing is stubbed: the packager must not touch the files
       run: |
         set -euo pipefail
         mkdir -p dist
-        for pkg in signed/nevr-runtime-v*/; do
+        for pkg in staged/nevr-runtime-v*/; do
           name=$(basename "$pkg")
           python3 tools/build_distribution.py --package "$pkg" --destination "dist/$name" \
             --tar "dist/$name.tar.zst" --zip "dist/$name.zip"
@@ -296,11 +398,37 @@ jobs:
         test "${#zips[@]}" -eq 2
         test "${#tars[@]}" -eq 2
 
+    - uses: actions/download-artifact@v8
+      if: needs.rc-seal.result == 'success'
+      with:
+        name: release-candidate-unsigned
+        path: rc-dist
+
+    - name: Attest build provenance of the release files
+      uses: actions/attest-build-provenance@v4
+      with:
+        subject-path: |
+          dist/*.zip
+          dist/*.tar.zst
+          rc-dist/*.zip
+
     - name: Upload dist artifacts
       uses: softprops/action-gh-release@v3
       with:
         files: |
           dist/*.zip
           dist/*.tar.zst
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # The release candidate's zip (UNSIGNED), its checksums and the notes; the APK is already a release asset.
+    - name: Upload the release candidate (UNSIGNED)
+      if: needs.rc-seal.result == 'success'
+      uses: softprops/action-gh-release@v3
+      with:
+        files: |
+          rc-dist/*.zip
+          rc-dist/SHA256SUMS
+          rc-dist/RELEASE-NOTES.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

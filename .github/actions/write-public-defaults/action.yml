@@ -1,0 +1,44 @@
+name: Write the public client defaults
+description: >
+  Writes config/public-defaults.env, the one file the build embeds its client defaults from
+  (cmake/nevr_builtin_defaults.cmake), from the repository's Actions variables. Fails when any is
+  unset, so a build can never go ahead embedding nothing. The values are public by design (#76),
+  but they are never printed.
+inputs:
+  socket-uri:
+    description: vars.NEVR_SOCKET_URI
+    required: true
+  http-uri:
+    description: vars.NEVR_HTTP_URI
+    required: true
+  public-api-key:
+    description: vars.NEVR_PUBLIC_API_KEY
+    required: true
+  public-socket-key:
+    description: vars.NEVR_PUBLIC_SOCKET_KEY
+    required: true
+runs:
+  using: composite
+  steps:
+  - shell: bash
+    env:
+      NEVR_SOCKET_URI: ${{ inputs.socket-uri }}
+      NEVR_HTTP_URI: ${{ inputs.http-uri }}
+      NEVR_PUBLIC_API_KEY: ${{ inputs.public-api-key }}
+      NEVR_PUBLIC_SOCKET_KEY: ${{ inputs.public-socket-key }}
+    run: |
+      set -euo pipefail
+      for name in NEVR_SOCKET_URI NEVR_HTTP_URI NEVR_PUBLIC_API_KEY NEVR_PUBLIC_SOCKET_KEY; do
+        if [ -z "${!name}" ]; then
+          echo "::error::the repository variable ${name} is not set (Settings > Secrets and variables > Actions > Variables)"
+          exit 1
+        fi
+      done
+      mkdir -p config
+      {
+        printf 'NEVR_SOCKET_URI=%s\n' "$NEVR_SOCKET_URI"
+        printf 'NEVR_HTTP_URI=%s\n' "$NEVR_HTTP_URI"
+        printf 'NEVR_PUBLIC_API_KEY=%s\n' "$NEVR_PUBLIC_API_KEY"
+        printf 'NEVR_PUBLIC_SOCKET_KEY=%s\n' "$NEVR_PUBLIC_SOCKET_KEY"
+      } > config/public-defaults.env
+      echo "wrote config/public-defaults.env (4 keys; values not printed)"

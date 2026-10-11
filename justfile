@@ -30,7 +30,7 @@ configure: generate-symcache _vcpkg-mingw _build-inputs
 _build-inputs:
     @tools/worktree-setup.sh --check
 
-# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout,
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss} and gen/ from the main checkout,
 # and give it its own vcpkg root (build/vcpkg-root) so its builds never wait on another worktree's vcpkg lock
 worktree-setup:
     tools/worktree-setup.sh
@@ -112,6 +112,8 @@ check-android-static-init: build-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: check-android-static-init
+    # The sentinel embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -139,12 +141,12 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
 # `apk` is required (the store APK path); the debug keystore is throwaway, NOT prod.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore":
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore" workdir="build/android-arm64/repack":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
     apk="{{ apk }}"; shim="{{ shim }}"; ks="{{ ks }}"
-    work="$root/build/android-arm64/repack"
+    work="$root/{{ workdir }}"
     for t in unzip patchelf zip zipalign apksigner readelf nm keytool; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
@@ -190,6 +192,45 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo ""
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
+
+# Release candidate: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-rc/rc.<n>/.
+# Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the .example) and need no config file to log in; the gate
+# (tools/package_rc.py) refuses the package otherwise, and refuses a binary without -rc.<n> and the commit.
+# `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
+# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
+# the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
+# This never tags, uploads or publishes.
+package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ n }}" in ''|*[!0-9]*|0) echo "package-rc: N must be a positive integer, got '{{ n }}'" >&2; exit 1;; esac
+    [ -z "$(git status --porcelain)" ] || { echo "package-rc: the tree is not clean; commit or stash first (a candidate is built from a commit)" >&2; exit 1; }
+    [ -f "{{ ks }}" ] || { echo "package-rc: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "package-rc: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    commit=$(git rev-parse HEAD)
+    label="rc.{{ n }}"
+    out="build/package-rc/$label"
+    # Windows DLL: its own build tree (build/mingw-rc), the label in the version string.
+    # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
+    (
+        unset VCPKG_ROOT
+        just preset=mingw-rc _vcpkg-mingw
+        cmake --preset mingw-rc -DNEVR_RC_LABEL="$label"
+        cmake --build --preset mingw-rc
+    )
+    # Quest sentinel: its own build tree (build/android-rc), the same label, the default features.
+    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-rc \
+        -DNEVR_RC_LABEL="$label" -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-rc -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    objects=$(python3 tools/quest_link_objects.py build/android-rc sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-rc/sentinel/libovrplatformloader.so $objects
+    just android-repack-apk "{{ store_apk }}" build/android-rc/sentinel/libovrplatformloader.so "{{ ks }}" build/android-rc/repack
+    python3 tools/package_rc.py --n "{{ n }}" --commit "$commit" --out "$out" \
+        --dll build/mingw-rc/bin/BugSplat64.dll \
+        --apk build/android-rc/repack/r15_nevr-sentinel_signed.apk \
+        --pc-header build/mingw-rc/generated/nevr_builtin_defaults.h \
+        --quest-header build/android-rc/generated/nevr_builtin_defaults.h \
+        --quest-build-info build/android-rc/generated/nevr_build_info.h
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the
@@ -1017,6 +1058,8 @@ verify:
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
+    # The DLL embeds exactly the public defaults file (the build reads no other source).
+    python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks

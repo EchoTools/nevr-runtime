@@ -426,8 +426,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows the Quest config path never names one.
    `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
-   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
-   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
+   time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
+   from the repository's Actions variables, at configure time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
    `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
    is off unless the file turns it on, and is forced off while its prerequisite is missing
    (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,

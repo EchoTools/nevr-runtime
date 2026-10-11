@@ -114,10 +114,13 @@ target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
 # Config-string redirect (CJson::TString hook adapter and decision logic).
 add_subdirectory(redirect)
 
-# Build-time defaults embedded from the environment or <root>/.env at configure time (never read
+# Build-time defaults embedded from <root>/config/public-defaults.env at configure time (never read
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
+# The version (with its release-candidate label and commit) and the features on by default.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_info.cmake")
+nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 # ── Token auth (device-code login, refresh, cache) ──────────────────────
 # The platform-neutral core (src/core) is the SAME source the Windows runtime

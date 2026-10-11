@@ -35,7 +35,8 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
-just worktree-setup            # Make a fresh git worktree buildable (copies extern/, gen/, .env from the main checkout)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just package-rc <N> <keystore>   # Release candidate from a clean tree: Windows zip + Quest APK in build/package-rc/rc.<N>/, no-config gate (never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
@@ -336,11 +337,15 @@ your seat name, for example `claude-main` or `codex`.
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
-  copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
+  copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
   checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
-  that `extern/<d>` and run `git submodule update --init extern/<d>`). Never print `.env`.
-  The build embeds the production endpoints from `.env`.
+  that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
+  writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
+  checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
+  not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
+  never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
