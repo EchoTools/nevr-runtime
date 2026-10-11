@@ -510,7 +510,7 @@ void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   nevr_quest::integration::SelfCheckHooks hooks;
   hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
   hooks.log = [](const nevr_self_check::LogRecord&) {};
-  hooks.build = "4.0.0-rc.1+abc";
+  hooks.build = "5.0.0";
   QCHECK(!nevr_self_check::Enabled());  // off until the bridge is configured
   nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
   QCHECK(nevr_self_check::Enabled());

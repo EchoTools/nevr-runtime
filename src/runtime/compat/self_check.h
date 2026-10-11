@@ -10,7 +10,7 @@
 //
 // What a result looks like (nlohmann::json, one string):
 //   {"message":"nevr_self_check","message_type":"NEVR_SELF_CHECK","userid":"<platform prefix>-<id>","check":"<name>",
-//    "pass":true,"expected":"...","observed":"...","seq":3,"build":"4.0.0-rc.1+<commit>"}
+//    "pass":true,"expected":"...","observed":"...","seq":3,"build":"5.0.0"}
 // The game service keeps an unknown `message` as a generic remote log and journals it per user
 // (server/evr_remotelogset.go, evr/login_remotelogset_messages.go); none of the names its filter drops.
 //

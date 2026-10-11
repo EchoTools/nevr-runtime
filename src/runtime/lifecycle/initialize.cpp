@@ -24,6 +24,7 @@
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/headless_graphics.h"
+#include "core/build_identity.h"
 #include "core/globals.h"
 #include "core/hooking.h"
 #include "core/logging.h"
@@ -302,6 +303,7 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::Init();
 
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s\n", nevr_build_identity::IdentityLiteral());
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 

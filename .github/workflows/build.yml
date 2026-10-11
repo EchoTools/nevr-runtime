@@ -1,44 +1,74 @@
 name: Build
 
 # Builds and runs `just verify` when someone asks for it (workflow_dispatch), and builds the release
-# artifact when a release is PUBLISHED (`release: created` does not fire for a draft: publish the release,
-# or start this workflow with `--ref <tag>`, which seals a dry run and publishes nothing). Nothing runs on a
-# pull request or a push: the merge
-# gate is the local capped `just verify`, and CI runs by hand with
+# when a release is PUBLISHED (`release: published`; a draft fires nothing until it is published, and
+# promoting a pre-release to a full release fires no workflow, so promotion rebuilds nothing). Nothing runs
+# on a pull request or a push: the merge gate is the local capped `just verify`, and CI runs by hand with
 # `gh workflow run build.yml --ref <branch>`. The toolchain is reinstalled from scratch every run
 # (~29 billed minutes), which is why it is not automatic.
 #
-# A release candidate exists only as a build of a tag named v<x.y.z>-rc.<N> HERE: a release created on
-# that tag (or a manual run started with `--ref <that tag>`) builds with -rc.<N> in the version, asserts
-# the DLL carries it (tools/package_rc.py stamp), gates the DLL and assembles the package tree
-# (tools/package_rc.py tree), passes it through the signing stub, and seals it (tools/package_rc.py
-# seal). cmake/nevr_rc_label.cmake stamps -rc only on such a tag build; any other build, locally or on
-# a branch, stamps a -dev version (`just package-dev`). The candidate is the Windows zip with its
-# SHA256SUMS and RELEASE-NOTES.md; a Quest APK is not part of it. Nothing here is code-signed yet: the policy signer (a private repository) is
-# not built, the `sign` job is a stub that says so, and every file, checksum list and release note says
-# UNSIGNED. The whole workflow runs on ubuntu-latest: no Windows runner, no cloud login.
+# A release is a plain semver tag vX.Y.Z plus GitHub's pre-release flag. The version is exactly the tag
+# (cmake/set_project_version_from_git.cmake): a CI build exactly on the tag stamps X.Y.Z, any other build
+# stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
+# the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
+# (tools/package_release.py tree), passes it through the signing stub, and seals it (seal): the Windows
+# zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ zips (the .tar.zst
+# archives stay a workflow artifact). No file or text
+# depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
+# release keeps whatever the human set. The whole workflow runs on
+# ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
+# the same path as a dry run and publishes nothing.
 on:
   workflow_dispatch:
-    inputs:
-      rc_number:
-        description: "Only on a v<x.y.z>-rc.<N> tag ref (--ref <tag>): must be empty or N. A candidate dry run (gate, tree, seal; UNSIGNED), uploaded as a workflow artifact, nothing published. On a branch it must be empty"
-        type: string
-        default: ""
   release:
-    types: [created]
+    types: [published]
 
 concurrency:
   group: build-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  # A release whose draft was already built, signed and filled with the attested assets fires `published`
+  # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
+  # NAMES (tools/release_already_built.sh: all five files of this version are there), never the
+  # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
+  # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      built: ${{ steps.check.outputs.built }}
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Does this release already carry its assets
+      id: check
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        TAG: ${{ github.event.release.tag_name }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        built=false
+        if [ "$EVENT" = release ]; then
+          built=$(tools/release_already_built.sh "$TAG" "$GITHUB_REPOSITORY")
+        fi
+        echo "built=$built" >> "$GITHUB_OUTPUT"
+        if [ "$built" = true ]; then
+          echo "release $TAG already carries its attested assets: nothing is rebuilt and nothing is re-uploaded"
+        fi
+
   build:
+    needs: guard
+    if: needs.guard.outputs.built != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     outputs:
-      rc_label: ${{ steps.rc.outputs.label }}
+      version: ${{ steps.release.outputs.version }}
     # The toolchain is the prebuilt builder image (.github/builder/Dockerfile, built by
     # builder-image.yml): Arch's MinGW-w64 GCC and headers from pacman, the toolchain development
     # uses (#81), not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
@@ -76,39 +106,35 @@ jobs:
         public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
         public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
 
-    # rc.<N> only for a build of the tag v<x.y.z>-rc.<N> (GITHUB_REF_TYPE=tag, GITHUB_REF_NAME): the same
-    # variables cmake/nevr_rc_label.cmake reads to decide the stamp, so the label and the stamp cannot
-    # disagree. Anything else is empty and the build stamps a dev version. A release created on an -rc tag
-    # that this step cannot turn into a label fails the job: it would otherwise publish a build that was
-    # never gated as a candidate.
-    - name: Release candidate label
-      id: rc
+    # The release version: exactly X.Y.Z of the tag vX.Y.Z. A release event takes it from the release's tag
+    # name (github.event.release.tag_name); a dispatch started on a tag ref takes it from the ref (a dry
+    # run). A tag that is not vX.Y.Z fails the job here with one line: nothing else is built from it.
+    # cmake reads the same GITHUB_* variables (set_project_version_from_git.cmake), and the assert step
+    # after the build checks that the stamp equals this version, so the two cannot disagree.
+    - name: Release version
+      id: release
       shell: bash
       env:
         EVENT: ${{ github.event_name }}
         TAG: ${{ github.event.release.tag_name }}
-        RC_NUMBER: ${{ inputs.rc_number }}
       run: |
         set -euo pipefail
-        re='^v[0-9]+\.[0-9]+\.[0-9]+-rc\.([1-9][0-9]*)$'
+        re='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
         echo "ref: type=${GITHUB_REF_TYPE:-} name=${GITHUB_REF_NAME:-} event=${EVENT}"
-        label=""
-        if [ "${GITHUB_REF_TYPE:-}" = tag ] && [[ "${GITHUB_REF_NAME:-}" =~ $re ]]; then
-          label="rc.${BASH_REMATCH[1]}"
-          if [ -n "$RC_NUMBER" ] && [ "$RC_NUMBER" != "${BASH_REMATCH[1]}" ]; then
-            echo "rc_number $RC_NUMBER does not match the tag $GITHUB_REF_NAME" >&2
+        version=""
+        if [ "$EVENT" = release ]; then
+          [[ "$TAG" =~ $re ]] || { echo "release tag '$TAG' is not vX.Y.Z: a release is a plain semver tag" >&2; exit 1; }
+          if [ "${GITHUB_REF_TYPE:-}" != tag ] || [ "${GITHUB_REF_NAME:-}" != "$TAG" ]; then
+            echo "release tag $TAG but the ref is ${GITHUB_REF_TYPE:-?} ${GITHUB_REF_NAME:-?}" >&2
             exit 1
           fi
-        elif [ -n "$RC_NUMBER" ]; then
-          echo "rc_number needs the run to be started on a v<x.y.z>-rc.<N> tag (--ref <tag>); this ref is ${GITHUB_REF_TYPE:-?} ${GITHUB_REF_NAME:-?}" >&2
-          exit 1
+          version="${BASH_REMATCH[1]}"
+        elif [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+          [[ "${GITHUB_REF_NAME:-}" =~ $re ]] || { echo "tag '${GITHUB_REF_NAME:-}' is not vX.Y.Z: a release is a plain semver tag" >&2; exit 1; }
+          version="${BASH_REMATCH[1]}"
         fi
-        if [ "$EVENT" = release ] && [[ "$TAG" =~ $re ]] && [ -z "$label" ]; then
-          echo "the release tag $TAG is a release candidate tag but the ref is ${GITHUB_REF_TYPE:-?} ${GITHUB_REF_NAME:-?}; refusing to build it as anything else" >&2
-          exit 1
-        fi
-        echo "label=$label" >> "$GITHUB_OUTPUT"
-        echo "release candidate label: '${label}' (empty: this build stamps a dev version)"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "release version: '${version}' (empty: a branch build, which stamps a development version)"
 
     - name: Setup pinned just
       uses: extractions/setup-just@v4
@@ -192,32 +218,23 @@ jobs:
       # Never signs here, and nothing in this workflow signs yet: the `sign` job is a stub that passes the files
       # through unsigned (the policy signer is not built).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_RC_LABEL=${{ steps.rc.outputs.label }}
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
 
     - name: Build
       run: cmake --build --preset mingw-release
 
-    # What the build actually stamped, logged and checked against the label computed above: a tag build
-    # must carry -rc.<N>, any other build must not carry an -rc stamp at all. The seal's own gate
-    # (tools/package_rc.py tree, check -rc.<N>+) is the backstop and refuses a candidate that is not stamped.
+    # What the build actually stamped, logged and checked against the version computed above: the DLL's
+    # one identity literal "NEVR-BUILD <version> <commit40>" must carry exactly that version and this
+    # commit; with no version (a branch build) it must carry a development version. The tree gate below
+    # (package_release.py tree) is the backstop and refuses a package whose DLL is not stamped.
     - name: Assert the stamped version
       shell: bash
       env:
-        LABEL: ${{ steps.rc.outputs.label }}
-      run: python3 tools/package_rc.py stamp --dll build/mingw-release/bin/BugSplat64.dll --label "$LABEL"
+        VERSION: ${{ steps.release.outputs.version }}
+      run: python3 tools/package_release.py stamp --dll build/mingw-release/bin/BugSplat64.dll --version "$VERSION" --commit "$GITHUB_SHA"
 
-    # A release-candidate dry run (rc_number) skips the full gate: it is the usual dispatch.
     - name: Verify
-      if: ${{ inputs.rc_number == '' }}
       run: just verify
-
-    - name: Get version
-      if: github.event_name == 'release'
-      id: version
-      run: |
-        VERSION=$(git describe --tags --always)
-        echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
-        echo "Version: ${VERSION#v}"
 
     - name: Create distribution packages (unsigned)
       if: github.event_name == 'release'
@@ -246,25 +263,25 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
-    # The release-candidate package tree (the Windows zip's contents, no checksums yet) is gated here:
-    # the DLL embeds exactly config/public-defaults.env and carries -rc.<N> and this commit.
-    - name: Gate and assemble the release candidate tree (unsigned)
-      if: steps.rc.outputs.label != ''
+    # The release package tree (the Windows zip's contents, no checksums yet) is gated here: the DLL
+    # embeds exactly config/public-defaults.env and its identity literal carries this version and commit.
+    - name: Gate and assemble the release tree
+      if: steps.release.outputs.version != ''
       shell: bash
       env:
-        LABEL: ${{ steps.rc.outputs.label }}
+        VERSION: ${{ steps.release.outputs.version }}
       run: |
         set -euo pipefail
-        python3 tools/package_rc.py tree --n "${LABEL#rc.}" --commit "$GITHUB_SHA" --out rc-stage \
+        python3 tools/package_release.py tree --version "$VERSION" --commit "$GITHUB_SHA" --out release-stage \
           --dll build/mingw-release/bin/BugSplat64.dll \
           --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
 
-    - name: Upload the unsigned release candidate tree
-      if: steps.rc.outputs.label != ''
+    - name: Upload the release tree
+      if: steps.release.outputs.version != ''
       uses: actions/upload-artifact@v7
       with:
-        name: unsigned-rc-tree
-        path: rc-stage/
+        name: unsigned-release-tree
+        path: release-stage/
         if-no-files-found: error
         retention-days: 7
 
@@ -284,12 +301,12 @@ jobs:
   # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
   # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
   # ubuntu-latest and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
-  # Nothing downstream labels these files signed: the artifact is named packages-unsigned, the seal
-  # records UNSIGNED, and the release notes and SIGNING.txt say UNSIGNED.
+  # Nothing downstream labels these files signed: the artifact is named packages-unsigned, and the release
+  # notes and SIGNING.txt state only what holds before and after a signer has run.
   sign:
     name: "sign: stubbed, policy signer not built yet"
     needs: build
-    if: github.event_name == 'release' || needs.build.outputs.rc_label != ''
+    if: github.event_name == 'release' || needs.build.outputs.version != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -301,15 +318,15 @@ jobs:
         path: packages
 
     - uses: actions/download-artifact@v8
-      if: needs.build.outputs.rc_label != ''
+      if: needs.build.outputs.version != ''
       with:
-        name: unsigned-rc-tree
-        path: packages/rc
+        name: unsigned-release-tree
+        path: packages/release
 
     # PLACEHOLDER: the signer dispatch goes here. Intended flow, once the signer exists: dispatch the
     # private signer repository with this run's `packages` artifact (the policy engine decides what may
-    # be signed), wait for it, download the signed files over `packages/`, and let `rc-seal` seal with
-    # --require-signed. Until then this step does not call anything.
+    # be signed), wait for it, download the signed files over `packages/`, and let `seal` seal them.
+    # Until then this step does not call anything.
     - name: "sign: stubbed, policy signer not built yet (files pass through UNSIGNED)"
       shell: bash
       run: |
@@ -326,15 +343,14 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-  # Seal the release candidate: the zip with SHA256SUMS regenerated from the files as they are (checked with
-  # sha256sum -c) and a SIGNING.txt that says UNSIGNED. The candidate is the Windows zip: a release with no
-  # Quest APK asset seals zip-only, and the notes and SIGNING.txt say "No Quest APK in this candidate". An
-  # APK that is attached must carry this candidate's -rc.<N> stamp, or the seal fails: a tester's dev-stamped
-  # APK can never ride a candidate. A dry run has no release and ends here: the sealed files are a workflow
-  # artifact.
-  rc-seal:
+  # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (checked with
+  # sha256sum -c), plus the top-level SHA256SUMS and RELEASE-NOTES.md. A release carries no Quest APK. The
+  # texts state facts that hold before and after a signer has run, and nothing here reads the pre-release
+  # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag) ends here: the
+  # sealed files are a workflow artifact.
+  seal:
     needs: [build, sign]
-    if: needs.build.outputs.rc_label != ''
+    if: needs.build.outputs.version != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -346,44 +362,27 @@ jobs:
         name: packages-unsigned
         path: staged
 
-    - name: Seal the release candidate (UNSIGNED)
+    - name: Seal the release
       shell: bash
-      env:
-        EVENT: ${{ github.event_name }}
-        TAG: ${{ github.event.release.tag_name }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-        tree=$(ls -d staged/rc/nevr-runtime-v*-windows)
-        apk_args=()
-        if [ "$EVENT" = release ]; then
-          # No APK asset is a zip-only candidate (empty output); a failed listing or download fails the job.
-          apk=$(tools/rc_release_apk.sh "$TAG" "$GITHUB_REPOSITORY" apk)
-          if [ -n "$apk" ]; then
-            apk_args=(--apk "$apk")
-          else
-            echo "no Quest APK attached to $TAG: a zip-only candidate"
-          fi
-        else
-          echo "dry run: no release, so no Quest APK; SHA256SUMS covers the Windows zip only"
-        fi
-        # Not --require-signed: nothing is signed yet, and the seal records exactly that (UNSIGNED).
-        python3 tools/package_rc.py seal --tree "$tree" --out rc-dist "${apk_args[@]}"
-        (cd rc-dist && sha256sum -c SHA256SUMS)
-        ls -la rc-dist
+        tree=$(ls -d staged/release/nevr-runtime-v*-windows)
+        python3 tools/package_release.py seal --tree "$tree" --out release-assets
+        (cd release-assets && sha256sum -c SHA256SUMS)
+        ls -la release-assets
 
     - uses: actions/upload-artifact@v7
       with:
-        name: release-candidate-unsigned
-        path: rc-dist
+        name: release-unsigned
+        path: release-assets
         if-no-files-found: error
         retention-days: 7
 
   # Repack the trees into the same archives the build job made, check them, attest their provenance and
-  # publish. The files are UNSIGNED (signing is stubbed above) and are published as such.
+  # publish. Signing is stubbed above: the files are published exactly as built.
   publish:
-    needs: [sign, rc-seal]
-    if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.rc-seal.result) }}
+    needs: [sign, seal]
+    if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && needs.seal.result == 'success' }}
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
@@ -432,39 +431,50 @@ jobs:
         test "${#zips[@]}" -eq 2
         test "${#tars[@]}" -eq 2
 
-    - uses: actions/download-artifact@v8
-      if: needs.rc-seal.result == 'success'
+    # The .tar.zst archives are built and checked but are not release assets: the public set is zips only
+    # (what Windows users use, and what a signer can sign). They stay here as a workflow artifact.
+    - name: Keep the .tar.zst archives as a workflow artifact
+      uses: actions/upload-artifact@v7
       with:
-        name: release-candidate-unsigned
-        path: rc-dist
+        name: dist-tar-zst
+        path: dist/*.tar.zst
+        if-no-files-found: error
+        retention-days: 7
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: release-unsigned
+        path: release-assets
 
     - name: Attest build provenance of the release files
       uses: actions/attest-build-provenance@v4
       with:
         subject-path: |
           dist/*.zip
-          dist/*.tar.zst
-          rc-dist/*.zip
-          rc-dist/SHA256SUMS
-          rc-dist/RELEASE-NOTES.md
+          release-assets/*.zip
+          release-assets/SHA256SUMS
+          release-assets/RELEASE-NOTES.md
 
+    # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
+    # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
+    # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
     - name: Upload dist artifacts
       uses: softprops/action-gh-release@v3
       with:
+        fail_on_unmatched_files: true
         files: |
           dist/*.zip
-          dist/*.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # The release candidate's zip (UNSIGNED), its checksums and the notes: the declared public set.
-    - name: Upload the release candidate (UNSIGNED)
-      if: needs.rc-seal.result == 'success'
+    # The release's sealed zip, its checksums and the notes: the declared public set (all attested above).
+    - name: Upload the release files
       uses: softprops/action-gh-release@v3
       with:
+        fail_on_unmatched_files: true
         files: |
-          rc-dist/*.zip
-          rc-dist/SHA256SUMS
-          rc-dist/RELEASE-NOTES.md
+          release-assets/*.zip
+          release-assets/SHA256SUMS
+          release-assets/RELEASE-NOTES.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

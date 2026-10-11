@@ -201,12 +201,12 @@ release-preflight base="main":
     tools/release_preflight.py --base {{ quote(base) }}
 
 # A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
-# Both builds stamp a DEVELOPMENT version (<x.y.z>-dev+<tweak>.<sha>) and the files are named
-# nevr-runtime-v4.0.0-dev-<sha>-*: this recipe cannot produce a release candidate. Only a CI build of a
-# v<x.y.z>-rc.<N> tag stamps -rc (cmake/nevr_rc_label.cmake, .github/workflows/build.yml).
+# Every non-tag build stamps a DEVELOPMENT version, X.Y.(Z+1)-dev.<N>+<sha> (cmake/set_project_version_from_git.cmake),
+# and the files are named nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-*: this recipe cannot produce a release. A release
+# is a vX.Y.Z tag built by CI (.github/workflows/build.yml); its version is exactly the tag.
 # Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
-# .example) and need no config file to log in; the gate (tools/package_rc.py) refuses the package otherwise,
-# and refuses a binary without -dev and the commit, or one stamped -rc.
+# .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
+# otherwise, and refuses a binary whose identity literal is not this commit's development version.
 # `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
 # the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
@@ -220,24 +220,24 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
     [ -f "{{ ks }}" ] || { echo "package-dev: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
     [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
-    echo "package-dev: LOCAL build of ${commit:0:7}: stamping a DEVELOPMENT version, not a release candidate (only a CI build of a v*-rc.<N> tag stamps -rc)" >&2
+    echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
     out="build/package-dev/${commit:0:7}"
-    # Windows DLL: its own build tree (build/mingw-dev), the dev stamp in the version string.
+    # Windows DLL: its own build tree (build/mingw-dev).
     # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
     (
         unset VCPKG_ROOT
         just preset=mingw-dev _vcpkg-mingw
-        cmake --preset mingw-dev -DNEVR_RC_LABEL=dev
+        cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-dev), the same stamp, the default features.
+    # Quest sentinel: its own build tree (build/android-dev), the default features.
     (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev \
-        -DNEVR_RC_LABEL=dev -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+        -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so "{{ ks }}" build/android-dev/repack
-    python3 tools/package_rc.py --commit "$commit" --out "$out" \
+    python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \

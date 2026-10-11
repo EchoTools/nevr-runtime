@@ -1,11 +1,16 @@
-"""The release workflow's signing path (build.yml): structure only, nothing is run or published.
+"""The release workflow (build.yml): structure and the small scripts it runs; nothing is published here.
 
-Signing is stubbed until the policy signer exists; these tests pin that the stub is honest (UNSIGNED
-everywhere, no Windows runner, no cloud login) and that the release candidate path is wired."""
+A release is a plain semver tag plus GitHub's pre-release flag. Signing is stubbed until the policy signer
+exists. These tests pin that the packaging path is one path for every release event, that nothing in it
+reads the pre-release flag (promotion changes no byte), that a release which already carries its assets is
+not rebuilt, and that the stub is honest."""
 
+import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +18,10 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
+GUARD = REPO / "tools" / "release_already_built.sh"
+
+FIVE = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+        "nevr-runtime-v5.0.0-lite.zip"]
 
 
 def load():
@@ -25,12 +34,34 @@ def steps_text(job: dict) -> str:
     return yaml.safe_dump(job.get("steps", []), width=10**9)  # no line folding inside a phrase
 
 
-class SigningWorkflowTest(unittest.TestCase):
-    def test_a_dry_run_is_a_dispatch_input_that_defaults_to_empty(self):
+def lines(value: str) -> list:
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+FAKE_GH = """#!/usr/bin/env bash
+# Fake gh: `release view` prints $FAKE_ASSETS (or fails with $FAKE_VIEW_RC) and logs the call.
+set -u
+echo "$*" >> "$FAKE_GH_LOG"
+if [ "$1 $2" = "release view" ]; then
+  [ "${FAKE_VIEW_RC:-0}" -eq 0 ] || { echo "gh: HTTP 404: Not Found" >&2; exit "${FAKE_VIEW_RC}"; }
+  printf '%s' "$FAKE_ASSETS"
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 99
+"""
+
+
+class WorkflowStructureTest(unittest.TestCase):
+    def test_a_release_fires_on_published_only_and_a_dispatch_has_no_inputs(self):
         _, triggers = load()
-        rc_number = triggers["workflow_dispatch"]["inputs"]["rc_number"]
-        self.assertEqual(rc_number["default"], "")
-        self.assertNotIn("sign_test", triggers["workflow_dispatch"]["inputs"])
+        self.assertEqual(triggers["release"]["types"], ["published"],
+                         "created misses a published draft; released/edited would rebuild on promotion")
+        self.assertIsNone(triggers["workflow_dispatch"])
+
+    def test_no_comment_or_step_uses_the_retired_model_words(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"(?i)release candidate|\bcandidate\b|\brc\b|-rc\b|\brc[-_.]|rc_|NEVR_RC", text), [])
 
     def test_no_comment_or_step_claims_the_files_are_signed(self):
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -46,16 +77,25 @@ class SigningWorkflowTest(unittest.TestCase):
         for forbidden in ("windows-latest", "azure/", "codesign", "Get-AuthenticodeSignature", "signtool"):
             self.assertNotIn(forbidden, text)
 
-    def test_the_sign_job_is_a_named_stub_that_passes_the_files_through_unsigned(self):
+    def test_the_sign_job_is_a_named_stub_that_passes_the_files_through(self):
         data, _ = load()
         sign = data["jobs"]["sign"]
         self.assertEqual(sign["name"], "sign: stubbed, policy signer not built yet")
-        text = steps_text(sign)
         self.assertIn("PLACEHOLDER: the signer dispatch goes here", WORKFLOW.read_text(encoding="utf-8"))
-        self.assertIn("UNSIGNED passthrough", text)
-        # The artifact it hands on says what it is.
+        text = steps_text(sign)
         self.assertIn("packages-unsigned", text)
         self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), r"name: signed-")
+
+    def test_the_job_graph_is_guard_build_sign_seal_publish(self):
+        jobs = load()[0]["jobs"]
+        self.assertEqual(list(jobs), ["guard", "build", "sign", "seal", "publish"])
+        self.assertEqual(jobs["build"]["needs"], "guard")
+        self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
+        self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["seal", "sign"])
+        self.assertEqual(jobs["sign"]["needs"], "build")
+        for name in ("sign", "seal", "publish"):
+            self.assertNotIn("rc", name)
 
     def test_nothing_is_published_without_a_release_event(self):
         data, _ = load()
@@ -64,7 +104,7 @@ class SigningWorkflowTest(unittest.TestCase):
             self.assertEqual(uses_release_action, name == "publish", name)
         publish = data["jobs"]["publish"]
         self.assertIn("github.event_name == 'release'", publish["if"])
-        self.assertEqual(sorted(publish["needs"]), ["rc-seal", "sign"])
+        self.assertIn("needs.seal.result == 'success'", publish["if"])
 
     def test_the_release_files_get_a_provenance_attestation_in_the_publish_job_only(self):
         data, _ = load()
@@ -73,117 +113,189 @@ class SigningWorkflowTest(unittest.TestCase):
             self.assertEqual(has_attest, name == "publish", name)
             permissions = job.get("permissions", {})
             self.assertEqual(permissions.get("id-token") == "write", name == "publish", name)
-        publish = data["jobs"]["publish"]
-        self.assertEqual(publish["permissions"]["attestations"], "write")
+        self.assertEqual(data["jobs"]["publish"]["permissions"]["attestations"], "write")
 
-    def test_every_published_release_file_is_an_attestation_subject(self):
-        """`gh attestation verify <file>` finds a file only if its digest is a subject of an attestation, so a
-        file the release receives that is not listed in the attest step has nothing to verify (#450)."""
-        publish = load()[0]["jobs"]["publish"]
-        steps = publish["steps"]
-
-        def lines(value: str) -> list:
-            return [line.strip() for line in value.splitlines() if line.strip()]
-
-        attest = [i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/attest-build-provenance@")]
-        uploads = [i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("softprops/action-gh-release@")]
-        self.assertEqual(len(attest), 1, "one attestation step covers every published file")
-        self.assertGreaterEqual(len(uploads), 2)
+    def test_the_attested_files_are_exactly_the_uploaded_files(self):
+        """`gh attestation verify <file>` finds a file only if its digest is a subject of an attestation: a
+        file the release receives that is not attested has nothing to verify (#450), and an attested file
+        that is never uploaded is a lie. The two lists are the same set."""
+        steps = load()[0]["jobs"]["publish"]["steps"]
+        attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest-build-provenance@")]
+        uploads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
+        self.assertEqual(len(attest), 1)
+        self.assertEqual(len(uploads), 2)
         subjects = lines(steps[attest[0]]["with"]["subject-path"])
+        uploaded = []
         for i in uploads:
             self.assertLess(attest[0], i, "the files are attested before they are uploaded")
-            for pattern in lines(steps[i]["with"]["files"]):
-                self.assertIn(pattern, subjects, f"{pattern} is uploaded to the release but not attested")
-        # The release candidate's public set: the zip, the checksums and the notes.
-        for pattern in ("rc-dist/*.zip", "rc-dist/SHA256SUMS", "rc-dist/RELEASE-NOTES.md"):
-            self.assertIn(pattern, subjects)
+            uploaded += lines(steps[i]["with"]["files"])
+        self.assertEqual(sorted(subjects), sorted(uploaded))
+        self.assertEqual(sorted(subjects), sorted([
+            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md"]))
+        self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
+        tar_steps = [s for s in steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
+        self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
+
+    def test_no_step_reads_or_sets_the_pre_release_flag(self):
+        """Promotion changes no byte and no run: the flag is the human's. Nothing reads the event's value,
+        and the uploads leave the `prerelease` input unset so the action re-sends the release's own flag
+        (read at upload time, so a promotion made while a run is going is kept)."""
+        data, _ = load()
+        text = WORKFLOW.read_text(encoding="utf-8")
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn("event.release.prerelease", code)
+        self.assertNotIn("isPrerelease", code)
+        for name, job in data["jobs"].items():
+            self.assertNotIn("prerelease", steps_text(job).lower(), name)
+        steps = data["jobs"]["publish"]["steps"]
+        uploads = [s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
+        self.assertEqual(len(uploads), 2)
+        for step in uploads:
+            self.assertNotIn("prerelease", step["with"])
+            self.assertNotIn("draft", step["with"])
+            self.assertTrue(step["with"]["fail_on_unmatched_files"])
 
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(sorted(set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text))), ["GITHUB_TOKEN"])
 
-    def label_step(self, **env):
-        """Run the `Release candidate label` step's script as bash with the given GITHUB_* environment."""
-        import os, subprocess, tempfile
+    # --- the release version step, executed -----------------------------------------------------------
+
+    def run_step(self, job, step_id, **env):
         data, _ = load()
-        step = next(s for s in data["jobs"]["build"]["steps"] if s.get("id") == "rc")
-        with tempfile.TemporaryDirectory(prefix="rc-label-") as tmp:
+        step = next(s for s in data["jobs"][job]["steps"] if s.get("id") == step_id)
+        with tempfile.TemporaryDirectory(prefix="workflow-step-") as tmp:
             out = Path(tmp) / "out"
             out.write_text("")
-            clean = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "EVENT", "TAG", "RC_"))}
-            clean.update({"EVENT": "workflow_dispatch", "TAG": "", "RC_NUMBER": "", "GITHUB_OUTPUT": str(out)})
+            clean = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "EVENT", "TAG"))}
+            clean.update({"EVENT": "workflow_dispatch", "TAG": "", "GITHUB_OUTPUT": str(out)})
             clean.update(env)
-            result = subprocess.run(["bash", "-c", step["run"]], env=clean, capture_output=True, text=True)
-            label = dict(line.split("=", 1) for line in out.read_text().splitlines()).get("label")
-            return result.returncode, label, result.stderr
+            result = subprocess.run(["bash", "-c", step["run"]], env=clean, capture_output=True, text=True, cwd=REPO)
+            outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
+            return result.returncode, outputs, result.stdout, result.stderr
 
-    def test_the_label_comes_only_from_a_tag_ref_named_v_x_y_z_rc_n(self):
-        rc, label, _ = self.label_step(EVENT="release", TAG="v4.0.0-rc.1",
-                                       GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0-rc.1")
-        self.assertEqual((rc, label), (0, "rc.1"))
-        rc, label, _ = self.label_step(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.1.0-rc.12", RC_NUMBER="12")
-        self.assertEqual((rc, label), (0, "rc.12"))
-        for ref_type, name in (("branch", "main"), ("branch", "v4.0.0-rc.1"), ("tag", "v4.0.0"),
-                               ("tag", "v4.0.0-rc.0"), ("tag", "v4.0.0-rc.1x")):
-            with self.subTest(ref_type=ref_type, name=name):
-                rc, label, _ = self.label_step(GITHUB_REF_TYPE=ref_type, GITHUB_REF_NAME=name)
-                self.assertEqual((rc, label), (0, ""))  # the build stamps a dev version
+    def test_the_version_is_exactly_the_tag_for_a_release_event(self):
+        rc, out, _, _ = self.run_step("build", "release", EVENT="release", TAG="v5.0.0",
+                                      GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v5.0.0")
+        self.assertEqual((rc, out.get("version")), (0, "5.0.0"))
+        rc, out, _, _ = self.run_step("build", "release", EVENT="release", TAG="v12.3.45",
+                                      GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v12.3.45")
+        self.assertEqual((rc, out.get("version")), (0, "12.3.45"))
 
-    def test_rc_number_must_be_empty_or_the_tags_number_and_needs_a_tag(self):
-        rc, _, err = self.label_step(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0-rc.2", RC_NUMBER="1")
-        self.assertEqual(rc, 1)
-        self.assertIn("does not match the tag", err)
-        rc, _, err = self.label_step(GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main", RC_NUMBER="1")
-        self.assertEqual(rc, 1)
-        self.assertIn("needs the run to be started on a v<x.y.z>-rc.<N> tag", err)
+    def test_the_step_logs_the_ref_and_the_version_it_decided(self):
+        """The version step is an Actions-log-only record (artifacts keep 7 days); its lines are asserted."""
+        rc, _, out, _ = self.run_step("build", "release", EVENT="release", TAG="v5.0.0",
+                                      GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v5.0.0")
+        self.assertEqual(rc, 0)
+        self.assertIn("ref: type=tag name=v5.0.0 event=release", out)
+        self.assertIn("release version: '5.0.0'", out)
+        rc, _, out, _ = self.run_step("build", "release", GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
+        self.assertIn("release version: '' (empty: a branch build, which stamps a development version)", out)
 
-    def test_a_release_on_an_rc_tag_that_yields_no_label_fails_the_job(self):
-        rc, label, err = self.label_step(EVENT="release", TAG="v4.0.0-rc.1",
-                                         GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
+    def test_a_dispatch_on_a_release_tag_is_a_dry_run_with_the_same_version(self):
+        rc, out, _, _ = self.run_step("build", "release", GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v5.0.1")
+        self.assertEqual((rc, out.get("version")), (0, "5.0.1"))
+
+    def test_a_branch_build_has_no_release_version(self):
+        rc, out, _, _ = self.run_step("build", "release", GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
+        self.assertEqual((rc, out.get("version")), (0, ""))
+
+    def test_a_tag_that_is_not_vx_y_z_fails_with_one_line(self):
+        for tag in ("v5.0", "v5.0.0-beta.1", "v4.0.0-rc.1", "5.0.0", "release-5", "v5.0.0.1", "vx.y.z",
+                    "v05.0.0", "v5.00.0", "v5.0.00", "v5.0.0+x", "v5.0.0-rc.1", "V5.0.0", "v5.0.0 "):
+            with self.subTest(tag=tag):
+                rc, out, _, err = self.run_step("build", "release", EVENT="release", TAG=tag,
+                                                GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(err.strip().splitlines()), 1, err)
+                self.assertIn("is not vX.Y.Z", err)
+                self.assertNotIn("version", out)
+                rc, out, _, err = self.run_step("build", "release", GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
+                self.assertEqual(rc, 1)
+
+    def test_a_release_whose_ref_is_not_its_tag_fails(self):
+        rc, _, _, err = self.run_step("build", "release", EVENT="release", TAG="v5.0.0",
+                                      GITHUB_REF_TYPE="branch", GITHUB_REF_NAME="main")
         self.assertEqual(rc, 1)
-        self.assertIn("refusing to build it as anything else", err)
-        # An ordinary release tag is not a candidate and is not refused.
-        rc, label, _ = self.label_step(EVENT="release", TAG="v4.0.0", GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v4.0.0")
-        self.assertEqual((rc, label), (0, ""))
+        self.assertIn("but the ref is", err)
+
+    # --- the guard: a release that already carries its assets is not rebuilt --------------------------
+
+    def guard(self, event="release", tag="v5.0.0", assets=FIVE, view_rc=0):
+        with tempfile.TemporaryDirectory(prefix="guard-") as tmp:
+            bindir = Path(tmp) / "bin"
+            bindir.mkdir()
+            gh = bindir / "gh"
+            gh.write_text(FAKE_GH)
+            gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+            log = Path(tmp) / "gh.log"
+            env = {"PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_GH_LOG": str(log),
+                   "FAKE_ASSETS": "\n".join(assets) + "\n", "FAKE_VIEW_RC": str(view_rc)}
+            rc, out, stdout, err = self.run_step("guard", "check", GITHUB_REPOSITORY="EchoTools/nevr-runtime",
+                                                 EVENT=event, TAG=tag, **env)
+            return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
+
+    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
+        rc, built, calls = self.guard()
+        self.assertEqual((rc, built), (0, "true"))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("release view v5.0.0", calls[0])
+
+    def test_a_release_missing_any_one_asset_is_built(self):
+        for missing in FIVE:
+            with self.subTest(missing=missing):
+                rc, built, _ = self.guard(assets=[a for a in FIVE if a != missing])
+                self.assertEqual((rc, built), (0, "false"))
+
+    def test_a_release_with_no_assets_is_built(self):
+        self.assertEqual(self.guard(assets=[])[:2], (0, "false"))
+
+    def test_other_versions_assets_do_not_count(self):
+        other = [a.replace("5.0.0", "4.9.9") for a in FIVE]
+        self.assertEqual(self.guard(assets=other)[:2], (0, "false"))
+
+    def test_a_failing_listing_fails_the_job_it_does_not_mean_rebuild(self):
+        rc, built, _ = self.guard(view_rc=1)
+        self.assertNotEqual(rc, 0)
+        self.assertIsNone(built)
+
+    def test_a_dispatch_never_asks_github_and_is_never_built_already(self):
+        rc, built, calls = self.guard(event="workflow_dispatch", tag="")
+        self.assertEqual((rc, built, calls), (0, "false", []))
+
+    # --- the packaging path ----------------------------------------------------------------------------
 
     def test_the_build_asserts_the_stamped_version_right_after_building(self):
         data, _ = load()
         names = [step.get("name", "") for step in data["jobs"]["build"]["steps"]]
         self.assertIn("Assert the stamped version", names)
         self.assertLess(names.index("Build"), names.index("Assert the stamped version"))
-        self.assertLess(names.index("Assert the stamped version"),
-                        names.index("Gate and assemble the release candidate tree (unsigned)"))
+        self.assertLess(names.index("Assert the stamped version"), names.index("Gate and assemble the release tree"))
+        self.assertLess(names.index("Release version"), names.index("Configure CMake"))
         step = data["jobs"]["build"]["steps"][names.index("Assert the stamped version")]
-        self.assertIn("tools/package_rc.py stamp", step["run"])
+        self.assertIn("tools/package_release.py stamp", step["run"])
+        self.assertIn('--commit "$GITHUB_SHA"', step["run"])
 
-    def test_a_release_with_no_quest_apk_seals_zip_only_and_the_seal_does_not_need_one(self):
+    def test_verify_always_runs_there_is_no_input_that_skips_it(self):
         data, _ = load()
-        seal = steps_text(data["jobs"]["rc-seal"])
-        self.assertIn("a zip-only candidate", seal)
-        self.assertNotIn("a missing or undownloadable APK fails the job", seal)
+        step = next(s for s in data["jobs"]["build"]["steps"] if s.get("name") == "Verify")
+        self.assertNotIn("if", step)
 
-    def test_the_release_candidate_is_gated_then_sealed_unsigned(self):
+    def test_the_release_is_gated_then_sealed_with_no_apk(self):
         data, _ = load()
         build = steps_text(data["jobs"]["build"])
-        self.assertIn("tools/package_rc.py tree", build)
-        self.assertIn("-DNEVR_RC_LABEL=", build)
-        seal_job = data["jobs"]["rc-seal"]
-        self.assertEqual(sorted(seal_job["needs"]), ["build", "sign"])
-        seal = steps_text(seal_job)
-        self.assertIn("tools/package_rc.py seal", seal)
-        runs = "\n".join(step.get("run", "") for step in seal_job["steps"])
-        seal_command = next(line for line in runs.splitlines() if line.startswith("python3 tools/package_rc.py seal"))
-        self.assertNotIn("--require-signed", seal_command, "nothing is signed yet: the seal must say UNSIGNED")
+        self.assertIn("tools/package_release.py tree", build)
+        self.assertIn("unsigned-release-tree", build)
+        seal = steps_text(data["jobs"]["seal"])
+        runs = "\n".join(step.get("run", "") for step in data["jobs"]["seal"]["steps"])
+        seal_command = next(line for line in runs.splitlines() if line.startswith("python3 tools/package_release.py seal"))
+        self.assertNotIn("--apk", seal_command)
+        self.assertNotIn("gh release", seal)
         self.assertIn("sha256sum -c SHA256SUMS", seal)
         self.assertIn("packages-unsigned", seal)
-        self.assertIn("release-candidate-unsigned", seal)
-
-    def test_a_release_candidates_apk_is_listed_then_fetched_and_a_failure_fails_the_job(self):
-        data, _ = load()
-        text = steps_text(data["jobs"]["rc-seal"])
-        self.assertIn("tools/rc_release_apk.sh", text)
-        self.assertNotIn("2>/dev/null", text, "a failed APK listing or download must not be swallowed")
-        self.assertNotIn("gh release download", text, "the download goes through rc_release_apk.sh")
+        self.assertIn("release-unsigned", seal)
+        self.assertIn("staged/release/nevr-runtime-v*-windows", seal)
+        self.assertFalse((REPO / "tools" / "rc_release_apk.sh").exists())
 
     def test_the_build_writes_the_public_defaults_before_it_configures(self):
         data, _ = load()

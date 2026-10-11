@@ -88,7 +88,7 @@ nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
   defaults.serverKey = nevr_builtin::kPublicSocketKey;
   defaults.features = nevr_build::kDefaultFeatures;
 
-  // Which build this is, so a log names its candidate and commit (neither is a configured value).
+  // Which build this is, so a log names its version and commit (neither is a configured value).
   Emit(nevr_quest::LogLevel::kInfo,
        std::string("build version=") + nevr_build::kVersion + " commit=" + nevr_build::kCommit);
   nevr_quest::LoadResult result =

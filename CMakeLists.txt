@@ -34,9 +34,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
-# A CI build of a v<x.y.z>-rc.<N> tag adds -rc.<N>; a local package (just package-dev) adds -dev; both carry the commit hash.
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_rc_label.cmake")
-nevr_apply_rc_label()
+# The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
+# X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
 # Define the version and git hash as compile definitions
 add_compile_definitions(
@@ -46,6 +45,7 @@ add_compile_definitions(
   NEVR_PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
   NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
   NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+  NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
   NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}")
 
 # Print out the version that was set by set_project_version_from_git()
