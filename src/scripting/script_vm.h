@@ -69,6 +69,11 @@ struct VmLimits {
   uint64_t instructions_per_call = 1000000;
   uint32_t millis_per_call = 50;
   size_t memory_bytes = 16u << 20;
+  // The whole shared state (the Luau binding's default mode): every script and the
+  // shared part together. No growth takes the state past it; what happens at it is
+  // JudgeStateCapHit (memory_policy.h). A binding with one state per script has no
+  // shared state and caps each state with memory_bytes alone.
+  size_t state_bytes = 64u << 20;
 };
 
 class ScriptVm {

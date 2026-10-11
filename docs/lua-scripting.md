@@ -108,15 +108,30 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   - **The cap.** It applies to the category, and the allocator checks it when Luau asks for memory (a new page or
     a large block). Free space inside pages the state already holds is used without a check. An interned string
     belongs to the script that created it first, and the VM's own growth (string table, registry) is category 0.
+  - **The whole state.** `VmLimits::state_bytes` (64 MiB by default) caps everything the allocator holds for the
+    state: every script, category 0 and free space in pages. The allocator refuses any growth past it, in any
+    category, so one script cannot take the state past it even when its own cap is larger. At the cap, the
+    request fails and, after a full collection, `JudgeStateCapHit` (`src/scripting/memory_policy.h`) decides:
+    - **It fits now.** Only that call failed, and the script continues.
+    - **Still full.** The script holding the most bytes is disabled, whoever asked, and its memory is released
+      (its anchor and threads are dropped and collected). A script already disabled for another limit counts
+      too, and is only released. The others keep their state and keep running.
+    - **One request over half the state cap, or three calls in a row at it.** The script that asked is disabled
+      and released.
+
+    Each hit writes a `state_cap_reached` record on the script that asked, naming the script disabled or
+    released and the bytes held. With one state per script there is no shared state; each state has its own
+    cap only.
   - **Locking.** One VM-wide mutex serializes all script code, whichever game thread calls.
   - **Unloading.** `Unload` drops the script's anchor, collects, and returns the category to the free list once
     its bytes reach 0. Otherwise it keeps the category reserved and writes a `category_reserved` record.
   - **Per script, as in the other mode:** the budget, the sticky breach, the pattern-matcher interrupt, garbage
     handling and the integer rule. A full collection covers the whole state, so a script that triggers one pays
     for it in its own call budget.
-- **Isolation.** Each script gets its own `lua_State`. Upstream's `luaL_sandbox` makes library tables, the
-  string metatable and the globals read-only, and each script runs in a `luaL_sandboxthread` thread, so its
-  globals are its own.
+- **Isolation.** Upstream's `luaL_sandbox` makes library tables, the string metatable and the globals
+  read-only, and each script runs in a `luaL_sandboxthread` thread, so its globals are its own. In the shared
+  state that thread, a memory category and an anchor table are what a script owns; with one state per script
+  it also gets its own `lua_State`.
 - **Sandbox.**
   - No `debug` library: introspection reached host internals, and errors already carry chunk:line.
   - `os` has only `clock`, `date` and `time`.
@@ -166,6 +181,16 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   - Scripts nested more than 8 deep on one thread are refused as well.
 - **Reload is dev-only.** Hot reload, including bringing back a script that was disabled for a limit breach,
   happens only in dev builds. In a normal build a breached script stays off until the game restarts.
+- **One mutex serializes every script (shared state).** Two hook points firing on two game threads run their
+  scripts one after the other. This is accepted while hook points run on the game thread.
+  - Revisit at the first hook point called from another thread.
+- **Collection time is charged to whoever triggers it (shared state).** A collection walks the whole shared heap,
+  so its time counts against the budget of the call that triggered it, which may be a script that holds little
+  while another holds a large live set.
+  - Revisit at the first script disabled for a breach that another script's memory caused.
+- **Test-only entry points.** `NEVR_LUAU_TEST_HOOKS` compiles `LuauTestThunksRefuseForeignArguments` into the
+  binding. It defaults to ON only when `src/scripting` is the top-level CMake project (the spike and its tests);
+  a build that adds it with `add_subdirectory` gets it OFF unless it asks.
 
 ## Typed API stubs and the checker
 
@@ -226,12 +251,12 @@ mingw-w64 under wine and NDK arm64 under qemu.
 
 | Executable | Result |
 | --- | --- |
-| `nevr_script_registry_test` | 19/19 |
+| `nevr_script_registry_test` | 20/20 |
 | `nevr_script_host_test` | 12/12 |
 | `nevr_script_stubs_test` | 3/3 |
 | `nevr_script_conformance` | 28/28; 13 of 13 sandbox probes refused, and the control probe proves the sensor |
 | `nevr_luau_memory_test` | 5/5 |
-| `nevr_luau_shared_test` (shared state only) | 8/8: per-script globals, memory and runaway breaches, byte counts and caps stay with the script that caused them; the 256th script is refused; an unloaded script's category is reused |
+| `nevr_luau_shared_test` (shared state only) | 10/10: per-script globals, memory and runaway breaches, byte counts and caps stay with the script that caused them; no script takes the whole state past its cap, and at it the script holding the most is disabled and released; the 256th script is refused; an unloaded script's category is reused |
 | `--pattern-dos` | stopped: the owner is disabled |
 | `--gc-dos` | returns; the finalizer never runs (Luau has no script finalizers) |
 

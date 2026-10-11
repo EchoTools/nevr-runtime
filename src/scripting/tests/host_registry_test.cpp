@@ -529,4 +529,20 @@ TEST(cap_hit_verdicts) {
   CHECK(JudgeCapHit(CapHit{9, 9, cap, 3}) == CapVerdict::kLiveSetTooLarge);  // the most specific reason first
 }
 
+TEST(state_cap_hit_verdicts) {
+  using nevr_script::JudgeStateCapHit;
+  using nevr_script::StateCapHit;
+  using nevr_script::StateCapVerdict;
+  const size_t cap = 16;
+  CHECK(JudgeStateCapHit(StateCapHit{10, 4, cap, 1}) == StateCapVerdict::kFits);
+  CHECK(JudgeStateCapHit(StateCapHit{12, 4, cap, 1}) == StateCapVerdict::kFits);  // exactly up to the cap fits
+  CHECK(JudgeStateCapHit(StateCapHit{13, 4, cap, 1}) == StateCapVerdict::kFull);
+  CHECK(JudgeStateCapHit(StateCapHit{10, 4, cap, 2}) == StateCapVerdict::kFits);
+  CHECK(JudgeStateCapHit(StateCapHit{10, 4, cap, 3}) == StateCapVerdict::kRepeated);  // the third call in a row
+  CHECK(JudgeStateCapHit(StateCapHit{13, 4, cap, 3}) == StateCapVerdict::kFull);  // full names the holder, not the asker
+  CHECK(JudgeStateCapHit(StateCapHit{0, 8, cap, 1}) == StateCapVerdict::kFits);  // exactly half is not over half
+  CHECK(JudgeStateCapHit(StateCapHit{0, 9, cap, 1}) == StateCapVerdict::kRequestTooLarge);
+  CHECK(JudgeStateCapHit(StateCapHit{16, 9, cap, 1}) == StateCapVerdict::kRequestTooLarge);  // the asker first
+}
+
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

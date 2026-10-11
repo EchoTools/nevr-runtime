@@ -3,6 +3,7 @@
 // one lua_State, each in its own thread and its own memory category. The shared
 // behaviour (src/scripting/tests/conformance_test.cpp) is not repeated here; these
 // tests are about one script not reaching, charging or stopping another.
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -204,6 +205,91 @@ TEST(shared_memory_bytes_tracks_each_scripts_own_allocations) {
   CHECK(b2 + kSlack >= b1 + (2u << 20));
   CHECK(a2 < a1 + kSlack);
   CHECK(h.vm->TotalMemoryBytes() >= a2 + b2);
+}
+
+namespace {
+
+// Limits for the whole-state tests: only the two memory caps stop a script.
+VmLimits StateCap(size_t per_script, size_t state) {
+  VmLimits limits = MemoryOnly(per_script);
+  limits.state_bytes = state;
+  return limits;
+}
+
+// A script that, when test.add is called with a == id, keeps one more string of
+// about 1 MiB (each a different length: Luau interns strings, so equal ones are
+// one); with a == 100 + id it returns how many it keeps.
+std::string Grower(char letter, int id) {
+  const std::string n = std::to_string(id);
+  return std::string("keep = {}\n") +
+         "nevr.hook('test.add', {\n"
+         "  pre = function(h) if h:get('a') == " + n + " then keep[#keep + 1] = string.rep('" + letter +
+         "', 1024 * 1024 + #keep) end end,\n"
+         "  post = function(h) if h:get('a') == " + std::to_string(100 + id) +
+         " then h:set('result', #keep) end end})\n";
+}
+
+}  // namespace
+
+// (g) One script cannot grow the shared state past its cap, even when its own
+// cap is larger: it is disabled at the state cap and its memory is released.
+TEST(shared_one_script_cannot_grow_the_state_past_its_cap) {
+  constexpr size_t kState = 16u << 20;
+  Host h(StateCap(64u << 20, kState));
+  NevrOwner* a = h.Load("mod_a.lua", Grower('a', 1));
+  size_t most = 0;
+  for (int i = 0; i < 30 && !a->disabled.load(); ++i) {
+    h.Add(1, 0);
+    most = std::max(most, h.vm->TotalMemoryBytes());
+  }
+  std::printf("  most the state held: %zu bytes (cap %zu); after: %zu\n", most, kState, h.vm->TotalMemoryBytes());
+  CHECK(most <= kState);
+  CHECK(a->disabled.load());
+  const Captured* c = h.Find("owner_disabled", "mod_a");
+  CHECK(c && Contains(c->detail, "shared state"));
+  CHECK(h.vm->TotalMemoryBytes() < (2u << 20));  // its strings went back
+}
+
+// (h) At the state cap, the script holding the most is disabled and released,
+// whoever's request was refused; the others keep their state and keep running.
+// mod_a keeps about 7 MiB, mod_b about 5 MiB; mod_c then grows until the 16 MiB
+// state cap refuses it.
+TEST(shared_at_the_state_cap_the_largest_script_is_disabled) {
+  constexpr size_t kState = 16u << 20;
+  Host h(StateCap(8u << 20, kState));
+  NevrOwner* a = h.Load("mod_a.lua", Grower('a', 1));
+  NevrOwner* b = h.Load("mod_b.lua", Grower('b', 2));
+  NevrOwner* c = h.Load("mod_c.lua", Grower('c', 3));
+  size_t most = 0;
+  for (int i = 0; i < 7; ++i) h.Add(1, 0);
+  for (int i = 0; i < 5; ++i) h.Add(2, 0);
+  most = h.vm->TotalMemoryBytes();
+  int c_calls = 0;
+  for (; c_calls < 10 && !h.Find("state_cap_reached"); ++c_calls) {
+    h.Add(3, 0);
+    most = std::max(most, h.vm->TotalMemoryBytes());
+  }
+  const int c_kept = static_cast<int>(h.Add(103, 0));
+  h.Add(3, 0);  // the state has room again
+  most = std::max(most, h.vm->TotalMemoryBytes());
+  std::printf("  mod_c called %d times, keeps %d; most the state held: %zu bytes (cap %zu); after: %zu\n", c_calls,
+              c_kept, most, kState, h.vm->TotalMemoryBytes());
+  CHECK(most <= kState);
+  const Captured* reached = h.Find("state_cap_reached", "mod_c");
+  const Captured* off = h.Find("owner_disabled", "mod_a");
+  if (reached) std::printf("  state_cap_reached (mod_c): %s\n", reached->detail.c_str());
+  if (off) std::printf("  owner_disabled (mod_a): %s\n", off->detail.c_str());
+  CHECK(reached && Contains(reached->detail, "mod_a"));
+  CHECK(a->disabled.load());
+  CHECK(off && Contains(off->detail, "shared state"));
+  CHECK(!b->disabled.load());
+  CHECK(!c->disabled.load());
+  for (const Captured& r : h.log) {  // mod_c's failed call is the state cap's, not its own cap's
+    CHECK(!(r.owner == "mod_c" && Contains(r.detail, "the memory cap of")));
+  }
+  CHECK_EQ(h.Add(102, 0), 5);           // mod_b kept all five strings
+  CHECK_EQ(h.Add(103, 0), c_kept + 1);  // mod_c's next string fitted
+  CHECK(h.vm->TotalMemoryBytes() < kState - (6u << 20));  // mod_a's 7 MiB went back
 }
 
 namespace {

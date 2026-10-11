@@ -1096,13 +1096,13 @@ test-scripting:
             -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" \
             -DNEVR_LUAU_SHARED_STATE="$flag" > /dev/null
         cmake --build "$out"
-        run_suite "$out/nevr_script_registry_test.exe" 19
+        run_suite "$out/nevr_script_registry_test.exe" 20
         run_suite "$out/nevr_script_host_test.exe" 12
         run_suite "$out/nevr_script_stubs_test.exe" 3
         run_suite "$out/nevr_script_conformance.exe" 28
         run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 5
         if [[ "$mode" == shared ]]; then
-            run_suite "$out/nevr_luau_shared_test.exe" 8
+            run_suite "$out/nevr_luau_shared_test.exe" 10
         fi
         # The two runaway probes report instead of asserting; each must end with the script stopped.
         dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)

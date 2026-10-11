@@ -8,18 +8,20 @@
 // callback, called directly), so an error can never reach the VM's
 // unprotected-error path.
 //
-// Limits (script_vm.h): one lua_State per owner, with
+// Limits (script_vm.h), per script:
 //   - a safepoint and wall-clock budget checked from lua_callbacks()->interrupt,
 //   - a byte cap enforced by the lua_Alloc handed to lua_newstate.
 // A breach is sticky: it is recorded on the state and the interrupt raises an
 // error at every later safepoint, so a script's pcall cannot swallow it.
 //
 // Two modes, chosen at configure time (NEVR_LUAU_SHARED_STATE, vm/luau/CMakeLists.txt):
-//   0 (default)  one lua_State per script, as above.
-//   1            one lua_State for the whole VM. Each script runs in its own
+//   1 (default)  one lua_State for the whole VM. Each script runs in its own
 //                luaL_sandboxthread thread and its allocations are charged to its own
-//                Luau memory category (lua_setmemcat); the cap applies to that category.
+//                Luau memory category (lua_setmemcat); the byte cap applies to that
+//                category, and VmLimits::state_bytes caps the whole state.
 //                One VM-wide mutex serializes all script code. See SharedLuauVm.
+//   0            one lua_State per script, each with its own byte cap; for
+//                debugging a script in isolation.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -109,6 +111,8 @@ struct State {
   int anchor_ref = LUA_NOREF;
   int next_slot = kAnchorFirstCallback;
   int category = 0;   // 1..255; 0 is the shared part
+  std::atomic<size_t> state_refused{0};  // the biggest request SharedAlloc refused for the state cap
+  int state_cap_hits = 0;  // calls in a row that reached the state cap
 #endif
 
   std::vector<std::unique_ptr<CallbackRef>> callbacks;
@@ -132,6 +136,12 @@ struct State {
     if (mem_failed.load(std::memory_order_relaxed)) {
       breach = "memory limit exceeded: the script's state may not hold more than " +
                std::to_string(limits.memory_bytes) + " bytes";
+#if NEVR_LUAU_SHARED_STATE
+      if (largest_refused.load(std::memory_order_relaxed) == 0) {
+        breach = "memory limit exceeded: the shared state may not hold more than " +
+                 std::to_string(limits.state_bytes) + " bytes";
+      }
+#endif
       memory_breach = true;
       return;
     }
@@ -162,6 +172,8 @@ struct SharedHost {
   State* running = nullptr;
   std::mutex mu;
   std::atomic<size_t> allocated{0};  // bytes the allocator holds for the whole state
+  size_t state_cap = 0;              // VmLimits::state_bytes
+  std::unordered_map<const NevrOwner*, std::unique_ptr<State>> scripts;  // every loaded script; under mu
 };
 
 State* StateOf(lua_State* L) { return static_cast<SharedHost*>(lua_callbacks(L)->userdata)->running; }
@@ -197,6 +209,19 @@ void* SharedAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     s->mem_failed.store(true, std::memory_order_relaxed);
     if (nsize > s->largest_refused.load(std::memory_order_relaxed)) {
       s->largest_refused.store(nsize, std::memory_order_relaxed);
+    }
+    return nullptr;
+  }
+  // The whole state: no growth takes it past state_cap, whatever the category and
+  // whether or not a script runs. With no script running only the setup grows the
+  // state (EnsureState, inside a protected call), so a refusal there is a clean
+  // load error, never an unprotected one.
+  if (nsize > held && h->allocated.load(std::memory_order_relaxed) - held + nsize > h->state_cap) {
+    if (s) {
+      s->mem_failed.store(true, std::memory_order_relaxed);
+      if (nsize > s->state_refused.load(std::memory_order_relaxed)) {
+        s->state_refused.store(nsize, std::memory_order_relaxed);
+      }
     }
     return nullptr;
   }
@@ -689,7 +714,90 @@ std::string PopError(lua_State* L) {
 // against the call's budget, which is why repeats count. The collector is tuned
 // and assisted within the call (Load, Interrupt), so a script that is not trying
 // should not get here at all.
+#if NEVR_LUAU_SHARED_STATE
+// Drops everything a disabled script holds in the shared state: its anchor table
+// holds its threads, call object and callbacks, and its thread holds its globals,
+// so after a collection its category keeps nothing. The State stays (Unload frees
+// it); HookTrampoline re-checks `disabled` under the lock before touching `run`.
+// Holds the VM-wide mutex, with no script running.
+void ReleaseScriptMemory(SharedHost& h, State* v) {
+  lua_unref(h.main, v->anchor_ref);
+  v->anchor_ref = LUA_NOREF;
+  v->run = nullptr;
+  lua_gc(h.main, LUA_GCCOLLECT, 0);
+}
+
+// After a call in which SharedAlloc refused `s` for the state cap: collect, judge
+// with JudgeStateCapHit (memory_policy.h), and disable and release the script it
+// names. True when `s` itself was disabled (nothing more to judge for it).
+bool ApplyStateCapHit(State* s) {
+  SharedHost& h = *static_cast<SharedHost*>(lua_callbacks(s->L)->userdata);
+  const size_t refused = s->state_refused.exchange(0);
+  if (refused == 0) {
+    s->state_cap_hits = 0;
+    return false;
+  }
+  lua_gc(h.main, LUA_GCCOLLECT, 0);
+  const size_t held = h.allocated.load(std::memory_order_relaxed);
+  const int hits = ++s->state_cap_hits;
+  const StateCapVerdict verdict = JudgeStateCapHit(StateCapHit{held, refused, h.state_cap, hits});
+  State* victim = nullptr;
+  if (verdict == StateCapVerdict::kRequestTooLarge || verdict == StateCapVerdict::kRepeated) victim = s;
+  if (verdict == StateCapVerdict::kFull) {
+    // The most bytes, released scripts aside; a script disabled for another limit
+    // still holds its memory until it is unloaded, so it counts. A tie goes to the
+    // requester.
+    victim = s;
+    size_t most = UsedBytes(s);
+    for (const auto& entry : h.scripts) {
+      State* other = entry.second.get();
+      if (other->anchor_ref == LUA_NOREF) continue;  // released already
+      const size_t bytes = UsedBytes(other);
+      if (bytes > most) {
+        most = bytes;
+        victim = other;
+      }
+    }
+  }
+  std::string detail = "a request of " + std::to_string(refused) + " bytes would take the shared state past its cap of " +
+                       std::to_string(h.state_cap) + " bytes (" + std::to_string(held) +
+                       " bytes held after collection): " + StateCapVerdictReason(verdict);
+  const bool already_disabled = victim && victim->owner->disabled.load();
+  if (victim) {
+    detail += std::string(already_disabled ? "; released (already disabled): " : "; disabled: ") +
+              victim->owner->name + ", holding " + std::to_string(UsedBytes(victim)) + " bytes";
+  } else {
+    detail += "; that call failed, the script continues";
+  }
+  s->registry->Record(NEVR_LOG_WARNING, "state_cap_reached", s->owner, victim ? victim->owner->name.c_str() : "",
+                      detail);
+  if (victim != s && s->largest_refused.load() == 0) {
+    // Only the state cap refused `s` in this call: that call failed, `s` continues.
+    s->mem_failed.store(false);
+    if (s->memory_breach) {
+      s->breach.clear();
+      s->memory_breach = false;
+    }
+  }
+  if (!victim) return false;
+  if (already_disabled) {
+    ReleaseScriptMemory(h, victim);
+    return false;
+  }
+  victim->breach = "memory limit exceeded: the shared state's cap of " + std::to_string(h.state_cap) +
+                   " bytes was reached (" + StateCapVerdictReason(verdict) + "); this script held " +
+                   std::to_string(UsedBytes(victim)) + " bytes, and its memory is released";
+  victim->memory_breach = true;
+  victim->registry->DisableOwner(victim->owner, victim->breach);
+  ReleaseScriptMemory(h, victim);
+  return victim == s;
+}
+#endif
+
 void ApplyBreach(State* s) {
+#if NEVR_LUAU_SHARED_STATE
+  if (ApplyStateCapHit(s)) return;
+#endif
   const size_t cap = s->limits.memory_bytes;
   if (!s->mem_failed.load()) s->garbage_refusals = 0;
   if (s->mem_failed.load() && (s->breach.empty() || s->memory_breach)) {
@@ -768,6 +876,9 @@ NevrHookResult HookTrampoline(NevrHookCall* call, void* user) {
     return s->api->call_fail(call, "scripts nested more than 8 deep on one thread; refused");
   }
   std::lock_guard<std::mutex> lock(*s->mu);
+  // Disabled while this call waited for the lock: in the shared state its memory
+  // may be released already (ReleaseScriptMemory), so `run` is not touched.
+  if (s->owner->disabled.load()) return NEVR_HOOK_CONTINUE;
   const RunningState running(s);
   s->call = call;
   s->phase = ref->phase;
@@ -940,6 +1051,7 @@ class LuauVm final : public ScriptVm {
 class SharedLuauVm final : public ScriptVm {
  public:
   SharedLuauVm(Registry& registry, const VmLimits& limits) : registry_(registry), limits_(limits) {
+    host_.state_cap = limits.state_bytes;
     for (int category = kMaxScripts; category >= 1; --category) free_.push_back(category);
   }
 
@@ -973,7 +1085,7 @@ class SharedLuauVm final : public ScriptVm {
     s->L = host_.main;
     s->mu = &host_.mu;
     s->category = category;
-    scripts_[owner] = std::move(state);
+    host_.scripts[owner] = std::move(state);
     const RunningState running_on_thread(s);
 
     lua_CompileOptions options = {};
@@ -1014,8 +1126,8 @@ class SharedLuauVm final : public ScriptVm {
 
   size_t MemoryBytes(const NevrOwner* owner) const override {
     std::lock_guard<std::mutex> lock(host_.mu);
-    const auto it = scripts_.find(owner);
-    return it == scripts_.end() ? 0 : lua_totalbytes(host_.main, it->second->category);
+    const auto it = host_.scripts.find(owner);
+    return it == host_.scripts.end() ? 0 : lua_totalbytes(host_.main, it->second->category);
   }
 
   // What the allocator holds for the whole state (libraries, every script, free
@@ -1025,10 +1137,10 @@ class SharedLuauVm final : public ScriptVm {
 
   void Unload(NevrOwner* owner) override {
     std::lock_guard<std::mutex> lock(host_.mu);  // waits out a callback still running
-    const auto it = scripts_.find(owner);
-    if (it == scripts_.end()) return;
+    const auto it = host_.scripts.find(owner);
+    if (it == host_.scripts.end()) return;
     std::unique_ptr<State> gone = std::move(it->second);
-    scripts_.erase(it);
+    host_.scripts.erase(it);
     // Dropping the anchor drops both threads, the call object and every callback;
     // the registry has already stopped calling them (Registry::Quiesce).
     lua_unref(host_.main, gone->anchor_ref);
@@ -1102,7 +1214,6 @@ class SharedLuauVm final : public ScriptVm {
   Registry& registry_;
   VmLimits limits_;
   mutable SharedHost host_;
-  std::unordered_map<const NevrOwner*, std::unique_ptr<State>> scripts_;
   std::vector<int> free_;      // categories no script holds
   std::vector<int> reserved_;  // unloaded scripts' categories that still hold bytes
 };

@@ -45,4 +45,39 @@ constexpr const char* CapVerdictReason(CapVerdict verdict) {
   return "";
 }
 
+// What a binding with one shared state does after an allocation would take the
+// whole state past VmLimits::state_bytes, judged after a full collection. The
+// script whose request was refused is the requester; the call that asked failed
+// in every case.
+struct StateCapHit {
+  size_t held_after_collection;  // bytes the allocator holds for the whole state
+  size_t largest_refused;        // the biggest single request refused for the state cap
+  size_t cap;                    // VmLimits::state_bytes
+  int hits_in_a_row;             // the requester's calls in a row that reached it, this one included
+};
+
+enum class StateCapVerdict {
+  kFits,             // the request fits now: only that call failed; the requester continues
+  kRequestTooLarge,  // one request alone was over half the state: disable the requester
+  kFull,             // it still does not fit: disable the script holding the most, and release its memory
+  kRepeated,         // kCapHitsInARowLimit calls in a row at the state cap: disable the requester
+};
+
+constexpr StateCapVerdict JudgeStateCapHit(const StateCapHit& hit) {
+  if (hit.largest_refused > hit.cap / 2) return StateCapVerdict::kRequestTooLarge;
+  if (hit.held_after_collection > hit.cap - hit.largest_refused) return StateCapVerdict::kFull;
+  if (hit.hits_in_a_row >= kCapHitsInARowLimit) return StateCapVerdict::kRepeated;
+  return StateCapVerdict::kFits;
+}
+
+constexpr const char* StateCapVerdictReason(StateCapVerdict verdict) {
+  switch (verdict) {
+    case StateCapVerdict::kRequestTooLarge: return "one allocation alone asked for over half the shared state's cap";
+    case StateCapVerdict::kFull: return "the shared state is full of live data; the script holding the most is disabled";
+    case StateCapVerdict::kRepeated: return "the shared state's cap was reached on 3 calls in a row";
+    case StateCapVerdict::kFits: return "garbage outran the collector";
+  }
+  return "";
+}
+
 }  // namespace nevr_script
