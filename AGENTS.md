@@ -58,6 +58,20 @@ zips; the `.tar.zst` archives stay a workflow artifact) and does nothing for a r
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
 
+A release whose files must be signed before anything is public goes through a DRAFT: a draft fires no workflow, so the build is
+started by hand on the tag ref.
+
+```sh
+gh release create v<x.y.z> --draft --verify-tag   # 1. a draft for the pushed tag
+gh workflow run build.yml --ref v<x.y.z>          # 2. builds, attests and attaches the five files to the draft; it stays a draft
+```
+
+`tools/release_draft.sh` decides: a tag with exactly one draft, no published release, and none of the five names on the draft is
+built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
+five names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
+which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `guard` job
+has `contents: write` only to list drafts, which a read-only token cannot see.
+
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).

@@ -12,14 +12,15 @@
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
 repo=${2:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
-if [[ ! "$tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+# The tag shape and the five names come from the one file tools/release_draft.sh also reads.
+source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
+if [[ ! "$tag" =~ $release_tag_regex ]]; then
   echo "release_already_built: tag '$tag' is not vX.Y.Z" >&2
   exit 1
 fi
 version=${BASH_REMATCH[1]}
+mapfile -t want < <(release_asset_names "$version")
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')
-want=("nevr-runtime-v$version-windows.zip" SHA256SUMS RELEASE-NOTES.md
-      "nevr-runtime-v$version.zip" "nevr-runtime-v$version-lite.zip")
 missing=()
 for name in "${want[@]}"; do
   grep -qxF -- "$name" <<<"$names" || missing+=("$name")

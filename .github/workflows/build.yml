@@ -35,10 +35,15 @@ jobs:
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
     runs-on: ubuntu-latest
+    # contents: write is only for LISTING draft releases: GitHub's REST docs ("List releases") say "Only users
+    # with push access will receive listings for draft releases", so with contents: read a draft is invisible
+    # and the lookup below would read "none". Nothing from the tree runs with this token except the
+    # tools/*.sh scripts of the checked-out ref, which only call `gh release view` / `gh api` (reads).
     permissions:
-      contents: read
+      contents: write
     outputs:
       built: ${{ steps.check.outputs.built }}
+      draft: ${{ steps.draft.outputs.draft }}
     steps:
     - uses: actions/checkout@v7
 
@@ -60,6 +65,24 @@ jobs:
           echo "release $TAG already carries its attested assets: nothing is rebuilt and nothing is re-uploaded"
         fi
 
+    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's five files, attests
+    # them and attaches them to that draft (GitHub: `release` created/edited/deleted are not triggered for
+    # draft releases, and a draft fires no `published` until it is published, so a draft is reached by
+    # dispatching on the tag). draft=true only when the tag has exactly one draft and no published release and
+    # the draft carries none of the build's files; a second dispatch on a draft that already carries them
+    # fails red here and uploads nothing. No release at all, or a published one, is the usual dry run.
+    - name: Find the draft release of this tag
+      id: draft
+      if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        kind=$(tools/release_draft.sh "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY")
+        if [ "$kind" = draft ]; then echo "draft=true" >> "$GITHUB_OUTPUT"; else echo "draft=false" >> "$GITHUB_OUTPUT"; fi
+        echo "draft release of $GITHUB_REF_NAME: $kind"
+
   build:
     needs: guard
     if: needs.guard.outputs.built != 'true'
@@ -69,6 +92,7 @@ jobs:
       packages: read
     outputs:
       version: ${{ steps.release.outputs.version }}
+      draft: ${{ needs.guard.outputs.draft }}
     # The toolchain is the prebuilt builder image (.github/builder/Dockerfile, built by
     # builder-image.yml): Arch's MinGW-w64 GCC and headers from pacman, the toolchain development
     # uses (#81), not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
@@ -237,11 +261,11 @@ jobs:
       run: just verify
 
     - name: Create distribution packages (unsigned)
-      if: github.event_name == 'release'
+      if: github.event_name == 'release' || needs.guard.outputs.draft == 'true'
       run: cmake --build --preset mingw-release --target dist dist-lite
 
     - name: Verify distribution archives
-      if: github.event_name == 'release'
+      if: github.event_name == 'release' || needs.guard.outputs.draft == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -288,7 +312,7 @@ jobs:
     # The unpacked package trees (dist/<name>/, normal and lite) go to the sign job; the unsigned
     # archives are never published.
     - name: Upload the unsigned packages for signing
-      if: github.event_name == 'release'
+      if: github.event_name == 'release' || needs.guard.outputs.draft == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: unsigned-packages
@@ -312,7 +336,7 @@ jobs:
       contents: read
     steps:
     - uses: actions/download-artifact@v8
-      if: github.event_name == 'release'
+      if: github.event_name == 'release' || needs.build.outputs.draft == 'true'
       with:
         name: unsigned-packages
         path: packages
@@ -381,8 +405,8 @@ jobs:
   # Repack the trees into the same archives the build job made, check them, attest their provenance and
   # publish. Signing is stubbed above: the files are published exactly as built.
   publish:
-    needs: [sign, seal]
-    if: ${{ always() && github.event_name == 'release' && needs.sign.result == 'success' && needs.seal.result == 'success' }}
+    needs: [build, sign, seal]
+    if: ${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
@@ -461,6 +485,11 @@ jobs:
     - name: Upload dist artifacts
       uses: softprops/action-gh-release@v3
       with:
+        # The one exception to "the uploads set nothing about the release's state": for a dispatch on a draft
+        # the action would PUBLISH the reused draft after uploading unless draft: true (its README: "If the
+        # action reuses an existing draft release, set draft: true to keep it draft; if draft is omitted, the
+        # action will publish that draft after uploading assets"). false for a release event: unchanged.
+        draft: ${{ github.event_name == 'workflow_dispatch' }}
         fail_on_unmatched_files: true
         files: |
           dist/*.zip
@@ -471,6 +500,7 @@ jobs:
     - name: Upload the release files
       uses: softprops/action-gh-release@v3
       with:
+        draft: ${{ github.event_name == 'workflow_dispatch' }}
         fail_on_unmatched_files: true
         files: |
           release-assets/*.zip

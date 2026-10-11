@@ -92,7 +92,9 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
         self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["seal", "sign"])
+        # publish also needs build: it reads build's `draft` output (a dispatch on a draft's tag, see
+        # test_release_draft_path.py); `needs` outputs are only visible from a direct dependency.
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "seal", "sign"])
         self.assertEqual(jobs["sign"]["needs"], "build")
         for name in ("sign", "seal", "publish"):
             self.assertNotIn("rc", name)
@@ -152,8 +154,19 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(len(uploads), 2)
         for step in uploads:
             self.assertNotIn("prerelease", step["with"])
-            self.assertNotIn("draft", step["with"])
+            # The one argued exception: softprops/action-gh-release PUBLISHES a reused draft after uploading
+            # unless `draft: true` ("If the action reuses an existing draft release, set draft: true to keep
+            # it draft; if draft is omitted, the action will publish that draft after uploading assets"). A
+            # dispatch on a draft's tag must keep the draft a draft; for a release event the expression is
+            # false, which is the action's default (nothing about the release's state changes). Nothing else
+            # may ever be set here.
+            self.assertEqual(step["with"].get("draft"), "${{ github.event_name == 'workflow_dispatch' }}")
             self.assertTrue(step["with"]["fail_on_unmatched_files"])
+        for name, job in data["jobs"].items():
+            if name == "publish":
+                continue
+            for step in job["steps"]:
+                self.assertNotIn("draft", step.get("with", {}), name)
 
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")
