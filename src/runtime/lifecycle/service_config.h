@@ -16,6 +16,11 @@
 
 #pragma once
 
+/// The folder of the config.yaml in use (the -config/-config-path folder when it holds one, else
+/// the `_local` folder it was found in), without a trailing separator; null when there is none.
+/// Stable for the process lifetime.
+const char* NevrCfgDirectory();
+
 /// A migrated flat NEVR key read from config.yaml. Null if the key is unmapped or
 /// absent; may be a stable "" if the key is present-but-empty (caller checks [0]).
 const char* NevrCfgGetFlat(const char* flatKey);

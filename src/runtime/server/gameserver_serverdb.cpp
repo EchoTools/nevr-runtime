@@ -155,7 +155,10 @@ std::string AcquireServerDbToken(std::string& reason) {
 
 static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
     std::string token;
-    auto auth = LoadCachedAuthToken();
+    // A server signs in as its own account: it reads, and refreshes into, only the cache beside the
+    // config.yaml it runs with (#512).
+    const CredentialCacheLocation cache = ServerCredentialCache(NevrCfgDirectory(), GetExeDirectory());
+    auto auth = LoadCachedAuthTokenFromPath(cache.credentialsPath);
     if (auth.HasValidToken()) {
         token = auth.token;
         Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
@@ -177,7 +180,7 @@ static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
         const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
         const char* httpKey = NevrCfgGetFlat("nevr_http_key");
         if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
-            RefreshAuthToken(auth, httpUri, httpKey)) {
+            RefreshAuthToken(auth, httpUri, httpKey, &cache)) {
             token = auth.token;
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
