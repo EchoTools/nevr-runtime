@@ -23,7 +23,7 @@ namespace nevr_script {
 struct LogRecord {
   NevrLogLevel level;
   const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
-                            // hook_unknown, undeclared, callback_failed, owner_disabled,
+                            // hook_unknown, override_unknown, undeclared, callback_failed, owner_disabled,
                             // owner_reset, owner_log; script host (script_host.h): script_loaded,
                             // script_refused, script_reloaded, reload_failed
   const char* owner;        // "" when none
@@ -135,6 +135,10 @@ class Registry {
   void Record(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* target,
               const std::string& detail);
 
+  // Runtime side. An override key exists only once registered, with its type.
+  // Returns false when the name is empty, malformed or already registered.
+  bool RegisterOverridePoint(const std::string& key, NevrValueType type);
+
   // Runtime side. Names are unique; a second registration of a name returns null.
   HookPoint* RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields);
   HookPoint* FindHookPoint(const char* name) const;
@@ -167,6 +171,7 @@ class Registry {
   mutable std::mutex mu_;  // guards owners_, overrides_, hooks_ and chain swaps
   std::vector<std::unique_ptr<NevrOwner>> owners_;
   std::map<std::string, OverrideEntry> overrides_;
+  std::map<std::string, NevrValueType> override_points_;
   std::map<std::string, std::unique_ptr<HookPoint>> hooks_;
 };
 

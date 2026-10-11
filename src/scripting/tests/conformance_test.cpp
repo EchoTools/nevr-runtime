@@ -59,7 +59,16 @@ struct Host {
                    {"result", NEVR_VALUE_INT, true, true}});
   std::unique_ptr<ScriptVm> vm;
 
-  explicit Host(VmLimits limits = VmLimits()) { vm = nevr_script::CreateScriptVm(reg, limits); }
+  // The override points the scripts below use, as the runtime would register them.
+  explicit Host(VmLimits limits = VmLimits()) {
+    const std::pair<const char*, NevrValueType> keys[] = {
+        {"physics.gravity", NEVR_VALUE_FLOAT}, {"team.colour", NEVR_VALUE_STRING},
+        {"hud.visible", NEVR_VALUE_BOOL},      {"match.rounds", NEVR_VALUE_INT},
+        {"mod_a.err", NEVR_VALUE_STRING},      {"mod_b.seen_error", NEVR_VALUE_STRING},
+        {"escape", NEVR_VALUE_BOOL}};
+    for (const auto& key : keys) reg.RegisterOverridePoint(key.first, key.second);
+    vm = nevr_script::CreateScriptVm(reg, limits);
+  }
 
   int64_t Add(int64_t a, int64_t b) {
     NevrValue fields[3] = {};
@@ -142,7 +151,21 @@ TEST(t2_second_script_on_a_key_gets_a_conflict_naming_both) {
   const Captured* c = h.Find("override_conflict");
   CHECK(c && c->owner == "mod_b" && c->other == "mod_a" && c->target == "match.rounds");
   CHECK_EQ(h.api->override_get(b, "match.rounds", &v), NEVR_OK);
-  CHECK(v.as.f == 3.0);
+  CHECK(v.type == NEVR_VALUE_INT && v.as.i == 3);  // a script number, stored as the key's INT
+}
+
+TEST(t2_unknown_or_mistyped_key_returns_nil_and_status) {
+  Host h;
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "local ok, err = nevr.override('no.such.key', 1)\n"
+                        "assert(ok == nil)\n"
+                        "local ok2, err2 = nevr.override('match.rounds', 2.5)\n"
+                        "assert(ok2 == nil)\n"
+                        "nevr.override('mod_a.err', err .. ' / ' .. err2)\n");
+  NevrValue v{};
+  CHECK_EQ(h.api->override_get(a, "mod_a.err", &v), NEVR_OK);
+  const std::string err = v.type == NEVR_VALUE_STRING ? v.as.s : "";
+  CHECK(Contains(err, "NEVR_ERR_UNKNOWN_KEY") && Contains(err, "NEVR_ERR_TYPE_MISMATCH"));
 }
 
 // ---- T3 pre/post callbacks ------------------------------------------------------------------

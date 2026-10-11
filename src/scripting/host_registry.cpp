@@ -19,6 +19,7 @@ const char* StatusName(NevrStatus status) {
     case NEVR_ERR_NOT_FOUND: return "NEVR_ERR_NOT_FOUND";
     case NEVR_ERR_DISABLED: return "NEVR_ERR_DISABLED";
     case NEVR_ERR_UNDECLARED: return "NEVR_ERR_UNDECLARED";
+    case NEVR_ERR_UNKNOWN_KEY: return "NEVR_ERR_UNKNOWN_KEY";
     default: return "NEVR_ERR_UNKNOWN_STATUS";
   }
 }
@@ -32,6 +33,39 @@ bool ValidValue(const NevrValue* v) {
     case NEVR_VALUE_STRING: return v->as.s != nullptr;
     default: return false;
   }
+}
+
+const char* TypeName(NevrValueType type) {
+  switch (type) {
+    case NEVR_VALUE_BOOL: return "bool";
+    case NEVR_VALUE_INT: return "int";
+    case NEVR_VALUE_FLOAT: return "float";
+    case NEVR_VALUE_STRING: return "string";
+    default: return "none";
+  }
+}
+
+// Converts `in` to the override point's type: an integral FLOAT to INT, an INT
+// to FLOAT. False when the types can't meet.
+bool CoerceTo(NevrValueType type, const NevrValue& in, NevrValue* out) {
+  *out = in;
+  if (in.type == type) return true;
+  if (type == NEVR_VALUE_FLOAT && in.type == NEVR_VALUE_INT) {
+    out->type = NEVR_VALUE_FLOAT;
+    out->as.f = static_cast<double>(in.as.i);
+    return true;
+  }
+  if (type == NEVR_VALUE_INT && in.type == NEVR_VALUE_FLOAT) {
+    const double f = in.as.f;
+    // [-2^63, 2^63): both bounds are exact doubles.
+    if (!(f >= -9223372036854775808.0 && f < 9223372036854775808.0)) return false;
+    const int64_t i = static_cast<int64_t>(f);
+    if (static_cast<double>(i) != f) return false;
+    out->type = NEVR_VALUE_INT;
+    out->as.i = i;
+    return true;
+  }
+  return false;
 }
 
 std::string Describe(const NevrValue& v) {
@@ -75,9 +109,11 @@ NevrStatus ApiCallSet(NevrHookCall* call, const char* field, const NevrValue* va
   const int index = call->hook->FieldIndex(field);
   if (index < 0) return NEVR_ERR_UNKNOWN_FIELD;
   const FieldSpec& spec = call->hook->Fields()[static_cast<size_t>(index)];
-  if (spec.type != value->type) return NEVR_ERR_TYPE_MISMATCH;
+  NevrValue typed{};
+  if (!CoerceTo(spec.type, *value, &typed)) return NEVR_ERR_TYPE_MISMATCH;
   const bool writable = call->phase == NEVR_HOOK_PRE ? spec.pre_writable : spec.post_writable;
   if (!writable) return NEVR_ERR_READ_ONLY;
+  value = &typed;
   NevrValue& slot = call->fields[index];
   if (value->type == NEVR_VALUE_STRING) {
     if (!call->strings) call->strings.reset(new std::string[call->hook->Fields().size()]);
@@ -245,6 +281,12 @@ void Registry::ResetOwner(NevrOwner* owner) {
        std::to_string(dropped) + " override(s) and callback(s) removed");
 }
 
+bool Registry::RegisterOverridePoint(const std::string& key, NevrValueType type) {
+  if (key.empty() || type < NEVR_VALUE_BOOL || type > NEVR_VALUE_STRING) return false;
+  std::lock_guard<std::mutex> lock(mu_);
+  return override_points_.emplace(key, type).second;
+}
+
 HookPoint* Registry::RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields) {
   std::lock_guard<std::mutex> lock(mu_);
   if (name.empty() || hooks_.count(name)) return nullptr;
@@ -270,6 +312,19 @@ NevrStatus Registry::OverrideSet(NevrOwner* owner, const char* key, const NevrVa
   if (owner->declared && !DeclarationCoversKey(owner->declaration, key)) {
     return Undeclared(owner, "override", key);
   }
+  const auto point = override_points_.find(key);
+  if (point == override_points_.end()) {
+    Emit(NEVR_LOG_WARNING, "override_unknown", owner, nullptr, key,
+         "no override point by this name on this build; the override is not applied");
+    return Fail(owner, NEVR_ERR_UNKNOWN_KEY, std::string("no override point named ") + key);
+  }
+  NevrValue typed{};
+  if (!CoerceTo(point->second, *value, &typed)) {
+    return Fail(owner, NEVR_ERR_TYPE_MISMATCH,
+                std::string("override ") + key + " is " + TypeName(point->second) + ", not " +
+                    TypeName(value->type) + " " + Describe(*value));
+  }
+  value = &typed;
   auto it = overrides_.find(key);
   if (it != overrides_.end() && it->second.owner != owner) {
     const NevrOwner* holder = it->second.owner;
