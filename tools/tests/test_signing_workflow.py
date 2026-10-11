@@ -59,11 +59,13 @@ class WorkflowStructureTest(unittest.TestCase):
                          "created misses a published draft; released/edited would rebuild on promotion")
         self.assertIsNone(triggers["workflow_dispatch"])
 
-    def test_runs_for_one_release_are_serialized_and_runs_for_other_releases_are_not(self):
-        """The group is the ref and the event, not the run id: a run id is unique, so every run had its own
-        group and two runs for one tag (a re-published release, a second dispatch) could upload at once.
-        A release run only ever queues behind release runs of the same tag, so a dry-run dispatch can never
-        replace the pending release run (a new run cancels the one pending in its group)."""
+    def test_runs_of_one_event_on_one_ref_share_a_group_and_other_events_or_refs_do_not(self):
+        """The group is the event and the ref, not the run id: a run id is unique, so every run had its own
+        group and two runs of one event on one tag (a release published again, a second dispatch) could
+        upload at once. Runs in one group queue; a new run cancels the one pending in its group, never the
+        one in progress, so a release run only ever replaces a pending release run of the same tag and a
+        dry-run dispatch can never take its place. A release run and a dispatch run on the SAME tag are in
+        different groups and run concurrently: this key does not serialize them."""
         concurrency = load()[0]["concurrency"]
         self.assertIs(concurrency["cancel-in-progress"], False)
         template = concurrency["group"]
@@ -75,12 +77,15 @@ class WorkflowStructureTest(unittest.TestCase):
             return rendered
 
         tag, other = "refs/tags/v5.0.1", "refs/tags/v5.0.2"
-        self.assertEqual(group("release", tag), group("release", tag), "one tag, one group")
         self.assertNotEqual(group("release", tag), group("release", other), "another tag does not queue")
+        self.assertNotEqual(group("workflow_dispatch", tag), group("workflow_dispatch", other))
+        self.assertNotEqual(group("workflow_dispatch", "refs/heads/a"), group("workflow_dispatch", "refs/heads/b"))
         self.assertNotEqual(group("release", tag), group("workflow_dispatch", tag),
                             "a dry run must not be able to cancel the pending release run")
-        self.assertEqual(group("workflow_dispatch", tag), group("workflow_dispatch", tag))
-        self.assertNotEqual(group("workflow_dispatch", "refs/heads/a"), group("workflow_dispatch", "refs/heads/b"))
+        # What the key pins: the same event on the same ref renders one group (a new run replaces the
+        # pending one, an earlier one finishes first).
+        self.assertIn("${{ github.event_name }}", template)
+        self.assertIn("${{ github.ref }}", template)
 
     def test_no_comment_or_step_uses_the_retired_model_words(self):
         text = WORKFLOW.read_text(encoding="utf-8")
