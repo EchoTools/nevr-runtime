@@ -22,14 +22,27 @@ namespace nevr_script {
 // for; the runtime renders a record as one `[NEVR.SCRIPT]` line.
 struct LogRecord {
   NevrLogLevel level;
-  const char* event;        // owner_opened, override_set, override_conflict, hook_added,
-                            // hook_unknown, callback_failed, owner_disabled, owner_reset, owner_log
+  const char* event;        // registry: owner_opened, override_set, override_conflict, hook_added,
+                            // hook_unknown, override_unknown, undeclared, callback_failed, owner_disabled,
+                            // owner_reset, owner_log; script host (script_host.h): script_loaded,
+                            // script_refused, script_reloaded, reload_failed
   const char* owner;        // "" when none
   const char* other_owner;  // the owner already holding the key, on override_conflict; else ""
   const char* target;       // the override key or hook point name; else ""
   const char* detail;       // free text; else ""
 };
 using LogSink = std::function<void(const LogRecord&)>;
+
+// What an owner's manifest declares it will touch. Once an owner has a
+// declaration, override_set and hook_add outside it fail with
+// NEVR_ERR_UNDECLARED, so the declaration a policy engine reads before the
+// owner runs is also the limit of what it can do.
+struct Declaration {
+  std::vector<std::string> overrides;  // exact keys, or "prefix.*" for every key under prefix.
+  std::vector<std::string> hooks;      // exact hook point names
+};
+
+bool DeclarationCoversKey(const Declaration& declaration, const std::string& key);
 
 struct FieldSpec {
   std::string name;
@@ -50,6 +63,8 @@ struct NevrOwner {
   uint32_t order;  // position in `plugins:` order; callbacks chain by it
   std::atomic<bool> disabled{false};
   std::string last_error;
+  bool declared = false;  // Registry::Declare was called: enforce `declaration`
+  nevr_script::Declaration declaration;
 };
 
 struct NevrHookCall {
@@ -111,6 +126,18 @@ class Registry {
   // Drop the owner's overrides and callbacks and enable it again, keeping its
   // place in the order (hot reload).
   void ResetOwner(NevrOwner* owner);
+  // Limit the owner to what its manifest declares (see Declaration).
+  void Declare(NevrOwner* owner, Declaration declaration);
+  // Finds an open owner by name, or null.
+  NevrOwner* FindOwner(const std::string& name) const;
+
+  // One record from the runtime side (the script host's own events).
+  void Record(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* target,
+              const std::string& detail);
+
+  // Runtime side. An override key exists only once registered, with its type.
+  // Returns false when the name is empty, malformed or already registered.
+  bool RegisterOverridePoint(const std::string& key, NevrValueType type);
 
   // Runtime side. Names are unique; a second registration of a name returns null.
   HookPoint* RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields);
@@ -133,6 +160,7 @@ class Registry {
     std::string text;  // storage for a STRING value
   };
 
+  NevrStatus Undeclared(NevrOwner* owner, const char* what, const char* name);
   void Emit(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* other,
             const char* target, const std::string& detail);
   NevrStatus Fail(NevrOwner* owner, NevrStatus status, std::string why);
@@ -143,6 +171,7 @@ class Registry {
   mutable std::mutex mu_;  // guards owners_, overrides_, hooks_ and chain swaps
   std::vector<std::unique_ptr<NevrOwner>> owners_;
   std::map<std::string, OverrideEntry> overrides_;
+  std::map<std::string, NevrValueType> override_points_;
   std::map<std::string, std::unique_ptr<HookPoint>> hooks_;
 };
 

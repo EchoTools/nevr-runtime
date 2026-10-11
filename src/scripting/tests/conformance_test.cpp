@@ -8,6 +8,7 @@
 //   conformance_test --pattern-dos
 //                               T5d: a pattern-matching backtrack inside one C call;
 //                               reports whether the binding stopped it, under a 20 s watchdog
+//   conformance_test --gc-dos   T5e: a __gc finalizer that loops forever; same reporting
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -58,7 +59,16 @@ struct Host {
                    {"result", NEVR_VALUE_INT, true, true}});
   std::unique_ptr<ScriptVm> vm;
 
-  explicit Host(VmLimits limits = VmLimits()) { vm = nevr_script::CreateScriptVm(reg, limits); }
+  // The override points the scripts below use, as the runtime would register them.
+  explicit Host(VmLimits limits = VmLimits()) {
+    const std::pair<const char*, NevrValueType> keys[] = {
+        {"physics.gravity", NEVR_VALUE_FLOAT}, {"team.colour", NEVR_VALUE_STRING},
+        {"hud.visible", NEVR_VALUE_BOOL},      {"match.rounds", NEVR_VALUE_INT},
+        {"mod_a.err", NEVR_VALUE_STRING},      {"mod_b.seen_error", NEVR_VALUE_STRING},
+        {"escape", NEVR_VALUE_BOOL}};
+    for (const auto& key : keys) reg.RegisterOverridePoint(key.first, key.second);
+    vm = nevr_script::CreateScriptVm(reg, limits);
+  }
 
   int64_t Add(int64_t a, int64_t b) {
     NevrValue fields[3] = {};
@@ -141,7 +151,21 @@ TEST(t2_second_script_on_a_key_gets_a_conflict_naming_both) {
   const Captured* c = h.Find("override_conflict");
   CHECK(c && c->owner == "mod_b" && c->other == "mod_a" && c->target == "match.rounds");
   CHECK_EQ(h.api->override_get(b, "match.rounds", &v), NEVR_OK);
-  CHECK(v.as.f == 3.0);
+  CHECK(v.type == NEVR_VALUE_INT && v.as.i == 3);  // a script number, stored as the key's INT
+}
+
+TEST(t2_unknown_or_mistyped_key_returns_nil_and_status) {
+  Host h;
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "local ok, err = nevr.override('no.such.key', 1)\n"
+                        "assert(ok == nil)\n"
+                        "local ok2, err2 = nevr.override('match.rounds', 2.5)\n"
+                        "assert(ok2 == nil)\n"
+                        "nevr.override('mod_a.err', err .. ' / ' .. err2)\n");
+  NevrValue v{};
+  CHECK_EQ(h.api->override_get(a, "mod_a.err", &v), NEVR_OK);
+  const std::string err = v.type == NEVR_VALUE_STRING ? v.as.s : "";
+  CHECK(Contains(err, "NEVR_ERR_UNKNOWN_KEY") && Contains(err, "NEVR_ERR_TYPE_MISMATCH"));
 }
 
 // ---- T3 pre/post callbacks ------------------------------------------------------------------
@@ -464,6 +488,37 @@ int PatternDos() {
   return 0;
 }
 
+// T5e: a finalizer that never returns. Lua 5.4 runs __gc with hooks switched
+// off (lgc.c GCTM), so an instruction budget does not stop it; a binding passes
+// by refusing __gc to scripts or by stopping it some other way. Reports what
+// happened; a watchdog ends the run if the call never returns.
+int GcDos() {
+  Host h;
+  NevrOwner* a = h.Load("gcdos.lua",
+                        "nevr.hook('test.add', {pre = function(h)\n"
+                        "  for i = 1, 200 do setmetatable({}, {__gc = function() while true do end end}) end\n"
+                        "  local t = {}\n"
+                        "  for i = 1, 200000 do t[i] = {i} end\n"
+                        "end})\n");
+  std::atomic<bool> done{false};
+  std::thread watchdog([&done] {
+    for (int i = 0; i < 200 && !done.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!done.load()) {
+      std::printf("T5e gc_dos: NOT STOPPED after 20000 ms (a finalizer is still running)\n");
+      std::fflush(stdout);
+      std::_Exit(2);
+    }
+  });
+  const auto t0 = std::chrono::steady_clock::now();
+  h.Add(2, 3);
+  h.Add(2, 3);
+  const double ms = MsSince(t0);
+  done.store(true);
+  watchdog.join();
+  std::printf("T5e gc_dos: returned after %.1f ms, owner %s\n", ms, a->disabled.load() ? "disabled" : "still enabled");
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -471,6 +526,7 @@ int main(int argc, char** argv) {
   g_verbose = verbose && *verbose == '1';
   if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) return Bench();
   if (argc > 1 && std::strcmp(argv[1], "--pattern-dos") == 0) return PatternDos();
+  if (argc > 1 && std::strcmp(argv[1], "--gc-dos") == 0) return GcDos();
   {
     Host h;
     std::printf("VM: %s\n", h.vm->Name());

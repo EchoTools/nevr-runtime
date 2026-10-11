@@ -18,6 +18,8 @@ const char* StatusName(NevrStatus status) {
     case NEVR_ERR_READ_ONLY: return "NEVR_ERR_READ_ONLY";
     case NEVR_ERR_NOT_FOUND: return "NEVR_ERR_NOT_FOUND";
     case NEVR_ERR_DISABLED: return "NEVR_ERR_DISABLED";
+    case NEVR_ERR_UNDECLARED: return "NEVR_ERR_UNDECLARED";
+    case NEVR_ERR_UNKNOWN_KEY: return "NEVR_ERR_UNKNOWN_KEY";
     default: return "NEVR_ERR_UNKNOWN_STATUS";
   }
 }
@@ -31,6 +33,39 @@ bool ValidValue(const NevrValue* v) {
     case NEVR_VALUE_STRING: return v->as.s != nullptr;
     default: return false;
   }
+}
+
+const char* TypeName(NevrValueType type) {
+  switch (type) {
+    case NEVR_VALUE_BOOL: return "bool";
+    case NEVR_VALUE_INT: return "int";
+    case NEVR_VALUE_FLOAT: return "float";
+    case NEVR_VALUE_STRING: return "string";
+    default: return "none";
+  }
+}
+
+// Converts `in` to the override point's type: an integral FLOAT to INT, an INT
+// to FLOAT. False when the types can't meet.
+bool CoerceTo(NevrValueType type, const NevrValue& in, NevrValue* out) {
+  *out = in;
+  if (in.type == type) return true;
+  if (type == NEVR_VALUE_FLOAT && in.type == NEVR_VALUE_INT) {
+    out->type = NEVR_VALUE_FLOAT;
+    out->as.f = static_cast<double>(in.as.i);
+    return true;
+  }
+  if (type == NEVR_VALUE_INT && in.type == NEVR_VALUE_FLOAT) {
+    const double f = in.as.f;
+    // [-2^63, 2^63): both bounds are exact doubles.
+    if (!(f >= -9223372036854775808.0 && f < 9223372036854775808.0)) return false;
+    const int64_t i = static_cast<int64_t>(f);
+    if (static_cast<double>(i) != f) return false;
+    out->type = NEVR_VALUE_INT;
+    out->as.i = i;
+    return true;
+  }
+  return false;
 }
 
 std::string Describe(const NevrValue& v) {
@@ -74,9 +109,11 @@ NevrStatus ApiCallSet(NevrHookCall* call, const char* field, const NevrValue* va
   const int index = call->hook->FieldIndex(field);
   if (index < 0) return NEVR_ERR_UNKNOWN_FIELD;
   const FieldSpec& spec = call->hook->Fields()[static_cast<size_t>(index)];
-  if (spec.type != value->type) return NEVR_ERR_TYPE_MISMATCH;
+  NevrValue typed{};
+  if (!CoerceTo(spec.type, *value, &typed)) return NEVR_ERR_TYPE_MISMATCH;
   const bool writable = call->phase == NEVR_HOOK_PRE ? spec.pre_writable : spec.post_writable;
   if (!writable) return NEVR_ERR_READ_ONLY;
+  value = &typed;
   NevrValue& slot = call->fields[index];
   if (value->type == NEVR_VALUE_STRING) {
     if (!call->strings) call->strings.reset(new std::string[call->hook->Fields().size()]);
@@ -116,6 +153,18 @@ const NevrHostApi kApi = {
 
 }  // namespace
 
+bool DeclarationCoversKey(const Declaration& declaration, const std::string& key) {
+  for (const std::string& pattern : declaration.overrides) {
+    if (pattern == key) return true;
+    const size_t n = pattern.size();
+    if (n >= 2 && pattern.compare(n - 2, 2, ".*") == 0 && key.size() > n - 1 &&
+        key.compare(0, n - 1, pattern, 0, n - 1) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int HookPoint::FieldIndex(const char* field) const {
   for (size_t i = 0; i < fields_.size(); ++i) {
     if (fields_[i].name == field) return static_cast<int>(i);
@@ -134,6 +183,33 @@ void Registry::Emit(NevrLogLevel level, const char* event, const NevrOwner* owne
   const LogRecord record{level, event, owner ? owner->name.c_str() : "", other ? other : "",
                          target ? target : "", detail.c_str()};
   sink_(record);
+}
+
+void Registry::Record(NevrLogLevel level, const char* event, const NevrOwner* owner, const char* target,
+                      const std::string& detail) {
+  Emit(level, event, owner, nullptr, target, detail);
+}
+
+NevrStatus Registry::Undeclared(NevrOwner* owner, const char* what, const char* name) {
+  Emit(NEVR_LOG_ERROR, "undeclared", owner, nullptr, name,
+       std::string(what) + " is not in the owner's manifest");
+  return Fail(owner, NEVR_ERR_UNDECLARED,
+              std::string(what) + " " + name + " is not declared in " + owner->name + "'s manifest");
+}
+
+void Registry::Declare(NevrOwner* owner, Declaration declaration) {
+  if (!owner) return;
+  std::lock_guard<std::mutex> lock(mu_);
+  owner->declaration = std::move(declaration);
+  owner->declared = true;
+}
+
+NevrOwner* Registry::FindOwner(const std::string& name) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  for (const auto& owner : owners_) {
+    if (owner->name == name) return owner.get();
+  }
+  return nullptr;
 }
 
 NevrStatus Registry::Fail(NevrOwner* owner, NevrStatus status, std::string why) {
@@ -205,6 +281,12 @@ void Registry::ResetOwner(NevrOwner* owner) {
        std::to_string(dropped) + " override(s) and callback(s) removed");
 }
 
+bool Registry::RegisterOverridePoint(const std::string& key, NevrValueType type) {
+  if (key.empty() || type < NEVR_VALUE_BOOL || type > NEVR_VALUE_STRING) return false;
+  std::lock_guard<std::mutex> lock(mu_);
+  return override_points_.emplace(key, type).second;
+}
+
 HookPoint* Registry::RegisterHookPoint(const std::string& name, std::vector<FieldSpec> fields) {
   std::lock_guard<std::mutex> lock(mu_);
   if (name.empty() || hooks_.count(name)) return nullptr;
@@ -227,6 +309,22 @@ NevrStatus Registry::OverrideSet(NevrOwner* owner, const char* key, const NevrVa
     return Fail(owner, NEVR_ERR_INVALID_ARG, "override needs a non-empty key and a typed value");
   }
   std::lock_guard<std::mutex> lock(mu_);
+  if (owner->declared && !DeclarationCoversKey(owner->declaration, key)) {
+    return Undeclared(owner, "override", key);
+  }
+  const auto point = override_points_.find(key);
+  if (point == override_points_.end()) {
+    Emit(NEVR_LOG_WARNING, "override_unknown", owner, nullptr, key,
+         "no override point by this name on this build; the override is not applied");
+    return Fail(owner, NEVR_ERR_UNKNOWN_KEY, std::string("no override point named ") + key);
+  }
+  NevrValue typed{};
+  if (!CoerceTo(point->second, *value, &typed)) {
+    return Fail(owner, NEVR_ERR_TYPE_MISMATCH,
+                std::string("override ") + key + " is " + TypeName(point->second) + ", not " +
+                    TypeName(value->type) + " " + Describe(*value));
+  }
+  value = &typed;
   auto it = overrides_.find(key);
   if (it != overrides_.end() && it->second.owner != owner) {
     const NevrOwner* holder = it->second.owner;
@@ -263,6 +361,10 @@ NevrStatus Registry::HookAdd(NevrOwner* owner, const char* hook, NevrHookPhase p
     return Fail(owner, NEVR_ERR_INVALID_ARG, "hook_add needs a hook name, a phase and a function");
   }
   std::lock_guard<std::mutex> lock(mu_);
+  if (owner->declared && std::find(owner->declaration.hooks.begin(), owner->declaration.hooks.end(),
+                                   hook) == owner->declaration.hooks.end()) {
+    return Undeclared(owner, "hook", hook);
+  }
   const auto it = hooks_.find(hook);
   if (it == hooks_.end()) {
     Emit(NEVR_LOG_WARNING, "hook_unknown", owner, nullptr, hook,

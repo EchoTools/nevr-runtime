@@ -6,8 +6,11 @@
  * Nothing here is a pointer into the game: a hook callback reads and writes the
  * call's named fields, and an override is a key with a typed value.
  *
- *   Data overrides. An owner sets `key = value`. The runtime owns the single
- *   hook on the engine's reader and applies the effective value. The first
+ *   Data overrides. An owner sets `key = value`. The keys are override points
+ *   the runtime registers, each with a type and the engine value(s) it maps to
+ *   on this build; the runtime owns the hook on the engine's reader and applies
+ *   the effective value. A number is accepted for an INT key when it is
+ *   integral and for a FLOAT key either way. The first
  *   owner to set a key keeps it (owners are registered in `plugins:` order); a
  *   second owner setting the same key gets NEVR_ERR_CONFLICT and the host logs
  *   one line naming both.
@@ -54,7 +57,9 @@ enum {
     NEVR_ERR_TYPE_MISMATCH  = 5, /* value type differs from the field's declared type */
     NEVR_ERR_READ_ONLY      = 6, /* the field is not writable in this phase */
     NEVR_ERR_NOT_FOUND      = 7, /* no override for this key */
-    NEVR_ERR_DISABLED       = 8  /* the owner was disabled (budget breach, error policy) */
+    NEVR_ERR_DISABLED       = 8, /* the owner was disabled (budget breach, error policy) */
+    NEVR_ERR_UNDECLARED     = 9, /* the owner's manifest does not declare this hook or key */
+    NEVR_ERR_UNKNOWN_KEY    = 10 /* no override point by that name on this build */
 };
 
 typedef int32_t NevrValueType;
