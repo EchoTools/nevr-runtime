@@ -40,6 +40,7 @@ struct PluginSpec {
   bool required = false;
   std::string target;                        // optional deployment-target hint
   std::map<std::string, std::string> args;   // dotted-key -> interpolated scalar
+  bool early = false;                        // load before the game reads its data (#496)
 };
 
 class NevrConfig {

@@ -53,6 +53,9 @@ namespace {
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
+// The one exception is the plugins config.yaml marks `early: true` (#496), which
+// PreprocessCommandLineHook loads right after this: they serve game data the
+// original call reads, and must stay off the graphics path.
 // -server is needed for the config loader's fail-loud policy. -config-path is
 // needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
@@ -115,6 +118,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
+  // #496: plugins marked `early: true` load here, once, before the original call: the
+  // game reads its manifests and opens its packages during it, before the graphics
+  // device exists (where the rest load), so a plugin that serves game data from
+  // elsewhere has to be in place now. Nothing marked early: nothing loads here.
+  static bool s_earlyPlugins = false;
+  if (!s_earlyPlugins) {
+    s_earlyPlugins = true;
+    LoadPlugins(PluginPhase::Early);
+  }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
