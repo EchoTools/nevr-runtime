@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/config.h"
+#include "runtime/compat/status_redirect_check.h"
 #include "runtime/lifecycle/config_redirect_result.h"
 #include "runtime/lifecycle/login_redirect_override.h"
 #include "runtime/compat/ws_bridge.h"
@@ -432,6 +433,10 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
       Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
   }
+
+  // Self-check "status_redirect" (#408): count this connect by class. Atomics and a bounded host copy only: this
+  // runs inside the game's connect function (no logging, no allocation, no lock).
+  nevr_status_redirect_check::NoteConnect(gameUri, uri);
 
   // Call the original function
   return EchoVR::HttpConnect(unk, uri);
