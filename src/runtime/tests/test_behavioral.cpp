@@ -277,6 +277,49 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
   EXPECT_TRUE(TestLogContains("optional, continuing"));
 }
 
+TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
+  char exePath[MAX_PATH] = {};
+  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+  std::string directory(exePath);
+  directory.resize(directory.find_last_of("\\/") + 1);
+  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
+  const std::string escaped = directory + "test_plugin_escape.dll";
+  ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
+  ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
+
+  g_testPluginLoadPlan.push_back({"escape", "..\\test_plugin_escape.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_escape.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  UnloadPlugins();
+  EXPECT_TRUE(DeleteFileA(escaped.c_str()));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) {
+  constexpr char kEventName[] = "Local\\NEVRTestPartialInitShutdownObserved";
+  HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kEventName);
+  ASSERT_NE(shutdownObserved, nullptr);
+
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_partial_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0), WAIT_OBJECT_0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_partial_init_fail.dll"), nullptr);
+  CloseHandle(shutdownObserved);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitWithoutShutdownRetainsModule) {
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_NE(GetModuleHandleA("test_plugin_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("retained until process exit"));
+}
+
 TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
   g_testPluginLoadPlan.push_back(
       {"future-api", "test_plugin_future_api.dll", false, "", "{}"});
