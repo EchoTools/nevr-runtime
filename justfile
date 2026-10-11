@@ -193,44 +193,48 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
 
-# Release candidate: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-rc/rc.<n>/.
-# Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the .example) and need no config file to log in; the gate
-# (tools/package_rc.py) refuses the package otherwise, and refuses a binary without -rc.<n> and the commit.
+# A LOCAL package: the Windows zip and the Quest APK from a CLEAN tree at HEAD, in build/package-dev/<sha>/.
+# Both builds stamp a DEVELOPMENT version (<x.y.z>-dev+<tweak>.<sha>) and the files are named
+# nevr-runtime-v4.0.0-dev-<sha>-*: this recipe cannot produce a release candidate. Only a CI build of a
+# v<x.y.z>-rc.<N> tag stamps -rc (cmake/nevr_rc_label.cmake, .github/workflows/build.yml).
+# Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
+# .example) and need no config file to log in; the gate (tools/package_rc.py) refuses the package otherwise,
+# and refuses a binary without -dev and the commit, or one stamped -rc.
 # `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
 # the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
+# The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
 # This never tags, uploads or publishes.
-package-rc n ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{ n }}" in ''|*[!0-9]*|0) echo "package-rc: N must be a positive integer, got '{{ n }}'" >&2; exit 1;; esac
-    [ -z "$(git status --porcelain)" ] || { echo "package-rc: the tree is not clean; commit or stash first (a candidate is built from a commit)" >&2; exit 1; }
-    [ -f "{{ ks }}" ] || { echo "package-rc: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
-    [ -f "{{ store_apk }}" ] || { echo "package-rc: store APK not found: {{ store_apk }}" >&2; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "package-dev: the tree is not clean; commit or stash first (a package is built from a commit)" >&2; exit 1; }
+    [ -f "{{ ks }}" ] || { echo "package-dev: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
+    [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
-    label="rc.{{ n }}"
-    out="build/package-rc/$label"
-    # Windows DLL: its own build tree (build/mingw-rc), the label in the version string.
+    echo "package-dev: LOCAL build of ${commit:0:7}: stamping a DEVELOPMENT version, not a release candidate (only a CI build of a v*-rc.<N> tag stamps -rc)" >&2
+    out="build/package-dev/${commit:0:7}"
+    # Windows DLL: its own build tree (build/mingw-dev), the dev stamp in the version string.
     # (The MinGW build uses this checkout's own vcpkg root; the Quest preset below needs VCPKG_ROOT.)
     (
         unset VCPKG_ROOT
-        just preset=mingw-rc _vcpkg-mingw
-        cmake --preset mingw-rc -DNEVR_RC_LABEL="$label"
-        cmake --build --preset mingw-rc
+        just preset=mingw-dev _vcpkg-mingw
+        cmake --preset mingw-dev -DNEVR_RC_LABEL=dev
+        cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-rc), the same label, the default features.
-    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-rc \
-        -DNEVR_RC_LABEL="$label" -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
-    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-rc -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
-    objects=$(python3 tools/quest_link_objects.py build/android-rc sentinel/libovrplatformloader.so)
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-rc/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-rc/sentinel/libovrplatformloader.so "{{ ks }}" build/android-rc/repack
-    python3 tools/package_rc.py --n "{{ n }}" --commit "$commit" --out "$out" \
-        --dll build/mingw-rc/bin/BugSplat64.dll \
-        --apk build/android-rc/repack/r15_nevr-sentinel_signed.apk \
-        --pc-header build/mingw-rc/generated/nevr_builtin_defaults.h \
-        --quest-header build/android-rc/generated/nevr_builtin_defaults.h \
-        --quest-build-info build/android-rc/generated/nevr_build_info.h
+    # Quest sentinel: its own build tree (build/android-dev), the same stamp, the default features.
+    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev \
+        -DNEVR_RC_LABEL=dev -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
+    objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so "{{ ks }}" build/android-dev/repack
+    python3 tools/package_rc.py --commit "$commit" --out "$out" \
+        --dll build/mingw-dev/bin/BugSplat64.dll \
+        --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
+        --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
+        --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
+        --quest-build-info build/android-dev/generated/nevr_build_info.h
 
 # Install the repacked Quest APK + game data onto the connected headset (sideload).
 # Pass `yes` (`just quest-install yes`) to allow removing the store build when the

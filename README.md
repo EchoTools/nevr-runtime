@@ -100,15 +100,18 @@ yet. On PC:
 
 1. **Sync the device clock first** (PC: Windows time sync; Quest: automatic time on), so
    PC and Quest logs line up afterwards.
-2. **Windows:** take `nevr-runtime-v4.0.0-rc.<N>-windows.zip` (built by `just package-rc <N>`),
+2. **Windows:** take `nevr-runtime-v4.0.0-rc.<N>-windows.zip` (the release candidate the CI builds from the tag `v4.0.0-rc.<N>`),
    close the game, unzip it, and run `install.ps1` from PowerShell
    (`powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`). It checks the package
    against `SHA256SUMS`, copies your original `BugSplat64.dll` to
    `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
    `dbgcore.dll.legacy-<date>` and installs the new file. It deletes nothing.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
-4. **Quest:** `adb install -r nevr-runtime-v4.0.0-rc.<N>-quest.apk`. It is signed with the same
-   key as earlier test builds, so it installs over them and keeps your data.
+4. **Quest:** the release candidate is the Windows zip only: the Quest APK repacks the store game and is
+   not part of the public set. Testers receive a development build
+   (`nevr-runtime-v4.0.0-dev-<sha>-quest.apk`, from `just package-dev`) privately; install it with
+   `adb install -r`. It is signed with the same key as earlier test builds, so it installs over them and
+   keeps your data.
 5. The Windows DLL is **unsigned**; Windows Defender or SmartScreen may warn about it.
 
 The community beta guide for a manual install is [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).

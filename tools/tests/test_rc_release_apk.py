@@ -54,10 +54,12 @@ class RcReleaseApkTest(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), str(self.tmp / "apk" / "nevr-runtime-v4.0.0-rc.1-quest.apk"))
         self.assertEqual(Path(result.stdout.strip()).read_bytes(), b"APK")
 
-    def test_a_release_that_lists_no_apk_fails(self):
-        result = self.run_script(FAKE_ASSETS="nevr-runtime-v4.0.0-rc.1-windows.zip\n")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("lists no *-quest.apk", result.stderr)
+    def test_a_release_that_lists_no_apk_is_a_zip_only_candidate(self):
+        result = self.run_script(FAKE_ASSETS="nevr-runtime-v4.0.0-rc.1-windows.zip\nSHA256SUMS\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("a zip-only release candidate", result.stderr)
+        self.assertFalse((self.tmp / "apk").exists())
 
     def test_a_failed_listing_fails_it_does_not_mean_no_apk(self):
         result = self.run_script(FAKE_ASSETS="", FAKE_VIEW_RC="1")
