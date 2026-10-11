@@ -646,6 +646,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
 
+    # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_party_share_check
+      tests/test_party_share_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_party_share_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_party_share_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_share_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
+
     # Legacy <-> current translator (compat/legacy_codec.cpp): platform neutral like evr_codec, so it builds
     # and runs on its own. It is not part of BugSplat64.dll until the legacy mode wires it in.
     find_package(ZLIB REQUIRED)
