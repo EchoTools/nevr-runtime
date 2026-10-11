@@ -31,8 +31,7 @@ inline DeregisterResourceOverridesFn g_fnDeregister = nullptr;
 inline ResetResourceOverridesFn g_fnReset = nullptr;
 
 // The modules that may export the override functions, in the order they are tried: the runtime's deployed
-// name (it masquerades as the game's crash reporter), then the legacy dbgcore.dll name. plugin_assets.h
-// resolves its exports from the same list in the same order.
+// name (it masquerades as the game's crash reporter), then the legacy dbgcore.dll name.
 inline constexpr const char* kResourceHostModules[] = {"BugSplat64.dll", "dbgcore.dll"};
 
 struct ResourceExports {
