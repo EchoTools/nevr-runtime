@@ -68,6 +68,7 @@ struct State {
   NevrHookPhase phase = NEVR_HOOK_PRE;
   bool skip = false;
   int call_object_ref = LUA_NOREF;
+  int thread_ref = LUA_NOREF;  // the script's sandboxed thread, kept alive
 
   std::vector<std::unique_ptr<CallbackRef>> callbacks;
 
@@ -433,20 +434,35 @@ int SetupThunk(lua_State* L) {
   lua_newuserdatataggedwithmetatable(L, sizeof(void*), kCallTag);
   s->call_object_ref = lua_ref(L, -1);
   lua_pop(L, 1);
+
+  // Upstream's sandbox, last: every library table and the globals table become
+  // read-only and the globals get `safeenv` (linit.cpp luaL_sandbox). The script
+  // itself runs in a thread made by luaL_sandboxthread (see ScriptThreadThunk).
+  luaL_sandbox(L);
   return 0;
 }
 
-struct RunChunk {
+struct ScriptThread {
+  State* state;
   const char* chunkname;  // "=mod.lua": '=' makes Luau use the rest verbatim
   const char* bytecode;
   size_t size;
+  lua_State* thread = nullptr;
+  int load_status = 0;  // luau_load's result: 0 loaded, else the message is on `thread`
 };
 
-// Loads the compiled chunk and runs it. An error leaves the message on the stack.
-int RunChunkThunk(lua_State* L) {
-  const RunChunk* c = static_cast<const RunChunk*>(lua_tolightuserdata(L, 1));
-  if (luau_load(L, c->chunkname, c->bytecode, c->size, 0) != 0) lua_error(L);
-  lua_call(L, 0, 0);
+// Makes the script's own thread with its own global table (luaL_sandboxthread:
+// a fresh globals table whose __index is the sandboxed main globals, so the
+// script's global writes land in its own table), anchors it in the registry and
+// loads the compiled chunk into it. Runs inside lua_cpcall.
+int ScriptThreadThunk(lua_State* L) {
+  ScriptThread* c = static_cast<ScriptThread*>(lua_tolightuserdata(L, 1));
+  lua_State* T = lua_newthread(L);
+  c->state->thread_ref = lua_ref(L, -1);
+  lua_pop(L, 1);
+  luaL_sandboxthread(T);
+  c->thread = T;
+  c->load_status = luau_load(T, c->chunkname, c->bytecode, c->size, 0);
   return 0;
 }
 
@@ -549,12 +565,22 @@ class LuauVm final : public ScriptVm {
     if (!bytecode) return Fail(s, chunkname + ": out of memory while compiling", error);
 
     const std::string luau_name = "=" + chunkname;
-    RunChunk run{luau_name.c_str(), bytecode, size};
-    s->BeginBudget();
-    const int status = lua_cpcall(s->L, RunChunkThunk, &run);
+    ScriptThread run{s, luau_name.c_str(), bytecode, size};
     std::string why;
-    if (status != LUA_OK) why = PopError(s->L);
-    s->EndBudget();
+    int status = lua_cpcall(s->L, ScriptThreadThunk, &run);
+    if (status != LUA_OK) {
+      why = PopError(s->L);
+    } else if (run.load_status != 0) {
+      status = LUA_ERRSYNTAX;
+      why = PopError(run.thread);
+    } else {
+      // lua_resume runs the chunk protected; an error leaves its message on the thread.
+      s->BeginBudget();
+      status = lua_resume(run.thread, nullptr, 0);
+      if (status == LUA_YIELD) status = LUA_OK;  // a top-level yield is not an error
+      if (status != LUA_OK) why = PopError(run.thread);
+      s->EndBudget();
+    }
     std::free(bytecode);
     ApplyBreach(s);
     if (status != LUA_OK) return Fail(s, why, error);
