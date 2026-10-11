@@ -214,7 +214,7 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 
 Operator rows: run on a dedicated game server (`echovr_server.exe` or `echovr.exe -server -headless -noconsole`). Nothing here is reachable by a player in the UI, so each row says how to trigger it.
 
-The dedicated game server does not reach bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)), so the rows from SV07 on cannot pass until that is fixed.
+A dedicated game server begins multiplayer after its login ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): its log shows `[NEVR.PATCH] server logged in — beginning multiplayer`, then `Beginning multiplayer` and the bring-up the rows from SV07 on check.
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
