@@ -8,6 +8,10 @@
 #include "scripting/memory_policy.h"
 #include "scripting/script_vm.h"
 
+namespace nevr_script {
+bool LuauTestThunksRefuseForeignArguments();  // luau_vm.cpp, NEVR_LUAU_TEST_HOOKS
+}  // namespace nevr_script
+
 namespace {
 
 using namespace nevr_script;
@@ -92,6 +96,48 @@ TEST(reentry_into_the_same_script_on_one_thread_is_refused) {
   }
   CHECK(refused);
   CHECK(!owner->disabled.load());
+}
+
+// A -> B -> A on one thread (re-check of #458): A's callback leads (through the
+// sink) to B's, and B's back to A's while A's lock is still held. The guard
+// must see every script running on the thread, not only the innermost.
+TEST(reentry_through_another_script_is_refused) {
+  std::vector<Captured> log;
+  Registry* reg_ptr = nullptr;
+  HookPoint* first = nullptr;
+  HookPoint* second = nullptr;
+  int depth = 0;
+  Registry reg([&](const LogRecord& r) {
+    log.push_back({r.event, r.detail});
+    if (std::string(r.event) != "owner_log" || depth >= 2) return;
+    ++depth;
+    NevrValue field{};
+    field.type = NEVR_VALUE_INT;
+    reg_ptr->Invoke(std::string(r.detail) == "a" ? second : first, &field, Original, nullptr);
+    --depth;
+  });
+  reg_ptr = &reg;
+  first = reg.RegisterHookPoint("test.a", {{"a", NEVR_VALUE_INT, true, true}});
+  second = reg.RegisterHookPoint("test.b", {{"a", NEVR_VALUE_INT, true, true}});
+  std::unique_ptr<ScriptVm> vm = CreateScriptVm(reg, VmLimits());
+  NevrOwner* a = reg.OpenOwner("script_a");
+  NevrOwner* b = reg.OpenOwner("script_b");
+  std::string error;
+  CHECK(vm->Load(a, "a.lua", "nevr.hook('test.a', {pre = function(h) nevr.log('info', 'a') end})\n", &error));
+  CHECK(vm->Load(b, "b.lua", "nevr.hook('test.b', {pre = function(h) nevr.log('info', 'b') end})\n", &error));
+  NevrValue field{};
+  field.type = NEVR_VALUE_INT;
+  reg.Invoke(first, &field, Original, nullptr);  // a -> (sink) b -> (sink) a: deadlocks without the guard
+  int refused = 0;
+  for (const Captured& c : log) refused += c.event == "callback_failed" && c.detail.find("re-entrant") != std::string::npos;
+  CHECK_EQ(refused, 1);
+}
+
+// The re-check of #458: with debug out of the surface, the reachable-functions
+// probe in the conformance suite returns at once, so the guard on the two setup
+// thunks needs its own test.
+TEST(setup_thunks_refuse_arguments_the_binding_did_not_pass) {
+  CHECK(LuauTestThunksRefuseForeignArguments());
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv, std::chrono::seconds(10)); }

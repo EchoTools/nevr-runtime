@@ -1094,7 +1094,7 @@ test-scripting:
     run_suite "$out/nevr_script_host_test.exe" 12
     run_suite "$out/nevr_script_stubs_test.exe" 3
     run_suite "$out/nevr_script_conformance.exe" 28
-    run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 2
+    run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 4
     # The two runaway probes report instead of asserting; each must end with the script stopped.
     dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
     dos=${dos//$'\r'/}

@@ -566,25 +566,38 @@ void ApplyBreach(State* s) {
   if (!s->breach.empty()) s->registry->DisableOwner(s->owner, s->breach);
 }
 
-// The state whose script code this thread is running (its lock held). A hook
-// point that calls the same script again on this thread, while it runs, is
-// refused: the lock is not recursive and the VM is mid-call.
-thread_local const State* t_running_state = nullptr;
+// Every state whose script code this thread is running (each one's lock held),
+// innermost last. A hook point that calls any of them again on this thread is
+// refused: its lock is not recursive and its VM is mid-call, whether it is the
+// innermost script (A -> A) or further out (A -> B -> A). Deeper nesting than
+// the list holds is refused too.
+constexpr int kMaxNestedScripts = 8;
+thread_local const State* t_running_states[kMaxNestedScripts];
+thread_local int t_running_depth = 0;
+
+bool RunningOnThisThread(const State* s) {
+  for (int i = 0; i < t_running_depth; ++i) {
+    if (t_running_states[i] == s) return true;
+  }
+  return false;
+}
 
 struct RunningState {
-  explicit RunningState(const State* s) : outer(t_running_state) { t_running_state = s; }
-  ~RunningState() { t_running_state = outer; }
+  explicit RunningState(const State* s) { t_running_states[t_running_depth++] = s; }
+  ~RunningState() { --t_running_depth; }
   RunningState(const RunningState&) = delete;
   RunningState& operator=(const RunningState&) = delete;
-  const State* outer;
 };
 
 NevrHookResult HookTrampoline(NevrHookCall* call, void* user) {
   const CallbackRef* ref = static_cast<const CallbackRef*>(user);
   State* s = ref->state;
   if (s->owner->disabled.load()) return NEVR_HOOK_CONTINUE;
-  if (t_running_state == s) {
+  if (RunningOnThisThread(s)) {
     return s->api->call_fail(call, "re-entrant call into this script on the thread already running it; refused");
+  }
+  if (t_running_depth >= kMaxNestedScripts) {
+    return s->api->call_fail(call, "scripts nested more than 8 deep on one thread; refused");
   }
   std::lock_guard<std::mutex> lock(s->mu);
   const RunningState running(s);
@@ -645,6 +658,7 @@ class LuauVm final : public ScriptVm {
       states_[owner] = std::move(state);
     }
 
+    if (t_running_depth >= kMaxNestedScripts) return Fail(s, chunkname + ": scripts nested more than 8 deep on one thread", error);
     std::lock_guard<std::mutex> lock(s->mu);
     const RunningState running(s);
     if (ProtectedCall(s->L, SetupThunk, s) != LUA_OK) {
@@ -722,6 +736,31 @@ class LuauVm final : public ScriptVm {
 };
 
 }  // namespace
+
+#if NEVR_LUAU_TEST_HOOKS
+// Test builds only (src/scripting/vm/luau/CMakeLists.txt NEVR_LUAU_TEST_HOOKS): calls
+// each lua_cpcall thunk as a script would if one were ever reachable again, with
+// no argument, nil, and a foreign light userdata. True when every call raised an
+// error instead of touching memory, which is what ThunkArg guarantees on its own.
+bool LuauTestThunksRefuseForeignArguments() {
+  lua_State* L = luaL_newstate();
+  if (!L) return false;
+  static int foreign = 0;
+  bool all_refused = true;
+  const lua_CFunction thunks[] = {SetupThunk, ScriptThreadThunk};
+  for (const lua_CFunction thunk : thunks) {
+    for (int variant = 0; variant < 3; ++variant) {
+      lua_pushcfunction(L, thunk, "thunk");
+      if (variant == 1) lua_pushnil(L);
+      if (variant == 2) lua_pushlightuserdata(L, &foreign);
+      all_refused = all_refused && lua_pcall(L, variant == 0 ? 0 : 1, 0, 0) != LUA_OK;
+      lua_settop(L, 0);
+    }
+  }
+  lua_close(L);
+  return all_refused;
+}
+#endif
 
 std::unique_ptr<ScriptVm> CreateScriptVm(Registry& registry, const VmLimits& limits) {
   return std::make_unique<LuauVm>(registry, limits);

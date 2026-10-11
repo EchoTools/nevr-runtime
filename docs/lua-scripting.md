@@ -131,8 +131,9 @@ pointer into the game. The runtime side is `src/scripting/host_registry.{h,cpp}`
   the runtime's `Log()`, a line gets an ISO8601 UTC time (`src/core/logging.cpp`); a thread id is not added
   anywhere yet.
 - **Re-entry is refused, not served.** While a script's code runs on a thread, a hook point that calls the same
-  script again on that thread fails that callback (`callback_failed`, "re-entrant"). It does not wait, because
-  the state's lock is not recursive.
+  script again on that thread fails that callback (`callback_failed`, "re-entrant"). That holds whether the
+  script is the innermost one (A to A) or further out (A to B to A). It does not wait, because each state's lock
+  is not recursive. Scripts nested more than 8 deep on one thread are refused as well.
 - **Reload is dev-only.** Hot reload, including bringing back a script that was disabled for a limit breach,
   happens only in dev builds. In a normal build a breached script stays off until the game restarts.
 
