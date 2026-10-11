@@ -2,6 +2,7 @@
 // budget hook? Prints one JSON-ish line per case. Not part of the contract and not run by CI.
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
 #include <string>
 
 #include "scripting/vm/luajit/luajit_vm.h"
@@ -50,13 +51,16 @@ void RunCase(const char* label, bool budget_hook, const char* body, uint32_t mil
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
   // 20M additions: long enough for the JIT to compile the loop, short enough to finish interpreted.
   const char* kHot = "local x = 0\nfor i = 1, 20000000 do x = x + i % 7 end\nh:set('result', x)";
   RunCase("hot loop, budget hook on ", true, kHot, 60000);
   RunCase("hot loop, budget hook off", false, kHot, 60000);
-  const char* kSpin = "while true do end";
-  RunCase("while true do end, hook on ", true, kSpin, 200);
+  // `probe spin` also runs the endless loop, which only a build that can interrupt compiled code survives.
+  if (argc > 1 && std::string(argv[1]) == "spin") {
+    RunCase("while true do end, hook on ", true, "while true do end", 200);
+  }
   // No "hook off" spin case: without a hook (or the watchdog build) nothing can stop it.
   return 0;
 }

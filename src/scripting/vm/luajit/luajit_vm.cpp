@@ -34,7 +34,7 @@ namespace nevr_script {
 namespace {
 
 // Bytecodes between two calls of the budget hook.
-constexpr int kStride = 1000;
+[[maybe_unused]] constexpr int kStride = 1000;
 
 struct Ctx;
 NevrHookResult Trampoline(NevrHookCall* call, void* user);
@@ -57,6 +57,10 @@ struct Ctx {
   VmLimits limits;
   NevrOwner* owner = nullptr;
   lua_State* L = nullptr;
+  // Upstream's own allocator (see Alloc), borrowed from a throwaway state that lives as long as L.
+  lua_State* allocator_state = nullptr;
+  lua_Alloc inner = nullptr;
+  void* inner_ud = nullptr;
   std::recursive_mutex mu;  // a state is not thread safe; hook points may fire on any game thread
 
   // Allocator accounting.
@@ -89,12 +93,17 @@ Ctx* CtxOf(lua_State* L) {
 }
 
 // ---- allocator: the per-state memory cap ------------------------------------------------------
+// The cap wraps upstream's own allocator (lj_alloc.c) rather than malloc. A LJ_GC64 state keeps
+// object addresses in 47 bits (lj_def.h checkptr47, checked in lj_state.c lua_newstate), and a
+// malloc that tags pointers (Android arm64 heap tagging: 0xb4... under qemu) breaks that, while
+// lj_alloc.c maps its own untagged memory. luaL_newstate() is the only public way to reach it
+// (lib_aux.c luaL_newstate, LJ_ALLOCF_INTERNAL), so a throwaway state supplies allocf and ud.
 
 void* Alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
   Ctx* c = static_cast<Ctx*>(ud);
   const size_t old = ptr ? osize : 0;  // osize is a type tag when ptr is null
   if (nsize == 0) {
-    std::free(ptr);
+    c->inner(c->inner_ud, ptr, osize, 0);
     c->mem_used -= old;
     return nullptr;
   }
@@ -102,7 +111,7 @@ void* Alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     c->mem_refused = true;
     return nullptr;
   }
-  void* block = std::realloc(ptr, nsize);
+  void* block = c->inner(c->inner_ud, ptr, osize, nsize);
   if (!block) {
     c->mem_refused = true;
     return nullptr;
@@ -620,7 +629,9 @@ class LuajitVm final : public ScriptVm {
       live_[owner] = std::move(ctx);
     }
     std::lock_guard<std::recursive_mutex> lock(c->mu);
-    c->L = lua_newstate(Alloc, c);
+    c->allocator_state = luaL_newstate();
+    if (c->allocator_state) c->inner = lua_getallocf(c->allocator_state, &c->inner_ud);
+    c->L = c->allocator_state ? lua_newstate(Alloc, c) : nullptr;
     if (!c->L) {
       registry_.DisableOwner(owner, MemoryReason(c));
       Fail(error, chunkname, "not enough memory to create the state");
@@ -685,7 +696,7 @@ class LuajitVm final : public ScriptVm {
         "local jit, loader = ...\n"
         "local util = loader()\n"
         "local n = 0\n"
-        "for i = 1, 1000 do if pcall(util.traceinfo, i) then n = n + 1 end end\n"
+        "for i = 1, 1000 do local ok, info = pcall(util.traceinfo, i) if ok and info then n = n + 1 end end\n"
         "return (jit.status()), n\n";
     if (luaL_loadbuffer(L, kScript, sizeof(kScript) - 1, "=inspect") != 0) {
       out.error = lua_tostring(L, -1);
@@ -719,6 +730,10 @@ class LuajitVm final : public ScriptVm {
     if (c->L) {
       lua_close(c->L);
       c->L = nullptr;
+    }
+    if (c->allocator_state) {
+      lua_close(c->allocator_state);
+      c->allocator_state = nullptr;
     }
   }
 

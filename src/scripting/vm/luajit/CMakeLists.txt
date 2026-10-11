@@ -33,7 +33,8 @@ set(LJ_ARGS -DLJ_SRC=${LJ_SRC} -DLJ_OUT=${NEVR_LUAJIT_BUILD_DIR} -DLJ_JOBS=6
             -DLJ_HOST_CC=${LJ_HOST_CC} -DLJ_RELVER=${LJ_RELVER} "-DLJ_XCFLAGS=${LJ_XCFLAGS}")
 if(ANDROID)
   get_filename_component(LJ_NDK_BIN "${CMAKE_C_COMPILER}" DIRECTORY)
-  set(LJ_NDK_CC "${LJ_NDK_BIN}/aarch64-linux-android${CMAKE_SYSTEM_VERSION}-clang")
+  string(REGEX REPLACE "^android-" "" LJ_API "${ANDROID_PLATFORM}")
+  set(LJ_NDK_CC "${LJ_NDK_BIN}/aarch64-linux-android${LJ_API}-clang")
   list(APPEND LJ_ARGS -DLJ_FLAVOUR=android -DLJ_NDK_BIN=${LJ_NDK_BIN} -DLJ_NDK_CC=${LJ_NDK_CC})
 elseif(MINGW OR WIN32)
   # CMAKE_C_COMPILER is <prefix>gcc; upstream wants the prefix (CROSS=).
@@ -56,6 +57,10 @@ add_custom_target(luajit_lib DEPENDS "${LJ_LIB}")
 
 add_library(luajit_imported STATIC IMPORTED GLOBAL)
 set_target_properties(luajit_imported PROPERTIES IMPORTED_LOCATION "${LJ_LIB}")
+if(ANDROID)
+  # lj_clib.c (FFI library loading) and lib_package.c call dlopen/dlsym; the scripts never reach them.
+  set_target_properties(luajit_imported PROPERTIES INTERFACE_LINK_LIBRARIES dl)
+endif()
 add_dependencies(luajit_imported luajit_lib)
 
 add_library(nevr_script_vm STATIC luajit_vm.cpp)
