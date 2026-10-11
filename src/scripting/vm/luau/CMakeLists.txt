@@ -116,6 +116,19 @@ target_compile_definitions(nevr_luau_vm PUBLIC LUA_USE_LONGJMP=1 "LUA_API=extern
 target_compile_options(nevr_luau_vm PRIVATE -fno-exceptions -fno-math-errno)
 target_link_libraries(nevr_luau_vm PUBLIC nevr_luau_common)
 
+# Two modes of the binding, chosen at build time only: no script and no config can
+# switch them.
+#   ON (default)  one lua_State for the VM; each script in its own luaL_sandboxthread
+#                 thread and its own memory category (lua_setmemcat). Also builds
+#                 nevr_luau_shared_test (src/scripting/CMakeLists.txt).
+#   OFF           one lua_State per script: for debugging a script in isolation.
+option(NEVR_LUAU_SHARED_STATE "Luau binding: one shared lua_State, one memory category per script" ON)
+if(NEVR_LUAU_SHARED_STATE)
+  set(NEVR_LUAU_SHARED_STATE_VALUE 1)
+else()
+  set(NEVR_LUAU_SHARED_STATE_VALUE 0)
+endif()
+
 add_library(nevr_script_vm STATIC luau_vm.cpp)
 
 # Test-only entry points (LuauTestThunksRefuseForeignArguments). The spike build
@@ -128,5 +141,5 @@ nevr_script_test(nevr_luau_memory_test tests/luau_memory_test.cpp)
 target_link_libraries(nevr_luau_memory_test PRIVATE nevr_script_vm nevr_script_host)
 target_link_libraries(nevr_script_vm PUBLIC nevr_script_host
                       PRIVATE nevr_luau_compiler nevr_luau_vm)
-target_compile_definitions(nevr_script_vm PRIVATE "NEVR_LUAU_TAG=\"${NEVR_LUAU_TAG}\"")
+target_compile_definitions(nevr_script_vm PRIVATE "NEVR_LUAU_TAG=\"${NEVR_LUAU_TAG}\"" "NEVR_LUAU_SHARED_STATE=${NEVR_LUAU_SHARED_STATE_VALUE}")
 target_compile_options(nevr_script_vm PRIVATE ${NEVR_WARNINGS} -fno-exceptions)

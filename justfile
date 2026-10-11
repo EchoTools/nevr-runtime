@@ -1065,11 +1065,7 @@ test-scripting:
         echo "test-scripting: FAIL — extern/luau is empty; run: git submodule update --init extern/luau" >&2
         exit 1
     fi
-    out="$PWD/build/scripting-mingw"
-    cmake -S src/scripting -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-mingw64.cmake" \
-        -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" > /dev/null
-    cmake --build "$out"
-    export NEVR_TEST_TMPDIR="$out/tmp"
+    export NEVR_TEST_TMPDIR="$PWD/build/scripting-mingw-shared/tmp"
     mkdir -p "$NEVR_TEST_TMPDIR"
     # One test executable under wine: it must exit 0, print "<n> tests, 0 failed checks" and run at least
     # the floor, so a test that silently stops being registered fails the gate.
@@ -1088,29 +1084,43 @@ test-scripting:
             echo "test-scripting: FAIL — $1: exit $rc, $n tests (floor $2), $failed failed checks" >&2
             exit 1
         fi
-        echo "test-scripting: $(basename "$1"): $n tests, 0 failed checks"
+        echo "test-scripting: [$mode] $(basename "$1"): $n tests, 0 failed checks"
     }
-    run_suite "$out/nevr_script_registry_test.exe" 19
-    run_suite "$out/nevr_script_host_test.exe" 12
-    run_suite "$out/nevr_script_stubs_test.exe" 3
-    run_suite "$out/nevr_script_conformance.exe" 28
-    run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 4
-    # The two runaway probes report instead of asserting; each must end with the script stopped.
-    dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
-    dos=${dos//$'\r'/}
-    if ! grep -qE '^T5d pattern_dos: returned after .* owner disabled$' <<<"$dos"; then
-        printf '%s\n' "$dos" >&2
-        echo "test-scripting: FAIL — a runaway inside string.find was not stopped" >&2
-        exit 1
-    fi
-    dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --gc-dos 2>&1)
-    dos=${dos//$'\r'/}
-    if ! grep -qE '^T5e gc_dos: returned after ' <<<"$dos"; then
-        printf '%s\n' "$dos" >&2
-        echo "test-scripting: FAIL — a looping finalizer was not stopped" >&2
-        exit 1
-    fi
-    echo "test-scripting: --pattern-dos and --gc-dos stopped"
+    # Both modes of the Luau binding: the shared state (the default) and one state per script (for
+    # debugging, NEVR_LUAU_SHARED_STATE=OFF). Neither may rot.
+    for mode in shared pervm; do
+        out="$PWD/build/scripting-mingw-$mode"
+        flag=ON
+        [[ "$mode" == pervm ]] && flag=OFF
+        cmake -S src/scripting -B "$out" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-mingw64.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DNEVR_SCRIPT_VM=luau -DNEVR_JSON_INCLUDE_DIR="$json" \
+            -DNEVR_LUAU_SHARED_STATE="$flag" > /dev/null
+        cmake --build "$out"
+        run_suite "$out/nevr_script_registry_test.exe" 19
+        run_suite "$out/nevr_script_host_test.exe" 12
+        run_suite "$out/nevr_script_stubs_test.exe" 3
+        run_suite "$out/nevr_script_conformance.exe" 28
+        run_suite "$out/vm/luau/nevr_luau_memory_test.exe" 4
+        if [[ "$mode" == shared ]]; then
+            run_suite "$out/nevr_luau_shared_test.exe" 7
+        fi
+        # The two runaway probes report instead of asserting; each must end with the script stopped.
+        dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --pattern-dos 2>&1)
+        dos=${dos//$'\r'/}
+        if ! grep -qE '^T5d pattern_dos: returned after .* owner disabled$' <<<"$dos"; then
+            printf '%s\n' "$dos" >&2
+            echo "test-scripting: FAIL — [$mode] a runaway inside string.find was not stopped" >&2
+            exit 1
+        fi
+        dos=$(WINEDEBUG=-all timeout -k 10 120 wine "$out/nevr_script_conformance.exe" --gc-dos 2>&1)
+        dos=${dos//$'\r'/}
+        if ! grep -qE '^T5e gc_dos: returned after ' <<<"$dos"; then
+            printf '%s\n' "$dos" >&2
+            echo "test-scripting: FAIL — [$mode] a looping finalizer was not stopped" >&2
+            exit 1
+        fi
+        echo "test-scripting: [$mode] --pattern-dos and --gc-dos stopped"
+    done
     # The author-side checker: the definitions come from a host build of the stubs generator.
     host="$PWD/build/scripting-host"
     mkdir -p "$host"
