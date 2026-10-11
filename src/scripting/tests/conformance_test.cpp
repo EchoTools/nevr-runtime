@@ -57,7 +57,8 @@ struct Host {
       "test.add", {{"a", NEVR_VALUE_INT, true, false},
                    {"b", NEVR_VALUE_INT, true, false},
                    {"result", NEVR_VALUE_INT, true, true}});
-  HookPoint* big = reg.RegisterHookPoint("test.big", {{"v", NEVR_VALUE_INT, true, true}});
+  HookPoint* big = reg.RegisterHookPoint("test.big", {{"v", NEVR_VALUE_INT, true, true},
+                                                     {"f", NEVR_VALUE_FLOAT, true, true}});
   std::unique_ptr<ScriptVm> vm;
 
   // The override points the scripts below use, as the runtime would register them.
@@ -72,12 +73,15 @@ struct Host {
   }
 
   // Invokes test.big(v) and returns v as the callbacks left it.
-  int64_t Big(int64_t v) {
-    NevrValue field{};
-    field.type = NEVR_VALUE_INT;
-    field.as.i = v;
-    reg.Invoke(big, &field, [](NevrValue*, void*) {}, nullptr);
-    return field.as.i;
+  int64_t Big(int64_t v, double* f_out = nullptr) {
+    NevrValue fields[2] = {};
+    fields[0].type = NEVR_VALUE_INT;
+    fields[0].as.i = v;
+    fields[1].type = NEVR_VALUE_FLOAT;
+    fields[1].as.f = 1.5;
+    reg.Invoke(big, fields, [](NevrValue*, void*) {}, nullptr);
+    if (f_out) *f_out = fields[1].as.f;
+    return fields[0].as.i;
   }
 
   int64_t Add(int64_t a, int64_t b) {
@@ -254,6 +258,23 @@ TEST(t3_script_number_too_large_for_an_exact_integer_is_refused) {
   if (out == 7) CHECK(h.Find("callback_failed", "mod_a") != nullptr);
 }
 
+// Spritz's decision on #458: no NaN or infinity reaches a FLOAT game field or
+// key; the script gets an error naming its line.
+TEST(t3_non_finite_numbers_are_refused_with_the_script_line) {
+  Host h;
+  std::string error;
+  h.Load("nan_key.lua", "local x = 1\nnevr.override('physics.gravity', 0/0)\n", false, &error);
+  CHECK(Contains(error, "nan_key.lua:2:"));
+  h.Load("inf_key.lua", "nevr.override('physics.gravity', math.huge)\n", false, &error);
+  CHECK(Contains(error, "inf_key.lua:1:"));
+  h.Load("mod_a.lua", "nevr.hook('test.big', {pre = function(h)\n  h:set('f', -math.huge)\nend})\n");
+  double f = 0;
+  h.Big(1, &f);
+  CHECK(f == 1.5);  // unchanged
+  const Captured* c = h.Find("callback_failed", "mod_a");
+  CHECK(c && Contains(c->detail, "mod_a.lua:2:"));
+}
+
 // ---- T4 errors are contained ----------------------------------------------------------------
 
 TEST(t4_callback_error_is_contained_with_chunk_and_line) {
@@ -345,6 +366,22 @@ TEST(t5_runaway_caught_by_pcall_is_still_stopped) {
   ExpectStoppedAndDisabled(h, a, MsSince(t0));
 }
 
+TEST(t5_yield_loop_cannot_escape_the_budget) {
+  Host h;
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "nevr.hook('test.add', {pre = function(h)\n"
+                        "  local co = coroutine.wrap(function() while true do coroutine.yield() end end)\n"
+                        "  while true do co() end\n"
+                        "end})\n");
+  const auto t0 = std::chrono::steady_clock::now();
+  CHECK_EQ(h.Add(2, 3), 5);
+  ExpectStoppedAndDisabled(h, a, MsSince(t0));
+  NevrOwner* b = h.Load("mod_b.lua",
+                        "local co = coroutine.wrap(function() while true do coroutine.yield() end end)\n"
+                        "while true do co() end\n", false);
+  ExpectStoppedAndDisabled(h, b, 0);
+}
+
 // ---- T6 sandbox -----------------------------------------------------------------------------
 // Each probe sets the override "escape" only if it reached what it must not.
 // The control probe proves the sensor works.
@@ -386,6 +423,70 @@ TEST(t6_sandbox_refuses_every_probe) {
                 escaped == control ? (control ? "sensor works" : "refused") : "ESCAPED / sensor broken");
     if (escaped != control) ++mini_test::Failures();
   }
+}
+
+// A script may reach any function on its call stack through debug.info(level,
+// "f") (where the VM has it). Whatever the binding put there must be harmless to
+// call with any arguments: the verification of #458 found the binding's callback
+// thunk reachable this way, and calling it with no argument crashed the host.
+TEST(t6_functions_reachable_on_the_stack_are_harmless) {
+  const char* walk =
+      "local function poke()\n"
+      "  if debug == nil or debug.info == nil then return end\n"
+      "  local self = debug.info(1, 'f')\n"
+      "  for level = 2, 30 do\n"
+      "    local f = debug.info(level, 'f')\n"
+      "    if f == nil then break end\n"
+      "    local src = debug.info(level, 's')\n"
+      "    if f ~= self and (src == '[C]' or src == '=[C]') then\n"
+      "      pcall(f)\n"
+      "      pcall(f, 1)\n"
+      "      pcall(f, 'x', {})\n"
+      "    end\n"
+      "  end\n"
+      "end\n";
+  Host h;
+  h.Load("mod_a.lua", std::string(walk) + "poke()\nnevr.hook('test.add', {pre = function(h) poke() end, post = function(h) poke() end})\n");
+  h.Add(2, 3);
+  h.Add(2, 3);
+  CHECK(true);  // reaching here is the test: the host process survived
+}
+
+// Spritz's surface decision on #458: no debug library, os only clock/time/date.
+// Every global a script can see must be on this list (script_vm.h "Sandbox").
+TEST(t6_globals_are_only_the_contract_surface) {
+  Host h;
+  NevrOwner* a = h.Load("mod_a.lua",
+                        "local names = {}\n"
+                        "for k in pairs(_G) do names[#names + 1] = tostring(k) end\n"
+                        "table.sort(names)\n"
+                        "local os_names = {}\n"
+                        "if os then for k in pairs(os) do os_names[#os_names + 1] = tostring(k) end end\n"
+                        "table.sort(os_names)\n"
+                        "nevr.override('mod_a.err', table.concat(names, ' ') .. ' | os: ' .. table.concat(os_names, ' '))\n");
+  NevrValue v{};
+  CHECK_EQ(h.api->override_get(a, "mod_a.err", &v), NEVR_OK);
+  const std::string seen = v.type == NEVR_VALUE_STRING ? v.as.s : "";
+  const std::string globals = seen.substr(0, seen.find(" | os: "));
+  const std::string os_part = seen.find(" | os: ") == std::string::npos ? "" : seen.substr(seen.find(" | os: ") + 7);
+  static const char* const kAllowed[] = {
+      "_G", "_VERSION", "assert", "collectgarbage", "coroutine", "error", "getmetatable", "ipairs", "math",
+      "nevr", "next", "os", "pairs", "pcall", "print", "rawequal", "rawget", "rawlen", "rawset", "select",
+      "setmetatable", "string", "table", "tonumber", "tostring", "type", "typeof", "unpack", "utf8", "xpcall"};
+  std::string offenders;
+  size_t start = 0;
+  while (start < globals.size()) {
+    const size_t end = globals.find(' ', start);
+    const std::string name = globals.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    bool ok = false;
+    for (const char* allowed : kAllowed) ok = ok || name == allowed;
+    if (!ok && !name.empty()) offenders += name + " ";
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  std::printf("  globals: %s\n  os: %s\n", globals.c_str(), os_part.c_str());
+  CHECK_EQ(offenders, std::string());
+  CHECK(os_part == "" || os_part == "clock date time");
 }
 
 TEST(t6_globals_are_per_script) {

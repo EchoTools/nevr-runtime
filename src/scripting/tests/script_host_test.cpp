@@ -1,7 +1,8 @@
 // Unit tests for script manifests (script_manifest.h), manifest enforcement in
 // the registry, and the script host's loading and dev reload (script_host.h).
 // A fake VM stands in for a real binding: after the manifest block it reads
-// lines of the form `override <key> <int>`, `hook <name>` and `fail`.
+// lines of the form `override <key> <int>`, `hook <name>`, `fail` and `breach`
+// (disables its owner, as a binding does on a limit breach).
 #include "scripting/script_host.h"
 
 #include <chrono>
@@ -52,6 +53,8 @@ class FakeVm final : public ScriptVm {
         last_status[owner->name] = reg_.Api()->override_set(owner, name.c_str(), &v);
       } else if (op == "hook") {
         last_status[owner->name] = reg_.Api()->hook_add(owner, name.c_str(), NEVR_HOOK_PRE, Noop, nullptr);
+      } else if (op == "breach") {
+        reg_.DisableOwner(owner, "instruction budget exceeded");
       } else if (op == "fail") {
         *error = chunk + ":" + std::to_string(n) + ": failed on purpose";
         return false;
@@ -323,6 +326,39 @@ TEST(reload_whose_top_level_fails_leaves_the_script_inert) {
   const Captured* c = env.Find("reload_failed", "a.lua");
   CHECK(c && Contains(c->detail, "a.lua:5: failed on purpose") && Contains(c->detail, "inert"));
   CHECK_EQ(env.vm.unquiesced_unloads, 0);
+}
+
+// Spritz, on #458: reloading re-enables a breached script in dev builds only
+// (reloading means the author changed it); in a normal build a breached script
+// stays off until the game restarts.
+TEST(breached_script_comes_back_on_reload_only_in_dev_builds) {
+  for (const bool dev : {true, false}) {
+    Env env(dev ? "breach_dev" : "breach_normal");
+    ScriptHost host(env.reg, env.vm, dev);
+    const std::string a = env.Write("a.lua", Manifest("mod_a", ", \"overrides\": [\"k\"]") + "override k 1\nbreach\n");
+    CHECK_EQ(host.LoadAll({a}), 1);
+    NevrOwner* owner = env.reg.FindOwner("mod_a");
+    CHECK(owner && owner->disabled.load());
+    env.Write("a.lua", Manifest("mod_a", ", \"overrides\": [\"k\"]") + "override k 2\n");
+    host.PollReload();
+    int64_t v = 0;
+    if (dev) {
+      CHECK(!owner->disabled.load());
+      CHECK(env.Effective("k", &v) && v == 2);
+    } else {
+      CHECK(owner->disabled.load());
+      CHECK(!env.Effective("k", &v));
+    }
+  }
+}
+
+// script_loaded is the record an operator searches to see what ran (review of #458).
+TEST(script_loaded_is_recorded_with_the_manifest) {
+  Env env("loaded_record");
+  ScriptHost host(env.reg, env.vm, false);
+  host.LoadAll({env.Write("a.lua", Manifest("mod_a", ", \"overrides\": [\"k\"]") + "override k 1\n")});
+  const Captured* c = env.Find("script_loaded", "a.lua");
+  CHECK(c && c->owner == "mod_a" && Contains(c->detail, "\"name\":\"mod_a\"") && Contains(c->detail, "\"overrides\":[\"k\"]"));
 }
 
 TEST(no_reload_outside_dev_builds) {

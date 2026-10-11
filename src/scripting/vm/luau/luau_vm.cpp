@@ -4,8 +4,9 @@
 // longjmp, never a C++ exception. Every function below that can raise an error
 // (anything that calls a lua_* or luaL_* function that allocates) therefore
 // keeps no object with a destructor alive across such a call. All work that
-// touches the VM from C++ runs inside lua_cpcall, so an error can never reach
-// the VM's unprotected-error path.
+// touches the VM from C++ runs inside lua_cpcall (setup) or lua_pcall (each
+// callback, called directly), so an error can never reach the VM's
+// unprotected-error path.
 //
 // Limits (script_vm.h): one lua_State per owner, with
 //   - a safepoint and wall-clock budget checked from lua_callbacks()->interrupt,
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -190,6 +192,7 @@ int NevrOverride(lua_State* L) {
     case LUA_TNUMBER:
       v.type = NEVR_VALUE_FLOAT;
       v.as.f = lua_tonumber(L, 2);
+      if (!std::isfinite(v.as.f)) luaL_error(L, "NEVR_ERR_INVALID_ARG: nevr.override('%s'): the value is not a finite number", key);
       break;
     case LUA_TSTRING:
       v.type = NEVR_VALUE_STRING;
@@ -340,6 +343,11 @@ int CallSet(lua_State* L) {
       // number, or one past ±2^53, for an INT field (host_registry.cpp CoerceTo).
       v.type = NEVR_VALUE_FLOAT;
       v.as.f = lua_tonumber(L, 3);
+      // No NaN or infinity into a game field (Spritz, on #458).
+      if (!std::isfinite(v.as.f)) {
+        luaL_error(L, "NEVR_ERR_INVALID_ARG: h:set('%s') on hook '%s': the value is not a finite number", field,
+                   s->api->call_hook_name(call));
+      }
       break;
     case LUA_TSTRING:
       v.type = NEVR_VALUE_STRING;
@@ -377,9 +385,31 @@ void DropGlobal(lua_State* L, const char* name) {
   lua_setglobal(L, name);
 }
 
+// The argument the binding is about to hand a lua_cpcall thunk. A thunk refuses
+// any other: once on a stack, a C function can be reached and called by script
+// code with arguments of its choosing (the verification of #458 crashed the host
+// this way through debug.info). Scripts no longer see debug, and callbacks are
+// called without a thunk; this keeps the remaining two harmless regardless.
+thread_local const void* t_thunk_arg = nullptr;
+
+template <class T>
+T* ThunkArg(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TLIGHTUSERDATA || lua_tolightuserdata(L, 1) != t_thunk_arg || !t_thunk_arg) {
+    luaL_error(L, "this function is internal to the host and cannot be called from a script");
+  }
+  return static_cast<T*>(lua_tolightuserdata(L, 1));
+}
+
+int ProtectedCall(lua_State* L, lua_CFunction thunk, void* arg) {
+  t_thunk_arg = arg;
+  const int status = lua_cpcall(L, thunk, arg);
+  t_thunk_arg = nullptr;
+  return status;
+}
+
 // Builds the sandboxed environment. Runs inside lua_cpcall; `ud` is the State.
 int SetupThunk(lua_State* L) {
-  State* s = static_cast<State*>(lua_tolightuserdata(L, 1));
+  State* s = ThunkArg<State>(L);
 
   // Whitelist: only the libraries script_vm.h names. luaL_openlibs would also
   // open bit32, buffer, vector and integer, which the contract does not offer.
@@ -389,8 +419,13 @@ int SetupThunk(lua_State* L) {
   OpenLib(L, LUA_OSLIBNAME, luaopen_os);
   OpenLib(L, LUA_STRLIBNAME, luaopen_string);
   OpenLib(L, LUA_MATHLIBNAME, luaopen_math);
-  OpenLib(L, LUA_DBLIBNAME, luaopen_debug);
   OpenLib(L, LUA_UTF8LIBNAME, luaopen_utf8);
+  // No debug library (Spritz, on #458): introspection reached host internals,
+  // and errors already carry chunk:line. os keeps clock, date and time only.
+  lua_getglobal(L, LUA_OSLIBNAME);
+  lua_pushnil(L);
+  lua_setfield(L, -2, "difftime");
+  lua_pop(L, 1);
 
   // What Luau's base library still exposes beyond script_vm.h's list.
   DropGlobal(L, "getfenv");
@@ -470,26 +505,13 @@ struct ScriptThread {
 // script's global writes land in its own table), anchors it in the registry and
 // loads the compiled chunk into it. Runs inside lua_cpcall.
 int ScriptThreadThunk(lua_State* L) {
-  ScriptThread* c = static_cast<ScriptThread*>(lua_tolightuserdata(L, 1));
+  ScriptThread* c = ThunkArg<ScriptThread>(L);
   lua_State* T = lua_newthread(L);
   c->state->thread_ref = lua_ref(L, -1);
   lua_pop(L, 1);
   luaL_sandboxthread(T);
   c->thread = T;
   c->load_status = luau_load(T, c->chunkname, c->bytecode, c->size, 0);
-  return 0;
-}
-
-struct RunCallback {
-  State* state;
-  const CallbackRef* ref;
-};
-
-int RunCallbackThunk(lua_State* L) {
-  const RunCallback* c = static_cast<const RunCallback*>(lua_tolightuserdata(L, 1));
-  lua_getref(L, c->ref->ref);
-  lua_getref(L, c->state->call_object_ref);
-  lua_call(L, 1, 0);
   return 0;
 }
 
@@ -544,18 +566,40 @@ void ApplyBreach(State* s) {
   if (!s->breach.empty()) s->registry->DisableOwner(s->owner, s->breach);
 }
 
+// The state whose script code this thread is running (its lock held). A hook
+// point that calls the same script again on this thread, while it runs, is
+// refused: the lock is not recursive and the VM is mid-call.
+thread_local const State* t_running_state = nullptr;
+
+struct RunningState {
+  explicit RunningState(const State* s) : outer(t_running_state) { t_running_state = s; }
+  ~RunningState() { t_running_state = outer; }
+  RunningState(const RunningState&) = delete;
+  RunningState& operator=(const RunningState&) = delete;
+  const State* outer;
+};
+
 NevrHookResult HookTrampoline(NevrHookCall* call, void* user) {
   const CallbackRef* ref = static_cast<const CallbackRef*>(user);
   State* s = ref->state;
   if (s->owner->disabled.load()) return NEVR_HOOK_CONTINUE;
+  if (t_running_state == s) {
+    return s->api->call_fail(call, "re-entrant call into this script on the thread already running it; refused");
+  }
   std::lock_guard<std::mutex> lock(s->mu);
+  const RunningState running(s);
   s->call = call;
   s->phase = ref->phase;
   s->skip = false;
   s->BeginBudget();
-  RunCallback run{s, ref};
   const int base = lua_gettop(s->L);
-  const int status = lua_cpcall(s->L, RunCallbackThunk, &run);
+  // The callback and h are pushed and called directly: no C function of ours
+  // sits on the stack under the script. Pushing two values needs no allocation
+  // (an idle state keeps LUA_MINSTACK free slots), so nothing here can raise
+  // outside the protected call.
+  lua_getref(s->L, ref->ref);
+  lua_getref(s->L, s->call_object_ref);
+  const int status = lua_pcall(s->L, 1, 0, 0);
   std::string error;
   if (status != LUA_OK) error = PopError(s->L);
   lua_settop(s->L, base);
@@ -602,7 +646,8 @@ class LuauVm final : public ScriptVm {
     }
 
     std::lock_guard<std::mutex> lock(s->mu);
-    if (lua_cpcall(s->L, SetupThunk, s) != LUA_OK) {
+    const RunningState running(s);
+    if (ProtectedCall(s->L, SetupThunk, s) != LUA_OK) {
       const std::string why = PopError(s->L);
       ApplyBreach(s);
       return Fail(s, chunkname + ": " + why, error);
@@ -618,7 +663,7 @@ class LuauVm final : public ScriptVm {
     const std::string luau_name = "=" + chunkname;
     ScriptThread run{s, luau_name.c_str(), bytecode, size};
     std::string why;
-    int status = lua_cpcall(s->L, ScriptThreadThunk, &run);
+    int status = ProtectedCall(s->L, ScriptThreadThunk, &run);
     if (status != LUA_OK) {
       why = PopError(s->L);
     } else if (run.load_status != 0) {

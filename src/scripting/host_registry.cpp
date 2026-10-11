@@ -1,6 +1,7 @@
 #include "scripting/host_registry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -36,8 +37,8 @@ bool ValidValue(const NevrValue* v) {
   if (!v) return false;
   switch (v->type) {
     case NEVR_VALUE_BOOL:
-    case NEVR_VALUE_INT:
-    case NEVR_VALUE_FLOAT: return true;
+    case NEVR_VALUE_INT: return true;
+    case NEVR_VALUE_FLOAT: return std::isfinite(v->as.f);  // no NaN or infinity into a game value
     case NEVR_VALUE_STRING: return v->as.s != nullptr;
     default: return false;
   }

@@ -58,4 +58,40 @@ TEST(cap_reached_on_three_calls_in_a_row_disables) {
   CHECK(disabled && disabled->detail.find(CapVerdictReason(CapVerdict::kRepeated)) != std::string::npos);
 }
 
-int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
+// Same-thread re-entry (verification of #458): while a script's callback runs,
+// something on the same thread invokes a hook point that calls the same script
+// again (here the log sink does). The state's lock is not recursive, so the
+// binding must refuse the inner call instead of waiting on itself.
+TEST(reentry_into_the_same_script_on_one_thread_is_refused) {
+  std::vector<Captured> log;
+  Registry* reg_ptr = nullptr;
+  HookPoint* point = nullptr;
+  int depth = 0;
+  Registry reg([&](const LogRecord& r) {
+    log.push_back({r.event, r.detail});
+    if (std::string(r.event) == "owner_log" && depth == 0) {
+      ++depth;
+      NevrValue field{};
+      field.type = NEVR_VALUE_INT;
+      reg_ptr->Invoke(point, &field, Original, nullptr);
+      --depth;
+    }
+  });
+  reg_ptr = &reg;
+  point = reg.RegisterHookPoint("test.a", {{"a", NEVR_VALUE_INT, true, true}});
+  std::unique_ptr<ScriptVm> vm = CreateScriptVm(reg, VmLimits());
+  NevrOwner* owner = reg.OpenOwner("reenter");
+  std::string error;
+  CHECK(vm->Load(owner, "reenter.lua", "nevr.hook('test.a', {pre = function(h) nevr.log('info', 'inside') end})\n", &error));
+  NevrValue field{};
+  field.type = NEVR_VALUE_INT;
+  reg.Invoke(point, &field, Original, nullptr);  // deadlocks without the guard; the test deadline reports it
+  bool refused = false;
+  for (const Captured& c : log) {
+    refused = refused || (c.event == "callback_failed" && c.detail.find("re-entrant") != std::string::npos);
+  }
+  CHECK(refused);
+  CHECK(!owner->disabled.load());
+}
+
+int main(int argc, char** argv) { return mini_test::RunAll(argc, argv, std::chrono::seconds(10)); }

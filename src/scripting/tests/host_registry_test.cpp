@@ -4,6 +4,7 @@
 #include "scripting/memory_policy.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -182,6 +183,9 @@ TEST(override_keys_are_registered_and_typed) {
   NevrValue below = Float(9007199254740991.0);  // 2^53-1
   CHECK_EQ(f.api->override_set(a, "match.rounds", &below), NEVR_OK);
   CHECK_EQ(f.api->override_set(a, "physics.gravity", &seven), NEVR_OK);  // INT into FLOAT
+  NevrValue nan = Float(std::nan("")), inf = Float(HUGE_VAL);  // never into a game field
+  CHECK_EQ(f.api->override_set(a, "physics.gravity", &nan), NEVR_ERR_INVALID_ARG);
+  CHECK_EQ(f.api->override_set(a, "physics.gravity", &inf), NEVR_ERR_INVALID_ARG);
   f.api->override_get(a, "physics.gravity", &out);
   CHECK(out.type == NEVR_VALUE_FLOAT && out.as.f == 7.0);
   CHECK(!f.reg.RegisterOverridePoint("match.rounds", NEVR_VALUE_INT));  // names are unique
