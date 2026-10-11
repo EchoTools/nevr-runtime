@@ -74,7 +74,9 @@ class PackageRcTest(unittest.TestCase):
         self.assertTrue(zip_path.exists() and apk_path.exists())
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
-                             ["BugSplat64.dll", "README.txt", "SHA256SUMS", "install.ps1", "uninstall.ps1"])
+                             ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "install.ps1",
+                              "uninstall.ps1"])
+            self.assertTrue(z.read("SIGNING.txt").decode().startswith("UNSIGNED\n"))
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             for name in z.namelist():
                 if name != "SHA256SUMS":
@@ -84,8 +86,9 @@ class PackageRcTest(unittest.TestCase):
         self.assertIn(hashlib.sha256(zip_path.read_bytes()).hexdigest(), top)
         self.assertIn(hashlib.sha256(apk_path.read_bytes()).hexdigest(), top)
         notes = (self.out / "RELEASE-NOTES.md").read_text()
-        for needle in ("unsigned", "install.ps1", "uninstall.ps1", self.version, zip_path.name, apk_path.name):
-            self.assertIn(needle, notes.replace("**Unsigned**", "unsigned").replace("**unsigned**", "unsigned"))
+        for needle in ("**UNSIGNED.**", "install.ps1", "uninstall.ps1", self.version, zip_path.name, apk_path.name):
+            self.assertIn(needle, notes)
+        self.assertNotIn("SIGNED.**", notes.replace("UNSIGNED.**", ""))  # nothing is labelled signed
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_and_nothing_is_written(self):
         self.dll.write_bytes(b"MZ" + self.version.encode() + COMMIT[:8].encode())
@@ -125,6 +128,121 @@ class PackageRcTest(unittest.TestCase):
         again = self.run_tool()
         self.assertEqual(again.returncode, 1)
         self.assertIn("exists; not overwritten", again.stderr)
+
+
+def fake_pe(certificate_size: int, payload: bytes) -> bytes:
+    """A minimal PE32+ header (no sections) with the Authenticode directory entry set, then `payload`."""
+    image = bytearray(0x200)
+    image[0:2] = b"MZ"
+    image[0x3C:0x40] = (0x80).to_bytes(4, "little")
+    image[0x80:0x84] = b"PE\0\0"
+    optional = 0x80 + 24
+    image[optional:optional + 2] = (0x20B).to_bytes(2, "little")
+    entry = optional + 112 + 8 * 4
+    image[entry:entry + 4] = (0x1F0).to_bytes(4, "little")
+    image[entry + 4:entry + 8] = certificate_size.to_bytes(4, "little")
+    return bytes(image) + payload
+
+
+class SigningStagesTest(PackageRcTest):
+    """The CI release path: gate and write the tree, sign it (here: a stand-in), then seal."""
+
+    def run_stage(self, stage, *args):
+        return subprocess.run([sys.executable, "-I", str(TOOL), stage, *args], capture_output=True, text=True)
+
+    def tree_args(self, **overrides):
+        args = {"--n": "3", "--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
+                "--pc-header": str(self.pc_header), "--defaults": str(self.defaults)}
+        args.update(overrides)
+        return [x for kv in args.items() for x in kv]
+
+    def make_tree(self):
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return self.out / "nevr-runtime-v4.0.0-rc.3-windows"
+
+    def test_tree_holds_the_files_the_sign_job_signs_and_no_checksums_yet(self):
+        tree = self.make_tree()
+        self.assertEqual(sorted(p.name for p in tree.iterdir()),
+                         ["BugSplat64.dll", "README.txt", "install.ps1", "uninstall.ps1"])
+        self.assertTrue((self.out / "rc.json").exists())
+
+    def test_the_tree_stage_refuses_a_dll_that_embeds_no_defaults(self):
+        self.dll.write_bytes(b"MZ" + self.version.encode() + COMMIT[:8].encode())
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: NEVR_SOCKET_URI: not embedded in BugSplat64.dll", result.stderr)
+
+    def sign_scripts(self, tree):
+        """What signing does to a PowerShell script: an Authenticode block is appended."""
+        for name in ("install.ps1", "uninstall.ps1"):
+            path = tree / name
+            path.write_bytes(path.read_bytes() + b"\n# SIG # Begin signature block\n# SIG # End signature block\n")
+
+    def test_seal_regenerates_sha256sums_from_the_signed_files(self):
+        tree = self.make_tree()
+        unsigned_sha = hashlib.sha256((tree / "BugSplat64.dll").read_bytes()).hexdigest()
+        signed = fake_pe(0x100, (tree / "BugSplat64.dll").read_bytes())  # the sign job rewrites the file
+        (tree / "BugSplat64.dll").write_bytes(signed)
+        self.sign_scripts(tree)
+        sealed = self.tmp / "sealed"
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(sealed), "--require-signed")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        zip_path = sealed / "nevr-runtime-v4.0.0-rc.3-windows.zip"
+        with zipfile.ZipFile(zip_path) as z:
+            sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
+            self.assertEqual(sums["BugSplat64.dll"], hashlib.sha256(signed).hexdigest())
+            self.assertNotEqual(sums["BugSplat64.dll"], unsigned_sha)
+            self.assertEqual(z.read("BugSplat64.dll"), signed)
+            signing = z.read("SIGNING.txt").decode()
+            self.assertTrue(signing.startswith("SIGNED\n"))
+            for name in ("BugSplat64.dll", "install.ps1", "uninstall.ps1"):
+                self.assertIn(name, signing)
+            for name in z.namelist():
+                if name != "SHA256SUMS":
+                    self.assertEqual(sums[name], hashlib.sha256(z.read(name)).hexdigest(), name)
+        top = (sealed / "SHA256SUMS").read_text()
+        self.assertIn(f"{hashlib.sha256(zip_path.read_bytes()).hexdigest()}  {zip_path.name}", top)
+        self.assertIn("**SIGNED.**", (sealed / "RELEASE-NOTES.md").read_text())
+
+    def test_seal_without_require_signed_never_calls_the_files_signed(self):
+        tree = self.make_tree()
+        (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))  # even a file that happens to carry a signature
+        self.sign_scripts(tree)
+        sealed = self.tmp / "sealed"
+        self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed)).returncode, 0)
+        with zipfile.ZipFile(sealed / "nevr-runtime-v4.0.0-rc.3-windows.zip") as z:
+            self.assertTrue(z.read("SIGNING.txt").decode().startswith("UNSIGNED\n"))
+        self.assertIn("**UNSIGNED.**", (sealed / "RELEASE-NOTES.md").read_text())
+
+    def test_seal_requiring_signatures_refuses_an_unsigned_tree(self):
+        tree = self.make_tree()
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "sealed"), "--require-signed")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not signed (no certificate table): BugSplat64.dll", result.stderr)
+        self.assertFalse((self.tmp / "sealed").exists())
+
+    def test_seal_requiring_signatures_refuses_a_signed_dll_with_unsigned_install_scripts(self):
+        tree = self.make_tree()
+        (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "sealed"), "--require-signed")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not signed (no signature block): install.ps1, uninstall.ps1", result.stderr)
+
+    def test_seal_puts_a_given_apk_under_the_checksums(self):
+        tree = self.make_tree()
+        sealed = self.tmp / "sealed"
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(sealed), "--apk", str(self.apk))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        apk = sealed / "nevr-runtime-v4.0.0-rc.3-quest.apk"
+        self.assertEqual(apk.read_bytes(), self.apk.read_bytes())
+        self.assertIn(f"{hashlib.sha256(apk.read_bytes()).hexdigest()}  {apk.name}", (sealed / "SHA256SUMS").read_text())
+
+    def test_seal_without_an_apk_says_nothing_about_one(self):
+        tree = self.make_tree()
+        sealed = self.tmp / "sealed"
+        self.assertEqual(self.run_stage("seal", "--tree", str(tree), "--out", str(sealed)).returncode, 0)
+        self.assertNotIn("quest.apk", (sealed / "SHA256SUMS").read_text())
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
