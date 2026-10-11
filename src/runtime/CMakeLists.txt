@@ -99,6 +99,7 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
+    "lifecycle/server_timestep.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
@@ -699,8 +700,10 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp)
-    set_source_files_properties(tests/test_early_quit_lockout.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_server_timestep.cpp (#511, header-only lifecycle/server_timestep.h) rides in this executable.
+    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp)
+    set_source_files_properties(tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp
+                                PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
