@@ -177,8 +177,12 @@ class Ledger {
     }
     const std::uint32_t slot = next_.fetch_add(1, std::memory_order_relaxed);
     if (slot >= detail::kHostSlots) return;  // the first four distinct hosts are kept
-    std::strncpy(hosts_[slot], host, detail::kHostBytes - 1);
-    hosts_[slot][detail::kHostBytes - 1] = '\0';
+    std::size_t n = 0;
+    while (host[n] != '\0' && n < detail::kHostBytes - 1) {
+      hosts_[slot][n] = host[n];
+      ++n;
+    }
+    hosts_[slot][n] = '\0';
     ready_[slot].store(true, std::memory_order_release);
   }
 
