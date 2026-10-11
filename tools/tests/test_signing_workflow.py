@@ -59,6 +59,29 @@ class WorkflowStructureTest(unittest.TestCase):
                          "created misses a published draft; released/edited would rebuild on promotion")
         self.assertIsNone(triggers["workflow_dispatch"])
 
+    def test_runs_for_one_release_are_serialized_and_runs_for_other_releases_are_not(self):
+        """The group is the ref and the event, not the run id: a run id is unique, so every run had its own
+        group and two runs for one tag (a re-published release, a second dispatch) could upload at once.
+        A release run only ever queues behind release runs of the same tag, so a dry-run dispatch can never
+        replace the pending release run (a new run cancels the one pending in its group)."""
+        concurrency = load()[0]["concurrency"]
+        self.assertIs(concurrency["cancel-in-progress"], False)
+        template = concurrency["group"]
+        self.assertNotIn("run_id", template)
+
+        def group(event, ref):
+            rendered = template.replace("${{ github.event_name }}", event).replace("${{ github.ref }}", ref)
+            self.assertNotIn("${{", rendered, f"{template}: a context this test does not model")
+            return rendered
+
+        tag, other = "refs/tags/v5.0.1", "refs/tags/v5.0.2"
+        self.assertEqual(group("release", tag), group("release", tag), "one tag, one group")
+        self.assertNotEqual(group("release", tag), group("release", other), "another tag does not queue")
+        self.assertNotEqual(group("release", tag), group("workflow_dispatch", tag),
+                            "a dry run must not be able to cancel the pending release run")
+        self.assertEqual(group("workflow_dispatch", tag), group("workflow_dispatch", tag))
+        self.assertNotEqual(group("workflow_dispatch", "refs/heads/a"), group("workflow_dispatch", "refs/heads/b"))
+
     def test_no_comment_or_step_uses_the_retired_model_words(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(re.findall(r"(?i)release candidate|\bcandidate\b|\brc\b|-rc\b|\brc[-_.]|rc_|NEVR_RC", text), [])

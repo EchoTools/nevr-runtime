@@ -23,8 +23,12 @@ on:
   release:
     types: [published]
 
+# One group per ref and event: two release runs for one tag (a release published again) queue instead of
+# uploading at once, and the second finds the assets and skips (the guard job). The event is in the group
+# so a dry-run dispatch on the tag cannot take the place of a pending release run: a new run cancels the
+# run that is pending in its group, never the one in progress.
 concurrency:
-  group: build-${{ github.run_id }}
+  group: build-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
