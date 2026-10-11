@@ -76,6 +76,28 @@ class SigningWorkflowTest(unittest.TestCase):
         publish = data["jobs"]["publish"]
         self.assertEqual(publish["permissions"]["attestations"], "write")
 
+    def test_every_published_release_file_is_an_attestation_subject(self):
+        """`gh attestation verify <file>` finds a file only if its digest is a subject of an attestation, so a
+        file the release receives that is not listed in the attest step has nothing to verify (#450)."""
+        publish = load()[0]["jobs"]["publish"]
+        steps = publish["steps"]
+
+        def lines(value: str) -> list:
+            return [line.strip() for line in value.splitlines() if line.strip()]
+
+        attest = [i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/attest-build-provenance@")]
+        uploads = [i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("softprops/action-gh-release@")]
+        self.assertEqual(len(attest), 1, "one attestation step covers every published file")
+        self.assertGreaterEqual(len(uploads), 2)
+        subjects = lines(steps[attest[0]]["with"]["subject-path"])
+        for i in uploads:
+            self.assertLess(attest[0], i, "the files are attested before they are uploaded")
+            for pattern in lines(steps[i]["with"]["files"]):
+                self.assertIn(pattern, subjects, f"{pattern} is uploaded to the release but not attested")
+        # The release candidate's public set: the zip, the checksums and the notes.
+        for pattern in ("rc-dist/*.zip", "rc-dist/SHA256SUMS", "rc-dist/RELEASE-NOTES.md"):
+            self.assertIn(pattern, subjects)
+
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(sorted(set(re.findall(r"secrets\.([A-Za-z0-9_]+)", text))), ["GITHUB_TOKEN"])
