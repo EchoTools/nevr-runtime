@@ -346,7 +346,9 @@ TEST(t6_sandbox_refuses_every_probe) {
 
 TEST(t6_globals_are_per_script) {
   Host h;
-  h.Load("mod_a.lua", "shared_secret = 1\nstring.rep = nil\n");
+  // A VM may refuse the write to a library table (Luau's luaL_sandbox makes them
+  // read-only); what matters is that mod_a cannot change what mod_b sees.
+  h.Load("mod_a.lua", "shared_secret = 1\npcall(function() string.rep = nil end)\n");
   NevrOwner* b = h.Load("mod_b.lua",
                         "if shared_secret ~= nil then nevr.override('escape', true) end\n"
                         "if string.rep == nil then nevr.override('escape', true) end\n");
