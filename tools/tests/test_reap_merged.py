@@ -152,6 +152,24 @@ class ReapMergedTest(unittest.TestCase):
         self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "squashed").stdout.strip(), "")
         self.assertIn("origin branch squashed deleted", result.stdout)
 
+    def test_failed_remote_delete_still_records_the_local_removal_in_ledger(self):
+        wt = self.add_worktree("push-denied", push=True)
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["push-denied"] = [{"number": 8, "headRefOid": tip, "state": "MERGED"}]
+        git(self.origin, "config", "receive.denyDeletes", "true")
+
+        result = self.run_tool("--apply")
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(wt.exists(), result.stdout + result.stderr)
+        self.assertEqual(git(self.main, "branch", "--list", "push-denied").stdout.strip(), "")
+        self.assertIn("push-denied", git(self.main, "ls-remote", "--heads", "origin", "push-denied").stdout)
+        ledger = (self.tmp / "ledger.md").read_text()
+        self.assertIn("origin branch push-denied deletion failed", ledger)
+        actions = [record["action"] for record in self.records()]
+        self.assertIn("ledger-row", actions)
+        self.assertIn("failed", actions)
+
     def test_a_pr_whose_head_ref_differs_from_the_local_branch_name_is_found(self):
         wt = self.add_worktree("local-name", push=True, remote_name="remote-name")
         git(wt, "config", "branch.local-name.remote", "origin")
