@@ -149,11 +149,12 @@ std::optional<std::string> MoveCodeLineFirst(const std::string& frame) {
 // RedirectServiceUrl rewrites this to "ws://localhost:PORT" when the proxy is active.
 // The game's CWebSocket connects to the local server — no TLS needed.
 
-// The ix objects below are deliberately never destroyed: a static destructor runs at
-// DLL_PROCESS_DETACH under the loader lock, and ix::WebSocket/WebSocketServer destructors stop and
-// join their worker threads there. Each holder is a leaked heap object so process exit skips them
-// (the OS reclaims the sockets); StopWebSocketBridgeListener is the real stop.
+// The holders below have no static destructor: DLL_PROCESS_DETACH runs under the
+// loader lock, where a WebSocketServer destructor could join its worker thread.
+// The graceful path explicitly stops and resets both listeners; on process exit
+// the OS reclaims any sockets still held by these leaked holders.
 static std::unique_ptr<ix::WebSocketServer>& g_server = *new std::unique_ptr<ix::WebSocketServer>();
+static std::unique_ptr<ix::WebSocketServer>& g_matchServer = *new std::unique_ptr<ix::WebSocketServer>();
 static std::string g_remoteUri;
 static uint16_t g_proxyPort = 0;
 static bool g_bridgeEnabled = false;
@@ -1562,13 +1563,12 @@ void InstallWebSocketBridge() {
     std::mt19937 matchGen(matchRd());
     std::uniform_int_distribution<uint16_t> matchDist(49152, 65535);
 
-    static std::unique_ptr<ix::WebSocketServer>& s_matchServer = *new std::unique_ptr<ix::WebSocketServer>();  // leaked, see g_server
     bool matchBound = false;
     for (int attempt = 0; attempt < kMaxMatchBindAttempts; ++attempt) {
       uint16_t tryPort = matchDist(matchGen);
-      s_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
-      s_matchServer->disablePerMessageDeflate();
-      auto [ok, errorText] = s_matchServer->listen();
+      g_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
+      g_matchServer->disablePerMessageDeflate();
+      auto [ok, errorText] = g_matchServer->listen();
       if (ok) {
         g_matchPort = tryPort;
         matchBound = true;
@@ -1578,16 +1578,16 @@ void InstallWebSocketBridge() {
           nevr_log_diagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
       Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
-      s_matchServer.reset();
+      g_matchServer.reset();
     }
 
     if (matchBound) {
-      s_matchServer->setOnClientMessageCallback(onClientMessage);
-      s_matchServer->start();
+      g_matchServer->setOnClientMessageCallback(onClientMessage);
+      g_matchServer->start();
       Log(EchoVR::LogLevel::Info,
           "[NEVR.WS] Matchmaker listener on ws://127.0.0.1:%u", g_matchPort);
     } else {
-      s_matchServer.reset();
+      g_matchServer.reset();
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.WS] Matchmaker listener FAILED after %d attempts — matchmaking will fail",
           kMaxMatchBindAttempts);
@@ -1632,8 +1632,14 @@ void StopWebSocketBridgeListener() {
     g_server->stop();
     g_server.reset();
   }
+  if (g_matchServer) {
+    g_matchServer->stop();
+    g_matchServer.reset();
+  }
+  g_proxyPort = 0;
+  g_matchPort = 0;
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released",
+      "[NEVR.WS] listeners stopped, %zu remote connection(s) closed — sockets released",
       remotes.size());
 }
 

@@ -1,6 +1,9 @@
 """Throwaway WebSocket echo server for the Quest TLS host test (just test-quest-tls).
 
 TLS mode:   tls_ws_server.py tls <cert.pem> <key.pem> <port-file>
+Stall mode: tls_ws_server.py tls-stall <cert.pem> <key.pem> <port-file>
+Delay mode: tls_ws_server.py tls-delay <cert.pem> <key.pem> <port-file>
+Trickle mode: tls_ws_server.py tls-trickle <cert.pem> <key.pem> <port-file>
 Plain mode: tls_ws_server.py plain <stats-file> <port-file>
 
 Binds 127.0.0.1 on an ephemeral port and writes the port to <port-file>. TLS mode completes the WebSocket
@@ -16,6 +19,7 @@ import ssl
 import struct
 import sys
 import threading
+import time
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -30,7 +34,7 @@ def recv_exact(conn, n):
     return data
 
 
-def serve_ws(conn):
+def serve_ws(conn, upgrade_delay=0):
     try:
         head = b""
         while b"\r\n\r\n" not in head:
@@ -45,6 +49,8 @@ def serve_ws(conn):
         if key is None:
             conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
             return
+        if upgrade_delay:
+            time.sleep(upgrade_delay)
         accept = base64.b64encode(hashlib.sha1(key + GUID).digest())
         conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                      b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
@@ -82,6 +88,41 @@ def serve_ws(conn):
             pass
 
 
+def stall_upgrade(conn):
+    try:
+        conn.settimeout(6)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            head += chunk
+        time.sleep(5)  # TLS and the request completed; no HTTP upgrade response arrives.
+    except (OSError, ssl.SSLError):
+        pass
+    finally:
+        conn.close()
+
+
+def trickle_upgrade(conn):
+    try:
+        conn.settimeout(6)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            head += chunk
+        conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\n")
+        for _ in range(20):
+            conn.sendall(b"X-Keep: a\r\n")
+            time.sleep(0.25)  # Full header lines, but never the blank line ending the response.
+    except (OSError, ssl.SSLError):
+        pass
+    finally:
+        conn.close()
+
+
 def main():
     mode = sys.argv[1]
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -89,7 +130,7 @@ def main():
     listener.bind(("127.0.0.1", 0))
     listener.listen(16)
     port = listener.getsockname()[1]
-    if mode == "tls":
+    if mode in ("tls", "tls-stall", "tls-delay", "tls-trickle"):
         cert, key, port_file = sys.argv[2:5]
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(cert, key)
@@ -120,12 +161,17 @@ def main():
 
     while True:
         conn, _ = listener.accept()
-        if mode == "tls":
+        if mode in ("tls", "tls-stall", "tls-delay", "tls-trickle"):
             try:
                 conn = ctx.wrap_socket(conn, server_side=True)
             except (ssl.SSLError, OSError):
                 continue  # a client that rejects our certificate aborts the handshake: expected
-            threading.Thread(target=serve_ws, args=(conn,), daemon=True).start()
+            if mode in ("tls-stall", "tls-trickle"):
+                handler = stall_upgrade if mode == "tls-stall" else trickle_upgrade
+                threading.Thread(target=handler, args=(conn,), daemon=True).start()
+            else:
+                delay = 0.5 if mode == "tls-delay" else 0
+                threading.Thread(target=serve_ws, args=(conn, delay), daemon=True).start()
         else:
             with lock:
                 stats["connections"] += 1

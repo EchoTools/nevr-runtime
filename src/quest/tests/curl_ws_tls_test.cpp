@@ -1,18 +1,21 @@
 // Host test for the libcurl WebSocket connector (src/quest/net/curl_ws_connector.{h,cpp}) against a real
 // TLS server it does and does not trust. Run by `just test-quest-tls`, which creates the certificates and
 // starts src/quest/tests/tls_ws_server.py. Usage:
-//   curl_ws_tls_test <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats_file>
+//   curl_ws_tls_test <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats_file> <stall_port> <delay_port> <trickle_port>
 // where <trust-dir> is a directory holding the CA certificate that signed the good server and
 // <other-trust-dir> one holding an unrelated CA. They go through the same CA loader and
 // CURLOPT_CAINFO_BLOB path Android uses (quest/auth/ca_bundle.h), not CAPATH.
 //
 // What it proves: a certificate that chains to the trusted CA for the right address connects and carries a
-// frame; a wrong CA, a wrong host name, a self-signed leaf, an empty trust store and a non-TLS server each
-// fail; a ws:// URL is refused without touching the network; and after every failure the plaintext server
+// frame after the upgrade deadline has elapsed; delayed HTTP 101 works and silent or trickling peers that
+// never finish it time out; a wrong CA, a wrong host name, a self-signed leaf, an empty trust store and a
+// non-TLS server each fail; a ws:// URL
+// is refused without touching the network; and after every failure the plaintext server
 // has seen no connection that looks like a downgrade (no "GET " upgrade request, no connection at all for
 // the ws:// case).
 
 #include <chrono>
+#include <curl/curl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -55,8 +58,8 @@ CurlWsConnector::Config TrustOnly(const std::string& caDir) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 7) {
-    std::fprintf(stderr, "usage: %s <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats>\n", argv[0]);
+  if (argc != 10) {
+    std::fprintf(stderr, "usage: %s <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats> <stall_port> <delay_port> <trickle_port>\n", argv[0]);
     return 2;
   }
   // Proxy variables must not matter: libcurl would otherwise route the connection (and its Authorization
@@ -69,14 +72,17 @@ int main(int argc, char** argv) {
   unsetenv("no_proxy");
   unsetenv("NO_PROXY");
 
-  const std::string ca = argv[1], otherCa = argv[2], good = argv[3], selfsigned = argv[4], plain = argv[5], stats = argv[6];
+  const std::string ca = argv[1], otherCa = argv[2], good = argv[3], selfsigned = argv[4], plain = argv[5], stats = argv[6], stall = argv[7], delay = argv[8], trickle = argv[9];
 
   // 1. Right CA, right address: connects, carries a frame both ways, closes.
   {
-    CurlWsConnector connector(TrustOnly(ca));
+    CurlWsConnector::Config config = TrustOnly(ca);
+    config.handshakeTimeoutSeconds = 2;
+    CurlWsConnector connector(config);
     ConnectResult r = connector.Connect(Request("wss://127.0.0.1:" + good + "/echo"));
     QCHECK(r.status == ConnectStatus::Ok);
     if (r.status == ConnectStatus::Ok && r.connection) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2200));
       QCHECK(r.connection->Send("hello over verified tls", true));
       RecvResult got;
       for (int i = 0; i < 20 && got.status != RecvStatus::Frame; ++i) got = r.connection->Recv(200);
@@ -92,6 +98,55 @@ int main(int argc, char** argv) {
     } else {
       std::fprintf(stderr, "connect failed: status=%s native=%d http=%d\n", ConnectStatusName(r.status), r.nativeCode, r.httpStatus);
     }
+  }
+
+  // A slow but valid HTTP 101 response still succeeds within the bounded attempt.
+  {
+    CurlWsConnector::Config config = TrustOnly(ca);
+    config.handshakeTimeoutSeconds = 2;
+    CurlWsConnector connector(config);
+    ConnectResult r = connector.Connect(Request("wss://127.0.0.1:" + delay + "/echo"));
+    QCHECK(r.status == ConnectStatus::Ok && r.connection);
+    if (r.connection) {
+      QCHECK(r.connection->Send("delayed upgrade", true));
+      RecvResult got;
+      for (int i = 0; i < 20 && got.status != RecvStatus::Frame; ++i) got = r.connection->Recv(200);
+      QCHECK(got.status == RecvStatus::Frame && got.data == "delayed upgrade");
+      r.connection->SendClose(1000);
+    }
+  }
+
+  // TLS is established, but the peer never answers the WebSocket upgrade request.
+  // CONNECTTIMEOUT alone cannot bound this wait after connection setup.
+  {
+    CurlWsConnector::Config config = TrustOnly(ca);
+    config.handshakeTimeoutSeconds = 2;
+    CurlWsConnector connector(config);
+    const auto start = std::chrono::steady_clock::now();
+    ConnectResult r = connector.Connect(Request("wss://127.0.0.1:" + stall + "/echo"));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    std::fprintf(stderr, "stalled upgrade: native=%d http=%d elapsed_ms=%lld\n", r.nativeCode, r.httpStatus,
+                 static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()));
+    QCHECK(r.status == ConnectStatus::NetworkError);
+    QCHECK(r.nativeCode == CURLE_OPERATION_TIMEDOUT || r.nativeCode == CURLE_ABORTED_BY_CALLBACK);
+    QCHECK(!r.connection);
+    QCHECK(elapsed < std::chrono::seconds(4));
+  }
+
+  // A peer can keep the low-speed meter satisfied while never finishing HTTP 101.
+  {
+    CurlWsConnector::Config config = TrustOnly(ca);
+    config.handshakeTimeoutSeconds = 2;
+    CurlWsConnector connector(config);
+    const auto start = std::chrono::steady_clock::now();
+    ConnectResult r = connector.Connect(Request("wss://127.0.0.1:" + trickle + "/echo"));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    std::fprintf(stderr, "trickled upgrade: native=%d http=%d elapsed_ms=%lld\n", r.nativeCode, r.httpStatus,
+                 static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()));
+    QCHECK(r.status == ConnectStatus::NetworkError);
+    QCHECK(r.nativeCode == CURLE_ABORTED_BY_CALLBACK || r.nativeCode == CURLE_OPERATION_TIMEDOUT);
+    QCHECK(!r.connection);
+    QCHECK(elapsed < std::chrono::seconds(4));
   }
 
   const PlainStats before = ReadStats(stats);
