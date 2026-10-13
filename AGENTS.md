@@ -351,6 +351,14 @@ your seat name, for example `claude-main` or `codex`.
   source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
+  `<sha>` is the PR's base commit: `git merge-base HEAD origin/main`, the commit whose AGENTS.md you
+  branched from (7 to 40 hex characters of it). It is a tell that you read this file, not a security
+  control; `.github/workflows/pr-read-check.yml` runs `tools/check_pr_read_line.py` on every open, edit
+  and push and fails on a missing line, a line that is not last, or a sha that is not that commit. When
+  `main` moves after the PR is opened the base does not: it stays the commit you branched from until
+  you `git merge origin/main`, and the check then names the new merge-base, so update the line (an
+  edit to the body re-runs the check).
 - **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
   the client login test as described under "System test after every commit". The run's log must
   show all four keys
