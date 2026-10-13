@@ -288,51 +288,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
 endif()
 
 # =============================================================================
-# Distribution Package Target
-# =============================================================================
-# Creates distribution archives (tar.zst and zip) containing DLLs and scripts
-# Usage: cmake --build <build_dir> --target dist
-# =============================================================================
-
-set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
-set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
-set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
-
-# List of DLL artifacts to include
-set(DIST_DLLS
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
-  # "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"  # merged into nevr_runtime
-)
-
-# List of debug symbol files to include
-set(DIST_DBG_FILES
-  "${CMAKE_BINARY_DIR}/BugSplat64.dll.dbg"
-  # "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"  # merged into nevr_runtime
-)
-
-# Custom target to prepare distribution directory
-add_custom_target(dist-prepare
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_STAGE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}"
-  # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
-  # The game statically imports it, so it loads at process startup before WinMain.
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_STAGE_DIR}/BugSplat64.dll"
-  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
-  # gameserver.dll merged into nevr_runtime — no separate DLL to copy
-  # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_STAGE_DIR}/"
-  # The tester-facing install page (#72, beta gate G5): what to install, sign-in, uninstall, logs.
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/docs/beta/INSTALL.md" "${DIST_STAGE_DIR}/INSTALL.md"
-  # plugins/ ships EMPTY on purpose — it is the drop-point for optional operator
-  # plugins. log_filter.dll is deliberately not packaged (N95): the loader
-  # refuses it by name.
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}/plugins"
-  VERBATIM
-)
-add_dependencies(dist-prepare nevr_runtime)
-add_dependencies(dist-prepare echovr_server)
-
-# =============================================================================
 # Code Signing
 # =============================================================================
 # Release jobs configure NEVR_CODESIGN_REQUIRED=ON. Local development defaults
@@ -348,86 +303,81 @@ if(NEVR_CODESIGN_REQUIRED)
   list(APPEND DIST_SIGNING_ARGS --required-signing)
 endif()
 
+# =============================================================================
+# Distribution Package Target (stripped, no debug symbols)
+# =============================================================================
+# Creates the one release package, nevr-runtime-v<ver>: binaries run through strip --strip-all.
+# Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
+# the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
+# exact symbols. The .dbg files are never part of the package. A local build with symbols is the
+# ordinary build output in build/<preset>/bin/.
+# Usage: cmake --build <build_dir> --target dist
+# =============================================================================
+
+set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
+set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
+set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
+set(DIST_SYMBOLS_DIR "${CMAKE_SOURCE_DIR}/dist/symbols/${DIST_NAME}")
+
+# Find strip tool (use llvm-strip or strip)
+find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)
+find_program(MINGW_OBJCOPY_TOOL NAMES x86_64-w64-mingw32-objcopy llvm-objcopy objcopy)
+
+# Custom target to prepare distribution directory with stripped DLLs
+add_custom_target(dist-prepare
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_SYMBOLS_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_SYMBOLS_DIR}"
+  # Per shipped PE: copy, split the debug info off, strip, link the stripped file to the .dbg.
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/BugSplat64.dll" "${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/BugSplat64.dll.dbg" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
+  COMMAND ${MINGW_OBJCOPY_TOOL} --only-keep-debug "${DIST_STAGE_DIR}/echovr_server.exe" "${DIST_SYMBOLS_DIR}/echovr_server.exe.dbg"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_STAGE_DIR}/echovr_server.exe"
+  COMMAND ${MINGW_OBJCOPY_TOOL} "--add-gnu-debuglink=${DIST_SYMBOLS_DIR}/echovr_server.exe.dbg" "${DIST_STAGE_DIR}/echovr_server.exe"
+  # gameserver.dll merged into nevr_runtime — no separate DLL to copy
+  # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_STAGE_DIR}/"
+  # The tester-facing install page (#72, beta gate G5): what to install, sign-in, uninstall, logs.
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/docs/beta/INSTALL.md" "${DIST_STAGE_DIR}/INSTALL.md"
+  # plugins/ ships EMPTY on purpose — it is the drop-point for optional operator
+  # plugins. log_filter.dll is deliberately not packaged (N95): the loader
+  # refuses it by name.
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}/plugins"
+  COMMENT "Preparing distribution directory (stripped): ${DIST_DIR}"
+  VERBATIM
+)
+add_dependencies(dist-prepare nevr_runtime)
+add_dependencies(dist-prepare echovr_server)
+
 add_custom_target(dist-sign
   COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/build_distribution.py"
     --package "${DIST_STAGE_DIR}" --destination "${DIST_DIR}"
     --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
     --zip "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" ${DIST_SIGNING_ARGS}
   DEPENDS dist-prepare
-  COMMENT "Signing, verifying, and atomically publishing runtime distribution"
+  COMMENT "Signing, verifying, and atomically publishing distribution"
   VERBATIM
 )
-add_custom_target(dist DEPENDS dist-sign)
+add_custom_target(dist
+  DEPENDS dist-sign
+  COMMENT "Distribution packages created: ${DIST_NAME}.tar.zst and ${DIST_NAME}.zip"
+)
 add_custom_command(TARGET dist POST_BUILD
   COMMAND ${CMAKE_COMMAND}
     -DARCHIVE_TAR=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst
     -DARCHIVE_ZIP=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip
     -P ${CMAKE_SOURCE_DIR}/cmake/VerifyDistribution.cmake
-  COMMENT "Checking required runtime in distribution archives"
-  VERBATIM
-)
-
-# =============================================================================
-# Lite Distribution Package Target (stripped, no debug symbols)
-# =============================================================================
-# Creates smaller distribution archives without debug symbols
-# Usage: cmake --build <build_dir> --target dist-lite
-# =============================================================================
-
-set(DIST_LITE_NAME "nevr-runtime-v${PROJECT_VERSION}-lite")
-set(DIST_LITE_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}")
-set(DIST_LITE_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_LITE_NAME}")
-
-# Find strip tool (use llvm-strip or strip)
-find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)
-
-# Custom target to prepare lite distribution directory with stripped DLLs
-add_custom_target(dist-lite-prepare
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_STAGE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_STAGE_DIR}"
-  # Copy the runtime DLL + legacy dbgcore.dll alias, then strip
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
-  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
-  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
-  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
-  # gameserver.dll merged into nevr_runtime — no separate DLL to copy
-  # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_STAGE_DIR}/"
-  # The tester-facing install page (#72, beta gate G5): what to install, sign-in, uninstall, logs.
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/docs/beta/INSTALL.md" "${DIST_LITE_STAGE_DIR}/INSTALL.md"
-  # plugins/ ships EMPTY on purpose — see the dist-prepare note above (N95).
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_STAGE_DIR}/plugins"
-  COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
-  VERBATIM
-)
-add_dependencies(dist-lite-prepare nevr_runtime)
-add_dependencies(dist-lite-prepare echovr_server)
-
-add_custom_target(dist-lite-sign
-  COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/build_distribution.py"
-    --package "${DIST_LITE_STAGE_DIR}" --destination "${DIST_LITE_DIR}"
-    --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst"
-    --zip "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip" ${DIST_SIGNING_ARGS}
-  DEPENDS dist-lite-prepare
-  COMMENT "Signing, verifying, and atomically publishing lite distribution"
-  VERBATIM
-)
-add_custom_target(dist-lite
-  DEPENDS dist-lite-sign
-  COMMENT "Lite distribution packages created: ${DIST_LITE_NAME}.tar.zst and ${DIST_LITE_NAME}.zip"
-)
-add_custom_command(TARGET dist-lite POST_BUILD
-  COMMAND ${CMAKE_COMMAND}
-    -DARCHIVE_TAR=${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst
-    -DARCHIVE_ZIP=${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip
-    -P ${CMAKE_SOURCE_DIR}/cmake/VerifyDistribution.cmake
   COMMAND ${CMAKE_COMMAND} -E echo ""
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
-  COMMAND ${CMAKE_COMMAND} -E echo "Lite distribution packages created (stripped, no debug symbols):"
-  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst"
-  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip"
+  COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages created (stripped, no debug symbols):"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip"
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
-  COMMENT "Checking required runtime in lite distribution archives"
+  COMMENT "Checking required runtime in distribution archives"
   VERBATIM
 )
 
@@ -488,6 +438,6 @@ add_custom_target(dist-legacy
 # Combined dist-all target
 # =============================================================================
 add_custom_target(dist-all
-  DEPENDS dist dist-lite dist-legacy
+  DEPENDS dist dist-legacy
   COMMENT "All distribution packages created"
 )

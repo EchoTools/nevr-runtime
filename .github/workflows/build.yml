@@ -12,7 +12,7 @@ name: Build
 # stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
 # (tools/package_release.py tree), passes it through the signing stub, and seals it (seal): the Windows
-# zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ zips (the .tar.zst
+# zip, SHA256SUMS and RELEASE-NOTES.md, all attested and published with the dist/ zip (the .tar.zst
 # archives stay a workflow artifact). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
@@ -36,7 +36,7 @@ concurrency:
 jobs:
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
-  # NAMES (tools/release_already_built.sh: all five files of this version are there), never the
+  # NAMES (tools/release_already_built.sh: all four files of this version are there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
@@ -244,7 +244,7 @@ jobs:
 
     - name: Create distribution packages (unsigned)
       if: github.event_name == 'release'
-      run: cmake --build --preset mingw-release --target dist dist-lite
+      run: cmake --build --preset mingw-release --target dist
 
     - name: Verify distribution archives
       if: github.event_name == 'release'
@@ -254,8 +254,8 @@ jobs:
         shopt -s nullglob
         zips=(dist/*.zip)
         tars=(dist/*.tar.zst)
-        test "${#zips[@]}" -eq 2
-        test "${#tars[@]}" -eq 2
+        test "${#zips[@]}" -eq 1
+        test "${#tars[@]}" -eq 1
         for archive in "${zips[@]}"; do
           test -s "$archive"
           zip_entries=$(cmake -E tar tf "$archive")
@@ -268,6 +268,36 @@ jobs:
           [[ "$tar_entries" == *BugSplat64.dll* ]]
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
+
+    # Every shipped PE is stripped and linked (.gnu_debuglink: name and CRC32) to the symbol file the dist
+    # target split off it, and the stripped DLL still carries its identity literal (version and commit):
+    # a crash from the field maps to exact symbols. PE has no build-id; the debuglink CRC32 is the link.
+    - name: Verify the symbol files match the stripped binaries
+      if: github.event_name == 'release'
+      shell: bash
+      env:
+        VERSION: ${{ steps.release.outputs.version }}
+      run: |
+        set -euo pipefail
+        packages=(dist/nevr-runtime-v*/)
+        test "${#packages[@]}" -eq 1
+        pkg=${packages[0]%/}
+        name=$(basename "$pkg")
+        for file in BugSplat64.dll echovr_server.exe; do
+          python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
+        done
+        python3 tools/package_release.py stamp --dll "$pkg/BugSplat64.dll" --version "$VERSION" --commit "$GITHUB_SHA"
+
+    # The symbol files are a workflow artifact for the maintainers, not a release asset: players never see
+    # them. The publish job attests them to this commit.
+    - name: Upload the symbol files
+      if: github.event_name == 'release'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: symbols
+        path: dist/symbols/
+        if-no-files-found: error
+        retention-days: 90
 
     # The release package tree (the Windows zip's contents, no checksums yet) is gated here: the DLL
     # embeds exactly config/public-defaults.env and its identity literal carries this version and commit.
@@ -291,7 +321,7 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-    # The unpacked package trees (dist/<name>/, normal and lite) go to the sign job; the unsigned
+    # The unpacked package trees (dist/<name>/) go to the sign job; the unsigned
     # archives are never published.
     - name: Upload the unsigned packages for signing
       if: github.event_name == 'release'
@@ -431,8 +461,8 @@ jobs:
         shopt -s nullglob
         zips=(dist/*.zip)
         tars=(dist/*.tar.zst)
-        test "${#zips[@]}" -eq 2
-        test "${#tars[@]}" -eq 2
+        test "${#zips[@]}" -eq 1
+        test "${#tars[@]}" -eq 1
 
     # The .tar.zst archives are built and checked but are not release assets: the public set is zips only
     # (what Windows users use, and what a signer can sign). They stay here as a workflow artifact.
@@ -476,6 +506,12 @@ jobs:
         name: release-unsigned
         path: release-assets
 
+    # The symbol files (a workflow artifact, never a release asset) are attested to this same commit.
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: symbols
+        path: symbols
+
     - name: Attest build provenance of the release files
       uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
       with:
@@ -484,6 +520,7 @@ jobs:
           release-assets/*.zip
           release-assets/SHA256SUMS
           release-assets/RELEASE-NOTES.md
+          symbols/*/*.dbg
 
     # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
     # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),

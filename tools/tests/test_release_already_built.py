@@ -1,6 +1,6 @@
 """tools/release_already_built.sh: does a release already carry the build's whole asset set?
 
-The signal is the release's asset NAMES (five files for version X.Y.Z), never the pre-release flag.
+The signal is the release's asset NAMES (four files for version X.Y.Z), never the pre-release flag.
 A listing that fails is an error, not "false"."""
 
 import os
@@ -39,10 +39,10 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
 
     def names(self, version="5.0.0", drop=None):
         names = [f"nevr-runtime-v{version}-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md",
-                 f"nevr-runtime-v{version}.zip", f"nevr-runtime-v{version}-lite.zip"]
+                 f"nevr-runtime-v{version}.zip"]
         return "\n".join(n for n in names if n != drop) + "\n"
 
-    def test_all_five_assets_mean_already_built(self):
+    def test_all_four_assets_mean_already_built(self):
         result = self.run_script(FAKE_ASSETS=self.names())
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "true"), result.stderr)
 
@@ -51,9 +51,10 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"))
         self.assertIn("RELEASE-NOTES.md", result.stderr)
 
-    def test_every_one_of_the_five_is_required(self):
+    def test_every_one_of_the_four_is_required(self):
         every = self.names().split()
-        self.assertEqual(len(every), 5)
+        self.assertEqual(len(every), 4)
+        self.assertEqual(sorted(every), sorted(["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]))
         for name in every:
             with self.subTest(missing=name):
                 result = self.run_script(FAKE_ASSETS=self.names(drop=name))
@@ -63,7 +64,7 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
     def test_the_tar_zst_archives_are_not_required_and_do_not_count(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "nevr-runtime-v5.0.0.tar.zst\n")
         self.assertEqual(result.stdout.strip(), "true")
-        only_tars = "nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0-lite.tar.zst\nSHA256SUMS\nRELEASE-NOTES.md\n"
+        only_tars = "nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0.tar.zst\nSHA256SUMS\nRELEASE-NOTES.md\n"
         self.assertEqual(self.run_script(FAKE_ASSETS=only_tars).stdout.strip(), "false")
 
     def test_extra_assets_do_not_matter(self):
