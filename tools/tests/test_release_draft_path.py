@@ -8,11 +8,16 @@ workflow_dispatch's GITHUB_REF is "Branch or tag that received dispatch". softpr
 reused draft is PUBLISHED after the upload unless `draft: true`, and release keys that are not explicitly set
 (prerelease) are retained."""
 
+import http.server
 import json
 import os
+import re
+import shutil
+import ssl
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -109,6 +114,71 @@ class ReleaseDraftPathTest(unittest.TestCase):
         rc, out, err = self.run_listing([[{"tag_name": "v4.9.0", "draft": False, "assets": []}]])
         self.assertEqual((rc, out), (0, "releases=[]"), err)
 
+    def run_listing_with_real_gh(self, pages, tag):
+        """Run the listing step's bash with the REAL gh, pointed at a local HTTPS server (gh insists on https,
+        so a throwaway self-signed certificate is trusted through SSL_CERT_FILE). What this covers that the fake
+        gh above cannot: gh's own --jq (gojq) reading the step's TAG from the process environment as `env.TAG`,
+        and --paginate following the Link header. It does not cover GitHub's token scope or its real response
+        bodies (extra fields are in the fixtures, the shapes are the documented ones)."""
+        for tool in ("gh", "jq", "openssl"):
+            self.assertIsNotNone(shutil.which(tool), f"{tool} must be on PATH: this test runs the real filter")
+        run = load()["jobs"]["drafts"]["steps"][0]["run"]
+        with tempfile.TemporaryDirectory(prefix="realgh-") as tmp:
+            cert, key = Path(tmp) / "cert.pem", Path(tmp) / "key.pem"
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
+                            "-out", str(cert), "-days", "1", "-subj", "/CN=localhost",
+                            "-addext", "subjectAltName=DNS:localhost"], check=True, capture_output=True)
+            requests = []
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(handler):
+                    requests.append(handler.path)
+                    index = 1 if "page=2" in handler.path else 0
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "application/json")
+                    if index + 1 < len(pages):
+                        handler.send_header(
+                            "Link", f'<https://localhost:{handler.server.server_port}'
+                                    f'/api/v3/repos/o/r/releases?per_page=100&page={index + 2}>; rel="next"')
+                    handler.end_headers()
+                    handler.wfile.write(json.dumps(pages[index]).encode())
+
+                def log_message(handler, *args):
+                    pass
+
+            server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert, key)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join()))
+            out = Path(tmp) / "out"
+            out.write_text("")
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("GITHUB_", "GH_", "HTTP", "HTTPS", "ALL_PROXY"))}
+            env.update(GH_HOST=f"localhost:{server.server_port}", GH_ENTERPRISE_TOKEN="x", GH_CONFIG_DIR=tmp,
+                       GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", SSL_CERT_FILE=str(cert),
+                       NO_PROXY="localhost,127.0.0.1", GITHUB_OUTPUT=str(out), GITHUB_REPOSITORY="o/r", TAG=tag)
+            result = subprocess.run(["bash", "-c", run], env=env, capture_output=True, text=True, timeout=60)
+            return result.returncode, out.read_text().strip(), result.stderr, requests
+
+    def test_the_real_gh_filter_reads_the_tag_from_env_and_follows_every_page(self):
+        page1 = [{"tag_name": "v5.0.0", "draft": True, "assets": [{"name": "a.zip"}], "id": 1},
+                 {"tag_name": "v4.9.0", "draft": False, "assets": [{"name": "old.zip"}]}]
+        page2 = [{"tag_name": "v5.0.0", "draft": False, "assets": [{"name": "b.zip"}]},
+                 {"tag_name": "v5.0.1", "draft": True, "assets": []}]
+        rc, out, err, requests = self.run_listing_with_real_gh([page1, page2], "v5.0.0")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out.split("=", 1)[1]),
+                         [{"draft": True, "assets": ["a.zip"]}, {"draft": False, "assets": ["b.zip"]}])
+        self.assertEqual(len(requests), 2, requests)
+        # another tag selects other releases: `env.TAG` is the filter, not a constant
+        rc, out, err, _ = self.run_listing_with_real_gh([page1, page2], "v5.0.1")
+        self.assertEqual((rc, json.loads(out.split("=", 1)[1])), (0, [{"draft": True, "assets": []}]), err)
+        rc, out, err, _ = self.run_listing_with_real_gh([page1, page2], "v9.9.9")
+        self.assertEqual((rc, out), (0, "releases=[]"), err)
+
     def test_a_failed_listing_fails_the_step_and_writes_no_output(self):
         rc, out, err = self.run_listing([[]], rc=1)
         self.assertNotEqual(rc, 0)
@@ -160,6 +230,16 @@ class ReleaseDraftPathTest(unittest.TestCase):
         for name in ("guard", "build", "sign", "seal", "repack"):
             self.assertEqual(jobs[name]["permissions"]["contents"], "read", name)
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
+
+    def test_the_release_steps_in_agents_md_have_unique_labels_and_every_reference_resolves(self):
+        text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+        section = text.split("Releases are built by CI from a tag", 1)[1].split("Build presets:", 1)[0]
+        labels = re.findall(r"#\s+((?:D)?\d+)\.\s", section)
+        self.assertEqual(sorted(labels), sorted(set(labels)), f"a step number is used twice: {labels}")
+        self.assertTrue({"1", "2", "3", "D1", "D2"} <= set(labels), labels)
+        for ref in re.findall(r"\(step (\d+)(?:, or (D\d+))?\)", section):
+            for label in filter(None, ref):
+                self.assertIn(label, labels)
 
     def test_a_draft_dispatch_builds_the_same_files_as_a_release_event(self):
         jobs = load()["jobs"]

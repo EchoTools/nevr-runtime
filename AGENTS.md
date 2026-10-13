@@ -65,8 +65,8 @@ A release whose files must be signed before anything is public goes through a DR
 started by hand on the tag ref.
 
 ```sh
-gh release create v<x.y.z> --draft --verify-tag   # 1. a draft for the pushed tag
-gh workflow run build.yml --ref v<x.y.z>          # 2. builds, attests and attaches the four files to the draft; it stays a draft
+gh release create v<x.y.z> --draft --verify-tag   # D1. a draft for the pushed tag (instead of step 3)
+gh workflow run build.yml --ref v<x.y.z>          # D2. builds, attests and attaches the four files to the draft; it stays a draft
 ```
 
 `tools/release_draft.sh` decides: a tag with exactly one draft, no published release, and none of the four names on the draft is
@@ -78,7 +78,7 @@ which `tools/release_already_built.sh` turns into a green no-op (both read `tool
 a dispatch is running makes that run upload to the published release.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
-`gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
+`gh release create` (step 3, or D1): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
