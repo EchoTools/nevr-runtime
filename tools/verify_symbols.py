@@ -6,6 +6,11 @@ adds a .gnu_debuglink section (objcopy --add-gnu-debuglink). That section holds 
 the CRC32 of its bytes: PE has no build-id, so name plus CRC32 is the link a debugger follows.
 
     verify_symbols.py <stripped.dll|exe> <file.dbg>
+    verify_symbols.py --tree <package dir> <symbols dir>
+
+--tree checks every .dll and .exe under the package directory (a dist package or the Windows zip's tree)
+against <symbols dir>/<file name>.dbg; a PE with no symbol file there is a problem, and so is a package
+with no PE at all.
 
 Exits 0 when the PE carries no DWARF, the .dbg carries it, and the debuglink names the .dbg with its CRC32.
 Exits 1 with one line per problem otherwise.
@@ -60,7 +65,28 @@ def problems(binary: Path, symbols: Path) -> list[str]:
     return out
 
 
+def tree_problems(package: Path, symbols_dir: Path) -> list[str]:
+    files = sorted(p for p in package.rglob("*") if p.suffix.lower() in (".dll", ".exe"))
+    if not files:
+        return [f"{package}: no .dll or .exe to check"]
+    out = []
+    for pe in files:
+        dbg = symbols_dir / f"{pe.name}.dbg"
+        if not dbg.is_file():
+            out.append(f"{pe.relative_to(package)}: no symbol file {dbg}")
+        else:
+            out += problems(pe, dbg)
+    return out
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 4 and argv[1] == "--tree":
+        found = tree_problems(Path(argv[2]), Path(argv[3]))
+        for line in found:
+            print(f"verify_symbols: {line}", file=sys.stderr)
+        if not found:
+            print(f"verify_symbols: every PE in {argv[2]} matches a symbol file in {argv[3]}")
+        return 1 if found else 0
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2

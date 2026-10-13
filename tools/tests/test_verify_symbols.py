@@ -71,6 +71,45 @@ class StrippedBinaryMatchesItsSymbolsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("not stripped", result.stderr)
 
+    def tree(self, name="pkg"):
+        package, symbols = self.dir / name, self.dir / (name + "-symbols")
+        package.mkdir()
+        symbols.mkdir()
+        return package, symbols
+
+    def tree_run(self, package, symbols):
+        return subprocess.run(["python3", "-I", str(TOOL), "--tree", str(package), str(symbols)],
+                              capture_output=True, text=True)
+
+    def test_a_package_tree_passes_when_every_pe_matches_its_symbol_file(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "t.exe")
+        shutil.copy(self.dbg, symbols / "t.exe.dbg")
+        (package / "install.ps1").write_text("not a PE\n")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_package_tree_with_an_unstripped_pe_is_refused(self):
+        package, symbols = self.tree()
+        shutil.copy(self.dir / "full.exe", package / "t.exe")
+        shutil.copy(self.dbg, symbols / "t.exe.dbg")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not stripped", result.stderr)
+
+    def test_a_package_tree_with_a_pe_that_has_no_symbol_file_is_refused(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "t.exe")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no symbol file", result.stderr)
+
+    def test_an_empty_package_tree_is_refused(self):
+        package, symbols = self.tree()
+        self.assertEqual(self.tree_run(package, symbols).returncode, 1)
+
     def test_a_link_to_another_file_name_is_refused(self):
         self.link()
         other = self.dir / "other.dbg"

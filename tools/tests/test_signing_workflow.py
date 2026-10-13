@@ -199,6 +199,17 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(len(verify), 1)
         self.assertIn("tools/verify_symbols.py", verify[0]["run"])
         self.assertIn("package_release.py stamp --dll", verify[0]["run"])
+        self.assertIn("verify_symbols.py --tree", verify[0]["run"])
+        # The Windows zip ships the stripped dist DLL, never build/mingw-release/bin/BugSplat64.dll.
+        tree = [s for s in steps if s.get("name") == "Gate and assemble the release tree"]
+        self.assertEqual(len(tree), 1)
+        self.assertIn('--dll "$pkg/BugSplat64.dll"', tree[0]["run"])
+        self.assertNotIn("--dll build/mingw-release", tree[0]["run"])
+        self.assertLess(steps.index(verify[0]), steps.index(tree[0]))
+        windows = [s for s in steps if s.get("name") == "Verify the Windows tree ships only stripped binaries"]
+        self.assertEqual(len(windows), 1)
+        self.assertIn("verify_symbols.py --tree release-stage/", windows[0]["run"])
+        self.assertLess(steps.index(tree[0]), steps.index(windows[0]))
         upload = [s for s in steps if s.get("with", {}).get("name") == "symbols"]
         self.assertEqual([s["with"]["path"] for s in upload], ["dist/symbols/"])
         self.assertLess(steps.index(verify[0]), steps.index(upload[0]))

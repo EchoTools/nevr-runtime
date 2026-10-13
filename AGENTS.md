@@ -56,7 +56,7 @@ stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and
 zips; the `.tar.zst` archives stay a workflow artifact) and does nothing for a release that already carries those assets. Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
-The `dist` package is stripped; `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
+The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
 stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `build.yml` checks the pair with `tools/verify_symbols.py`,
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.

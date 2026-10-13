@@ -242,8 +242,10 @@ jobs:
     - name: Verify
       run: just verify
 
+    # Built for a dry run on a tag too (a version is set), because the Windows zip is made from this package's
+    # stripped DLL.
     - name: Create distribution packages (unsigned)
-      if: github.event_name == 'release'
+      if: steps.release.outputs.version != ''
       run: cmake --build --preset mingw-release --target dist
 
     - name: Verify distribution archives
@@ -273,7 +275,7 @@ jobs:
     # target split off it, and the stripped DLL still carries its identity literal (version and commit):
     # a crash from the field maps to exact symbols. PE has no build-id; the debuglink CRC32 is the link.
     - name: Verify the symbol files match the stripped binaries
-      if: github.event_name == 'release'
+      if: steps.release.outputs.version != ''
       shell: bash
       env:
         VERSION: ${{ steps.release.outputs.version }}
@@ -286,12 +288,13 @@ jobs:
         for file in BugSplat64.dll echovr_server.exe; do
           python3 tools/verify_symbols.py "$pkg/$file" "dist/symbols/$name/$file.dbg"
         done
+        python3 tools/verify_symbols.py --tree "$pkg" "dist/symbols/$name"
         python3 tools/package_release.py stamp --dll "$pkg/BugSplat64.dll" --version "$VERSION" --commit "$GITHUB_SHA"
 
     # The symbol files are a workflow artifact for the maintainers, not a release asset: players never see
     # them. The publish job attests them to this commit.
     - name: Upload the symbol files
-      if: github.event_name == 'release'
+      if: steps.release.outputs.version != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: symbols
@@ -301,6 +304,8 @@ jobs:
 
     # The release package tree (the Windows zip's contents, no checksums yet) is gated here: the DLL
     # embeds exactly config/public-defaults.env and its identity literal carries this version and commit.
+    # The DLL is the stripped, debuglinked one from the dist package (players get stripped builds only);
+    # its symbols are the `symbols` artifact above.
     - name: Gate and assemble the release tree
       if: steps.release.outputs.version != ''
       shell: bash
@@ -308,9 +313,21 @@ jobs:
         VERSION: ${{ steps.release.outputs.version }}
       run: |
         set -euo pipefail
+        packages=(dist/nevr-runtime-v*/)
+        test "${#packages[@]}" -eq 1
+        pkg=${packages[0]%/}
         python3 tools/package_release.py tree --version "$VERSION" --commit "$GITHUB_SHA" --out release-stage \
-          --dll build/mingw-release/bin/BugSplat64.dll \
+          --dll "$pkg/BugSplat64.dll" \
           --pc-header build/mingw-release/generated/nevr_builtin_defaults.h
+
+    - name: Verify the Windows tree ships only stripped binaries
+      if: steps.release.outputs.version != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        packages=(dist/nevr-runtime-v*/)
+        name=$(basename "${packages[0]%/}")
+        python3 tools/verify_symbols.py --tree release-stage/nevr-runtime-v*-windows "dist/symbols/$name"
 
     - name: Upload the release tree
       if: steps.release.outputs.version != ''
