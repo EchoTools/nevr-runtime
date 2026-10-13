@@ -341,6 +341,19 @@ your seat name, for example `claude-main` or `codex`.
 - **PRs target `main`.** Do not base a PR on another feature branch.
 - **Report a mistake the moment you see it,** with the command and its output.
 
+### The game install
+
+- **No agent runs a deploy script or writes into the owner's install.** `verify-server.sh` and
+  `launch-client.sh` (every use, with or without `--dll`) copy `BugSplat64.dll`, plugins and a
+  `config.yaml` into `echovr/bin/win10` of the checkout named by `NEVR_GAME_ROOT` (the main checkout
+  by default), and a `launch-server.sh` or any other script that copies a DLL into a game directory
+  does the same. The main checkout's `echovr/` links into `/mnt/games`, the owner's install, so
+  `/mnt/games/**` and `echovr/**` in the checkout are never a deploy target. A client or `-server`
+  run uses a throwaway copy of the install: a directory with its own `echovr/` (no link back into
+  the install), passed as `NEVR_GAME_ROOT`, under your scratch directory. If no copy exists, the run
+  waits for a human. Before any run that writes, check free space on the target filesystem with
+  `df -h <path>`; a full disk truncates the file being copied.
+
 ### Review, verification and merge
 
 - **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
@@ -366,13 +379,14 @@ your seat name, for example `claude-main` or `codex`.
   checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
-- **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
-  BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
+- **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
+  build's BugSplat64.dll> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
   endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
-  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` overrides which
-  checkout's `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
+  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` names the directory
+  whose `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
 
 ### Documentation, plans and findings
 
@@ -415,7 +429,8 @@ This applies regardless of context — even if the task seems to require it, eve
 
 ## System test after every commit
 
-- **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+- **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
+  install"),** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
 - **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
