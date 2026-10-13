@@ -20,8 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-FIVE = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-        "nevr-runtime-v5.0.0-lite.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
 
 
 def load():
@@ -147,7 +146,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertNotIn("run", step, step)
             self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
         self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
-                         ["actions/download-artifact", "actions/download-artifact",
+                         ["actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
                           "actions/attest-build-provenance", "softprops/action-gh-release",
                           "softprops/action-gh-release"])
         text = steps_text(publish)
@@ -182,14 +181,38 @@ class WorkflowStructureTest(unittest.TestCase):
         for i in uploads:
             self.assertLess(attest[0], i, "the files are attested before they are uploaded")
             uploaded += lines(steps[i]["with"]["files"])
-        self.assertEqual(sorted(subjects), sorted(uploaded))
+        # The symbol files are attested to the same commit but are a workflow artifact, never a release asset.
+        self.assertEqual(sorted(s for s in subjects if not s.startswith("symbols/")), sorted(uploaded))
         self.assertEqual(sorted(subjects), sorted([
-            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md"]))
+            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md",
+            "symbols/*/*.dbg"]))
+        self.assertNotIn("symbols", " ".join(uploaded), "the symbol files are not release assets")
         self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
         repack_steps = load()[0]["jobs"]["repack"]["steps"]
         tar_steps = [s for s in repack_steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
         self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
         self.assertEqual([s["with"]["name"] for s in steps if s.get("with", {}).get("path") == "dist"], ["dist-zips"])
+
+    def test_the_build_job_checks_and_keeps_the_symbol_files_of_the_stripped_binaries(self):
+        steps = load()[0]["jobs"]["build"]["steps"]
+        verify = [s for s in steps if s.get("name") == "Verify the symbol files match the stripped binaries"]
+        self.assertEqual(len(verify), 1)
+        self.assertIn("tools/verify_symbols.py", verify[0]["run"])
+        self.assertIn("package_release.py stamp --dll", verify[0]["run"])
+        self.assertIn("verify_symbols.py --tree", verify[0]["run"])
+        # The Windows zip ships the stripped dist DLL, never build/mingw-release/bin/BugSplat64.dll.
+        tree = [s for s in steps if s.get("name") == "Gate and assemble the release tree"]
+        self.assertEqual(len(tree), 1)
+        self.assertIn('--dll "$pkg/BugSplat64.dll"', tree[0]["run"])
+        self.assertNotIn("--dll build/mingw-release", tree[0]["run"])
+        self.assertLess(steps.index(verify[0]), steps.index(tree[0]))
+        windows = [s for s in steps if s.get("name") == "Verify the Windows tree ships only stripped binaries"]
+        self.assertEqual(len(windows), 1)
+        self.assertIn("verify_symbols.py --tree release-stage/", windows[0]["run"])
+        self.assertLess(steps.index(tree[0]), steps.index(windows[0]))
+        upload = [s for s in steps if s.get("with", {}).get("name") == "symbols"]
+        self.assertEqual([s["with"]["path"] for s in upload], ["dist/symbols/"])
+        self.assertLess(steps.index(verify[0]), steps.index(upload[0]))
 
     def test_no_step_reads_or_sets_the_pre_release_flag(self):
         """Promotion changes no byte and no run: the flag is the human's. Nothing reads the event's value,
@@ -276,7 +299,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     # --- the guard: a release that already carries its assets is not rebuilt --------------------------
 
-    def guard(self, event="release", tag="v5.0.0", assets=FIVE, view_rc=0):
+    def guard(self, event="release", tag="v5.0.0", assets=FOUR, view_rc=0):
         with tempfile.TemporaryDirectory(prefix="guard-") as tmp:
             bindir = Path(tmp) / "bin"
             bindir.mkdir()
@@ -290,23 +313,23 @@ class WorkflowStructureTest(unittest.TestCase):
                                                  EVENT=event, TAG=tag, **env)
             return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
 
-    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
+    def test_a_release_with_all_four_assets_is_not_rebuilt(self):
         rc, built, calls = self.guard()
         self.assertEqual((rc, built), (0, "true"))
         self.assertEqual(len(calls), 1)
         self.assertIn("release view v5.0.0", calls[0])
 
     def test_a_release_missing_any_one_asset_is_built(self):
-        for missing in FIVE:
+        for missing in FOUR:
             with self.subTest(missing=missing):
-                rc, built, _ = self.guard(assets=[a for a in FIVE if a != missing])
+                rc, built, _ = self.guard(assets=[a for a in FOUR if a != missing])
                 self.assertEqual((rc, built), (0, "false"))
 
     def test_a_release_with_no_assets_is_built(self):
         self.assertEqual(self.guard(assets=[])[:2], (0, "false"))
 
     def test_other_versions_assets_do_not_count(self):
-        other = [a.replace("5.0.0", "4.9.9") for a in FIVE]
+        other = [a.replace("5.0.0", "4.9.9") for a in FOUR]
         self.assertEqual(self.guard(assets=other)[:2], (0, "false"))
 
     def test_a_failing_listing_fails_the_job_it_does_not_mean_rebuild(self):

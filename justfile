@@ -52,17 +52,13 @@ launcher: configure
 verbose-build: configure
     cmake --build --preset {{ preset }}
 
-# Create distribution packages
+# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/
 dist: build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
-
-# Build stripped binaries without debug symbols
-dist-lite: build
-    cmake --build --preset {{ preset }} --target dist-lite
 
 # Create legacy distribution package (v1 DLLs only)
 dist-legacy: build
@@ -2595,7 +2591,7 @@ generate-certs:
 renew-certs:
     ./certs/generate-ca.sh --renew
 
-# Build normal and lite archives with required local Authenticode signing.
+# Build the stripped archives with required local Authenticode signing.
 sign:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2612,7 +2608,7 @@ sign:
     export CODESIGN_TSURL="http://timestamp.digicert.com"
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=ON
     build_status=0
-    cmake --build --preset {{ preset }} --target dist dist-lite || build_status=$?
+    cmake --build --preset {{ preset }} --target dist || build_status=$?
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=OFF > /dev/null
     exit "$build_status"
 
