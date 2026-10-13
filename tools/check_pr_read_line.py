@@ -61,9 +61,15 @@ def check(body: str, base: str, head: str, repo: str = ".") -> str:
     actual = merge_base(repo, base, head)
     resolved = git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{claimed}^{{commit}}")
     resolved_sha = resolved.stdout.strip() if resolved.returncode == 0 else ""
-    if resolved_sha != actual or not actual.startswith(claimed.lower()):
+    if not actual.startswith(claimed.lower()):
         raise Failure(f"{claimed} is not the PR's base commit; the merge-base of the head and the target "
                       f"is {actual[:12]}")
+    if resolved_sha != actual:
+        # The text is a prefix of the base, but git does not read it as the base: a tag or branch of that
+        # name wins over the object name, or the prefix is ambiguous between objects.
+        where = f"resolves to {resolved_sha[:12]}, not the base" if resolved_sha else "does not resolve to one commit"
+        raise Failure(f"{claimed} is a prefix of the PR's base commit {actual[:12]} but is ambiguous: git "
+                      f"{where} (a ref or another object shares the name); write the full 40-hex sha")
     return actual
 
 

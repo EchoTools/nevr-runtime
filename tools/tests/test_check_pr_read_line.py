@@ -58,9 +58,12 @@ class CheckPrReadLineTest(unittest.TestCase):
         return subprocess.run(argv, cwd=self.repo, env=env, capture_output=True, text=True)
 
     def assertFails(self, result, needle):
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Return code 1 is the script's own failure; 2 (argparse) or 127/other means it did not run.
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "", "a failure prints nothing on stdout")
         lines = result.stderr.strip().splitlines()
         self.assertEqual(len(lines), 1, f"one clear line on failure, got: {result.stderr!r}")
+        self.assertTrue(lines[0].startswith("FAIL: "), f"the failure line starts with `FAIL: `: {lines[0]!r}")
         self.assertIn(needle, lines[0])
 
     def test_passes_on_the_merge_base_sha(self):
@@ -98,22 +101,54 @@ class CheckPrReadLineTest(unittest.TestCase):
         self.assertFails(self.run_check(f"x\n\nRead AGENTS.md at {self.root[:6]}\n"), "malformed")
 
     def test_fails_on_a_non_hex_value_or_a_wrong_sentence(self):
-        for line in ("Read AGENTS.md at HEAD", "Read AGENTS.md at origin/main", "Read AGENTS.md", f"I read AGENTS.md at {self.root}",
-                     f"Read AGENTS.md at {self.root} thanks"):
+        for line, needle in (("Read AGENTS.md at HEAD", "malformed sha 'HEAD'"),
+                             ("Read AGENTS.md at origin/main", "malformed sha 'origin/main'"),
+                             ("Read AGENTS.md", "missing"),
+                             (f"I read AGENTS.md at {self.root}", "missing"),
+                             (f"Read AGENTS.md at {self.root} thanks", "malformed last line")):
             with self.subTest(line=line):
-                self.assertNotEqual(self.run_check(f"x\n\n{line}\n").returncode, 0)
+                self.assertFails(self.run_check(f"x\n\n{line}\n"), needle)
 
     def test_the_base_is_the_merge_base_not_the_target_tip(self):
         """Main moved after the PR was opened: the PR's base stays the commit it branched from, and the
         tip of main is a wrong answer."""
         self.assertNotEqual(self.root, self.main_tip)
         self.assertEqual(self.run_check(f"x\n\nRead AGENTS.md at {self.root[:7]}\n").returncode, 0)
-        self.assertNotEqual(self.run_check(f"x\n\nRead AGENTS.md at {self.main_tip[:7]}\n").returncode, 0)
+        self.assertFails(self.run_check(f"x\n\nRead AGENTS.md at {self.main_tip[:7]}\n"), "is not the PR's base")
 
     def test_an_unreadable_range_fails_loud(self):
         result = self.run_check(f"x\n\nRead AGENTS.md at {self.root}\n", base="0" * 40)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertFails(result, "cannot compute the merge-base")
+
+    def test_a_non_full_sha_argument_fails_loud(self):
+        self.assertFails(self.run_check(f"x\n\nRead AGENTS.md at {self.root}\n", base=self.main_tip[:12]),
+                         "is not a full 40-hex commit sha")
+
+    def test_a_prefix_that_git_reads_as_another_object_says_so(self):
+        """A tag named like the first hex characters of the base wins over the object name in rev-parse.
+        The text IS a prefix of the base, so the failure must say it is ambiguous, not that it is
+        'not the PR's base commit'."""
+        with tempfile.TemporaryDirectory(prefix="read-line-tag-") as tmp:
+            repo = Path(tmp)
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            git(repo, "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "topic")
+            head = git(repo, "rev-parse", "HEAD")
+            git(repo, "update-ref", f"refs/tags/{base[:8]}", head)
+            self.assertEqual(git(repo, "rev-parse", f"{base[:8]}^{{commit}}"), head)  # the tag wins
+            env = {k: v for k, v in os.environ.items() if k != "PR_BODY"}
+            env["PR_BODY"] = f"x\n\nRead AGENTS.md at {base[:8]}\n"
+            result = subprocess.run([sys.executable, str(SCRIPT), "--base-sha", base, "--head-sha", head],
+                                    cwd=repo, env=env, capture_output=True, text=True)
+            self.assertFails(result, "is a prefix of the PR's base commit")
+            self.assertIn("ambiguous", result.stderr)
+            self.assertNotIn("is not the PR's base commit", result.stderr)
+            # The full sha is not shadowed by the tag, so it still passes.
+            env["PR_BODY"] = f"x\n\nRead AGENTS.md at {base}\n"
+            ok = subprocess.run([sys.executable, str(SCRIPT), "--base-sha", base, "--head-sha", head],
+                                cwd=repo, env=env, capture_output=True, text=True)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
 
 
 if __name__ == "__main__":

@@ -85,6 +85,37 @@ class PrReadCheckWorkflowTest(unittest.TestCase):
         for forbidden in ("gh pr", "gh api", "git push", "upload-artifact", "actions/cache", "id-token"):
             self.assertNotIn(forbidden, text)
 
+    def test_nothing_can_make_the_check_pass_or_skip_silently(self):
+        """`continue-on-error` or an `if:` on the job or a step would turn a failing check green or
+        skipped without any test noticing; so would swallowing the script's exit status."""
+        data, _ = load()
+        self.assertNotIn("continue-on-error", data)
+        self.assertNotIn("if", data)
+        self.assertNotIn("defaults", data, "a workflow-level shell default could change error handling")
+        for name, job in data["jobs"].items():
+            for key in ("continue-on-error", "if", "needs", "strategy", "container", "services"):
+                self.assertNotIn(key, job, f"{name}: job-level {key}")
+            for step in job["steps"]:
+                label = f"{name}: {step.get('name') or step.get('uses')}"
+                self.assertNotIn("continue-on-error", step, label)
+                self.assertNotIn("if", step, label)
+                self.assertNotIn("shell", step, label)
+        run = next(s for _, s in all_steps(data) if "check_pr_read_line.py" in s.get("run", ""))["run"]
+        for swallow in ("|| true", "|| :", "|| exit 0", "set +e", "set +o errexit"):
+            self.assertNotIn(swallow, run)
+        self.assertIn("set -euo pipefail", run)
+        last = [l for l in run.splitlines() if l.strip()][-1]
+        self.assertTrue(last.lstrip().startswith("python3 tools/check_pr_read_line.py"),
+                        "the checker is the last command, so its exit status is the step's")
+        self.assertNotRegex(last, r"[|;&]|>\s*/dev/null")
+
+    def test_the_pr_template_ends_with_the_scaffold_line_and_keeps_its_checklist(self):
+        template = (REPO / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
+        last = [l for l in template.splitlines() if l.strip()][-1]
+        self.assertEqual(last, "Read AGENTS.md at <sha>")
+        self.assertIn("## Checklist", template)
+        self.assertIn("- [ ] `just verify` passes", template)
+
     def test_actionlint_accepts_the_workflow_when_installed(self):
         actionlint = shutil.which("actionlint")
         if actionlint is None:
