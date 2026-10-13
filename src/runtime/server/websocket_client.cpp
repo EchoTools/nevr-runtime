@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include <exception>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -28,16 +29,12 @@ WebSocketClient::WebSocketClient() : webSocket_(std::make_unique<ix::WebSocket>(
     netSystemInitialized_ = true;
   }
 
-  // Initialize thread synchronization for received messages
-  InitializeCriticalSection(&receivedMessagesMutex_);
-
   // Set up the message callback
   webSocket_->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) { OnMessage(msg); });
 }
 
 WebSocketClient::~WebSocketClient() {
   Disconnect();
-  DeleteCriticalSection(&receivedMessagesMutex_);
 }
 
 BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
@@ -98,24 +95,32 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
 #ifdef NEVR_TEST_HOOKS
     if (testBeforePendingLock_) testBeforePendingLock_();
 #endif
-    EnterCriticalSection(&receivedMessagesMutex_);
-    // Open publishes connected_ before draining the queue. A sender that read
-    // false before Open must not append after that drain has completed.
-    if (!connected_.load(std::memory_order_relaxed)) {
-      if (pendingMessages_.size() >= 256) {
-        LeaveCriticalSection(&receivedMessagesMutex_);
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.SERVERDB] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
-        return WebSocketSendStatus::Rejected;
+    bool queueFull = false;
+    bool queued = false;
+    {
+      std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
+      // Open publishes connected_ before draining the queue. A sender that read
+      // false before Open must not append after that drain has completed.
+      if (!connected_.load(std::memory_order_relaxed)) {
+        if (pendingMessages_.size() >= 256) {
+          queueFull = true;
+        } else {
+          pendingMessages_.push_back(message);
+          queued = true;
+        }
       }
-      pendingMessages_.push_back(message);
-      LeaveCriticalSection(&receivedMessagesMutex_);
+    }
+    if (queueFull) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.SERVERDB] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
+      return WebSocketSendStatus::Rejected;
+    }
+    if (queued) {
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.SERVERDB] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
           msgId, size, size);
       return WebSocketSendStatus::Queued;
     }
-    LeaveCriticalSection(&receivedMessagesMutex_);
   }
 
 #ifdef NEVR_TEST_HOOKS
@@ -142,10 +147,9 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
 }
 
 size_t WebSocketClient::DiscardPendingMessages() {
-  EnterCriticalSection(&receivedMessagesMutex_);
+  std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
   const size_t discarded = pendingMessages_.size();
   pendingMessages_.clear();
-  LeaveCriticalSection(&receivedMessagesMutex_);
   return discarded;
 }
 
@@ -220,7 +224,7 @@ VOID WebSocketClient::RefreshBearerTokenAfterRejection() {
 
 BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
-VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
+VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) try {
   switch (msg->type) {
     case ix::WebSocketMessageType::Open:
       if (s_wsHasConnectedOnce) ++s_wsReconnectCount;
@@ -257,21 +261,26 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
       if (msg->binary) {
         const std::string& payload = msg->str;
         size_t queueCapacity = 0;
-        EnterCriticalSection(&receivedMessagesMutex_);
-        if (receivedMessages_.size() < 1024) queueCapacity = 1024 - receivedMessages_.size();
-        LeaveCriticalSection(&receivedMessagesMutex_);
+        {
+          std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
+          if (receivedMessages_.size() < 1024) queueCapacity = 1024 - receivedMessages_.size();
+        }
 
         auto parsed = nevr_game_server::ParseServerDbFrame(payload, queueCapacity);
         bool queueFull = false;
-        EnterCriticalSection(&receivedMessagesMutex_);
-        for (auto& received : parsed.messages) {
-          if (receivedMessages_.size() >= 1024) {
-            queueFull = true;
-            break;
+        {
+          std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
+          for (auto& received : parsed.messages) {
+            if (receivedMessages_.size() >= 1024) {
+              queueFull = true;
+              break;
+            }
+#ifdef NEVR_TEST_HOOKS
+            if (testBeforeReceiveEnqueue_) testBeforeReceiveEnqueue_();
+#endif
+            receivedMessages_.push_back(std::move(received));
           }
-          receivedMessages_.push_back(std::move(received));
         }
-        LeaveCriticalSection(&receivedMessagesMutex_);
 
         switch (parsed.status) {
           case nevr_game_server::WebSocketFrameStatus::Complete:
@@ -324,14 +333,17 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
     case ix::WebSocketMessageType::Fragment:
       break;
   }
+} catch (const std::exception&) {
+  Log(EchoVR::LogLevel::Error, "[NEVR.SERVERDB] callback threw and was CONTAINED at=WebSocketClient::OnMessage failure=1");
 }
 
 VOID WebSocketClient::FlushPendingMessages() {
   std::vector<std::string> toSend;
 
-  EnterCriticalSection(&receivedMessagesMutex_);
-  toSend.swap(pendingMessages_);
-  LeaveCriticalSection(&receivedMessagesMutex_);
+  {
+    std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
+    toSend.swap(pendingMessages_);
+  }
 
   if (toSend.empty()) {
     return;
@@ -353,9 +365,10 @@ VOID WebSocketClient::FlushPendingMessages() {
 VOID WebSocketClient::ProcessReceivedMessages() {
   std::vector<nevr_game_server::ReceivedWebSocketMessage> messagesToProcess;
 
-  EnterCriticalSection(&receivedMessagesMutex_);
-  messagesToProcess.swap(receivedMessages_);
-  LeaveCriticalSection(&receivedMessagesMutex_);
+  {
+    std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
+    messagesToProcess.swap(receivedMessages_);
+  }
 
   // Non-const iteration: messagesToProcess is this function's own copy and is
   // discarded after dispatch, so handing the handler a writable payload is honest.
@@ -375,9 +388,8 @@ VOID WebSocketClient::DisableReconnection() {
 void WebSocketClient::TestSetConnected(bool connected) { connected_.store(connected); }
 
 std::vector<std::string> WebSocketClient::TestCopyPendingMessages() {
-  EnterCriticalSection(&receivedMessagesMutex_);
+  std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
   const std::vector<std::string> messages = pendingMessages_;
-  LeaveCriticalSection(&receivedMessagesMutex_);
   return messages;
 }
 
@@ -391,9 +403,16 @@ void WebSocketClient::TestSetBeforePendingLock(std::function<void()> hook) {
 
 void WebSocketClient::TestFlushPendingMessages() { FlushPendingMessages(); }
 
+void WebSocketClient::TestSetBeforeReceiveEnqueue(std::function<void()> hook) {
+  testBeforeReceiveEnqueue_ = std::move(hook);
+}
+
+void WebSocketClient::TestDeliverMessage(const ix::WebSocketMessagePtr& msg) { OnMessage(msg); }
+
+void WebSocketClient::TestSetBearerToken(const std::string& token) { ApplyBearerToken(token); }
+
 void WebSocketClient::TestEnqueueReceivedMessage(nevr_game_server::ReceivedWebSocketMessage message) {
-  EnterCriticalSection(&receivedMessagesMutex_);
+  std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
   receivedMessages_.push_back(std::move(message));
-  LeaveCriticalSection(&receivedMessagesMutex_);
 }
 #endif
