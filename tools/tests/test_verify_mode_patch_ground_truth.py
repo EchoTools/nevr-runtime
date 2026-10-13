@@ -96,6 +96,27 @@ class VerifyModePatchGroundTruth(unittest.TestCase):
         with self.assertRaisesRegex(verifier.InventoryError, "0x116F3D"):
             self.run_verifier(source=mutated, ground_truth=truth)
 
+    def test_a_decoy_does_not_stand_in_for_a_site_declared_another_way(self):
+        # An earlier function declares `site` for a covered RVA and closes at column 0.  The real
+        # function declares its `site` with brace-init, so no `site =` stands between the decoy and
+        # the real Apply.  Only the column-0 closing brace stops the span: without it the decoy is
+        # attributed to the real Apply, the real site drops out of the inventory unflagged, and the
+        # census is satisfied by the decoy.
+        source = SOURCE.read_text()
+        anchor = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
+        real = (
+            "uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + "
+            "nevr_patch_addresses::SPECTATORSTREAM_CHECK;"
+        )
+        self.assertIn(anchor, source)
+        self.assertIn(real, source)
+        braced = real.replace("site = ", "site{").replace(";", "};")
+        mutated = source.replace(real, braced).replace(
+            anchor, self.decoy_function("SERVER_FLAGS_CHECK") + anchor
+        )
+        with self.assertRaisesRegex(verifier.InventoryError, "unrecognized ProcessMemcpy"):
+            self.run_verifier(source=mutated)
+
     def test_the_shipped_site_is_the_one_inventoried_when_a_decoy_precedes_it(self):
         source = SOURCE.read_text()
         anchor = "nevr_checked_patch::Result PatchSpectatorStreamCheck("

@@ -129,14 +129,14 @@ VOID PatchEnableHeadless(PVOID pGame) {
   //   engine flags 0x00000137 -> 0x00000135 (bit0_render=SET(WINDOWED))
   // with one game window present for the entire run.
   //
-  // Ordering is what makes applying it here correct: this function runs from
-  // boot.cpp's `if (g_isHeadless)` block, strictly after `-server` sets that
-  // global in the same hook and strictly before the trailing
-  // EchoVR::PreprocessCommandLine(pGame) — which is where the game applies this
-  // identical mask when the token IS present. So our write lands earlier in the
-  // same call chain than the game's own known-sufficient write, and precedes
-  // every consumer that write precedes. AND-masking is idempotent, so passing
-  // the token as well remains a no-op.
+  // Ordering: this function runs from RunDeferredRuntimeBootstrap's
+  // `if (g_isHeadless)` block (boot.cpp), after `-server` has set that global
+  // during argument parsing and AFTER PreprocessCommandLineHook's original
+  // EchoVR::PreprocessCommandLine(pGame) call has returned. That original call
+  // is where the game applies this identical mask when the token IS present, so
+  // on a `-server`-only run our write lands after it, not before it. Whether any
+  // consumer inside that call needs the mask earlier is not established.
+  // AND-masking is idempotent, so passing the token as well remains a no-op.
   UINT32* engineFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_ENGINE_FLAGS_OFFSET);
   const UINT32 flagsBefore = *engineFlags;
   *engineFlags &= ENGINE_FLAGS_NOAUDIO_MASK & ENGINE_FLAGS_HEADLESS_MASK;
@@ -624,7 +624,8 @@ VOID PatchEnableServer() {
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
-  // This makes the server automatically enter "load lobby" state on startup.
+  // Hypothesis (#45): this check is what keeps a server out of the "load lobby" state at startup.
+  // Not established either way.
   // #519: PreprocessCommandLineHook writes the site before the first original call on a server,
   // so this pass is expected to report already_applied. If that earlier write did not happen,
   // this pass validates the bytes and writes them; whether a write at this point has any effect

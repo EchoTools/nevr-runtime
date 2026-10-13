@@ -177,7 +177,11 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     # through to the ProcessMemcpy census below.  The span between the `site`
     # declaration and Apply stays inside one function: it cannot cross another
     # `site =` or a function's closing brace at column 0, so an earlier decoy
-    # declaration cannot stand in for the one Apply really uses.
+    # declaration cannot stand in for the one Apply really uses.  Limit: this
+    # verifier alone accepts a decoy placed AFTER the real declaration in a
+    # nested scope (an indented block before Apply); the shipped-source tests in
+    # tools/tests/test_verify_mode_patch_ground_truth.py pin SPECTATOR_RVA, so
+    # that substitution still fails the suite.
     checked_write = re.search(
         r"uint8_t\s*\*\s*const\s+site\s*=\s*"
         r"reinterpret_cast<uint8_t\*>\(\s*EchoVR::g_GameBaseAddress\s*\)\s*\+\s*"
