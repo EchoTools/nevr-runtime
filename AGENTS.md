@@ -359,18 +359,22 @@ your seat name, for example `claude-main` or `codex`.
   - `launch-server.sh` copies `BugSplat64.dll` and `plugins/*` into `echovr/bin/win10` and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
-  - `just test-system` and its variants (`tests/system/helpers_test.go`: `deployDLL`, `deployPlugin`
-    and `cleanupDLLs` write and `os.Remove` under `$EVR_GAME_DIR/bin/win10`), and `just test-plugins`
+  - `just test-system` and its variants (`tests/system/helpers_test.go`: `deployDLL` writes and
+    `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is defined and not
+    called). A plain `just test-system` also starts the game: `shutdown_test.go` runs `wine` in
+    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix` unless `-short` is set.
+    Another writer is `just test-plugins`
     and `just test-plugins-verbose` (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup
     helpers for DLLs and plugin config files, but no test calls them; the plugin tests only read
     `$EVR_GAME_DIR/bin/win10/_overrides/combat`), and `tests/system/login_test.go` (with
-    `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` and writes
-    `$EVR_GAME_DIR/.wineprefix`).
+    `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
+    when set, else `$EVR_GAME_DIR/.wineprefix`; unset `WINEPREFIX` or set it to
+    `<copy>/echovr/.wineprefix` for a Go test run).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
   Not writers: `just test-plugins-groundtruth`, `just test-auth-groundtruth` (they need no game
-  binary and name no game directory). `just test-winvm` deploys to the guest VM's own install, not
-  this host's.
+  binary and name no game directory). `just test-winvm` deploys into a throwaway rig on the guest
+  VM (`tools/winvm/systest.py`: `C:\nevr-systest`) and only reads the guest's install.
 
   Point the scripts and the scenario recipes at the copy with `NEVR_GAME_ROOT=<copy>`, the Go tests
   with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
@@ -389,7 +393,8 @@ your seat name, for example `claude-main` or `codex`.
     all of it.
   - **Size.** The copy is the whole install including `.wineprefix`. Measure the install read-only
     with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
-    prefix) and compare it with `df -h /var/tmp`; free space must exceed the figure. A full disk truncates the file being copied.
+    prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
+    (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
   - **Make it safe.** Remove what a run must not start with, then list every link that leaves the
     copy:
     ```sh
@@ -415,11 +420,16 @@ your seat name, for example `claude-main` or `codex`.
       `echovr/.wineprefix`.
   - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
-    `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: logs and
-    Wine registry under `echovr/.wineprefix`, and the files it deploys. `launch-client.sh` and
-    `verify-server.sh` put back what they deploy; `launch-server.sh` and the Go tests do not (they
-    leave the test DLL or delete `BugSplat64.dll`, and leave plugins or config files that make
-    `launch-client.sh` abort or save the test DLL as its "original"). `verify-server.sh` keeps its
+    `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
+    registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
+    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/EchoVR/logs`;
+    `verify-server.sh` reads `echovr/bin/win10/logs` (that the runtime writes there is unverified).
+    `launch-client.sh` and `verify-server.sh` put back what they deploy on a normal or trapped exit,
+    not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
+    the leftover test DLL as the "original" on the next run, while `verify-server.sh` recovers from
+    its backup directory. `launch-server.sh` and the Go tests put nothing back (they leave the test
+    DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
+    `launch-client.sh` abort). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
     `/var/tmp/work-nevr-runtime/`), and restores it into the current copy, so clear or inspect that
     directory before a run against a different copy than the last. When no copy exists, the run
