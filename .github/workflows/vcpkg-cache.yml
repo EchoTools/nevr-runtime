@@ -68,8 +68,8 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
-        # every mingw package ABI hash. A PATH that differs between jobs (build.yml adds setup-just, the seed
-        # does not) gives every archive a different name and the restore finds none. Pin it.
+        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
+        # finds none; `just verify` runs vcpkg again under the job PATH, so the job must not change PATH either.
         env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
           "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \

@@ -49,6 +49,19 @@ class VcpkgPinTest(unittest.TestCase):
             self.assertRegex(text, re.escape(pinned) + r" \\\n\s+\"\$HOME/\.vcpkg/vcpkg\" install",
                              f"{workflow.name} runs vcpkg install under the job's own PATH")
 
+    def test_no_job_that_installs_vcpkg_changes_path(self):
+        # `just verify` runs vcpkg install again (justfile _vcpkg-mingw) under the job's PATH, and PATH is
+        # hashed into every mingw package ABI. A job whose PATH differs from the install step's pinned one
+        # removes and rebuilds all 14 packages inside the Verify step. The image ships the pinned just.
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            text = workflow.read_text()
+            if '"$HOME/.vcpkg/vcpkg" install' not in text:
+                continue
+            self.assertNotIn("GITHUB_PATH", text, f"{workflow.name} edits PATH for later steps")
+            self.assertNotIn("extractions/setup-just", text, f"{workflow.name} installs just onto PATH")
+        build = (WORKFLOWS / "build.yml").read_text()
+        self.assertIn('test "$(just --version)" = "just 1.58.0"', build)
+
     def test_the_cache_key_prefix_is_the_same_in_the_seed_and_the_consumer(self):
         keys = {}
         for name in ("build.yml", "vcpkg-cache.yml"):

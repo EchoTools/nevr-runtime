@@ -199,11 +199,6 @@ jobs:
         echo "version=$version" >> "$GITHUB_OUTPUT"
         echo "release version: '${version}' (empty: a branch build, which stamps a development version)"
 
-    - name: Setup pinned just
-      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-      with:
-        just-version: '1.58.0'
-
     - name: Toolchain versions
       run: |
         set -euo pipefail
@@ -212,6 +207,9 @@ jobs:
         x86_64-w64-mingw32-g++ -v 2>&1 | grep "Thread model"
         cmake --version
         just --version
+        # The image's own just is the one the release was built with. An action that installs one adds a
+        # directory to PATH, and PATH is part of every mingw package ABI (see the vcpkg install below).
+        test "$(just --version)" = "just 1.58.0"
         osslsigncode --version
         buf --version
 
@@ -256,8 +254,8 @@ jobs:
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
         # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
-        # every mingw package ABI hash. A PATH that differs between jobs (build.yml adds setup-just, the seed
-        # does not) gives every archive a different name and the restore finds none. Pin it.
+        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
+        # finds none; `just verify` runs vcpkg again under the job PATH, so the job must not change PATH either.
         env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
           "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
