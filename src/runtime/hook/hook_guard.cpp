@@ -15,7 +15,18 @@ constexpr int kSnapshotBytes = 16;
 
 /// Fixed capacity — no heap. Recording happens during boot, some of it under the
 /// loader lock, and this is a diagnostic that must never be the reason a boot fails.
-constexpr int kMaxGuarded = 64;
+///
+/// The bound is found, not set. Counting the install sites in src/ that reach Record() (every
+/// PatchDetour/InstallBootDetour call, each row of the binary_bug_fixes hook table, and the raw
+/// MinHook installs that call Record directly) gives 62 for a build with every optional hook
+/// present: crash_recovery 9, mode_patches 8, binary_bug_fixes 7, party_invite_gate 7,
+/// initialize 8 (6 InstallBootDetour + CSysDLL_GetSymbol + CSysDLL_Load), headless_graphics 4,
+/// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2,
+/// and one each in xpid_patch, return_to_lobby, resource_override, builtin_filter. The
+/// previous capacity of 64 left 2 spare slots, so one more hook would have dropped silently.
+/// 128 is that count doubled. If the table still fills, Record() counts the drop (never
+/// silent): VerifyAll() reports it at ERROR and DroppedCount() exposes it.
+constexpr int kMaxGuarded = 128;
 
 struct GuardedSite {
   const void* target;
@@ -31,7 +42,12 @@ struct GuardedSite {
 GuardedSite g_sites[kMaxGuarded];
 volatile LONG g_reserved = 0;
 volatile LONG g_recorded = 0;
-volatile LONG g_overflowed = 0;
+volatile LONG g_dropped = 0;           // Record() calls that found the table full
+volatile LONG g_dropReported = 0;       // g_dropped value VerifyAll() last reported
+volatile LONG g_firstDropClaimed = 0;   // one writer fills the two fields below
+volatile LONG g_firstDropPublished = 0;
+const void* g_firstDropTarget = nullptr;
+const char* g_firstDropName = nullptr;
 
 #ifdef NEVR_TEST_HOOKS
 void (*g_beforePublishForTest)() = nullptr;
@@ -71,11 +87,15 @@ void Record(const void* target, const char* name) {
   for (;;) {
     idx = InterlockedCompareExchange(&g_reserved, 0, 0);
     if (idx >= kMaxGuarded) {
-      if (InterlockedCompareExchange(&g_overflowed, 1, 0) == 0) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] hook guard table full cap=%d — further detours unguarded",
-            kMaxGuarded);
+      // No Log() here: Record() runs under the DllMain loader lock during boot (N36).
+      // The drop is counted and VerifyAll() (tick, plugin loader: never under the lock)
+      // reports it.
+      if (InterlockedCompareExchange(&g_firstDropClaimed, 1, 0) == 0) {
+        g_firstDropTarget = target;
+        g_firstDropName = name != nullptr ? name : "(unnamed)";
+        InterlockedExchange(&g_firstDropPublished, 1);
       }
+      InterlockedIncrement(&g_dropped);
       return;
     }
     if (InterlockedCompareExchange(&g_reserved, idx + 1, idx) == idx) break;
@@ -139,6 +159,20 @@ int VerifyAll(const char* context) {
         context != nullptr ? context : "(unknown)", expected, actual);
   }
 
+  // A full table means detours that nothing is watching. Reported at ERROR each time the
+  // dropped count has grown since the last report, so it cannot pass as quiet.
+  const LONG dropped = InterlockedCompareExchange(&g_dropped, 0, 0);
+  const LONG lastReported = InterlockedExchange(&g_dropReported, dropped);
+  if (dropped > lastReported) {
+    const bool haveFirst = InterlockedCompareExchange(&g_firstDropPublished, 0, 0) != 0;
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.PATCH] hook guard table full cap=%d dropped=%ld first=%s va=0x%llX after=%s — "
+        "those detours are NOT guarded against overwrite",
+        kMaxGuarded, static_cast<long>(dropped), haveFirst ? g_firstDropName : "(unknown)",
+        static_cast<unsigned long long>(haveFirst ? reinterpret_cast<uintptr_t>(g_firstDropTarget) : 0),
+        context != nullptr ? context : "(unknown)");
+  }
+
   // Aggregate line is edge-triggered too: only fires when THIS check found a
   // new collision, not on every periodic tick for as long as an old one
   // remains overwritten. `mismatches` (the return value) still reports the
@@ -155,6 +189,10 @@ int VerifyAll(const char* context) {
 
 int RecordedCount() { return static_cast<int>(InterlockedCompareExchange(&g_recorded, 0, 0)); }
 
+int DroppedCount() { return static_cast<int>(InterlockedCompareExchange(&g_dropped, 0, 0)); }
+
+int Capacity() { return kMaxGuarded; }
+
 #ifdef NEVR_TEST_HOOKS
 void SetBeforePublishForTest(void (*callback)()) { g_beforePublishForTest = callback; }
 
@@ -162,7 +200,12 @@ void ResetForTest() {
   InterlockedExchange(&g_reserved, 0);
   InterlockedExchange(&g_recorded, 0);
   memset(g_sites, 0, sizeof(g_sites));
-  InterlockedExchange(&g_overflowed, 0);
+  InterlockedExchange(&g_dropped, 0);
+  InterlockedExchange(&g_dropReported, 0);
+  InterlockedExchange(&g_firstDropClaimed, 0);
+  InterlockedExchange(&g_firstDropPublished, 0);
+  g_firstDropTarget = nullptr;
+  g_firstDropName = nullptr;
   g_beforePublishForTest = nullptr;
 }
 #endif

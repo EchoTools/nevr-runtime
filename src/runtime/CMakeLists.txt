@@ -768,6 +768,8 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
+      patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
@@ -813,6 +815,7 @@ if(BUILD_TESTING)
       tests/test_behavioral.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       ext/module_loader.cpp

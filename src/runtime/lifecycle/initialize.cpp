@@ -377,8 +377,9 @@ static VOID InitializeAfterGameImageGuard() {
               nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_GetSymbol reason=%s\n",
                                             MH_StatusToString(cleanup));
             }
+            // The trampoline is written only when creation returned MH_OK.
+            g_original_GetSymbol = nullptr;
           }
-          g_original_GetSymbol = nullptr;
           nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;
@@ -406,8 +407,9 @@ static VOID InitializeAfterGameImageGuard() {
               nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_Load reason=%s\n",
                                             MH_StatusToString(cleanup));
             }
+            // The trampoline is written only when creation returned MH_OK.
+            g_original_LoadModule = nullptr;
           }
-          g_original_LoadModule = nullptr;
           nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;

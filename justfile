@@ -1077,7 +1077,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_spectatorstream_order tools.tests.test_verify_mode_patch_ground_truth tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly tools.tests.test_check_pr_read_line tools.tests.test_pr_read_check_workflow -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_spectatorstream_order tools.tests.test_pnsrad_diag_deferral tools.tests.test_verify_mode_patch_ground_truth tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly tools.tests.test_check_pr_read_line tools.tests.test_pr_read_check_workflow -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1720,7 +1720,10 @@ verify:
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
     fi
-    if ! grep -q 'ServerFatal' <<<"$N120_XPID"; then
+    # ServerFatal is not callable here: the patch runs before the CLI is parsed, so g_isServer is
+    # still false and ServerFatal would only warn. The failure goes through g_bootHookFailed, which
+    # boot.cpp checks once the mode is known (src/runtime/tests/test_behavioral.cpp XpidPatchBoot).
+    if ! grep -q 'g_bootHookFailed = true' <<<"$N120_XPID"; then
         echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
         exit 1
@@ -2565,7 +2568,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 872
+    python3 tools/verify_gtest_floor.py --floor 913
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

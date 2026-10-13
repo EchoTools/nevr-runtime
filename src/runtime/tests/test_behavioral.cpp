@@ -41,6 +41,8 @@
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/patch/evrp_package.h"
+#include "runtime/patch/xpid_patch.h"
+#include "runtime/hook/addresses.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -166,6 +168,9 @@ void ServerFatal(const CHAR* format, ...) {
   g_lastServerFatal = buf;
   fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
 }
+
+// --- initialize.h extern (set by xpid_patch.cpp; initialize.cpp is not linked here) ---
+bool g_bootHookFailed = false;
 
 // --- config.h extern (used by ws_bridge.cpp) ---
 PVOID g_pGame = nullptr;
@@ -1937,6 +1942,61 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     VirtualFree(reserved, 0, MEM_RELEASE);
 }
 
+// The table holds every install site the runtime has. 62 is the count of sites in src/ that reach
+// nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
+// guards on a healthy boot. A new site raises that count and this number with it.
+TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
+    constexpr int kInstallSitesInSource = 62;
+    EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
+}
+
+// A full table must not look like a clean one. Recording past Capacity() drops the site, and the drop
+// has to be counted and reported at ERROR by VerifyAll, not vanish.
+TEST(N84_HookGuard, FullTable_DropsAreCountedAndReportedLoudly) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+
+    const int cap = nevr_hook_guard::Capacity();
+    ASSERT_GT(cap, 0);
+    for (int i = 0; i < cap; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap);
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 0);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:full"), 0);
+    EXPECT_FALSE(TestLogContains("hook guard table full")) << "reported a drop that never happened";
+
+    nevr_hook_guard::Record(s.page, "N84_dropped_first");
+    nevr_hook_guard::Record(s.page, "N84_dropped_second");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap) << "a full table must not grow";
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 2);
+
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overflow"), 0) << "a drop is not an overwrite";
+    EXPECT_TRUE(TestLogContains("hook guard table full cap=")) << "the drop was not reported";
+    EXPECT_TRUE(TestLogContains("dropped=2 first=N84_dropped_first")) << "the report must name the first dropped detour";
+
+    // Edge-triggered: the same drops are not reported again, a new drop is.
+    ClearTestLogs();
+    nevr_hook_guard::VerifyAll("test:again");
+    EXPECT_FALSE(TestLogContains("hook guard table full"));
+    nevr_hook_guard::Record(s.page, "N84_dropped_third");
+    nevr_hook_guard::VerifyAll("test:third");
+    EXPECT_TRUE(TestLogContains("dropped=3 first=N84_dropped_first"));
+}
+
+// Record() runs under the DllMain loader lock at boot, so overflow itself must not Log().
+TEST(N84_HookGuard, FullTable_RecordDoesNotLogUnderTheLoaderLock) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    for (int i = 0; i < nevr_hook_guard::Capacity() + 3; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 3);
+    EXPECT_FALSE(TestLogContains("hook guard")) << "Record() logged on overflow; it can run under the loader lock";
+}
+
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
 //   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
 // WOULD-FAIL-IF (N84-record): delete the Readable() check in nevr_hook_guard::Record
@@ -2183,4 +2243,111 @@ TEST(HmdSerial, StockChoice) {
   char full[nevr_hmd_serial::kSerialBytes];
   std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
   EXPECT_EQ(nevr_hmd_serial::Select(false, full).value, std::string(24, 'Z'));
+}
+
+
+// ============================================================================
+// #479 — the XPID provider-string patch reports failure through g_bootHookFailed.
+//
+// PatchDscProvider runs from Initialize(), before the CLI is parsed, so g_isServer is still false
+// there and ServerFatal() would only warn. The failure has to reach boot.cpp's server check
+// (`if (g_bootHookFailed) ServerFatal(...)`) through the flag instead.
+//
+// The test builds a 32 MB stand-in for the game image, puts the five provider strings at the
+// real RVAs, and points EchoVR::g_GameBaseAddress at it.
+// ============================================================================
+
+namespace {
+
+constexpr size_t kXpidImageSize = 0x2000000;
+
+struct XpidSite {
+    uintptr_t rva;
+    const char* original;  // 4 bytes including the terminator or dash
+    const char* patched;
+};
+
+const XpidSite kXpidSites[] = {
+    {nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "PSN-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "???-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME, "???", "DSC"},
+};
+
+void WriteXpidOriginals(char* base) {
+    for (const auto& site : kXpidSites) memcpy(base + site.rva, site.original, 4);
+}
+
+// Points EchoVR::g_GameBaseAddress at `base` for one test and restores it, and clears the flag the
+// code under test sets.
+struct XpidBaseScope {
+    CHAR* saved;
+    explicit XpidBaseScope(char* base) : saved(EchoVR::g_GameBaseAddress) {
+        EchoVR::g_GameBaseAddress = base;
+        g_bootHookFailed = false;
+        g_serverFatalCalls = 0;
+    }
+    ~XpidBaseScope() {
+        EchoVR::g_GameBaseAddress = saved;
+        g_bootHookFailed = false;
+    }
+};
+
+}  // namespace
+
+TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    for (const auto& site : kXpidSites) {
+        EXPECT_EQ(memcmp(base + site.rva, site.patched, 4), 0) << "site rva=0x" << std::hex << site.rva;
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AnImageWithUnexpectedBytesFailsTheBootThroughTheFlagNotServerFatal) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);  // not this build
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a validation failure must reach boot.cpp's server check";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+    }
+    // Nothing is half-patched: validation happens before any write.
+    EXPECT_EQ(memcmp(base + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
+    // The same bytes through a read-only view of a section: validation passes, then
+    // VirtualProtect(PAGE_EXECUTE_READWRITE) on the view is refused, so every ApplyPatch fails.
+    HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        static_cast<DWORD>(kXpidImageSize), nullptr);
+    ASSERT_NE(section, nullptr);
+    char* writable = static_cast<char*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kXpidImageSize));
+    ASSERT_NE(writable, nullptr);
+    WriteXpidOriginals(writable);
+    UnmapViewOfFile(writable);
+    char* readOnly = static_cast<char*>(MapViewOfFile(section, FILE_MAP_READ, 0, 0, kXpidImageSize));
+    ASSERT_NE(readOnly, nullptr);
+    {
+        XpidBaseScope scope(readOnly);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    UnmapViewOfFile(readOnly);
+    CloseHandle(section);
 }

@@ -235,6 +235,128 @@ TEST(DllLoadHookCallbacks, OnLoadClaimsItsOwnRegistrationAfterConcurrentAppend) 
   nevr_dll_load_hook::Shutdown();
 }
 
+// Install() creates, enables and (on a failed enable) removes four MinHook hooks. The tests below
+// replace those three calls so each failure branch runs and its cleanup is observed.
+namespace {
+
+struct FakeHookState {
+  int createCalls = 0;
+  int enableCalls = 0;
+  int removeCalls = 0;
+  std::vector<void*> removedTargets;
+  MH_STATUS createResult = MH_OK;
+  MH_STATUS enableResult = MH_OK;
+  MH_STATUS removeResult = MH_OK;
+  bool writeTrampoline = true;
+};
+FakeHookState g_fakeHooks;
+int g_trampolineStorage = 0;
+
+MH_STATUS WINAPI FakeCreate(LPVOID, LPVOID, LPVOID* original) {
+  ++g_fakeHooks.createCalls;
+  if (g_fakeHooks.createResult == MH_OK && g_fakeHooks.writeTrampoline && original != nullptr) {
+    *original = &g_trampolineStorage;  // MinHook writes the trampoline only on MH_OK
+  }
+  return g_fakeHooks.createResult;
+}
+MH_STATUS WINAPI FakeEnable(LPVOID) {
+  ++g_fakeHooks.enableCalls;
+  return g_fakeHooks.enableResult;
+}
+MH_STATUS WINAPI FakeRemove(LPVOID target) {
+  ++g_fakeHooks.removeCalls;
+  g_fakeHooks.removedTargets.push_back(target);
+  return g_fakeHooks.removeResult;
+}
+
+void UseFakeHooks() {
+  g_fakeHooks = FakeHookState{};
+  const nevr_dll_load_hook::MinHookOps ops{&FakeCreate, &FakeEnable, &FakeRemove};
+  nevr_dll_load_hook::SetMinHookOpsForTest(&ops);
+}
+
+const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"};
+
+}  // namespace
+
+// MinHook writes the trampoline only when MH_CreateHook returns MH_OK. A second Install() fails every
+// create with MH_ERROR_ALREADY_CREATED and leaves the first install's trampoline in place; the
+// detours still call through it, so Install() must not clear it.
+TEST(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled) {
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  nevr_dll_load_hook::Install();
+  void* before[4];
+  for (int i = 0; i < 4; ++i) {
+    before[i] = nevr_dll_load_hook::OriginalForTest(kVariants[i]);
+    ASSERT_NE(before[i], nullptr) << kVariants[i] << ": precondition: the first install worked";
+  }
+
+  UseFakeHooks();
+  g_fakeHooks.createResult = MH_ERROR_ALREADY_CREATED;
+  nevr_dll_load_hook::Install();
+
+  EXPECT_EQ(g_fakeHooks.createCalls, 4);
+  EXPECT_EQ(g_fakeHooks.removeCalls, 0) << "nothing was created, so there is nothing to remove";
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), before[i])
+        << kVariants[i] << ": a failed create cleared the working trampoline";
+  }
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  EXPECT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr) << "the installed hook must still load through its trampoline";
+  nevr_dll_load_hook::Shutdown();
+  MH_Uninitialize();
+}
+
+TEST(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampoline) {
+  UseFakeHooks();
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  const int recordedBefore = nevr_hook_guard::RecordedCount();
+  nevr_dll_load_hook::Install();
+
+  EXPECT_EQ(g_fakeHooks.createCalls, 4);
+  EXPECT_EQ(g_fakeHooks.enableCalls, 4);
+  EXPECT_EQ(g_fakeHooks.removeCalls, 4) << "every created-but-not-enabled hook must be removed";
+  const void* expectedTargets[4] = {
+      reinterpret_cast<void*>(&LoadLibraryA), reinterpret_cast<void*>(&LoadLibraryW),
+      reinterpret_cast<void*>(&LoadLibraryExA), reinterpret_cast<void*>(&LoadLibraryExW)};
+  ASSERT_EQ(g_fakeHooks.removedTargets.size(), 4U);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(g_fakeHooks.removedTargets[i], expectedTargets[i]) << kVariants[i];
+    EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), nullptr)
+        << kVariants[i] << ": a removed hook's trampoline must not stay published";
+  }
+  EXPECT_EQ(nevr_hook_guard::RecordedCount(), recordedBefore) << "a hook that did not install must not be guarded";
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
+TEST(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
+  UseFakeHooks();
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  g_fakeHooks.removeResult = MH_ERROR_NOT_CREATED;
+  nevr_dll_load_hook::Install();
+
+  EXPECT_EQ(g_fakeHooks.removeCalls, 4);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), nullptr) << kVariants[i];
+  }
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
+TEST(DllLoadHookInstall, ASuccessfulInstallRemovesNothing) {
+  UseFakeHooks();
+  nevr_dll_load_hook::Install();
+
+  EXPECT_EQ(g_fakeHooks.removeCalls, 0);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), &g_trampolineStorage) << kVariants[i];
+  }
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
 // #363 review: the Oculus predicate matches the file name, not any folder on the path.
 TEST(OculusPlatformPath, RefusesTheSdkLibraryByFileName) {
   EXPECT_TRUE(nevr_dll_load_hook::IsOculusPlatformPath(L"libovrplatform64_1.dll"));

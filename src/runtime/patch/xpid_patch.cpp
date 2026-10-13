@@ -11,7 +11,7 @@
 // (`login injected xpid=DSC-...` does not prove it: ws_bridge builds that prefix
 // itself, so it is green even when this patch never ran.) Tee the outcome.
 #include "runtime/log/boot_log_tee.h"
-#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
+#include "runtime/lifecycle/initialize.h"  // g_bootHookFailed
 
 // Expected original bytes at each patch site (for validation).
 static const BYTE kPsnShort[] = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
@@ -31,10 +31,10 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
 /// Report a mismatch with both expected and actual bytes — `ValidateBytes`
 /// only returns a bool, so this re-derives `site` to show what was actually
 /// found, not just what was expected. Warning, not Error: these are
-/// diagnostic detail feeding into the mode-aware ServerFatal() call below,
-/// which owns the terminal severity (fatal+Error on server, non-fatal+
-/// Warning on client) — five unconditional Error lines here would read as
-/// five separate decisions when it's really one.
+/// diagnostic detail feeding into the single g_bootHookFailed decision below,
+/// which boot.cpp turns into the terminal severity once the CLI says whether
+/// this is a server — five unconditional Error lines here would read as five
+/// separate decisions when it's really one.
 static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
   Log(EchoVR::LogLevel::Warning,
@@ -72,11 +72,8 @@ VOID PatchDscProvider() {
   }
 
   if (!ok) {
-    // No standalone "Aborting..." Log() line here (was Category J): ServerFatal
-    // below already logs the better, more detailed explanation at the
-    // mode-correct level (Error+exit on server, Warning+continue on client) —
-    // this also resolves severity being decided in one place instead of split
-    // across this line and ServerFatal.
+    // No standalone "Aborting..." Log() line here: the failure is reported once,
+    // through the boot tee below, and g_bootHookFailed carries the decision.
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
@@ -85,8 +82,15 @@ VOID PatchDscProvider() {
     // would be somewhere unrelated. Verified safe to make fatal: a real server run
     // reports "DSC provider patch applied at 5 sites", so this fires only on an
     // actual binary mismatch, never on a healthy boot.
-    ServerFatal("XPID provider-string validation failed — echovr.exe is not the "
-                "build this runtime targets; every patched address is suspect");
+    //
+    // ServerFatal is not callable here: this runs from Initialize() before the CLI
+    // is parsed, so g_isServer is still false and ServerFatal would only warn.
+    // g_bootHookFailed is checked by boot.cpp once g_isServer is known, and a
+    // server refuses to start with it set (a client reports ok=false and goes on).
+    g_bootHookFailed = true;
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.XPID] XPID provider-string validation failed — echovr.exe is not the build this runtime "
+        "targets; every patched address is suspect; a server will refuse to start\n");
     return;
   }
 
@@ -105,7 +109,12 @@ VOID PatchDscProvider() {
   allPatched &= ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
 
   if (!allPatched) {
-    ServerFatal("XPID provider-string patch failed — identity strings are inconsistent");
+    // Same rule as the validation failure above: no ServerFatal before the CLI is
+    // parsed. The identity strings are now a mix of PSN-/DSC-, so a server must not run.
+    g_bootHookFailed = true;
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.XPID] provider-string patch FAILED — identity strings are inconsistent; "
+        "a server will refuse to start\n");
     return;
   }
 

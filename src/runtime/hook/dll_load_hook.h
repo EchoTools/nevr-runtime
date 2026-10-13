@@ -6,6 +6,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+#include <MinHook.h>
+#endif
 
 namespace nevr_dll_load_hook {
 
@@ -51,6 +54,19 @@ void FireCallbacksForModule(const char* lower_name, HMODULE module);
 #ifdef NEVR_DLL_LOAD_HOOK_TESTING
 using ModuleProbe = HMODULE(WINAPI*)(LPCSTR);
 void SetModuleProbeForTest(ModuleProbe probe);
+
+/* The three MinHook calls Install() makes, replaceable so a test can make creation or enabling
+ * fail and watch the cleanup. A null member keeps the real function. */
+struct MinHookOps {
+  MH_STATUS(WINAPI* create)(LPVOID target, LPVOID detour, LPVOID* original);
+  MH_STATUS(WINAPI* enable)(LPVOID target);
+  MH_STATUS(WINAPI* remove)(LPVOID target);
+};
+void SetMinHookOpsForTest(const MinHookOps* ops);
+
+/* The trampoline Install() holds for "LoadLibraryA"/"LoadLibraryW"/"LoadLibraryExA"/"LoadLibraryExW",
+ * or nullptr when it holds none. */
+void* OriginalForTest(const char* name);
 #endif
 
 } // namespace nevr_dll_load_hook
