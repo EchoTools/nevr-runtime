@@ -20,7 +20,8 @@ on:
 
 concurrency:
   group: vcpkg-cache-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue, never cancel: the save is the last step of a ~39 minute install, so a cancelled run saves nothing.
+  cancel-in-progress: false
 
 jobs:
   seed:
