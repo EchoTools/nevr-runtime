@@ -39,7 +39,8 @@
 // "which file owns crash recovery?" and answers it in two places. The
 // definition is here and mode_patches.cpp does not know about it.
 jmp_buf g_gameLoopJmpBuf;
-volatile bool g_gameLoopJmpBufValid = false;
+static std::atomic<bool> g_gameLoopJmpBufValid{false};
+static std::atomic<DWORD> g_gameLoopThreadId{0};
 
 // --- game-loop wrapper: the setjmp side of the recovery pair ---------------
 // The game's WinMain uses the wrapper's return value (RAX) as the process exit code: the wrapper at
@@ -54,10 +55,11 @@ typedef INT64 GameMainFunc(INT64 arg1);
 static GameMainFunc* GameMain = nullptr;
 
 static INT64 GameMainWrapperHook(INT64 arg1) {
-  // Always set up the longjmp recovery point — g_isServer isn't set yet when this
-  // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
+  // Set up the recovery point on this thread. The VEH checks server mode and
+  // thread identity at exception time.
+  g_gameLoopThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
   int crashCount = setjmp(g_gameLoopJmpBuf);
-  g_gameLoopJmpBufValid = true;
+  g_gameLoopJmpBufValid.store(crashCount == 0, std::memory_order_release);
 
   if (crashCount > 0) {
     Log(EchoVR::LogLevel::Warning,
@@ -88,7 +90,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
   // on clients would leave a closed client running with no window on Windows and under Wine.)
-  g_gameLoopJmpBufValid = false;
+  g_gameLoopJmpBufValid.store(false, std::memory_order_release);
   if (!g_isServer) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
@@ -623,12 +625,14 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
   if (g_isServer && pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
     DWORD64 target = pExceptionInfo->ExceptionRecord->ExceptionInformation[1];
 
-    if (target < 0x10000 && g_gameLoopJmpBufValid) {
+    if (nevr_veh_policy::ShouldRecoverNullPointerAv(
+            g_isServer, target, g_gameLoopJmpBufValid.load(std::memory_order_acquire),
+            GetCurrentThreadId(), g_gameLoopThreadId.load(std::memory_order_acquire))) {
       LONG count = InterlockedIncrement(&g_avRecoveryCount);
       if (count <= 3) WriteCrashDump(pExceptionInfo);
 
       VehPrintf("[NEVR.CRASH] null_ptr_av count=%ld action=longjmp_to_server_hold", count);
-      g_gameLoopJmpBufValid = false;
+      g_gameLoopJmpBufValid.store(false, std::memory_order_release);
       longjmp(g_gameLoopJmpBuf, static_cast<int>(count));
     }
   }
@@ -1002,17 +1006,20 @@ void InstallCrashFilterInstrumentation() {
   }
 }
 
-bool InstallVEH() {
+nevr_veh_policy::InstallResult InstallVEH() {
+  // Startup calls this once during early initialization and once after CLI preflight.
+  // Both calls are on the game's startup thread.
+  static PVOID handler = nullptr;
+  if (handler != nullptr) return nevr_veh_policy::InstallResult::Installed;
+
   // Wine's own first-chance stack-overflow handling is active during client
   // startup. A first-priority foreign VEH changes that handler ordering even
   // when it returns CONTINUE_SEARCH, so keep this server-only recovery hook
   // out of Wine client processes.
   HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-  const bool isWineClient = ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
-  if (!nevr_veh_policy::ShouldInstall(g_isServer, isWineClient)) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.CRASH] VEH disabled for Wine client; native exception handling retained");
-    return false;
+  const bool isWine = ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+  if (!nevr_veh_policy::ShouldInstall(g_isServer, isWine)) {
+    return nevr_veh_policy::InstallResult::DeferredWine;
   }
 
   // N70: snapshot the module table now, while the loader lock is safe to take.
@@ -1025,12 +1032,17 @@ bool InstallVEH() {
   EnsureStackReserve();
 
   // Install VEH to handle int3 that fires after our ExitProcess suppression returns
-  AddVectoredExceptionHandler(1, BreakpointVEH);
+  handler = AddVectoredExceptionHandler(1, BreakpointVEH);
+  if (handler == nullptr) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.CRASH] veh install failed win32_error=%lu",
+        static_cast<unsigned long>(GetLastError()));
+    return nevr_veh_policy::InstallResult::Failed;
+  }
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] veh installed handler=BreakpointVEH priority=1 modules_cached=%ld "
       "stack_reserve_bytes=%lu",
       g_moduleCacheCount, static_cast<unsigned long>(kCrashHandlerStackReserve));
-  return true;
+  return nevr_veh_policy::InstallResult::Installed;
 }
 
 // POSIX signal handler — initiates shutdown DIRECTLY.

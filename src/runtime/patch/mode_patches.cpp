@@ -2,6 +2,9 @@
 #include "runtime/hook/dll_load_hook.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <string>
 
@@ -17,6 +20,8 @@
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/patch/broadcaster_pointer_guard.h"
+#include "runtime/patch/checked_patch.h"
+#include "runtime/log/boot_log_tee.h"
 
 // ============================================================================
 // Headless graphics-gate skip helper
@@ -125,14 +130,14 @@ VOID PatchEnableHeadless(PVOID pGame) {
   //   engine flags 0x00000137 -> 0x00000135 (bit0_render=SET(WINDOWED))
   // with one game window present for the entire run.
   //
-  // Ordering is what makes applying it here correct: this function runs from
-  // boot.cpp's `if (g_isHeadless)` block, strictly after `-server` sets that
-  // global in the same hook and strictly before the trailing
-  // EchoVR::PreprocessCommandLine(pGame) — which is where the game applies this
-  // identical mask when the token IS present. So our write lands earlier in the
-  // same call chain than the game's own known-sufficient write, and precedes
-  // every consumer that write precedes. AND-masking is idempotent, so passing
-  // the token as well remains a no-op.
+  // Ordering: this function runs from RunDeferredRuntimeBootstrap's
+  // `if (g_isHeadless)` block (boot.cpp), after `-server` has set that global
+  // during argument parsing and AFTER PreprocessCommandLineHook's original
+  // EchoVR::PreprocessCommandLine(pGame) call has returned. That original call
+  // is where the game applies this identical mask when the token IS present, so
+  // on a `-server`-only run our write lands after it, not before it. Whether any
+  // consumer inside that call needs the mask earlier is not established.
+  // AND-masking is idempotent, so passing the token as well remains a no-op.
   UINT32* engineFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_ENGINE_FLAGS_OFFSET);
   const UINT32 flagsBefore = *engineFlags;
   *engineFlags &= ENGINE_FLAGS_NOAUDIO_MASK & ENGINE_FLAGS_HEADLESS_MASK;
@@ -611,11 +616,13 @@ VOID PatchEnableServer() {
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
-  // This makes the server automatically enter "load lobby" state on startup
-  const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
-  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE,
-                "SPECTATORSTREAM_CHECK patch size mismatch");
-  ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
+  // Hypothesis (#45): this check is what keeps a server out of the "load lobby" state at startup.
+  // Not established either way.
+  // #519: PreprocessCommandLineHook writes the site before the first original call on a server,
+  // so this pass is expected to report already_applied. If that earlier write did not happen,
+  // this pass validates the bytes and writes them; whether a write at this point has any effect
+  // on the lobby is not established (#45 is neither confirmed nor refuted).
+  PatchSpectatorStreamCheck("PatchEnableServer");
 }
 
 // ============================================================================
@@ -744,27 +751,39 @@ VOID PatchDisableWwise() {
       "(est. savings 20-30MB RAM, 5-8%% CPU/instance)");
 }
 
-// N146: Patch the PreprocessCommandLine spectator-stream check so the game
-// always acts as if -spectatorstream was provided.  The original bytes at
-// 0x140116F3D are a 6-byte JE (0f 84 df 00 00 00) that branches around
-// the spectator-stream setup.  NOPping it forces the game into windowed
-// no-VR mode just like the native -spectatorstream flag does.
-VOID PatchSpectatorStreamAlways() {
-  uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
-  static const unsigned char kExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
-  if (memcmp(reinterpret_cast<void*>(addr), kExpected, 6) != 0) {
-    const unsigned char* actual = reinterpret_cast<const unsigned char*>(addr);
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] spectator-stream check prologue mismatch at 0x%llx: "
-        "got=%02x%02x%02x%02x%02x%02x want=%02x%02x%02x%02x%02x%02x — NOT patched",
-        addr,
-        actual[0], actual[1], actual[2], actual[3], actual[4], actual[5],
-        kExpected[0], kExpected[1], kExpected[2], kExpected[3], kExpected[4], kExpected[5]);
-    return;
+// Patch the PreprocessCommandLine spectator-stream check so the game acts as if
+// -spectatorstream was provided. Hypothesis (#45, neither confirmed nor refuted): on a server
+// this lets it enter "load lobby" and begin by itself. The site (FUN_140116720 + 0x81D) is
+// inside PreprocessCommandLine, so PreprocessCommandLineHook calls this before the original on a
+// server (#519). Validated against kSpectatorStreamExpected, written only on a match, and
+// recorded as one key=value line on every call.
+//
+// Callers run both under the DllMain loader lock window (boot) and after it, so the record
+// goes through the boot log tee while nevr_boot_log_tee::InBootPhase() and through Log() after.
+nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
+  uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
+  static_assert(sizeof(nevr_checked_patch::kSpectatorStreamExpected) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
+                "SPECTATORSTREAM_CHECK expected-bytes size mismatch");
+  static_assert(sizeof(nevr_checked_patch::kSpectatorStreamPatched) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
+                "SPECTATORSTREAM_CHECK patch size mismatch");
+
+  uint8_t before[nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE];
+  std::memcpy(before, site, sizeof(before));
+  const nevr_checked_patch::Site spec = nevr_checked_patch::SpectatorStreamSite();
+  const nevr_checked_patch::Result result = nevr_checked_patch::Apply(
+      site, spec, [](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); });
+
+  char record[192];
+  nevr_checked_patch::FormatSpectatorStreamRecord(record, sizeof(record), phase,
+                                                  reinterpret_cast<uintptr_t>(site), before, result);
+  const bool ok = result == nevr_checked_patch::Result::Applied ||
+                  result == nevr_checked_patch::Result::AlreadyApplied;
+  if (nevr_boot_log_tee::InBootPhase()) {
+    nevr_boot_log_tee::TeeFprintf("%s\n", record);
+  } else {
+    Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
   }
-  static const BYTE nops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-  ProcessMemcpy(reinterpret_cast<VOID*>(addr), const_cast<BYTE*>(nops), 6);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Spectator-stream check NOP'd — forced windowed/no-VR mode");
+  return result;
 }
 
 // ===================================================================================================
