@@ -357,7 +357,8 @@ your seat name, for example `claude-main` or `codex`.
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
   - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10` and, when
-    `build/mingw-release/bin/plugins/*.dll` exist, those into `echovr/bin/win10/plugins`, and restores
+    `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
+    `echovr/bin/win10/plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
@@ -409,12 +410,14 @@ your seat name, for example `claude-main` or `codex`.
     A Wine prefix has its own device and home links, which this check prints: on the owner's
     install, `.wineprefix/dosdevices/com1` to `com32` (to `/dev/ttyS*`), `d::` (to a block device),
     `z:` (to `/`), and `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and
-    `Templates` (to the home directory), 41 lines in all. The scripts start the game with its working
+    `Templates` (to the home directory), 41 lines, plus `OC_ASSET_FILES/content` and
+    `OC_ASSET_FILES/_data` (relative links to `../ready-at-dawn-echo-arena/...`, which do not exist in
+    the copy, so they print with an empty target): 43 lines in all. The scripts start the game with its working
     directory inside the copy. That the runtime never writes through those links is not verified, so a
     run on the copy is isolated from the install, not from the rest of the filesystem. A line that
     resolves into `/mnt/games` or `$SRC` fails the check: `rm` that link, run the check again, and
-    only then start a run. Relative links that stay inside the copy (`OC_ASSET_FILES/content`) print
-    nothing.
+    only then start a run. A link whose target is empty is dangling and leaves nothing to write
+    through.
   - **Shape.** The scripts differ:
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
