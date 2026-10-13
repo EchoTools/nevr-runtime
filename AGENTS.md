@@ -350,31 +350,35 @@ your seat name, for example `claude-main` or `codex`.
   pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
   to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
   each at a copy explicitly:
-  - `verify-server.sh` deploys `BugSplat64.dll` and, when `build/mingw-release/bin/plugins` exists,
-    its files into `echovr/bin/win10` and `plugins/` of `$NEVR_GAME_ROOT`, and, when the install has
-    none, a `config.yaml` into `echovr/_local`.
+  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
+    `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
+    the install has none, a `config.yaml` into `echovr/_local`.
   - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
-  - `launch-server.sh` copies `BugSplat64.dll` and `plugins/*` into `echovr/bin/win10` and restores
+  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10` and, when
+    `build/mingw-release/bin/plugins/*.dll` exist, those into `echovr/bin/win10/plugins`, and restores
     nothing; any other script that copies a DLL into a game directory is the same kind of writer.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
-  - `just test-system` and its variants (`tests/system/helpers_test.go`: `deployDLL` writes and
-    `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is defined and not
-    called). A plain `just test-system` also starts the game: `shutdown_test.go` runs `wine` in
-    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix` unless `-short` is set.
-    Another writer is `just test-plugins`
-    and `just test-plugins-verbose` (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup
-    helpers for DLLs and plugin config files, but no test calls them; the plugin tests only read
-    `$EVR_GAME_DIR/bin/win10/_overrides/combat`), and `tests/system/login_test.go` (with
+  - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
+    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is
+    defined and not called). They also start the game: `shutdown_test.go` runs `wine` in
+    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
+    `test-system-dll` pass `-short`, which skips every test that deploys or starts the game.
+    `tests/system/login_test.go` also writes (with
     `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
     when set, else `$EVR_GAME_DIR/.wineprefix`; unset `WINEPREFIX` or set it to
     `<copy>/echovr/.wineprefix` for a Go test run).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
-  Not writers: `just test-plugins-groundtruth`, `just test-auth-groundtruth` (they need no game
-  binary and name no game directory). `just test-winvm` deploys into a throwaway rig on the guest
-  VM (`tools/winvm/systest.py`: `C:\nevr-systest`) and only reads the guest's install.
+  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short`
+  (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup helpers for DLLs and plugin
+  config files, but no test calls them; the plugin tests only read
+  `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
+  `just test-auth-groundtruth` (they need no game binary and name no game directory).
+  `just test-winvm` deploys into a throwaway rig on the guest VM (`tools/winvm/systest.py`:
+  `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
+  rig; whether the game writes through them is not verified.
 
   Point the scripts and the scenario recipes at the copy with `NEVR_GAME_ROOT=<copy>`, the Go tests
   with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
@@ -402,12 +406,15 @@ your seat name, for example `claude-main` or `codex`.
     if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
-    The expected output is empty, or only `.wineprefix/dosdevices/z: -> /`. Wine creates `z:` by
-    default and the scripts start the game with its working directory inside the copy. That the
-    runtime never writes through `z:` is not verified, so a run on the copy is isolated from the
-    install, not from the rest of the filesystem. Any other line, above all one into `/mnt/games`
-    or `$SRC` (`g:`, `d::`, `drive_c/users/*/Music`), fails the check: `rm` that link, run the
-    check again, and only then start a run.
+    A Wine prefix has its own device and home links, which this check prints: on the owner's
+    install, `.wineprefix/dosdevices/com1` to `com32` (to `/dev/ttyS*`), `d::` (to a block device),
+    `z:` (to `/`), and `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and
+    `Templates` (to the home directory), 41 lines in all. The scripts start the game with its working
+    directory inside the copy. That the runtime never writes through those links is not verified, so a
+    run on the copy is isolated from the install, not from the rest of the filesystem. A line that
+    resolves into `/mnt/games` or `$SRC` fails the check: `rm` that link, run the check again, and
+    only then start a run. Relative links that stay inside the copy (`OC_ASSET_FILES/content`) print
+    nothing.
   - **Shape.** The scripts differ:
     - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
       `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
@@ -431,8 +438,9 @@ your seat name, for example `claude-main` or `codex`.
     DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
     `launch-client.sh` abort). `verify-server.sh` keeps its
     backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
-    `/var/tmp/work-nevr-runtime/`), and restores it into the current copy, so clear or inspect that
-    directory before a run against a different copy than the last. When no copy exists, the run
+    `/var/tmp/work-nevr-runtime/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
+    files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
 
 ### Review, verification and merge
