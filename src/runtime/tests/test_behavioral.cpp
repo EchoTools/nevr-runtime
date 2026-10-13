@@ -850,6 +850,32 @@ class N61_WsBridgeTest : public ::testing::Test {
   }
 };
 
+TEST(WsBridgeListener, GracefulStopReleasesBothListeningPorts) {
+  SetWebSocketBridgeTarget("wss://127.0.0.1:9/ws");
+  InstallWebSocketBridge();
+  const uint16_t proxyPort = GetWebSocketBridgePort();
+  const uint16_t matchPort = GetMatchmakerBridgePort();
+  ASSERT_NE(proxyPort, 0);
+  ASSERT_NE(matchPort, 0);
+  ASSERT_NE(proxyPort, matchPort);
+
+  StopWebSocketBridgeListener();
+  SetWebSocketBridgeTarget("");
+
+  for (const uint16_t port : {proxyPort, matchPort}) {
+    SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_NE(probe, INVALID_SOCKET);
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+    const int result = bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    const int error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+    EXPECT_NE(result, SOCKET_ERROR) << "port " << port << " stayed bound after stop: WSA " << error;
+    closesocket(probe);
+  }
+}
+
 // #70: when the shared remote session ends, every game socket on it (login and matchmaker) is closed so
 // the game reconnects; a socket on another remote, or one the game already closed, is left alone.
 TEST_F(N61_WsBridgeTest, RemoteEndSelectsEveryGameSocketOnThatSessionOnly) {
