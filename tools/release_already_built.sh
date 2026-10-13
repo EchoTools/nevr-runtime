@@ -12,14 +12,22 @@
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
 repo=${2:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
-if [[ ! "$tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+# The tag shape and the four names come from the one file tools/release_draft.sh also reads.
+source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
+if [[ ! "$tag" =~ $release_tag_regex ]]; then
   echo "release_already_built: tag '$tag' is not vX.Y.Z" >&2
   exit 1
 fi
 version=${BASH_REMATCH[1]}
+# A failing name list must stop the script: a process substitution would swallow its exit status and an
+# empty list would read as "every required file is present".
+want_out=$(release_asset_names "$version") || { echo "release_already_built: the asset name list failed" >&2; exit 1; }
+mapfile -t want <<<"$want_out"
+if [ "${#want[@]}" -eq 0 ] || [ -z "${want[0]}" ]; then
+  echo "release_already_built: the asset name list is empty; refusing to decide" >&2
+  exit 1
+fi
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')
-want=("nevr-runtime-v$version-windows.zip" SHA256SUMS RELEASE-NOTES.md
-      "nevr-runtime-v$version.zip")
 missing=()
 for name in "${want[@]}"; do
   grep -qxF -- "$name" <<<"$names" || missing+=("$name")
