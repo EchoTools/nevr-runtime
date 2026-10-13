@@ -775,28 +775,19 @@ nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
 
   uint8_t before[nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE];
   std::memcpy(before, site, sizeof(before));
-  const nevr_checked_patch::Site spec{nevr_checked_patch::kSpectatorStreamExpected,
-                                      nevr_checked_patch::kSpectatorStreamPatched, sizeof(before)};
+  const nevr_checked_patch::Site spec = nevr_checked_patch::SpectatorStreamSite();
   const nevr_checked_patch::Result result = nevr_checked_patch::Apply(
       site, spec, [](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); });
 
-  char expectedHex[2 * sizeof(before) + 1];
-  char actualHex[2 * sizeof(before) + 1];
-  for (size_t i = 0; i < sizeof(before); ++i) {
-    std::snprintf(expectedHex + 2 * i, 3, "%02x", nevr_checked_patch::kSpectatorStreamExpected[i]);
-    std::snprintf(actualHex + 2 * i, 3, "%02x", before[i]);
-  }
-  const char* const name = nevr_checked_patch::ResultName(result);
+  char record[192];
+  nevr_checked_patch::FormatSpectatorStreamRecord(record, sizeof(record), phase,
+                                                  reinterpret_cast<uintptr_t>(site), before, result);
   const bool ok = result == nevr_checked_patch::Result::Applied ||
                   result == nevr_checked_patch::Result::AlreadyApplied;
   if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s\n",
-        phase, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)), expectedHex, actualHex, name);
+    nevr_boot_log_tee::TeeFprintf("%s\n", record);
   } else {
-    Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s",
-        phase, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)), expectedHex, actualHex, name);
+    Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
   }
   return result;
 }

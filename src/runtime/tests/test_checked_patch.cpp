@@ -3,9 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
+#include "runtime/hook/addresses.h"
 #include "runtime/patch/checked_patch.h"
 
 namespace {
@@ -25,6 +27,12 @@ bool CopyWriter(void* dest, const void* src, size_t n) {
 bool RefusingWriter(void*, const void*, size_t) { return false; }
 
 bool SilentlyDroppingWriter(void*, const void*, size_t) { return true; }
+
+// Reports success after writing only the first half: the read-back must not accept it.
+bool HalfWriter(void* dest, const void* src, size_t n) {
+  std::memcpy(dest, src, n / 2);
+  return true;
+}
 
 Site SpectatorSite() { return Site{kJe, kNop, sizeof(kJe)}; }
 
@@ -65,9 +73,17 @@ TEST(CheckedPatch, ReportsAWriterFailure) {
 }
 
 TEST(CheckedPatch, ReadsBackAndReportsAWriteThatDidNotLand) {
+  // The writer says "ok" and changes nothing: only the read-back can tell.
   uint8_t image[6];
   std::memcpy(image, kJe, sizeof(image));
   EXPECT_EQ(nevr_checked_patch::Apply(image, SpectatorSite(), SilentlyDroppingWriter), Result::WriteFailed);
+  EXPECT_EQ(std::memcmp(image, kJe, sizeof(kJe)), 0);
+}
+
+TEST(CheckedPatch, ReadsBackAndReportsAPartialWrite) {
+  uint8_t image[6];
+  std::memcpy(image, kJe, sizeof(image));
+  EXPECT_EQ(nevr_checked_patch::Apply(image, SpectatorSite(), HalfWriter), Result::WriteFailed);
 }
 
 TEST(CheckedPatch, SitesAreIndependentAndEachReportsItsOwnResult) {
@@ -90,11 +106,43 @@ TEST(CheckedPatch, ResultNamesAreStableTokens) {
   EXPECT_STREQ(nevr_checked_patch::ResultName(Result::WriteFailed), "write_failed");
 }
 
-TEST(CheckedPatch, SpectatorStreamAddressesMatchTheKnownSite) {
-  // The shipped constants: 6 bytes at +0x116F3D inside PreprocessCommandLine (+0x81D).
-  EXPECT_EQ(nevr_checked_patch::kSpectatorStreamExpected[0], 0x0f);
-  EXPECT_EQ(std::memcmp(nevr_checked_patch::kSpectatorStreamExpected, kJe, 6), 0);
-  EXPECT_EQ(std::memcmp(nevr_checked_patch::kSpectatorStreamPatched, kNop, 6), 0);
+TEST(CheckedPatch, SpectatorStreamSiteIsExpectedThenPatchedAndSixBytes) {
+  // The pair production passes to Apply(): a swap would make the JE look "already applied" and
+  // the NOPs look like a mismatch, so exercise it in both directions on a fake image.
+  const Site site = nevr_checked_patch::SpectatorStreamSite();
+  EXPECT_EQ(site.size, 6u);
+  EXPECT_EQ(std::memcmp(site.expected, kJe, 6), 0);
+  EXPECT_EQ(std::memcmp(site.patched, kNop, 6), 0);
+
+  uint8_t image[6];
+  std::memcpy(image, kJe, sizeof(image));
+  EXPECT_EQ(nevr_checked_patch::Apply(image, site, CopyWriter), Result::Applied);
+  EXPECT_EQ(std::memcmp(image, kNop, sizeof(kNop)), 0);
+  EXPECT_EQ(nevr_checked_patch::Apply(image, site, RefusingWriter), Result::AlreadyApplied);
+}
+
+TEST(CheckedPatch, SpectatorStreamSiteAddressIsTheKnownRvaAndSize) {
+  // PatchSpectatorStreamCheck writes at g_GameBaseAddress + SPECTATORSTREAM_CHECK; pin both the
+  // RVA (FUN_140116720 + 0x81D) and the size the shipped bytes must match.
+  EXPECT_EQ(nevr_patch_addresses::SPECTATORSTREAM_CHECK, static_cast<uintptr_t>(0x116F3D));
+  EXPECT_EQ(nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE, sizeof(nevr_checked_patch::kSpectatorStreamExpected));
+  EXPECT_EQ(nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE, sizeof(nevr_checked_patch::kSpectatorStreamPatched));
+}
+
+TEST(CheckedPatch, SpectatorStreamRecordFormat) {
+  char out[192];
+  const uintptr_t addr = 0x140000000u + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "pre-preprocess", addr, kJe, Result::Applied);
+  EXPECT_STREQ(out,
+               "[NEVR.PATCH] spectatorstream_check phase=pre-preprocess addr=0x140116f3d "
+               "expected=0f84df000000 actual=0f84df000000 result=applied");
+
+  const uint8_t found[6] = {0x0f, 0x85, 0xdf, 0x00, 0x00, 0xcc};
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, found,
+                                                  Result::Mismatch);
+  EXPECT_STREQ(out,
+               "[NEVR.PATCH] spectatorstream_check phase=PatchEnableServer addr=0x140116f3d "
+               "expected=0f84df000000 actual=0f85df0000cc result=mismatch");
 }
 
 }  // namespace

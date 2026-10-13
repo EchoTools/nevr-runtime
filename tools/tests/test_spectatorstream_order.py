@@ -13,6 +13,8 @@ from tools.tests.test_runtime_lifecycle_invariants import extract_braced_functio
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_CALL = "EchoVR::PreprocessCommandLine(pGame)"
 ROUTINE = "PatchSpectatorStreamCheck("
+PREFLIGHT = "PreflightRuntimeBootstrap()"
+ROUTINE_SIGNATURE = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
 
 
 def hook_body() -> str:
@@ -30,6 +32,20 @@ class SpectatorStreamOrder(unittest.TestCase):
             body.index(ORIGINAL_CALL),
             "the spectator-stream patch is applied after the original PreprocessCommandLine call",
         )
+
+    def test_server_applies_the_patch_after_preflight_sets_g_isserver(self):
+        # g_isServer is set inside PreflightRuntimeBootstrap(); the `if (g_isServer)` guarding the
+        # patch reads it, so the guard must come after the preflight, not just before the call.
+        body = hook_body()
+        self.assertEqual(body.count(PREFLIGHT), 1)
+        self.assertLess(
+            body.index(PREFLIGHT),
+            body.index(ROUTINE),
+            "the spectator-stream patch is applied before PreflightRuntimeBootstrap() has set g_isServer",
+        )
+        guard = re.search(r"if\s*\(\s*g_isServer\s*\)\s*\{[^{}]*" + re.escape(ROUTINE), body)
+        self.assertIsNotNone(guard)
+        self.assertLess(body.index(PREFLIGHT), guard.start())
 
     def test_patch_before_the_call_is_server_only(self):
         # N146: a client's first original call initializes D3D; nothing client-side may change there.
@@ -51,11 +67,13 @@ class SpectatorStreamOrder(unittest.TestCase):
         )
         self.assertIn(ROUTINE, body)
 
-    def test_routine_validates_logs_through_the_boot_tee_and_never_logs_under_the_loader_lock(self):
+    def routine_body(self) -> str:
         source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
-        body = extract_braced_function(source, "nevr_checked_patch::Result PatchSpectatorStreamCheck(")
+        return extract_braced_function(source, ROUTINE_SIGNATURE)
+
+    def test_routine_validates_logs_through_the_boot_tee_and_never_logs_under_the_loader_lock(self):
+        body = self.routine_body()
         self.assertIn("nevr_checked_patch::Apply(", body)
-        self.assertIn("kSpectatorStreamExpected", body)
         match = re.search(
             r"if\s*\(\s*nevr_boot_log_tee::InBootPhase\(\)\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<other>.*?)\}",
             body,
@@ -65,8 +83,36 @@ class SpectatorStreamOrder(unittest.TestCase):
         self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("then"))
         self.assertNotRegex(match.group("then").replace("TeeFprintf(", ""), r"\bLog\(")
         self.assertIn("Log(", match.group("other"))
-        for key in ("addr=", "expected=", "actual=", "result="):
-            self.assertIn(key, match.group("then"), f"record lacks {key}")
+        # No unguarded Log() anywhere else in the routine: it runs under the loader lock at boot.
+        outside = body.replace(match.group(0), "")
+        self.assertNotRegex(outside, r"\bLog\s*\(", "PatchSpectatorStreamCheck logs outside the InBootPhase else branch")
+        self.assertNotRegex(outside, r"\bfprintf\s*\(|\bprintf\s*\(", "PatchSpectatorStreamCheck prints outside the tee")
+
+    def test_routine_uses_the_tested_site_pair_the_named_rva_and_the_shared_record(self):
+        body = self.routine_body()
+        self.assertRegex(
+            body,
+            r"EchoVR::g_GameBaseAddress\)\s*\+\s*nevr_patch_addresses::SPECTATORSTREAM_CHECK\s*;",
+            "the patch site is not g_GameBaseAddress + SPECTATORSTREAM_CHECK",
+        )
+        # The {expected, patched} pair is built once, in checked_patch.h, where the unit tests
+        # pin its order; the routine must not assemble a pair of its own.
+        self.assertIn("nevr_checked_patch::SpectatorStreamSite()", body)
+        self.assertNotRegex(body, r"nevr_checked_patch::Site\s+\w+\s*\{", "routine builds its own Site")
+        self.assertIn("nevr_checked_patch::FormatSpectatorStreamRecord(", body)
+
+    def test_record_format_has_every_key_and_the_header_site_is_expected_first(self):
+        header = (ROOT / "src/runtime/patch/checked_patch.h").read_text()
+        record = re.search(r'"(\[NEVR\.PATCH\] spectatorstream_check[^"]*)"', header)
+        self.assertIsNotNone(record, "no spectatorstream_check record format in checked_patch.h")
+        for key in ("phase=%s", "addr=0x%llx", "expected=%s", "actual=%s", "result=%s"):
+            self.assertIn(key, record.group(1))
+        site = extract_braced_function(header, "inline Site SpectatorStreamSite()")
+        self.assertRegex(
+            site,
+            r"Site\{\s*kSpectatorStreamExpected\s*,\s*kSpectatorStreamPatched\s*,",
+            "Site{expected, patched, size}: the expected bytes must come first",
+        )
 
 
 if __name__ == "__main__":

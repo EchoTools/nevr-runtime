@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace nevr_checked_patch {
@@ -47,5 +48,27 @@ inline Result Apply(uint8_t* site, const Site& spec, WriteFn write) {
 // that branches around the spectator-stream setup, and the 6 NOPs that fall through it.
 inline constexpr uint8_t kSpectatorStreamExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
 inline constexpr uint8_t kSpectatorStreamPatched[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+
+// The one place the {expected, patched} pair is assembled, so a swap is a unit-test failure.
+inline Site SpectatorStreamSite() {
+  return Site{kSpectatorStreamExpected, kSpectatorStreamPatched, sizeof(kSpectatorStreamExpected)};
+}
+
+// One key=value record for a patch site: the bytes the unpatched binary should hold, the bytes
+// found there BEFORE the write, and the outcome. Written to `out` (NUL-terminated, truncated at
+// `cap`); returns snprintf's result. Both the boot-tee and Log() paths print this same text.
+inline int FormatSpectatorStreamRecord(char* out, size_t cap, const char* phase, uintptr_t addr,
+                                       const uint8_t* actual, Result result) {
+  constexpr size_t kBytes = sizeof(kSpectatorStreamExpected);
+  char expectedHex[2 * kBytes + 1];
+  char actualHex[2 * kBytes + 1];
+  for (size_t i = 0; i < kBytes; ++i) {
+    std::snprintf(expectedHex + 2 * i, 3, "%02x", kSpectatorStreamExpected[i]);
+    std::snprintf(actualHex + 2 * i, 3, "%02x", actual[i]);
+  }
+  return std::snprintf(out, cap,
+                       "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s",
+                       phase, static_cast<unsigned long long>(addr), expectedHex, actualHex, ResultName(result));
+}
 
 }  // namespace nevr_checked_patch
