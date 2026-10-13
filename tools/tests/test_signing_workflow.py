@@ -129,6 +129,44 @@ class WorkflowStructureTest(unittest.TestCase):
         for name in ("sign", "seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 
+    def test_no_job_below_a_skippable_ancestor_relies_on_the_implicit_success(self):
+        # GitHub prepends success() to an `if:` with no status function, and success() is false when ANY
+        # ancestor job (not only a direct `needs`) was skipped. `drafts` is skipped on a release event, so a
+        # job under it with a bare condition is skipped there and the run is green and builds nothing
+        # (v5.1.0, run 38409770193). A dispatch on a tag runs `drafts`, so the dry run cannot see this: it
+        # is only visible as a rule over the graph.
+        jobs = load()[0]["jobs"]
+
+        def needs(name):
+            n = jobs[name].get("needs", [])
+            return [n] if isinstance(n, str) else list(n)
+
+        def ancestors(name):
+            seen = set()
+            todo = needs(name)
+            while todo:
+                j = todo.pop()
+                if j not in seen:
+                    seen.add(j)
+                    todo.extend(needs(j))
+            return seen
+
+        # `!cancelled()` or `always()` only: a bare success() IS the implicit condition, and cancelled() or
+        # failure() alone mean something else.
+        status = re.compile(r"!cancelled\(\)|\balways\(\)")
+        skippable = {n for n, j in jobs.items() if "if" in j}
+        self.assertIn("drafts", skippable)
+        for name, job in jobs.items():
+            if ancestors(name) & skippable:
+                self.assertRegex(str(job.get("if", "")), status, f"{name} has a skippable ancestor and no status function")
+        # and each names the result of what it needs, so a failed or skipped need still stops it
+        self.assertIn("needs.guard.result == 'success'", jobs["build"]["if"])
+        self.assertIn("needs.build.result == 'success'", jobs["sign"]["if"])
+        self.assertIn("needs.sign.result == 'success'", jobs["seal"]["if"])
+        for name in ("build", "sign", "seal", "repack", "publish"):
+            self.assertIn("!cancelled()", jobs[name]["if"])
+            self.assertNotRegex(jobs[name]["if"], r"(?<![!\w])success\(\)", name)
+
     def test_nothing_is_published_without_a_release_event_or_a_draft_of_the_dispatched_tag(self):
         data, _ = load()
         for name, job in data["jobs"].items():

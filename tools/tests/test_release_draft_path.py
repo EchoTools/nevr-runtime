@@ -85,6 +85,8 @@ class ReleaseDraftPathTest(unittest.TestCase):
 
     def run_listing(self, pages, rc=0, tag="v5.0.0"):
         """Run the listing step's bash with a fake gh printing one --jq result per page (as gh --paginate does)."""
+        if shutil.which("jq") is None:  # the fake gh and the step both run jq; the CI builder image has none
+            self.skipTest("jq is not on PATH (the CI builder image has none; the step runs on ubuntu-latest)")
         run = load()["jobs"]["drafts"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory(prefix="listing-") as tmp:
             gh = Path(tmp) / "gh"
@@ -121,7 +123,8 @@ class ReleaseDraftPathTest(unittest.TestCase):
         and --paginate following the Link header. It does not cover GitHub's token scope or its real response
         bodies (extra fields are in the fixtures, the shapes are the documented ones)."""
         for tool in ("gh", "jq", "openssl"):
-            self.assertIsNotNone(shutil.which(tool), f"{tool} must be on PATH: this test runs the real filter")
+            if shutil.which(tool) is None:
+                self.skipTest(f"{tool} is not on PATH: this test runs the real filter (the CI builder image lacks jq)")
         run = load()["jobs"]["drafts"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory(prefix="realgh-") as tmp:
             cert, key = Path(tmp) / "cert.pem", Path(tmp) / "key.pem"
@@ -192,7 +195,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
         self.assertIn("set -euo pipefail", find["run"])
         jobs = load()["jobs"]
         self.assertEqual(jobs["build"]["needs"], "guard", "every later job hangs off build, which hangs off guard")
-        self.assertEqual(jobs["build"]["if"], "needs.guard.outputs.built != 'true'")
+        self.assertEqual(jobs["build"]["if"], "${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' }}")
 
     def run_lookup(self, script_body, ref="v5.0.0", releases="[]"):
         """Run the lookup step's bash with a fake tools/release_draft.sh in the working directory."""
@@ -256,7 +259,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
         sign = jobs["sign"]
         download = next(s for s in sign["steps"] if s.get("with", {}).get("name") == "unsigned-packages")
         self.assertEqual(download["if"], "github.event_name == 'release' || " + DRAFT)
-        self.assertEqual(sign["if"], "github.event_name == 'release' || needs.build.outputs.version != ''")
+        self.assertEqual(sign["if"], "${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}")
 
     def test_repack_and_publish_run_for_a_release_event_as_before_and_for_a_dispatch_only_with_a_draft(self):
         jobs = load()["jobs"]
@@ -264,10 +267,10 @@ class ReleaseDraftPathTest(unittest.TestCase):
         repack, publish = jobs["repack"], jobs["publish"]
         self.assertEqual(repack["needs"], ["build", "sign", "seal"])
         self.assertEqual(repack["if"],
-            "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
+            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
         self.assertEqual(publish["needs"], ["build", "sign", "seal", "repack"])
         self.assertEqual(publish["if"],
-            "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
+            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
             "needs.repack.result == 'success' && " + gate + " }}")
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})
