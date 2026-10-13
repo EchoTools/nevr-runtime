@@ -291,12 +291,12 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("may sign", texts["SIGNING.txt"])
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
-        self.assertIn("Three zips", texts["RELEASE-NOTES.md"])
-        for name in ("nevr-runtime-v5.0.0.zip", "nevr-runtime-v5.0.0-lite.zip"):
-            self.assertIn(name, texts["RELEASE-NOTES.md"])
+        self.assertIn("Two zips", texts["RELEASE-NOTES.md"])
+        self.assertIn("nevr-runtime-v5.0.0.zip", texts["RELEASE-NOTES.md"])
+        self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
-        # README.md is copied into nevr-runtime-vX.Y.Z.zip and -lite.zip, which are attested and never
+        # README.md is copied into nevr-runtime-vX.Y.Z.zip, which is attested and never
         # change: it must be true whether or not the Windows zip has been signed.
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         self.assertNotRegex(readme, r"(?i)\bunsigned\b|is not signed")

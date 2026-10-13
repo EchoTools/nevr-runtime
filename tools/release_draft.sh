@@ -8,17 +8,17 @@
 #   listing shows drafts only to a token with push access, so the listing is made in a job of its own with
 #   the write token and no checkout; this script holds no token and makes no call).
 #   prints `draft` when the tag has exactly one DRAFT release, no published one, and that draft carries none
-#   of the build's five files; prints `none` (a dry run: nothing is uploaded) when the tag has no release or
+#   of the build's four files; prints `none` (a dry run: nothing is uploaded) when the tag has no release or
 #   has a published one.
 #
 # Exit 1: two drafts for the tag (ambiguous); a draft beside a published release (ambiguous); a draft that
-# already carries ANY of the five names (the signer replaced them, or someone attached them: a second dispatch
+# already carries ANY of the four names (the signer replaced them, or someone attached them: a second dispatch
 # would put UNSIGNED bytes over them, and a partial draft needs a human); stdin that is not a JSON array, which
 # is never read as "none". Exit 2: a tag that is not vX.Y.Z. One decision line goes to stderr either way.
 set -euo pipefail
 tag=${1:?usage: release_draft.sh <vX.Y.Z> (releases JSON on stdin)}
 
-# The tag shape and the five names come from the one file tools/release_already_built.sh (the published
+# The tag shape and the four names come from the one file tools/release_already_built.sh (the published
 # guard) also reads.
 source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
 if ! [[ "$tag" =~ $release_tag_regex ]]; then

@@ -1,4 +1,4 @@
-"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's five files,
+"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's four files,
 attests them and attaches them to that tag's DRAFT release (kept a draft), so a signer can replace the draft's
 assets before anything is public; a release event and a dispatch with no draft behave as before.
 
@@ -22,8 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 BUILT = REPO / "tools" / "release_already_built.sh"
 
-FIVE = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-        "nevr-runtime-v5.0.0-lite.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
 
 DRAFT = "needs.build.outputs.draft == 'true'"
 
@@ -166,8 +165,12 @@ class ReleaseDraftPathTest(unittest.TestCase):
         jobs = load()["jobs"]
         build = jobs["build"]
         self.assertEqual(build["outputs"]["draft"], "${{ needs.guard.outputs.draft }}")
-        for name in ("Create distribution packages (unsigned)", "Verify distribution archives",
-                     "Upload the unsigned packages for signing"):
+        # The dist package is built whenever a version is set: a release event, a draft's dispatch and the dry
+        # run (the symbol checks and the Windows zip need it), so the draft path cannot lack it.
+        dist = step_named(build, "Create distribution packages (unsigned)")
+        self.assertEqual(dist["if"], "steps.release.outputs.version != ''")
+        self.assertEqual(dist["run"], "cmake --build --preset mingw-release --target dist")
+        for name in ("Verify distribution archives", "Upload the unsigned packages for signing"):
             self.assertEqual(step_named(build, name)["if"],
                              "github.event_name == 'release' || needs.guard.outputs.draft == 'true'", name)
         sign = jobs["sign"]
@@ -217,7 +220,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
             self.assertNotRegex(text.split("source ", 1)[1], r'nevr-runtime-v\$version[-.]', script)
         names = (REPO / "tools" / "release_asset_names.sh").read_text(encoding="utf-8")
         self.assertNotIn("tar.zst\"", names, "the .tar.zst archives are a workflow artifact, not a release asset")
-        self.assertEqual(names.count('"nevr-runtime-v$version'), 3)
+        self.assertEqual(names.count('"nevr-runtime-v$version'), 2)
 
     # ---- the published guard (tools/release_already_built.sh) meets the draft this path fills -------------
     def built(self, assets):
@@ -229,13 +232,13 @@ class ReleaseDraftPathTest(unittest.TestCase):
         env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}", FAKE_ASSETS=" ".join(assets))
         return subprocess.run([str(BUILT), "v5.0.0", "EchoTools/nevr-runtime"], env=env, capture_output=True, text=True)
 
-    def test_publishing_a_draft_this_path_filled_with_the_five_files_rebuilds_nothing(self):
-        result = self.built(FIVE)
+    def test_publishing_a_draft_this_path_filled_with_the_four_files_rebuilds_nothing(self):
+        result = self.built(FOUR)
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "true"), result.stderr)
 
-    def test_a_draft_missing_one_of_the_five_is_built_by_the_published_run(self):
-        for missing in FIVE:
-            result = self.built([n for n in FIVE if n != missing])
+    def test_a_draft_missing_one_of_the_four_is_built_by_the_published_run(self):
+        for missing in FOUR:
+            result = self.built([n for n in FOUR if n != missing])
             self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"), missing)
 
 

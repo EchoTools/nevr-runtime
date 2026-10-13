@@ -5,14 +5,14 @@
 #
 # build.yml's `guard` job calls this on every release event. A release whose draft was already built,
 # signed and filled with the attested assets fires `published` when it is published; rebuilding it would
-# replace the signed files. The signal is the release's asset NAMES: all five files this workflow
-# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md and the two dist
-# zips). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
+# replace the signed files. The signal is the release's asset NAMES: all four files this workflow
+# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md and the dist
+# zip). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
 # tag) is an error (exit 1), not "false": a check that cannot run must not decide to rebuild.
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
 repo=${2:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
-# The tag shape and the five names come from the one file tools/release_draft.sh also reads.
+# The tag shape and the four names come from the one file tools/release_draft.sh also reads.
 source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
 if [[ ! "$tag" =~ $release_tag_regex ]]; then
   echo "release_already_built: tag '$tag' is not vX.Y.Z" >&2

@@ -27,8 +27,7 @@ def release(draft, assets=()):
     return {"draft": draft, "assets": list(assets)}
 
 
-FIVE = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-        "nevr-runtime-v5.0.0-lite.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
 
 
 class ReleaseDraftTest(unittest.TestCase):
@@ -53,14 +52,14 @@ class ReleaseDraftTest(unittest.TestCase):
     def test_a_draft_that_already_carries_the_built_files_is_refused_never_overwritten(self):
         # A second dispatch after the signer replaced the draft's assets would rebuild UNSIGNED files over
         # the signed ones: it fails red and uploads nothing.
-        result = self.run_script([release(True, FIVE)])
+        result = self.run_script([release(True, FOUR)])
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertNotEqual(result.stdout.strip(), "draft")
         self.assertIn("the draft already carries built assets", result.stderr)
         self.assertIn("refusing to overwrite", result.stderr)
 
     def test_a_draft_with_some_but_not_all_of_the_files_needs_a_human(self):
-        for name in FIVE:
+        for name in FOUR:
             result = self.run_script([release(True, [name])])
             self.assertEqual(result.returncode, 1, name)
             self.assertIn("refusing to overwrite", result.stderr)
@@ -72,7 +71,7 @@ class ReleaseDraftTest(unittest.TestCase):
 
     def test_the_published_releases_assets_do_not_count_on_the_draft(self):
         # a published release beside the draft is refused for being ambiguous, never for its assets
-        result = self.run_script([release(True), release(False, FIVE)])
+        result = self.run_script([release(True), release(False, FOUR)])
         self.assertEqual(result.returncode, 1)
         self.assertIn("both a draft and a published release", result.stderr)
 
@@ -105,9 +104,9 @@ class ReleaseDraftTest(unittest.TestCase):
             self.assertIn("refusing to decide", result.stderr)
 
     def test_the_decision_line_names_the_counts_and_the_outcome(self):
-        cases = [([release(True)], "1 draft(s), 0 published, 0 of 5 built names on the draft(s): draft"),
-                 ([release(True, FIVE[:2])], "1 draft(s), 0 published, 2 of 5 built names on the draft(s): refused"),
-                 ([], "0 draft(s), 0 published, 0 of 5 built names on the draft(s): none")]
+        cases = [([release(True)], "1 draft(s), 0 published, 0 of 4 built names on the draft(s): draft"),
+                 ([release(True, FOUR[:2])], "1 draft(s), 0 published, 2 of 4 built names on the draft(s): refused"),
+                 ([], "0 draft(s), 0 published, 0 of 4 built names on the draft(s): none")]
         for releases, line in cases:
             self.assertIn(line, self.run_script(releases).stderr)
 
