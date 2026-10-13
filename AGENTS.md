@@ -91,7 +91,7 @@ just scenario-all             # Every social scenario in turn, one PASS/FAIL tab
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
 ```
 
-Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
+Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a copy of the install, never the owner's install; see "The game install").
 
 ## Startup timing
 
@@ -343,16 +343,43 @@ your seat name, for example `claude-main` or `codex`.
 
 ### The game install
 
-- **No agent runs a deploy script or writes into the owner's install.** `verify-server.sh` and
-  `launch-client.sh` (every use, with or without `--dll`) copy `BugSplat64.dll`, plugins and a
-  `config.yaml` into `echovr/bin/win10` of the checkout named by `NEVR_GAME_ROOT` (the main checkout
-  by default), and a `launch-server.sh` or any other script that copies a DLL into a game directory
-  does the same. The main checkout's `echovr/` links into `/mnt/games`, the owner's install, so
-  `/mnt/games/**` and `echovr/**` in the checkout are never a deploy target. A client or `-server`
-  run uses a throwaway copy of the install: a directory with its own `echovr/` (no link back into
-  the install), passed as `NEVR_GAME_ROOT`, under your scratch directory. If no copy exists, the run
-  waits for a human. Before any run that writes, check free space on the target filesystem with
-  `df -h <path>`; a full disk truncates the file being copied.
+- **No agent runs a deploy script or writes into the owner's install.** On the owner's machine
+  the main checkout's `echovr/` is a symlink into `/mnt/games/...`, the owner's install (`echovr` is
+  git-ignored and untracked, so the repo does not guarantee this). `/mnt/games/**` and `echovr/**`
+  in the main checkout are never a deploy target, and every writer below writes through that link
+  unless it is pointed at a copy:
+  - `verify-server.sh` deploys `BugSplat64.dll`, `plugins/*` and, when the install has none, a
+    `_local/config.yaml` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` (the main checkout by default).
+  - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
+    or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
+    any write.
+  - `launch-server.sh` and any other script that copies a DLL into a game directory.
+  - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
+  - `just test-system` and its variants (`tests/system/helpers_test.go`: `deployDLL`, `deployPlugin`
+    and `cleanupDLLs` write and `os.Remove` under `$EVR_GAME_DIR/bin/win10`), and `just test-plugins`
+    and its variants (`tests/plugins/plugin_helpers_test.go` does the same).
+  - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
+
+  Point each at the copy: `NEVR_GAME_ROOT=<copy>` for the scripts and the scenario recipes,
+  `EVR_GAME_DIR=<copy>/echovr` for the Go tests, and for `generate-combat-overrides` run the generator
+  with `--output-dir <copy>/echovr/bin/win10/_overrides/combat`. A writer that cannot be pointed at
+  the copy waits for a human. (`just test-winvm` deploys to the guest VM's own install, not to this
+  host's.)
+- **The copy.** A client or `-server` run uses a throwaway copy of the install, under
+  `/var/tmp/work-nevr-runtime/<agent>/game-copy/` (named per agent, never another agent's).
+  - **Shape:** `<copy>/echovr/bin/win10/` with `echovr.exe` and the original `BugSplat64.dll`,
+    `<copy>/echovr/.wineprefix`, and `<copy>/echovr/_local` with no `config.yaml`, no `config.json`
+    and no `bin/win10/plugins/*` content. Both scripts need all of it.
+  - **Make it dereferenced.** `echovr` in the main checkout is itself a symlink, and a plain copy
+    copies the link, so a run writes through it. Use `cp -aL <main checkout>/echovr <copy>/echovr`
+    (or `rsync -aL`). Then list what is left: `find <copy> -type l -printf '%p -> %l\n'`. No link
+    in the copy may point outside the copy, and none into `/mnt/games`.
+  - **Size.** The copy is the whole install including `.wineprefix`, several GB. Run
+    `df -h /var/tmp` first; free space must exceed it, and a full disk truncates the file being
+    copied. Do not measure the install itself; check `df` on the target.
+  - **Who makes it.** Only a human or the foreman makes the first copy. Agents reuse it for every
+    run and never write back to the install. When none exists, the run waits for a human; a runtime
+    change is not verified until then.
 
 ### Review, verification and merge
 
