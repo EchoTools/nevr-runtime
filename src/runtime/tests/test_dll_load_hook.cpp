@@ -13,26 +13,73 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
 bool BlocksVersionDll(const wchar_t* lowerPath) { return std::wcsstr(lowerPath, L"version.dll") != nullptr; }
 
+bool NeverBlocks(const wchar_t*) { return false; }
+
+// Another thread registers a filter, which needs the registry mutex. If the thread running a
+// filter predicate or a patch callback still holds that mutex, this thread cannot finish, and the
+// wait below times out. That is a gtest failure instead of a hang. The helper threads are joined
+// by JoinLockProbes() once the hook call has returned and released the mutex.
+std::mutex g_lockProbesMutex;
+std::vector<std::thread> g_lockProbes;
+
+bool RegistryLockIsFreeFromAnotherThread() {
+  auto done = std::make_shared<std::promise<void>>();
+  std::future<void> finished = done->get_future();
+  {
+    std::lock_guard<std::mutex> lock(g_lockProbesMutex);
+    g_lockProbes.emplace_back([done] {
+      nevr_dll_load_hook::AddLoadFilter("lock-probe", NeverBlocks);
+      done->set_value();
+    });
+  }
+  return finished.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+}
+
+void JoinLockProbes() {
+  std::vector<std::thread> probes;
+  {
+    std::lock_guard<std::mutex> lock(g_lockProbesMutex);
+    probes.swap(g_lockProbes);
+  }
+  for (auto& probe : probes) probe.join();
+}
+
 std::atomic<bool> g_addedFilter{false};
+std::atomic<bool> g_predicateHeldLock{false};
 bool AddsFilterDuringPredicate(const wchar_t*) {
-  if (!g_addedFilter.exchange(true))
+  if (!g_addedFilter.exchange(true)) {
+    // Registering from this thread would deadlock on a held mutex, so check from another thread
+    // first and skip the registration when the lock is held: the test then fails by assertion.
+    if (!RegistryLockIsFreeFromAnotherThread()) {
+      g_predicateHeldLock = true;
+      return false;
+    }
     nevr_dll_load_hook::AddLoadFilter("added-filter", BlocksVersionDll);
+  }
   return false;
 }
 
 std::atomic<int> g_firstCalls{0};
 std::atomic<int> g_nestedCalls{0};
+std::atomic<bool> g_callbackHeldLock{false};
 void NestedCallback(const char*, HMODULE) { ++g_nestedCalls; }
 void RegisterDuringCallback(const char*, HMODULE module) {
   ++g_firstCalls;
+  if (!RegistryLockIsFreeFromAnotherThread()) {
+    g_callbackHeldLock = true;
+    return;
+  }
   nevr_dll_load_hook::OnLoad("nevr-reentrant-unloaded.dll", NestedCallback);
   nevr_dll_load_hook::FireCallbacksForModule("nevr-reentrant-unloaded.dll", module);
 }
@@ -124,8 +171,11 @@ TEST(DllLoadHookFilter, OverlongFilterNameIsTruncatedNotDropped) {
 TEST(DllLoadHookFilter, PredicateCanRegisterFilterForNextLoad) {
   nevr_dll_load_hook::Shutdown();
   g_addedFilter = false;
+  g_predicateHeldLock = false;
   nevr_dll_load_hook::AddLoadFilter("registering-filter", AddsFilterDuringPredicate);
   EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", nullptr));
+  JoinLockProbes();
+  EXPECT_FALSE(g_predicateHeldLock.load()) << "the registry mutex was held while a filter predicate ran";
   EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", nullptr));
   nevr_dll_load_hook::Shutdown();
 }
@@ -134,10 +184,13 @@ TEST(DllLoadHookCallbacks, ReentrantRegistrationFiresEachCallbackOnce) {
   nevr_dll_load_hook::Shutdown();
   g_firstCalls = 0;
   g_nestedCalls = 0;
+  g_callbackHeldLock = false;
   nevr_dll_load_hook::OnLoad("nevr-reentrant-unloaded.dll", RegisterDuringCallback);
   HMODULE module = reinterpret_cast<HMODULE>(0x1234);
   nevr_dll_load_hook::FireCallbacksForModule("nevr-reentrant-unloaded.dll", module);
   nevr_dll_load_hook::FireCallbacksForModule("nevr-reentrant-unloaded.dll", module);
+  JoinLockProbes();
+  EXPECT_FALSE(g_callbackHeldLock.load()) << "the registry mutex was held while a patch callback ran";
   EXPECT_EQ(g_firstCalls.load(), 1);
   EXPECT_EQ(g_nestedCalls.load(), 1);
   nevr_dll_load_hook::Shutdown();
