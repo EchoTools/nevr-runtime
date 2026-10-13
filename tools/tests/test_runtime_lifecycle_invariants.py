@@ -157,17 +157,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
 
-    def test_the_posix_handler_success_line_is_conditional_on_both_registrations(self):
-        # Issue #25: "POSIX signal handlers installed" was logged after the two signal() calls
-        # whether or not either returned SIG_ERR.
+    def test_server_shutdown_uses_console_handler_without_crt_signals(self):
         source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         stripped = strip_comments(source)
-        self.assertEqual(stripped.count("POSIX signal handlers installed"), 1)
-        self.assertRegex(stripped, r"if\s*\(\s*sigintOk\s*&&\s*sigtermOk\s*\)\s*\{\s*Log\([^;]*POSIX signal handlers installed")
-        self.assertRegex(stripped, r"const\s+bool\s+sigintOk\s*=\s*signal\(\s*SIGINT\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
-        self.assertRegex(stripped, r"const\s+bool\s+sigtermOk\s*=\s*signal\(\s*SIGTERM\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
-        # The failure branch must exist and name which handler failed.
-        self.assertRegex(stripped, r"else\s*\{\s*Log\(EchoVR::LogLevel::Warning,\s*\"\[NEVR\.PATCH\] POSIX signal handlers NOT fully installed")
+        self.assertNotIn("PosixSignalHandler", stripped)
+        self.assertNotRegex(stripped, r"\bsignal\s*\(")
+        self.assertIn("SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE)", stripped)
+        handler = extract_braced_function(stripped, "static BOOL WINAPI ConsoleCtrlHandler(")
+        self.assertIn("PerformGracefulShutdown(0)", handler)
 
     def test_early_boot_never_reads_config(self):
         # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
@@ -219,11 +216,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "a Hooking::Attach call's result is not captured in a variable")
 
     def test_veh_boot_line_comes_from_the_result_of_install_veh(self):
-        # #339: InstallVEH skips installing on a Wine client, so the boot line is derived from its
-        # return value, never written as a literal that is true on only one platform.
+        # The boot line must distinguish an early Wine deferral from an installation failure.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(source, r"\bconst\s+bool\s+vehInstalled\s*=\s*InstallVEH\s*\(\s*\)\s*;")
-        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehInstalled\s*\)")
+        self.assertRegex(source, r"\bconst\s+nevr_veh_policy::InstallResult\s+vehResult\s*=\s*InstallVEH\s*\(\s*\)\s*;")
+        self.assertRegex(source, r"nevr_veh_policy::BootLine\(\s*vehResult\s*\)")
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
 
@@ -329,7 +325,9 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(gone, patches)
         for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
-            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", extract_braced_function(patches, hook))
+            body = extract_braced_function(patches, hook)
+            self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
+            self.assertRegex(body, r"if\s*\(\s*!nevr_broadcaster_guard::TryReadListenerTable\(")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):

@@ -20,6 +20,7 @@
 
 #include "runtime/patch/resource_override.h"
 #include "runtime/hook/symbol_corpus.h"
+#include "runtime/hook/hook_guard.h"
 
 #include <cstdio>
 #include <cstring>
@@ -191,6 +192,7 @@ static void EnsureHookInstalled() {
         return;
     }
 
+    nevr_hook_guard::Record(g_hook_target, "AsyncResourceIOCallback");
     Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", g_hook_target);
 }
 

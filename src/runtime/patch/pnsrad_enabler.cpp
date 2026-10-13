@@ -29,7 +29,9 @@
 
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/provider_identity.h"
+#include "runtime/patch/pnsrad_diag_queue.h"
 #include "runtime/hook/process_memory.h"
+#include "runtime/hook/patching.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
 #include "runtime/compat/self_check.h"
 #include "runtime/patch/matchmaker_host_patch.h"
@@ -39,6 +41,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <atomic>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -124,10 +127,9 @@ static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_h
 // the object itself — *(this+0x2b0) for CNSRADParty. If that handle is null
 // at the moment this runs, every Listen() call it makes (InviteNotifyCB
 // included) silently registers nothing — no error, no log — which would
-// fully explain why a live party-invite test produced zero evidence
-// anywhere (see ReVault comments on 0x3039c4/libpnsrad.so and
-// 0x180082d20/pnsrad.dll). This diagnostic-only hook confirms or falsifies
-// that live, rather than continuing to infer from static analysis.
+// explain an invite with no listener evidence (see ReVault comments on
+// 0x3039c4/libpnsrad.so and 0x180082d20/pnsrad.dll). The diagnostic observes
+// the handle when registration occurs after its deferred installation.
 //
 // Target: the vslot[8] function that does the Listen() registration loop
 // (pnsrad.dll FUN_180082d20, confirmed via ReVault to read the handle at
@@ -137,18 +139,10 @@ static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = nevr_matchmaker_h
 static constexpr uintptr_t PNSRAD_PARTY_INITIALIZE_RVA = 0x82d20;
 static constexpr uintptr_t PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET = 0x2b0;
 
-// 2026-09-13: the Initialize hook above never fired across multiple live
-// in-game invite attempts (confirmed — the listener-registration function
-// simply never runs at that point in the session). Most likely explanation:
-// it runs once, during pnsrad.dll's own load-time construction of the
-// CNSRADParty singleton, which completes BEFORE our LdrDllNotification
-// callback (fires post-DllMain, per documented Windows loader semantics) —
-// we install the hook too late to ever see that one call. SendInvite, by
-// contrast, is the actual per-click function (renamed in ReVault from
-// FUN_180086df0 after cross-referencing libpnsrad.so's real symbol name) —
-// it fires fresh on every invite attempt, sidestepping the load-order race
-// entirely. Same broadcaster-handle offset, read at the very top of the
-// function before it does anything else.
+// The listener-registration hook does not fire during in-game invite attempts;
+// registration may run before the deferred diagnostic hook is installed.
+// SendInvite is the per-click function (ReVault FUN_180086df0, identified
+// against libpnsrad.so) and reads the same broadcaster-handle field.
 static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
 
 /* --------------------------------------------------------------------
@@ -206,7 +200,9 @@ static void RegisterMatchmakingReloadCheck() {
          "every pnsradmatchmaking.dll load had its matchmaker host default re-applied (patched == loads)",
          &MatchmakingReloadProbe});
 }
-static uintptr_t s_pnsradModuleBase = 0;
+static std::atomic<uintptr_t> s_pnsradModuleBase{0};
+static PnsradDiagQueue s_pendingDiagnostics;
+static thread_local bool s_inDllNotification = false;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
  * matchmaker connection reaches our own listener instead of the dead
@@ -273,17 +269,16 @@ static uint64_t PartyListenerRegisterHook(void* thisPtr, uint64_t param2) {
 
 static void InstallPartyBroadcasterDiag(uintptr_t base) {
     void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_INITIALIZE_RVA);
-    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartyListenerRegisterHook),
-                                  reinterpret_cast<void**>(&g_RealPartyListenerRegister));
-    if (st == MH_OK) st = MH_EnableHook(target);
-    if (st == MH_OK) {
+    g_RealPartyListenerRegister = reinterpret_cast<PartyListenerRegisterFn>(target);
+    if (PatchDetour(&g_RealPartyListenerRegister,
+                    reinterpret_cast<PVOID>(PartyListenerRegisterHook), "pnsrad party listener-register")) {
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsrad DIAG party-broadcaster hook installed at +0x%x",
             (unsigned)PNSRAD_PARTY_INITIALIZE_RVA);
     } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsrad DIAG party-broadcaster hook FAILED at +0x%x: %s",
-            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA, MH_StatusToString(st));
+            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA, Hooking::LastAttachError());
     }
 }
 
@@ -307,17 +302,16 @@ static void PartySendInviteHook(void* thisPtr, uint64_t targetAccountId) {
 
 static void InstallPartySendInviteDiag(uintptr_t base) {
     void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_SEND_INVITE_RVA);
-    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartySendInviteHook),
-                                  reinterpret_cast<void**>(&g_RealPartySendInvite));
-    if (st == MH_OK) st = MH_EnableHook(target);
-    if (st == MH_OK) {
+    g_RealPartySendInvite = reinterpret_cast<PartySendInviteFn>(target);
+    if (PatchDetour(&g_RealPartySendInvite,
+                    reinterpret_cast<PVOID>(PartySendInviteHook), "pnsrad party send-invite")) {
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsrad DIAG party-send-invite hook installed at +0x%x",
             (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA);
     } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsrad DIAG party-send-invite hook FAILED at +0x%x: %s",
-            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA, MH_StatusToString(st));
+            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA, Hooking::LastAttachError());
     }
 }
 
@@ -390,6 +384,11 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
     // Only loads act (an unload leaves nothing to undo: the image and its patch are gone together).
     if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName) return;
+    struct NotificationScope {
+        bool previous;
+        NotificationScope() : previous(s_inDllNotification) { s_inDllNotification = true; }
+        ~NotificationScope() { s_inDllNotification = previous; }
+    } notificationScope;
     const UNICODE_STRING* name = data->BaseDllName;
 
     // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
@@ -434,7 +433,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
 
         s_pnsradPatched = true;
         uintptr_t base = reinterpret_cast<uintptr_t>(data->DllBase);
-        s_pnsradModuleBase = base;
+        s_pnsradModuleBase.store(base, std::memory_order_release);
 
         PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK),
                        PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED), 2,
@@ -446,8 +445,9 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
                        PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
                        "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
         PnsradUserProviderIdPatch(base);
-        InstallPartyBroadcasterDiag(base);
-        InstallPartySendInviteDiag(base);
+        // These are optional diagnostics. MinHook's thread suspension must not
+        // run from the loader notification; the frame dispatcher drains this.
+        s_pendingDiagnostics.NoteLoaded(base);
 
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
@@ -592,6 +592,22 @@ void nevr_pnsrad_enabler::Shutdown() {
 #endif
 }
 
+void nevr_pnsrad_enabler::InstallPendingDiagnostics() {
+#ifdef _WIN32
+    if (s_inDllNotification) return;
+    s_pendingDiagnostics.Drain([](uintptr_t base) {
+        const HMODULE loaded = GetModuleHandleA("pnsrad.dll");
+        if (reinterpret_cast<uintptr_t>(loaded) != base) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] pnsrad diagnostic hooks skipped: module changed before deferred install");
+            return;
+        }
+        InstallPartyBroadcasterDiag(base);
+        InstallPartySendInviteDiag(base);
+    });
+#endif
+}
+
 uintptr_t nevr_pnsrad_enabler::GetModuleBase() {
-    return s_pnsradModuleBase;
+    return s_pnsradModuleBase.load(std::memory_order_acquire);
 }
