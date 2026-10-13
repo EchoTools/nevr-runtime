@@ -24,7 +24,7 @@ Presets are `mingw-debug`, `mingw-release` (Linux default), `debug` and `release
 fails closed: run it before you open a PR and paste its output into the PR.
 
 It is necessary but not sufficient. It does not catch wire-format bugs, login failures or rendering regressions; for a
-change to runtime code, also run the game against a server (`./launch-client.sh`) and check the program's own log.
+change to runtime code, also run the game against a server (`NEVR_GAME_ROOT=<copy of the install> ./launch-client.sh`, see "The game install" in `AGENTS.md`) and check the program's own log.
 [`docs/standards/verification.md`](docs/standards/verification.md) says what counts as evidence for a claim like
 "fixed" or "verified", and [`docs/standards/logging.md`](docs/standards/logging.md) covers what a component must log.
 
