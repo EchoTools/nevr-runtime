@@ -728,14 +728,17 @@ test-quest-tls:
     trap cleanup EXIT
     server=../../src/quest/tests/tls_ws_server.py
     python3 -I "$server" tls server.pem server.key good.port & pids+=($!)
+    python3 -I "$server" tls-delay server.pem server.key delay.port & pids+=($!)
+    python3 -I "$server" tls-stall server.pem server.key stall.port & pids+=($!)
+    python3 -I "$server" tls-trickle server.pem server.key trickle.port & pids+=($!)
     python3 -I "$server" tls selfsigned.pem selfsigned.key selfsigned.port & pids+=($!)
     python3 -I "$server" plain plain.stats plain.port & pids+=($!)
-    for f in good.port selfsigned.port plain.port; do
+    for f in good.port delay.port stall.port trickle.port selfsigned.port plain.port; do
         for _ in $(seq 1 100); do [ -s "$f" ] && break; sleep 0.1; done
         [ -s "$f" ] || { echo "test-quest-tls: server for $f did not start" >&2; exit 1; }
     done
     ./curl_ws_tls_test trust-good trust-other "$(cat good.port)" "$(cat selfsigned.port)" \
-        "$(cat plain.port)" plain.stats
+        "$(cat plain.port)" plain.stats "$(cat stall.port)" "$(cat delay.port)" "$(cat trickle.port)"
     echo "test-quest-tls: verified-TLS connector tests pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -1179,7 +1182,7 @@ verify:
     QTLS_LITERAL=$(grep -ciE 'curl_easy_setopt\(curl,[[:space:]]*CURLOPT_[A-Z0-9_]+,' <<<"$QTLS_CODE" || true)
     [ "$QTLS_CALLS" = "$QTLS_LITERAL" ] || qtls_fail "$QTLS_CALLS curl_easy_setopt line(s) but only $QTLS_LITERAL name their option with a direct CURLOPT_ literal"
     if grep -qiE 'curl_easy_option|curl_easy_setopt[^(]' <<<"$QTLS_CODE"; then qtls_fail "curl_easy_option_* or an indirect curl_easy_setopt reference"; fi
-    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
+    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_TIMEOUT CURLOPT_XFERINFODATA CURLOPT_XFERINFOFUNCTION CURLOPT_NOPROGRESS CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
     QTLS_NAMES=$(grep -oiE 'CURLOPT_[A-Z0-9_]+' <<<"$QTLS_CODE" || true)
     while IFS= read -r qtls_name; do
         [ -n "$qtls_name" ] || continue
