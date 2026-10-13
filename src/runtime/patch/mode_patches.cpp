@@ -2,6 +2,9 @@
 #include "runtime/hook/dll_load_hook.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <string>
 
@@ -16,6 +19,8 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/process_memory.h"
+#include "runtime/patch/checked_patch.h"
+#include "runtime/log/boot_log_tee.h"
 
 // ============================================================================
 // Headless graphics-gate skip helper
@@ -619,11 +624,11 @@ VOID PatchEnableServer() {
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
-  // This makes the server automatically enter "load lobby" state on startup
-  const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
-  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE,
-                "SPECTATORSTREAM_CHECK patch size mismatch");
-  ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
+  // This makes the server automatically enter "load lobby" state on startup.
+  // #519: the site is inside PreprocessCommandLine, so PreprocessCommandLineHook has already
+  // applied it before the original call on a server. This second pass is the verified no-op
+  // (already_applied) and, if the hook path did not run, the validated fallback.
+  PatchSpectatorStreamCheck("PatchEnableServer");
 }
 
 // ============================================================================
@@ -752,27 +757,48 @@ VOID PatchDisableWwise() {
       "(est. savings 20-30MB RAM, 5-8%% CPU/instance)");
 }
 
-// N146: Patch the PreprocessCommandLine spectator-stream check so the game
-// always acts as if -spectatorstream was provided.  The original bytes at
-// 0x140116F3D are a 6-byte JE (0f 84 df 00 00 00) that branches around
-// the spectator-stream setup.  NOPping it forces the game into windowed
-// no-VR mode just like the native -spectatorstream flag does.
-VOID PatchSpectatorStreamAlways() {
-  uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
-  static const unsigned char kExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
-  if (memcmp(reinterpret_cast<void*>(addr), kExpected, 6) != 0) {
-    const unsigned char* actual = reinterpret_cast<const unsigned char*>(addr);
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] spectator-stream check prologue mismatch at 0x%llx: "
-        "got=%02x%02x%02x%02x%02x%02x want=%02x%02x%02x%02x%02x%02x — NOT patched",
-        addr,
-        actual[0], actual[1], actual[2], actual[3], actual[4], actual[5],
-        kExpected[0], kExpected[1], kExpected[2], kExpected[3], kExpected[4], kExpected[5]);
-    return;
+// Patch the PreprocessCommandLine spectator-stream check so the game always acts as if
+// -spectatorstream was provided; on a server this is what makes it enter "load lobby" and begin
+// by itself (#45). The site (FUN_140116720 + 0x81D) is inside PreprocessCommandLine, so a write
+// that lands after that call returns changes nothing: PreprocessCommandLineHook calls this
+// BEFORE the original on a server (#519). Validated against kSpectatorStreamExpected, written
+// only on a match, and recorded as one key=value line on every call.
+//
+// Callers run both under the DllMain loader lock window (boot) and after it, so the record
+// goes through the boot log tee while nevr_boot_log_tee::InBootPhase() and through Log() after.
+nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
+  uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
+  static_assert(sizeof(nevr_checked_patch::kSpectatorStreamExpected) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
+                "SPECTATORSTREAM_CHECK expected-bytes size mismatch");
+  static_assert(sizeof(nevr_checked_patch::kSpectatorStreamPatched) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
+                "SPECTATORSTREAM_CHECK patch size mismatch");
+
+  uint8_t before[nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE];
+  std::memcpy(before, site, sizeof(before));
+  const nevr_checked_patch::Site spec{nevr_checked_patch::kSpectatorStreamExpected,
+                                      nevr_checked_patch::kSpectatorStreamPatched, sizeof(before)};
+  const nevr_checked_patch::Result result = nevr_checked_patch::Apply(
+      site, spec, [](void* dest, const void* src, size_t n) { return ProcessMemcpy(dest, src, n); });
+
+  char expectedHex[2 * sizeof(before) + 1];
+  char actualHex[2 * sizeof(before) + 1];
+  for (size_t i = 0; i < sizeof(before); ++i) {
+    std::snprintf(expectedHex + 2 * i, 3, "%02x", nevr_checked_patch::kSpectatorStreamExpected[i]);
+    std::snprintf(actualHex + 2 * i, 3, "%02x", before[i]);
   }
-  static const BYTE nops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-  ProcessMemcpy(reinterpret_cast<VOID*>(addr), const_cast<BYTE*>(nops), 6);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Spectator-stream check NOP'd — forced windowed/no-VR mode");
+  const char* const name = nevr_checked_patch::ResultName(result);
+  const bool ok = result == nevr_checked_patch::Result::Applied ||
+                  result == nevr_checked_patch::Result::AlreadyApplied;
+  if (nevr_boot_log_tee::InBootPhase()) {
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s\n",
+        phase, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)), expectedHex, actualHex, name);
+  } else {
+    Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] spectatorstream_check phase=%s addr=0x%llx expected=%s actual=%s result=%s",
+        phase, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)), expectedHex, actualHex, name);
+  }
+  return result;
 }
 
 // ===================================================================================================

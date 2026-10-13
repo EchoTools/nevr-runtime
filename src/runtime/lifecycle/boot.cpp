@@ -83,7 +83,7 @@ void PreflightRuntimeBootstrap() {
   // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
   // flag directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
-  // 0x2000000), which is what PatchSpectatorStreamAlways does by NOPping
+  // 0x2000000), which is what PatchSpectatorStreamCheck does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally.
@@ -115,6 +115,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
+  // #519: the -spectatorstream NOP is a write INTO PreprocessCommandLine, so on a server it must
+  // land before the original runs; applied after the call returns it changes nothing. Server
+  // only: the client's first original call initializes D3D and is left alone (N146).
+  if (g_isServer) {
+    PatchSpectatorStreamCheck("pre-preprocess");
+  }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
