@@ -1278,8 +1278,8 @@ verify:
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
         exit 1
     fi
-    # The graceful signal path must release it too, and must not reintroduce a
-    # runtime symbol lookup on a path that cannot take the loader lock (N62).
+    # The graceful console-control path must release it too, without a
+    # runtime symbol lookup during shutdown (N62).
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
         exit 1
@@ -2012,9 +2012,7 @@ verify:
             exit 1
         fi
     done
-    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources are kept out —
-    # the stderr FILE lock (Log -> vfprintf) and the loader lock
-    # (GetModuleHandleA/GetProcAddress). Both must stay out of PerformGracefulShutdown.
+    # N62: graceful shutdown must not resolve symbols through the loader lock.
     # Strip comment lines first: the function's own comment says "NO
     # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
     # violation of itself. Same false positive the N81 and N85 sensors hit.
@@ -2024,18 +2022,12 @@ verify:
     N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
     if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
-        echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
-        echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
+        echo "both take the loader lock and may deadlock shutdown." >&2
+        echo "Call StopWebSocketBridgeListener() directly." >&2
         exit 1
     fi
     if ! grep -q 'ResolveShutdownDependencies();' src/runtime/lifecycle/boot.cpp; then
-        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing; the cached" >&2
-        echo "WsBridge_Shutdown pointer stays null and the listener leaks on every shutdown." >&2
-        exit 1
-    fi
-    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/runtime/lifecycle/crash_recovery.cpp; then
-        echo "verify: FAIL — N62 signal-context flag is not volatile sig_atomic_t (the only type" >&2
-        echo "a signal handler may portably touch)." >&2
+        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing." >&2
         exit 1
     fi
     # N86: the per-frame tick MUST be dispatched from a site that runs in server
