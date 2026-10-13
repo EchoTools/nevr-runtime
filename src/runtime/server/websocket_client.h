@@ -139,6 +139,7 @@ class WebSocketClient {
   std::mutex receivedMessagesMutex_;
 #ifdef NEVR_TEST_HOOKS
   std::function<bool(const std::string&)> testTransportHandler_;
+  std::function<void()> testBeforePendingLock_;
   std::function<void()> testBeforeReceiveEnqueue_;
 #endif
 
@@ -165,6 +166,8 @@ class WebSocketClient {
   void TestSetConnected(bool connected);
   std::vector<std::string> TestCopyPendingMessages();
   void TestSetTransportHandler(std::function<bool(const std::string&)> handler);
+  void TestSetBeforePendingLock(std::function<void()> hook);
+  void TestFlushPendingMessages();
   void TestSetBeforeReceiveEnqueue(std::function<void()> hook);
   void TestDeliverMessage(const ix::WebSocketMessagePtr& msg);
   void TestSetBearerToken(const std::string& token);

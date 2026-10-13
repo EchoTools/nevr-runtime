@@ -92,13 +92,22 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
   std::string message(messageBuffer.begin(), messageBuffer.end());
 
   if (!connected_.load(std::memory_order_relaxed)) {
+#ifdef NEVR_TEST_HOOKS
+    if (testBeforePendingLock_) testBeforePendingLock_();
+#endif
     bool queueFull = false;
+    bool queued = false;
     {
       std::lock_guard<std::mutex> lock(receivedMessagesMutex_);
-      if (pendingMessages_.size() >= 256) {
-        queueFull = true;
-      } else {
-        pendingMessages_.push_back(message);
+      // Open publishes connected_ before draining the queue. A sender that read
+      // false before Open must not append after that drain has completed.
+      if (!connected_.load(std::memory_order_relaxed)) {
+        if (pendingMessages_.size() >= 256) {
+          queueFull = true;
+        } else {
+          pendingMessages_.push_back(message);
+          queued = true;
+        }
       }
     }
     if (queueFull) {
@@ -106,10 +115,12 @@ WebSocketSendStatus WebSocketClient::SendWithStatus(EchoVR::SymbolId msgId, cons
           "[NEVR.SERVERDB] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
       return WebSocketSendStatus::Rejected;
     }
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.SERVERDB] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
-        msgId, size, size);
-    return WebSocketSendStatus::Queued;
+    if (queued) {
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.SERVERDB] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
+          msgId, size, size);
+      return WebSocketSendStatus::Queued;
+    }
   }
 
 #ifdef NEVR_TEST_HOOKS
@@ -385,6 +396,12 @@ std::vector<std::string> WebSocketClient::TestCopyPendingMessages() {
 void WebSocketClient::TestSetTransportHandler(std::function<bool(const std::string&)> handler) {
   testTransportHandler_ = std::move(handler);
 }
+
+void WebSocketClient::TestSetBeforePendingLock(std::function<void()> hook) {
+  testBeforePendingLock_ = std::move(hook);
+}
+
+void WebSocketClient::TestFlushPendingMessages() { FlushPendingMessages(); }
 
 void WebSocketClient::TestSetBeforeReceiveEnqueue(std::function<void()> hook) {
   testBeforeReceiveEnqueue_ = std::move(hook);
