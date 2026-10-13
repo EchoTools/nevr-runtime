@@ -77,8 +77,8 @@ VOID PatchDscProvider() {
   }
 
   if (!ok) {
-    // No standalone "Aborting..." Log() line here: the failure is reported once,
-    // through the boot tee below, and g_bootHookFailed carries the decision.
+    // The failure is reported once, through the boot tee below, and g_bootHookFailed
+    // carries the decision.
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.

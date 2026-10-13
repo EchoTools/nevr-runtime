@@ -14,8 +14,8 @@ extern HWND g_hWindow;
 extern bool g_bootHookFailed;
 
 /// The first boot failure's short cause (site and reason), set next to g_bootHookFailed so the
-/// server's refusal in boot.cpp names what failed. Written under the DllMain loader lock, so it is
-/// a fixed buffer filled by NoteBootHookFailureCause: no heap, no Log().
+/// server's refusal in boot.cpp names what failed. Written from the boot sequence, which can run under
+/// the DllMain loader lock, so it is a fixed buffer filled by NoteBootHookFailureCause: no heap, no Log().
 extern char g_bootHookFailedCause[96];
 
 /// Record `cause` as the reason the boot failed, unless an earlier failure already did.
