@@ -262,11 +262,16 @@ def load_generator():
     return module
 
 
-def header_constants():
-    """{(namespace, identifier): value as unsigned 64-bit} for every `constexpr SymbolId` in symbols.h."""
+def header_constants(text=None):
+    """{(namespace, identifier): value as unsigned 64-bit} for every `constexpr SymbolId` in symbols.h.
+
+    A line that mentions SymbolId in a form this parser cannot read (a ULL suffix, brace-init) raises: it would
+    otherwise be a constant the test never pinned."""
     found = {}
     scope = []
-    for line in (REPO / "src/abi/symbols.h").read_text().split("\n"):
+    if text is None:
+        text = (REPO / "src/abi/symbols.h").read_text()
+    for line in text.split("\n"):
         code = line.split("//")[0]
         opened = re.match(r"\s*namespace\s+([\w:]+)\s*\{", code)
         if opened:
@@ -280,6 +285,8 @@ def header_constants():
             key = ("::".join(scope), const.group(1))
             assert key not in found, "duplicate constant %s" % (key,)
             found[key] = int(const.group(2), 0) & U64
+        elif re.search(r"\bSymbolId\b", code) and not re.match(r"\s*(using|typedef)\b", code):
+            raise AssertionError("a SymbolId declaration this test cannot read, so cannot pin: %r" % line.strip())
     return found
 
 
@@ -304,6 +311,15 @@ class AbiSymbolsTest(unittest.TestCase):
         for ident, text in TCP.items():
             want[(top + "::Tcp", ident)] = ("csymbol64", text, None)
         return want
+
+    def test_a_constant_in_a_form_the_parser_cannot_read_is_refused_not_skipped(self):
+        for line in ("constexpr SymbolId Bogus = 0x1234ULL;", "constexpr SymbolId Bogus{0x1234};",
+                     "static constexpr SymbolId Bogus = 0x1234;"):
+            with self.subTest(line=line):
+                with self.assertRaises(AssertionError):
+                    header_constants("namespace EchoVR {\nnamespace Symbols {\n%s\n}\n}\n" % line)
+        parsed = header_constants("namespace A {\nconstexpr SymbolId Fine = 0x10;\nusing SymbolId = unsigned;\n}\n")
+        self.assertEqual(parsed, {("A", "Fine"): 0x10})
 
     def test_hash_known_answers(self):
         # Values the game itself produced, so the implementations under test are the game's.
