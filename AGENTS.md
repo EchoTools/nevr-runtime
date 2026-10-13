@@ -8,9 +8,9 @@ nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connectio
 
 ## For contributors
 
-Everything in this file binds every agent. This section is for an agent working for an outside contributor, on the
-contributor's own machine. It adds what such an agent needs: what to read, what a PR carries, which rules are already
-enforced, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
+The rest of this file binds every agent, a contributor's included, except the parts marked **Maintainers only**. This
+section applies to an agent working for an outside contributor, on the contributor's own machine. It adds what such an
+agent needs: what to read, what a PR carries, which rules are live, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
 on yours instead. Where a step needs access only the maintainers have (ReVault, the production server's logs, the
 release pipeline), do what you can without it and ask in your PR or issue. Never guess in its place.
 
@@ -37,8 +37,8 @@ each one gives; do the step this way on yours:
 | Maintainers-only part | On your machine |
 | --- | --- |
 | "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
-| "Ownership and cleanup": the ledger file | Keep the same record (artifact, owner, purpose, remove-when) in a file of your own, and read it before deleting anything. The worktree path `.claude/worktrees/<branch>` works in any clone; use it, so `just reap-merged` finds your worktrees. |
-| "Builds": the shared `nevr-builds.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. If you run one lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while `pgrep -x ninja \| wc -l` is 2 or more. |
+| "Ownership and cleanup": the ledger file | Keep the same ledger in a file of your own: a markdown table (artifact, owner, purpose, remove-when), one row per thing you create, the worktree directory or branch in the first cell and your handle, one word, in the second. Read it before deleting anything. Create worktrees under `.claude/worktrees/` in your clone, and run `REAP_LEDGER=<your ledger file> just reap-merged`: `tools/reap_merged.py` scans only `.claude/worktrees/`, exits when it cannot read the ledger (default `~/.local/share/repo-hygiene/nevr-runtime-ledger.md`), and keeps any worktree the ledger does not credit to an owner. |
+| "Builds": the shared `nevr-builds.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. If you run one lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while two or more `ninja` processes run (`pgrep -x ninja` lists them). |
 | Scratch under `/var/tmp/work-nevr-runtime/<agent>/` | The same path works on any Linux machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `/var/tmp/work-nevr-runtime/<your handle>/`, never `/tmp` and never the repo. |
 | "The game install": `/mnt/games` and the owner's link | See "Your game install" below. |
 | "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
@@ -58,8 +58,8 @@ mouse and keyboard.
 ### Your game install
 
 The rule in "The game install" holds for you as it is written: no run deploys into, or writes through, a real
-install, and every run uses its own copy, made from a pristine copy and deleted when the run ends (#524). Only the
-paths differ:
+install, and every run uses its own copy, made from a pristine copy and deleted when the run ends (#524). The paths
+differ, and so does who makes the pristine copy:
 
 - `SRC` is the root of your install: the directory that holds `bin/win10/echovr.exe` (a stock install is named
   `ready-at-dawn-echo-arena`). If your checkout's `echovr/` is a link to it, `SRC=$(readlink -f <checkout>/echovr)`.
@@ -74,8 +74,8 @@ size check, removing `_local/config.*` and `plugins/*`, and the shape each scrip
 
 ### What a PR carries
 
-The maintainers' recent PRs (#471 is a merged example) carry the items below, and reviewers ask for them. Treat them
-as required for your PR:
+#471 is the model: a merged PR that carries all of the items below. Most merged PRs do not yet carry all of them, but
+your PR does:
 
 - **A search statement.** Before adding anything, show that nothing in the tree or its history already does it. State
   the commands and what they found, over files *and* history:
@@ -95,7 +95,8 @@ as required for your PR:
   Edited: nevr::ReaderGate (Scope, WaitIdle, Enter (new)); test_reader_gate.cpp.
   Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
   ```
-- **A mutant for every changed line of behaviour.** "The test fails without the change" is not enough. For every line
+- **A mutant for every changed line of behaviour.** This is stricter than "A test must fail without the change" under
+  "Review, verification and merge", which every PR meets; a contributor's PR meets this as well. For every line
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
@@ -116,12 +117,13 @@ as required for your PR:
 - **Falsifier**: the one observation that would prove the issue wrong.
 - **Work**: the steps, in order, tests first, each with what it must show.
 
-### Rules a check already enforces
+### Live rules
 
 - **The PR body ends with `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge").
   `.github/workflows/pr-read-check.yml` fails the PR without it. On a PR from a fork, a maintainer has to approve the
   workflow run before it runs.
-- **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install").
+- **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). No check
+  enforces this: the scripts still default to the checkout's `echovr/`, so point every writer at the copy yourself.
 
 ### The N-rules index
 
@@ -155,7 +157,7 @@ comment (for example N41, N48) is not a rule.
 | N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
 | N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; initialization calls `InstallGameMainHook()`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
 | N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, plugins, file I/O or bridge), because the client's D3D initialization runs inside that call. The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, before the first original call (#519). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`PatchMatchmakingHost`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | `tools/tests/test_spectatorstream_order.py`, `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_runtime_lifecycle_invariants.py` (the host patch runs on every load); nothing for the boot-state limit or the image base |
-| N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline). | the launch scripts | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
+| N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
 
 #### Server, bridge and login
 
@@ -180,7 +182,7 @@ comment (for example N41, N48) is not a rule.
 | N115 | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | verify |
 | N123 | The login display name is the token-auth username (`TokenAuth_GetUsername`), falling back to the account id; never a placeholder. | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/login_profile.cpp`, `src/modules/token-auth/src/token_auth.cpp` | verify |
 | N131 | The asset CDN starts only on a client: in `boot.cpp` inside `if (!g_isServer)`, never in `initialize.cpp` (where `g_isServer` is not yet set). | `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N132 | `just proto` generates from one pinned BSR commit, matching the protocol revision the server side uses; bump it only with the schema. | `justfile` (`proto`) | nothing |
+| N132 | `just proto` generates from one pinned BSR commit, matching nevr-stream's Go module revision (as `justfile` says); bump it only with the schema. | `justfile` (`proto`) | nothing |
 
 #### Config and plugins
 
