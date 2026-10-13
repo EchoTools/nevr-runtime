@@ -625,9 +625,10 @@ VOID PatchEnableServer() {
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
   // This makes the server automatically enter "load lobby" state on startup.
-  // #519: the site is inside PreprocessCommandLine, so PreprocessCommandLineHook has already
-  // applied it before the original call on a server. This second pass is the verified no-op
-  // (already_applied) and, if the hook path did not run, the validated fallback.
+  // #519: PreprocessCommandLineHook writes the site before the first original call on a server,
+  // so this pass is expected to report already_applied. If that earlier write did not happen,
+  // this pass validates the bytes and writes them; whether a write at this point has any effect
+  // on the lobby is not established (#45 is neither confirmed nor refuted).
   PatchSpectatorStreamCheck("PatchEnableServer");
 }
 
@@ -757,12 +758,12 @@ VOID PatchDisableWwise() {
       "(est. savings 20-30MB RAM, 5-8%% CPU/instance)");
 }
 
-// Patch the PreprocessCommandLine spectator-stream check so the game always acts as if
-// -spectatorstream was provided; on a server this is what makes it enter "load lobby" and begin
-// by itself (#45). The site (FUN_140116720 + 0x81D) is inside PreprocessCommandLine, so a write
-// that lands after that call returns changes nothing: PreprocessCommandLineHook calls this
-// BEFORE the original on a server (#519). Validated against kSpectatorStreamExpected, written
-// only on a match, and recorded as one key=value line on every call.
+// Patch the PreprocessCommandLine spectator-stream check so the game acts as if
+// -spectatorstream was provided. Hypothesis (#45, neither confirmed nor refuted): on a server
+// this lets it enter "load lobby" and begin by itself. The site (FUN_140116720 + 0x81D) is
+// inside PreprocessCommandLine, so PreprocessCommandLineHook calls this before the original on a
+// server (#519). Validated against kSpectatorStreamExpected, written only on a match, and
+// recorded as one key=value line on every call.
 //
 // Callers run both under the DllMain loader lock window (boot) and after it, so the record
 // goes through the boot log tee while nevr_boot_log_tee::InBootPhase() and through Log() after.

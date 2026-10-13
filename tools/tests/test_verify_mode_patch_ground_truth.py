@@ -66,6 +66,43 @@ class VerifyModePatchGroundTruth(unittest.TestCase):
         with self.assertRaisesRegex(verifier.InventoryError, "0x116F3D"):
             self.run_verifier(ground_truth=truth.replace("0x116F3D", "0x116F3E"))
 
+    def decoy_function(self, rva_name: str) -> str:
+        return (
+            "VOID DecoySite() {\n"
+            "  uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + "
+            f"nevr_patch_addresses::{rva_name};\n"
+            "}\n\n"
+        )
+
+    def test_a_decoy_site_earlier_in_the_file_does_not_stand_in_for_the_real_one(self):
+        # SERVER_FLAGS_CHECK has ground truth; the spectator site's does not (0x116F3D -> 0x116F3E).
+        # The decoy declares `site` for a covered RVA and the span to the real Apply holds no
+        # ProcessMemcpy, so an unbounded span attributes the real write to the decoy and passes.
+        truth = GROUND_TRUTH.read_text().replace("0x116F3D", "0x116F3E")
+        source = SOURCE.read_text()
+        anchor = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
+        self.assertIn(anchor, source)
+        mutated = source.replace(anchor, self.decoy_function("SERVER_FLAGS_CHECK") + anchor)
+        with self.assertRaisesRegex(verifier.InventoryError, "0x116F3D"):
+            self.run_verifier(source=mutated, ground_truth=truth)
+
+    def test_a_decoy_in_the_same_function_does_not_stand_in_for_the_real_one(self):
+        truth = GROUND_TRUTH.read_text().replace("0x116F3D", "0x116F3E")
+        source = SOURCE.read_text()
+        real = "  uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;"
+        self.assertIn(real, source)
+        decoy = real.replace("SPECTATORSTREAM_CHECK", "SERVER_FLAGS_CHECK")
+        mutated = source.replace(real, decoy + "\n" + real)
+        with self.assertRaisesRegex(verifier.InventoryError, "0x116F3D"):
+            self.run_verifier(source=mutated, ground_truth=truth)
+
+    def test_the_shipped_site_is_the_one_inventoried_when_a_decoy_precedes_it(self):
+        source = SOURCE.read_text()
+        anchor = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
+        mutated = source.replace(anchor, self.decoy_function("SERVER_FLAGS_CHECK") + anchor)
+        rewrites, _covered = self.run_verifier(source=mutated)
+        self.assertIn(SPECTATOR_RVA, rewrites)
+
 
 if __name__ == "__main__":
     unittest.main()

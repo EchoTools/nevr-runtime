@@ -174,16 +174,19 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
     # named RVA, and the only writer handed to Apply is a lambda that forwards
     # its three parameters, unchanged and in order, to ProcessMemcpy.  Any
     # other lambda body, writer or site expression does not match and falls
-    # through to the ProcessMemcpy census below.
+    # through to the ProcessMemcpy census below.  The span between the `site`
+    # declaration and Apply stays inside one function: it cannot cross another
+    # `site =` or a function's closing brace at column 0, so an earlier decoy
+    # declaration cannot stand in for the one Apply really uses.
     checked_write = re.search(
         r"uint8_t\s*\*\s*const\s+site\s*=\s*"
         r"reinterpret_cast<uint8_t\*>\(\s*EchoVR::g_GameBaseAddress\s*\)\s*\+\s*"
         r"nevr_patch_addresses::(\w+)\s*;"
-        r"(?:(?!ProcessMemcpy).)*?nevr_checked_patch::Apply\s*\(\s*site\s*,\s*\w+\s*,\s*"
+        r"(?:(?!ProcessMemcpy|\bsite\s*=(?!=)|^\}).)*?nevr_checked_patch::Apply\s*\(\s*site\s*,\s*\w+\s*,\s*"
         r"\[\]\s*\(\s*void\s*\*\s*(\w+)\s*,\s*const\s+void\s*\*\s*(\w+)\s*,\s*size_t\s+(\w+)\s*\)\s*"
         r"\{\s*return\s+ProcessMemcpy\s*\(\s*\2\s*,\s*\3\s*,\s*\4\s*\)\s*;\s*\}\s*\)",
         source,
-        re.DOTALL,
+        re.DOTALL | re.MULTILINE,
     )
     if checked_write is not None:
         targets.add(resolve(checked_write.group(1), constants))

@@ -115,10 +115,18 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
-  // #519: the -spectatorstream NOP is a write INTO PreprocessCommandLine, so on a server it must
-  // land before the original runs; applied after the call returns it changes nothing. Server
-  // only: the client's first original call initializes D3D and is left alone (N146).
-  if (g_isServer) {
+  // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
+  // the NOP is written here, before the first original call, rather than only from
+  // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
+  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
+  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
+  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
+  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
+  // run earlier is not established. Server only: the client's first original call initializes
+  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
+  // attempted on the first server entry only and its record is emitted once.
+  static std::atomic_bool s_spectatorStreamPatchAttempted{false};
+  if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
     PatchSpectatorStreamCheck("pre-preprocess");
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
