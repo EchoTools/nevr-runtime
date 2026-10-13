@@ -91,7 +91,7 @@ just scenario-all             # Every social scenario in turn, one PASS/FAIL tab
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
 ```
 
-Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
+Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a copy of the install, never the owner's install; see "The game install").
 
 ## Startup timing
 
@@ -341,6 +341,111 @@ your seat name, for example `claude-main` or `codex`.
 - **PRs target `main`.** Do not base a PR on another feature branch.
 - **Report a mistake the moment you see it,** with the command and its output.
 
+### The game install
+
+- **No agent runs a deploy script or writes into the owner's install.** On the owner's machine
+  the main checkout's `echovr/` is a symlink into `/mnt/games/...`, the owner's install (`echovr` is
+  git-ignored and untracked, so the repo does not guarantee this). `/mnt/games/**` and `echovr/**`
+  in the main checkout are never a deploy target. Each writer below writes into the tree it is
+  pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
+  to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
+  each at a copy explicitly:
+  - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
+    `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
+    the install has none, a `config.yaml` into `echovr/_local`.
+  - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
+    or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
+    any write.
+  - `launch-server.sh` copies `BugSplat64.dll` into `echovr/bin/win10` and, when
+    `build/mingw-release/bin/plugins/*.dll` exist, that directory's files into
+    `echovr/bin/win10/plugins`, and restores
+    nothing; any other script that copies a DLL into a game directory is the same kind of writer.
+  - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
+  - `just test-system` and `just test-system-verbose` (`tests/system/helpers_test.go`: `deployDLL`
+    writes and `cleanupDLLs` does `os.Remove` under `$EVR_GAME_DIR/bin/win10`; `deployPlugin` is
+    defined and not called). They also start the game: `shutdown_test.go` runs `wine` in
+    `$EVR_GAME_DIR/bin/win10` with `WINEPREFIX=$EVR_GAME_DIR/.wineprefix`. `test-system-short` and
+    `test-system-dll` pass `-short`, which skips every test that deploys or starts the game.
+    `tests/system/login_test.go` also writes (with
+    `NEVR_LIVE_TESTS=1` it runs `wine ./echovr.exe` in `$EVR_GAME_DIR/bin/win10` with `$WINEPREFIX`
+    when set, else `$EVR_GAME_DIR/.wineprefix`; unset `WINEPREFIX` or set it to
+    `<copy>/echovr/.wineprefix` for a Go test run).
+  - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
+
+  Not writers: `just test-plugins`, `just test-plugins-verbose` and `just test-plugins-short`
+  (`tests/plugins/plugin_helpers_test.go` defines deploy and cleanup helpers for DLLs and plugin
+  config files, but no test calls them; the plugin tests only read
+  `$EVR_GAME_DIR/bin/win10/_overrides/combat`), `just test-plugins-groundtruth` and
+  `just test-auth-groundtruth` (they need no game binary and name no game directory).
+  `just test-winvm` deploys into a throwaway rig on the guest VM (`tools/winvm/systest.py`:
+  `C:\nevr-systest`) and reads the guest's install (`C:\echovr`) through junctions it makes in the
+  rig; whether the game writes through them is not verified.
+
+  Point the scripts and the scenario recipes at the copy with `NEVR_GAME_ROOT=<copy>`, the Go tests
+  with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
+  `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
+  `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
+  copy waits for a human.
+- **The copy** lives under `/var/tmp/work-nevr-runtime/<agent>/` (named per agent, never another
+  agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
+  - **Make it.** Dereference only the top-level link, and keep every link inside as a link (no `-L`):
+    ```sh
+    SRC=$(readlink -f <main checkout>/echovr)
+    mkdir -p <copy>/echovr && cp -a --reflink=auto "$SRC"/. <copy>/echovr/
+    ```
+    `cp -aL` is wrong: a Wine prefix holds links to `/`, to `/mnt/games` and to the home directory
+    (`.wineprefix/dosdevices/z:`, drive letters, `drive_c/users/*/` folders), and `-L` would copy
+    all of it.
+  - **Size.** The copy is the whole install including `.wineprefix`. Measure the install read-only
+    with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
+    prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
+    (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
+  - **Make it safe.** Remove what a run must not start with, then list every link that leaves the
+    copy:
+    ```sh
+    rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
+    if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
+    COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
+    ```
+    A Wine prefix has its own device and home links, which this check prints: on the owner's
+    install, `.wineprefix/dosdevices/com1` to `com32` (to `/dev/ttyS*`), `d::` (to a block device),
+    `z:` (to `/`), and `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and
+    `Templates` (to the home directory), 41 lines, plus `OC_ASSET_FILES/content` and
+    `OC_ASSET_FILES/_data` (relative links to `../ready-at-dawn-echo-arena/...`, which do not exist in
+    the copy, so they print with an empty target): 43 lines in all. The scripts start the game with its working
+    directory inside the copy. That the runtime never writes through those links is not verified, so a
+    run on the copy is isolated from the install, not from the rest of the filesystem. A line that
+    resolves into `/mnt/games` or `$SRC` fails the check: `rm` that link, run the check again, and
+    only then start a run. A link whose target is empty is dangling and leaves nothing to write
+    through.
+  - **Shape.** The scripts differ:
+    - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
+      `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
+      it), no `echovr/_local/config.yaml` or `config.json` (a missing `_local` passes) and
+      `bin/win10/plugins` empty.
+      It reads the run's log from `echovr/.wineprefix`.
+    - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
+      `BugSplat64.dll` (it adds it and removes it on exit), creates `_local` when missing, and uses
+      a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
+      `echovr/.wineprefix`.
+  - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
+    runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
+    `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
+    registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
+    run's log under `echovr/.wineprefix/drive_c/users/<user>/AppData/Local/EchoVR/logs`;
+    `verify-server.sh` reads `echovr/bin/win10/logs` (that the runtime writes there is unverified).
+    `launch-client.sh` and `verify-server.sh` put back what they deploy on a normal or trapped exit,
+    not after a SIGKILL: `launch-client.sh` only prints ERROR when its restore fails and then saves
+    the leftover test DLL as the "original" on the next run, while `verify-server.sh` recovers from
+    its backup directory. `launch-server.sh` and the Go tests put nothing back (they leave the test
+    DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
+    `launch-client.sh` abort). `verify-server.sh` keeps its
+    backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
+    `/var/tmp/work-nevr-runtime/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
+    files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
+    inspect that directory before a run against a different copy than the last. When no copy exists, the run
+    waits for a human; a runtime change is not verified until then.
+
 ### Review, verification and merge
 
 - **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
@@ -351,6 +456,17 @@ your seat name, for example `claude-main` or `codex`.
   source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
+  `<sha>` is the PR's base commit: `git merge-base HEAD origin/<target>`, where `<target>` is the
+  branch the PR targets (usually `main`), the commit whose AGENTS.md you branched from (7 to 40 hex
+  characters of it). Fetch first (`git fetch origin <target>`); a stale `origin/<target>` can give
+  another merge-base. It is a tell that you read this file, not a security control;
+  `.github/workflows/pr-read-check.yml` runs `tools/check_pr_read_line.py` on every open, edit and
+  push, against the PR's target branch, and fails on a missing line, a line that is not last, or a
+  sha that is not that commit. The scaffold line is in `.github/pull_request_template.md`. When the
+  target moves after the PR is opened the base does not: it stays the commit you branched from until
+  you `git merge origin/<target>`, and the check then names the new merge-base, so update the line
+  (an edit to the body re-runs the check).
 - **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
   the client login test as described under "System test after every commit". The run's log must
   show all four keys
@@ -366,13 +482,14 @@ your seat name, for example `claude-main` or `codex`.
   checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
   not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
   never copied into a worktree, never compiled in); never print it.
-- **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
-  BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
+- **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
+  build's BugSplat64.dll> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
+  install (see "The game install"), one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
   exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
   endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
-  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` overrides which
-  checkout's `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
+  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` names the directory
+  whose `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
 
 ### Documentation, plans and findings
 
@@ -415,7 +532,8 @@ This applies regardless of context — even if the task seems to require it, eve
 
 ## System test after every commit
 
-- **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+- **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
+  install"),** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
 - **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
