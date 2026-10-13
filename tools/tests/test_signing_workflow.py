@@ -151,7 +151,9 @@ class WorkflowStructureTest(unittest.TestCase):
                     todo.extend(needs(j))
             return seen
 
-        status = re.compile(r"\b(always|cancelled|failure|success)\(\)")
+        # `!cancelled()` or `always()` only: a bare success() IS the implicit condition, and cancelled() or
+        # failure() alone mean something else.
+        status = re.compile(r"!cancelled\(\)|\balways\(\)")
         skippable = {n for n, j in jobs.items() if "if" in j}
         self.assertIn("drafts", skippable)
         for name, job in jobs.items():
@@ -161,8 +163,9 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("needs.guard.result == 'success'", jobs["build"]["if"])
         self.assertIn("needs.build.result == 'success'", jobs["sign"]["if"])
         self.assertIn("needs.sign.result == 'success'", jobs["seal"]["if"])
-        for name in ("build", "sign", "seal"):
+        for name in ("build", "sign", "seal", "repack", "publish"):
             self.assertIn("!cancelled()", jobs[name]["if"])
+            self.assertNotRegex(jobs[name]["if"], r"(?<![!\w])success\(\)", name)
 
     def test_nothing_is_published_without_a_release_event_or_a_draft_of_the_dispatched_tag(self):
         data, _ = load()

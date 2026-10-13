@@ -264,10 +264,10 @@ class ReleaseDraftPathTest(unittest.TestCase):
         repack, publish = jobs["repack"], jobs["publish"]
         self.assertEqual(repack["needs"], ["build", "sign", "seal"])
         self.assertEqual(repack["if"],
-            "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
+            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
         self.assertEqual(publish["needs"], ["build", "sign", "seal", "repack"])
         self.assertEqual(publish["if"],
-            "${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
+            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
             "needs.repack.result == 'success' && " + gate + " }}")
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})

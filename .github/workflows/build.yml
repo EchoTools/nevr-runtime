@@ -69,8 +69,9 @@ jobs:
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
     needs: drafts
-    # `drafts` is skipped for a release event. A failed listing fails the run, and with `guard` skipped every
-    # job below (their implied success() is false) is skipped too: nothing is built or uploaded.
+    # `drafts` is skipped for a release event. A failed listing fails the run, and with `guard` skipped
+    # `build` stops on `needs.guard.result == 'success'`, and every job below it with it: nothing is built or
+    # uploaded.
     if: ${{ always() && needs.drafts.result != 'failure' && needs.drafts.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
@@ -495,7 +496,7 @@ jobs:
   # code and installs nothing. Signing is stubbed above: the files are repacked exactly as built.
   repack:
     needs: [build, sign, seal]
-    if: ${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -561,7 +562,7 @@ jobs:
   # release files. Nothing is built, installed or run from the repository here.
   publish:
     needs: [build, sign, seal, repack]
-    if: ${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
