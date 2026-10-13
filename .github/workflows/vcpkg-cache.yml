@@ -59,7 +59,7 @@ jobs:
         # No restore-keys: an entry holds only the archives of this key. A fallback to an older entry
         # carried its 19 unusable archives into the saved one (run 37914950616: "Restored 0 package(s)",
         # 38 archives saved, 231 MB grew to 547 MB).
-        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Install vcpkg dependencies
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
@@ -67,7 +67,12 @@ jobs:
         set -euo pipefail
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
-        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
+        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
+        # finds none. This value is the builder image's own PATH, which build.yml's job keeps (nothing may add to it).
+        # The key does not encode this pin: change the pin and bump the vcpkg-binN prefix in the same commit.
+        env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+          "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
         count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
@@ -79,4 +84,4 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
