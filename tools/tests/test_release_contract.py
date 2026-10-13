@@ -210,7 +210,10 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_release_ci_installs_tools_and_uploads_the_actual_artifact_directory(self):
         workflow = (REPO / ".github/workflows/build.yml").read_text()
-        self.assertIn("just-version:", workflow)
+        # just comes from the builder image, not from an action that edits PATH (PATH is hashed into every
+        # mingw package ABI, #551): the job asserts the image carries the pinned version.
+        self.assertNotIn("extractions/setup-just", workflow)
+        self.assertIn('test "$(just --version)" = "just 1.58.0"', workflow)
         # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
         # from pacman, installed once in the builder image (.github/builder/Dockerfile) that the job
         # runs in, with every version logged per run.
