@@ -37,12 +37,17 @@ class VcpkgPinTest(unittest.TestCase):
                 self.assertLess(text.index("actions/checkout"), text.index("Microsoft/vcpkg.git"),
                                 f"{workflow.name}: .vcpkg-commit is read before the checkout")
 
-    def test_the_cache_seed_runs_only_on_demand(self):
-        # Nothing triggers a run automatically: the seed is dispatched by hand on main after a pin bump.
+    def test_the_cache_seed_runs_on_main_when_a_key_input_changes_and_on_demand(self):
+        # A cache is restorable only from the run's own ref and the default branch, so main must hold the key
+        # build.yml asks for or every tag and release run compiles the dependencies (~39 min).
         text = (WORKFLOWS / "vcpkg-cache.yml").read_text()
         triggers = yaml.safe_load(text)
         triggers = triggers.get("on", triggers.get(True))
-        self.assertEqual(set(triggers), {"workflow_dispatch"})
+        self.assertEqual(set(triggers), {"push", "workflow_dispatch"})
+        self.assertEqual(triggers["push"]["branches"], ["main"])
+        # every input of the key: vcpkg.json (hashed), the pin, the toolchain image, and the workflow itself
+        for path in ("vcpkg.json", ".vcpkg-commit", ".github/builder/**", ".github/workflows/vcpkg-cache.yml"):
+            self.assertIn(path, triggers["push"]["paths"])
         self.assertIn(".vcpkg-commit", text)
 
     def test_the_builder_image_provides_the_case_folded_crypt32(self):
