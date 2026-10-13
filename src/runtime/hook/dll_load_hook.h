@@ -26,7 +26,8 @@ typedef bool (*LoadFilter)(const wchar_t* lower_path);
  * feature that must veto a load registers here instead of installing its own detour on the same
  * targets (MinHook allows one per target: the second install fails with MH_ERROR_ALREADY_CREATED,
  * #361). A refused load returns NULL with ERROR_MOD_NOT_FOUND. `name` is for the log line.
- * Applies to every LoadLibrary variant and every dwFlags value. */
+ * Applies to every LoadLibrary variant and every dwFlags value. `name` is truncated to 47 bytes
+ * (the truncation is logged); IsLoadBlocked reports the truncated name. */
 void AddLoadFilter(const char* name, LoadFilter filter);
 
 /* The Oculus Platform SDK predicate: true when the FILE NAME of `lower_path` (the part after the

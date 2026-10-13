@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <thread>
 
 namespace {
@@ -105,6 +106,18 @@ TEST(DllLoadHookFilter, ReportedNameOutlivesFilterVectorChanges) {
   nevr_dll_load_hook::Shutdown();
   nevr_dll_load_hook::AddLoadFilter("replacement-filter", BlocksVersionDll);
   EXPECT_STREQ(by, "original-filter");
+  nevr_dll_load_hook::Shutdown();
+}
+
+TEST(DllLoadHookFilter, OverlongFilterNameIsTruncatedNotDropped) {
+  nevr_dll_load_hook::Shutdown();
+  // 60 bytes in; the stored name holds 47 plus the terminator.
+  const std::string longName(60, 'n');
+  nevr_dll_load_hook::AddLoadFilter(longName.c_str(), BlocksVersionDll);
+  const char* by = nullptr;
+  ASSERT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", &by));
+  ASSERT_NE(by, nullptr);
+  EXPECT_EQ(std::string(by), std::string(47, 'n'));
   nevr_dll_load_hook::Shutdown();
 }
 

@@ -205,7 +205,13 @@ static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWO
 void AddLoadFilter(const char* name, LoadFilter filter) {
     if (!filter) return;
     Filter f{};
-    snprintf(f.name, sizeof(f.name), "%s", name ? name : "?");
+    const char* label = name ? name : "?";
+    const int needed = snprintf(f.name, sizeof(f.name), "%s", label);
+    if (needed >= static_cast<int>(sizeof(f.name))) {
+        fprintf(stderr, "[NEVR.DLLHOOK] load filter name truncated to %zu bytes: '%s'\n",
+                sizeof(f.name) - 1, f.name);
+        fflush(stderr);
+    }
     f.predicate = filter;
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_filters.push_back(f);
@@ -230,9 +236,13 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
     for (const auto& f : filters) {
         if (f.predicate(lower_path)) {
             if (blocked_by) {
-                static thread_local std::string name;
-                name = f.name;
-                *blocked_by = name.c_str();
+                // A fixed per-thread buffer: a thread_local std::string would register a
+                // per-thread destructor in this DLL. f.name is already NUL-terminated and
+                // truncated to sizeof(Filter::name) - 1 bytes by AddLoadFilter.
+                static thread_local char name[sizeof(Filter::name)];
+                std::memcpy(name, f.name, sizeof(name));
+                name[sizeof(name) - 1] = '\0';
+                *blocked_by = name;
             }
             return true;
         }
