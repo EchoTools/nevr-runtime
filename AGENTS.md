@@ -346,10 +346,12 @@ your seat name, for example `claude-main` or `codex`.
 - **No agent runs a deploy script or writes into the owner's install.** On the owner's machine
   the main checkout's `echovr/` is a symlink into `/mnt/games/...`, the owner's install (`echovr` is
   git-ignored and untracked, so the repo does not guarantee this). `/mnt/games/**` and `echovr/**`
-  in the main checkout are never a deploy target, and every writer below writes through that link
-  unless it is pointed at a copy:
+  in the main checkout are never a deploy target. Each writer below writes into the tree it is
+  pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
+  to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
+  each at a copy explicitly:
   - `verify-server.sh` deploys `BugSplat64.dll`, `plugins/*` and, when the install has none, a
-    `_local/config.yaml` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` (the main checkout by default).
+    `_local/config.yaml` into `echovr/bin/win10` of `$NEVR_GAME_ROOT`.
   - `launch-client.sh` deploys `BugSplat64.dll` there and aborts (exit 3) when `plugins/*` is non-empty
     or `_local/config.yaml` or `_local/config.json` exists. `--print-game-root` and `--help` exit before
     any write.
@@ -357,29 +359,61 @@ your seat name, for example `claude-main` or `codex`.
   - `just scenario` and `just scenario-all` (`tools/scenario/run_scenario.py` runs `launch-client.sh`).
   - `just test-system` and its variants (`tests/system/helpers_test.go`: `deployDLL`, `deployPlugin`
     and `cleanupDLLs` write and `os.Remove` under `$EVR_GAME_DIR/bin/win10`), and `just test-plugins`
-    and its variants (`tests/plugins/plugin_helpers_test.go` does the same).
+    and `just test-plugins-verbose` (`tests/plugins/plugin_helpers_test.go` does the same, and also
+    writes `.json`, `.jsonc`, `.yml` and `.yaml` config files into `bin/win10/plugins/`).
   - `just generate-combat-overrides` (writes `echovr/bin/win10/_overrides/combat`).
 
-  Point each at the copy: `NEVR_GAME_ROOT=<copy>` for the scripts and the scenario recipes,
-  `EVR_GAME_DIR=<copy>/echovr` for the Go tests, and for `generate-combat-overrides` run the generator
-  with `--output-dir <copy>/echovr/bin/win10/_overrides/combat`. A writer that cannot be pointed at
-  the copy waits for a human. (`just test-winvm` deploys to the guest VM's own install, not to this
-  host's.)
-- **The copy.** A client or `-server` run uses a throwaway copy of the install, under
-  `/var/tmp/work-nevr-runtime/<agent>/game-copy/` (named per agent, never another agent's).
-  - **Shape:** `<copy>/echovr/bin/win10/` with `echovr.exe` and the original `BugSplat64.dll`,
-    `<copy>/echovr/.wineprefix`, and `<copy>/echovr/_local` with no `config.yaml`, no `config.json`
-    and no `bin/win10/plugins/*` content. Both scripts need all of it.
-  - **Make it dereferenced.** `echovr` in the main checkout is itself a symlink, and a plain copy
-    copies the link, so a run writes through it. Use `cp -aL <main checkout>/echovr <copy>/echovr`
-    (or `rsync -aL`). Then list what is left: `find <copy> -type l -printf '%p -> %l\n'`. No link
-    in the copy may point outside the copy, and none into `/mnt/games`.
-  - **Size.** The copy is the whole install including `.wineprefix`, several GB. Run
-    `df -h /var/tmp` first; free space must exceed it, and a full disk truncates the file being
-    copied. Do not measure the install itself; check `df` on the target.
-  - **Who makes it.** Only a human or the foreman makes the first copy. Agents reuse it for every
-    run and never write back to the install. When none exists, the run waits for a human; a runtime
-    change is not verified until then.
+  Not writers: `just test-plugins-groundtruth`, `just test-auth-groundtruth` (they need no game
+  binary and name no game directory). `just test-winvm` deploys to the guest VM's own install, not
+  this host's.
+
+  Point the scripts and the scenario recipes at the copy with `NEVR_GAME_ROOT=<copy>`, the Go tests
+  with `EVR_GAME_DIR=<copy>/echovr`, and the combat generator with
+  `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
+  `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
+  copy waits for a human.
+- **The copy** lives under `/var/tmp/work-nevr-runtime/<agent>/` (named per agent, never another
+  agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
+  - **Make it.** Dereference only the top-level link, and keep every link inside as a link (no `-L`):
+    ```sh
+    SRC=$(readlink -f <main checkout>/echovr)
+    mkdir -p <copy>/echovr && cp -a --reflink=auto "$SRC"/. <copy>/echovr/
+    ```
+    `cp -aL` is wrong: a Wine prefix holds links to `/`, to `/mnt/games` and to the home directory
+    (`.wineprefix/dosdevices/z:`, drive letters, `drive_c/users/*/` folders), and `-L` would copy
+    all of it.
+  - **Size.** The copy is the whole install including `.wineprefix`. Measure the install read-only
+    with `du -sh --apparent-size "$SRC"` and compare it with `df -h /var/tmp`; free space must
+    exceed the figure. A full disk truncates the file being copied.
+  - **Make it safe.** Remove what a run must not start with, then list every link that leaves the
+    copy:
+    ```sh
+    rm -f <copy>/echovr/_local/config.yaml <copy>/echovr/_local/config.json
+    [ -d <copy>/echovr/bin/win10/plugins ] && find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete
+    COPY=<copy> find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
+    ```
+    The expected output is empty, or only `.wineprefix/dosdevices/z: -> /`. Wine creates `z:` by
+    default and the scripts start the game with its working directory inside the copy. That the
+    runtime never writes through `z:` is not verified, so a run on the copy is isolated from the
+    install, not from the rest of the filesystem. Any other line, above all one into `/mnt/games`
+    or `$SRC` (`g:`, `d::`, `drive_c/users/*/Music`), fails the check: `rm` that link, run the
+    check again, and only then start a run.
+  - **Shape.** The scripts differ:
+    - `launch-client.sh` needs `echovr/bin/win10/echovr.exe` and the original
+      `echovr/bin/win10/BugSplat64.dll` (it saves and restores it and stops under `set -e` without
+      it), and `echovr/_local` with no `config.yaml` or `config.json` and `bin/win10/plugins` empty.
+      It reads the run's log from `echovr/.wineprefix`.
+    - `verify-server.sh` needs `echovr/bin/win10/echovr.exe`. It tolerates an absent
+      `BugSplat64.dll` (it adds it and removes it on exit), creates `_local` when missing, and uses
+      a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
+      `echovr/.wineprefix`.
+  - **Who makes it, and reuse.** Only a human or the foreman makes the first copy, and nothing
+    writes to it afterwards. Runs of the scripts may use it directly: they put back what they
+    deploy, and never write back to the install. A Go test run consumes its copy (the tests delete
+    `BugSplat64.dll` and leave config files in `plugins/`, which makes `launch-client.sh` abort):
+    make a separate copy for each Go test run from the pristine one, with `cp -a`, delete it when the
+    run ends, and never run `launch-client.sh` against it. When no copy exists, the run waits for a
+    human; a runtime change is not verified until then.
 
 ### Review, verification and merge
 
