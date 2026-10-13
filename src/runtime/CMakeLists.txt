@@ -387,6 +387,7 @@ if(BUILD_TESTING)
       log/url_diagnostics.cpp)
     set_source_files_properties(tests/test_websocket_client_auth.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_websocket_client_auth PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_websocket_client_auth PRIVATE
       GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
