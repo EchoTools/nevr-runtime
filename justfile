@@ -52,17 +52,13 @@ launcher: configure
 verbose-build: configure
     cmake --build --preset {{ preset }}
 
-# Create distribution packages
+# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/
 dist: build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
-
-# Build stripped binaries without debug symbols
-dist-lite: build
-    cmake --build --preset {{ preset }} --target dist-lite
 
 # Create legacy distribution package (v1 DLLs only)
 dist-legacy: build
@@ -817,7 +813,17 @@ test-quest-redirect:
     set -euo pipefail
     out="build/quest-redirect-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-redirect: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -892,7 +898,17 @@ test-quest-social:
     set -euo pipefail
     out="build/quest-social-host"
     mkdir -p "$out"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-social: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     off=("${on[@]}" -fno-exceptions)
     "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
@@ -1081,7 +1097,7 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_spectatorstream_order tools.tests.test_pnsrad_diag_deferral tools.tests.test_verify_mode_patch_ground_truth tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly tools.tests.test_check_pr_read_line tools.tests.test_pr_read_check_workflow tools.tests.test_abi_symbols -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1724,9 +1740,20 @@ verify:
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
     fi
-    if ! grep -q 'ServerFatal' <<<"$N120_XPID"; then
+    # ServerFatal is not callable here: the patch runs before the CLI is parsed, so g_isServer is
+    # still false and ServerFatal would only warn. The failure goes through g_bootHookFailed, which
+    # boot.cpp checks once the mode is known (src/runtime/tests/test_behavioral.cpp XpidPatchBoot).
+    if ! grep -q 'g_bootHookFailed = true' <<<"$N120_XPID"; then
         echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
+        exit 1
+    fi
+    # The flag alone is satisfied by one `g_bootHookFailed = true`, so a ServerFatal() restored on the
+    # validation path would pass the check above. It must stay out of this file altogether: it runs
+    # before the CLI is parsed, where ServerFatal only warns and the boot would go on.
+    if grep -q 'ServerFatal(' <<<"$N120_XPID"; then
+        echo "verify: FAIL — N120 xpid_patch.cpp calls ServerFatal()." >&2
+        echo "The patch runs before the CLI is parsed, so g_isServer is still false and ServerFatal only warns; report through g_bootHookFailed (boot.cpp refuses to start a server)." >&2
         exit 1
     fi
 
@@ -2571,7 +2598,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 872
+    python3 tools/verify_gtest_floor.py --floor 915
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
@@ -2597,7 +2624,7 @@ generate-certs:
 renew-certs:
     ./certs/generate-ca.sh --renew
 
-# Build normal and lite archives with required local Authenticode signing.
+# Build the stripped archives with required local Authenticode signing.
 sign:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2614,7 +2641,7 @@ sign:
     export CODESIGN_TSURL="http://timestamp.digicert.com"
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=ON
     build_status=0
-    cmake --build --preset {{ preset }} --target dist dist-lite || build_status=$?
+    cmake --build --preset {{ preset }} --target dist || build_status=$?
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=OFF > /dev/null
     exit "$build_status"
 

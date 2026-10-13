@@ -83,7 +83,7 @@ void PreflightRuntimeBootstrap() {
   // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
   // flag directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
-  // 0x2000000), which is what PatchSpectatorStreamAlways does by NOPping
+  // 0x2000000), which is what PatchSpectatorStreamCheck does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally.
@@ -125,6 +125,20 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
                          : vehResult == nevr_veh_policy::InstallResult::DeferredWine ? "skipped" : "failed";
     Log(vehResult == nevr_veh_policy::InstallResult::Failed ? EchoVR::LogLevel::Error : EchoVR::LogLevel::Info,
         "[NEVR.CRASH] veh post_cli status=%s mode=%s", status, g_isServer ? "server" : "client");
+  }
+  // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
+  // the NOP is written here, before the first original call, rather than only from
+  // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
+  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
+  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
+  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
+  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
+  // run earlier is not established. Server only: the client's first original call initializes
+  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
+  // attempted on the first server entry only and its record is emitted once.
+  static std::atomic_bool s_spectatorStreamPatchAttempted{false};
+  if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
+    PatchSpectatorStreamCheck("pre-preprocess");
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
@@ -190,7 +204,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // engine reads natively (publisher_lock is supplied by JsonValueAsStringHook
     // when absent); a server with no config.json boots and logs in.
     if (g_bootHookFailed) {
-      ServerFatal("One or more boot hooks failed to install — server would be degraded");
+      // The cause was recorded where the flag was set (NoteBootHookFailureCause, initialize.h), so the last line names the site.
+      ServerFatal("One or more boot hooks failed to install — server would be degraded: %s",
+                  g_bootHookFailedCause[0] != '\0' ? g_bootHookFailedCause : "cause not recorded");
     }
   }
 

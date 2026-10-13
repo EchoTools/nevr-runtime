@@ -115,7 +115,9 @@ bool ValidFlatJson(const std::string& t) {
 void SilentSink(LogLevel, const char*) {}
 
 int g_invalidLines = 0;
+#ifdef NEVR_TEST_HAVE_NLOHMANN
 int g_nlohmannParsed = 0;
+#endif
 void CaptureSink(LogLevel level, const char* line) {
   const std::lock_guard<std::mutex> guard(g_captureMutex);
   if (!ValidFlatJson(line)) {
