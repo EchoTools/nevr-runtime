@@ -83,7 +83,7 @@ void PreflightRuntimeBootstrap() {
   // (src/legacy/gamepatches/patches.cpp) sets the windowed-mode
   // flag directly on the game instance at offset 31456 (0x7AE0) with bit
   // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
-  // 0x2000000), which is what PatchSpectatorStreamAlways does by NOPping
+  // 0x2000000), which is what PatchSpectatorStreamCheck does by NOPping
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally.
@@ -115,6 +115,20 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
+  // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
+  // the NOP is written here, before the first original call, rather than only from
+  // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
+  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
+  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
+  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
+  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
+  // run earlier is not established. Server only: the client's first original call initializes
+  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
+  // attempted on the first server entry only and its record is emitted once.
+  static std::atomic_bool s_spectatorStreamPatchAttempted{false};
+  if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
+    PatchSpectatorStreamCheck("pre-preprocess");
+  }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
