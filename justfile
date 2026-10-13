@@ -813,7 +813,17 @@ test-quest-redirect:
     set -euo pipefail
     out="build/quest-redirect-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-redirect: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -888,7 +898,17 @@ test-quest-social:
     set -euo pipefail
     out="build/quest-social-host"
     mkdir -p "$out"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-social: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     off=("${on[@]}" -fno-exceptions)
     "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
