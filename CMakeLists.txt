@@ -120,9 +120,8 @@ if(MSVC)
     "/EHsc" # Enable C++ exceptions
     "$<$<CONFIG:Debug>:/D_DEBUG>" # Debug: Define _DEBUG
     "$<$<CONFIG:Release>:/DNDEBUG>" # Release: Define NDEBUG
-    "$<$<CONFIG:Release>:/Od>" # Debug: Disable optimizations
-
-    # "$<$<CONFIG:Release>:/O2>" # Release: Enable optimizations
+    "$<$<CONFIG:Debug>:/Od>" # Debug: Disable optimizations
+    "$<$<CONFIG:Release>:/O2>" # Release: Enable optimizations
   )
 endif()
 
