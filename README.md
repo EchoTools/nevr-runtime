@@ -189,8 +189,7 @@ just verify         # THE GATE — build + tests under Wine + invariant sensors
 just test-system-short        # quick Go system tests (needs the game binary)
 just test-plugins-groundtruth # plugin tests without the game binary
 just test-android              # Quest binary-shape checks
-just dist           # distribution packages
-just dist-lite      # stripped, no debug symbols
+just dist           # the stripped release package (symbols split to dist/symbols/); a build with symbols is build/<preset>/bin/
 ```
 
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`

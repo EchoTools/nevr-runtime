@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -35,9 +37,12 @@ struct Registration {
     char dll_name[64];     // lowercase, filename only
     PatchCallback callback;
     bool fired;
+    std::uint64_t id;
 };
 
 static std::vector<Registration> g_registrations;
+static std::mutex g_registryMutex;
+static std::uint64_t g_nextRegistrationId = 0;
 
 struct Filter {
     char name[48];
@@ -52,6 +57,18 @@ static decltype(&LoadLibraryA) g_origLoadLibraryA = nullptr;
 static decltype(&LoadLibraryW) g_origLoadLibraryW = nullptr;
 static decltype(&LoadLibraryExA) g_origLoadLibraryExA = nullptr;
 static decltype(&LoadLibraryExW) g_origLoadLibraryExW = nullptr;
+
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+static ModuleProbe g_moduleProbe = &GetModuleHandleA;
+
+void SetModuleProbeForTest(ModuleProbe probe) {
+    g_moduleProbe = probe ? probe : &GetModuleHandleA;
+}
+
+static HMODULE FindLoadedModule(const char* name) { return g_moduleProbe(name); }
+#else
+static HMODULE FindLoadedModule(const char* name) { return GetModuleHandleA(name); }
+#endif
 
 /* Extract filename from a path and lowercase it */
 static void ExtractLowerFilename(const char* path, char* out, size_t out_size) {
@@ -111,7 +128,8 @@ static std::wstring LowerWide(const wchar_t* path) {
 static bool RefuseLoad(const std::wstring& lower) {
     const char* by = nullptr;
     if (!IsLoadBlocked(lower.c_str(), &by)) return false;
-    fprintf(stderr, "[NEVR.DLLHOOK] load refused by filter '%s': %ls\n", by ? by : "?", lower.c_str());
+    const std::string filterName = by ? by : "?";
+    fprintf(stderr, "[NEVR.DLLHOOK] load refused by filter '%s': %ls\n", filterName.c_str(), lower.c_str());
     fflush(stderr);
     SetLastError(ERROR_MOD_NOT_FOUND);
     return true;
@@ -119,14 +137,22 @@ static bool RefuseLoad(const std::wstring& lower) {
 
 /* Fire registered callbacks for a loaded DLL (each fires at most once) */
 static void FireCallbacks(const char* lower_name, HMODULE module) {
-    for (auto& reg : g_registrations) {
-        if (!reg.fired && strcmp(reg.dll_name, lower_name) == 0) {
-            fprintf(stderr, "[NEVR.DLLHOOK] firing patch callback for '%s' (module=%p)\n",
-                    lower_name, (void*)module);
-            fflush(stderr);
-            reg.fired = true;
-            reg.callback(lower_name, module);
+    std::vector<Registration> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        pending.reserve(g_registrations.size());
+        for (auto& reg : g_registrations) {
+            if (!reg.fired && strcmp(reg.dll_name, lower_name) == 0) {
+                reg.fired = true;
+                pending.push_back(reg);
+            }
         }
+    }
+    for (const auto& reg : pending) {
+        fprintf(stderr, "[NEVR.DLLHOOK] firing patch callback for '%s' (module=%p)\n",
+                reg.dll_name, (void*)module);
+        fflush(stderr);
+        reg.callback(reg.dll_name, module);
     }
 }
 
@@ -180,8 +206,15 @@ static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWO
 void AddLoadFilter(const char* name, LoadFilter filter) {
     if (!filter) return;
     Filter f{};
-    snprintf(f.name, sizeof(f.name), "%s", name ? name : "?");
+    const char* label = name ? name : "?";
+    const int needed = snprintf(f.name, sizeof(f.name), "%s", label);
+    if (needed >= static_cast<int>(sizeof(f.name))) {
+        fprintf(stderr, "[NEVR.DLLHOOK] load filter name truncated to %zu bytes: '%s'\n",
+                sizeof(f.name) - 1, f.name);
+        fflush(stderr);
+    }
     f.predicate = filter;
+    std::lock_guard<std::mutex> lock(g_registryMutex);
     g_filters.push_back(f);
 }
 
@@ -196,9 +229,22 @@ bool IsOculusPlatformPath(const wchar_t* lower_path) {
 
 bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
     if (!lower_path) return false;
-    for (const auto& f : g_filters) {
+    std::vector<Filter> filters;
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        filters = g_filters;
+    }
+    for (const auto& f : filters) {
         if (f.predicate(lower_path)) {
-            if (blocked_by) *blocked_by = f.name;
+            if (blocked_by) {
+                // A fixed per-thread buffer: a thread_local std::string would register a
+                // per-thread destructor in this DLL. f.name is already NUL-terminated and
+                // truncated to sizeof(Filter::name) - 1 bytes by AddLoadFilter.
+                static thread_local char name[sizeof(Filter::name)];
+                std::memcpy(name, f.name, sizeof(name));
+                name[sizeof(name) - 1] = '\0';
+                *blocked_by = name;
+            }
             return true;
         }
     }
@@ -261,25 +307,41 @@ void Shutdown() {
     if (g_origLoadLibraryExA) MH_DisableHook((void*)&LoadLibraryExA);
     if (g_origLoadLibraryExW) MH_DisableHook((void*)&LoadLibraryExW);
 #endif
+    std::lock_guard<std::mutex> lock(g_registryMutex);
     g_registrations.clear();
     g_filters.clear();
 }
 
 void OnLoad(const char* dll_name, PatchCallback callback) {
-    Registration reg;
+    Registration reg{};
     ExtractLowerFilename(dll_name, reg.dll_name, sizeof(reg.dll_name));
     reg.callback = callback;
-    reg.fired = false;
-    g_registrations.push_back(reg);
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        reg.id = ++g_nextRegistrationId;
+        g_registrations.push_back(reg);
+    }
 
     // If the DLL is already loaded, fire immediately
-    HMODULE existing = GetModuleHandleA(dll_name);
+    HMODULE existing = FindLoadedModule(dll_name);
     if (existing) {
-        fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p), firing immediately\n",
-                reg.dll_name, (void*)existing);
-        fflush(stderr);
-        g_registrations.back().fired = true;
-        callback(reg.dll_name, existing);
+        bool claimed = false;
+        {
+            std::lock_guard<std::mutex> lock(g_registryMutex);
+            for (auto& registered : g_registrations) {
+                if (registered.id == reg.id && !registered.fired) {
+                    registered.fired = true;
+                    claimed = true;
+                    break;
+                }
+            }
+        }
+        if (claimed) {
+            fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p), firing immediately\n",
+                    reg.dll_name, (void*)existing);
+            fflush(stderr);
+            callback(reg.dll_name, existing);
+        }
     }
 }
 

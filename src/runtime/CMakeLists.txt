@@ -728,7 +728,7 @@ if(BUILD_TESTING)
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
@@ -921,8 +921,8 @@ if(BUILD_TESTING)
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)
