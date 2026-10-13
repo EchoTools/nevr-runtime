@@ -115,6 +115,17 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
+  // Wine skips the early VEH while server mode is unknown. Decide now, before
+  // the original command-line processing can enter server-specific game code.
+  static bool s_vehDecisionLogged = false;
+  if (!s_vehDecisionLogged) {
+    s_vehDecisionLogged = true;
+    const auto vehResult = InstallVEH();
+    const char* status = vehResult == nevr_veh_policy::InstallResult::Installed ? "installed"
+                         : vehResult == nevr_veh_policy::InstallResult::DeferredWine ? "skipped" : "failed";
+    Log(vehResult == nevr_veh_policy::InstallResult::Failed ? EchoVR::LogLevel::Error : EchoVR::LogLevel::Info,
+        "[NEVR.CRASH] veh post_cli status=%s mode=%s", status, g_isServer ? "server" : "client");
+  }
   // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
   // the NOP is written here, before the first original call, rather than only from
   // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
