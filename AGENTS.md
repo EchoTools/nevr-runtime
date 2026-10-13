@@ -1,20 +1,23 @@
 # AGENTS.md
 
-This file is for any coding agent, and the person running it, working on this repository. It is the full statement of
-the rules; [`CONTRIBUTING.md`](CONTRIBUTING.md) is the short path from a checkout to a pull request.
-
-The rules are written for a contributor on their own machine. Where a step needs access only the maintainers have
-(the reverse-engineering database, the production server's logs, the release pipeline), the step says so: do what you
-can without it, and ask for the rest in your PR or issue. Never guess in place of that access.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
 
 nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
-## Required reading
+## For contributors
+
+Everything in this file binds every agent. This section is for an agent working for an outside contributor, on the
+contributor's own machine. It adds what such an agent needs: what to read, what a PR carries, which rules are already
+enforced, and the N-rules index. It also says which later sections describe the maintainers' machine, and what to do
+on yours instead. Where a step needs access only the maintainers have (ReVault, the production server's logs, the
+release pipeline), do what you can without it and ask in your PR or issue. Never guess in its place.
+
+### Required reading
 
 Read this file whole before your first change. The four standards in `docs/standards/` are binding, not background.
-Read each one at the point below, before you start that kind of work:
+Read each one before you start the kind of work it covers:
 
 | Standard | Read it before you... |
 | --- | --- |
@@ -23,8 +26,233 @@ Read each one at the point below, before you start that kind of work:
 | `docs/standards/naming.md` | add any name: file, directory, type, function, namespace, macro, config key, log tag, DLL export, branch |
 | `docs/standards/planning.md` | open or edit an issue, a PR's milestone or labels, or anything on the project board |
 
-The N-rules below ("The N-rules") are binding too: a change that touches a file they guard must keep them, whether
-or not `just verify` would notice.
+The N-rules ("The N-rules index" below) bind too. A change to a file they guard must keep them, whether or not
+`just verify` would notice.
+
+### Maintainers only, and what to do instead
+
+The sections and bullets marked **Maintainers only** describe the maintainers' machine and accounts. Keep the reason
+each one gives; do the step this way on yours:
+
+| Maintainers-only part | On your machine |
+| --- | --- |
+| "Commit identity" (author, trailer, signing) | Commit as yourself: the author is the person responsible, under the name and email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer. Conventional prefix, one logical change per commit, and the same post-commit check. |
+| "Ownership and cleanup": the ledger file | Keep the same record (artifact, owner, purpose, remove-when) in a file of your own, and read it before deleting anything. The worktree path `.claude/worktrees/<branch>` works in any clone; use it, so `just reap-merged` finds your worktrees. |
+| "Builds": the shared `nevr-builds.slice` | Same reason: parallel lanes, each under its own cap, still starve a machine. If you run one lane, `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>` is enough. If you run several, create one user slice that caps them all together, as the maintainers do. Wait while `pgrep -x ninja \| wc -l` is 2 or more. |
+| Scratch under `/var/tmp/work-nevr-runtime/<agent>/` | The same path works on any Linux machine, and several tools write there by default (`tools/scenario/run_scenario.py`, `tools/lib/game_install.sh`, `tools/winvm/systest.py`). Use `/var/tmp/work-nevr-runtime/<your handle>/`, never `/tmp` and never the repo. |
+| "The game install": `/mnt/games` and the owner's link | See "Your game install" below. |
+| "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
+| "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
+| "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
+| "System test after every commit": the production server, display `:0` | Log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the nested Xephyr display exactly as described. If you cannot run the game at all, say so in the PR: the runtime change is then unverified, and a maintainer runs it. |
+| "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
+| Merging, and "Only the agent the owner has told to merge merges PRs" | A contributor's agent never merges. The maintainers review and merge. |
+| `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
+| `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
+
+**Keep Wine off the user's desktop.** `just verify` runs GTest binaries under Wine, and several tests and scripts
+start the game. Run each with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just verify`),
+except for a client run on the nested display. A Wine process that reaches the user's display can take over their
+mouse and keyboard.
+
+### Your game install
+
+The rule in "The game install" holds for you as it is written: no run deploys into, or writes through, a real
+install, and every run uses its own copy, made from a pristine copy and deleted when the run ends (#524). Only the
+paths differ:
+
+- `SRC` is the root of your install: the directory that holds `bin/win10/echovr.exe` (a stock install is named
+  `ready-at-dawn-echo-arena`). If your checkout's `echovr/` is a link to it, `SRC=$(readlink -f <checkout>/echovr)`.
+- The pristine copy is `<copy>/echovr`, made by you, the human, never by the agent:
+  `mkdir -p <copy>/echovr && cp -a --reflink=auto "$SRC"/. <copy>/echovr/`. `<copy>` lives in your scratch directory.
+- In the link check, a line that resolves into `SRC` or anywhere else in your install fails the check. Remove that
+  link and run the check again.
+- Set `NEVR_RUN_SCRATCH_ROOT` to your scratch directory before using `verify-server.sh`.
+
+Everything else in "The game install" applies unchanged: the list of writers, how to point each at the copy, the
+size check, removing `_local/config.*` and `plugins/*`, and the shape each script needs.
+
+### What a PR carries
+
+The maintainers' recent PRs (#471 is a merged example) carry the items below, and reviewers ask for them. Treat them
+as required for your PR:
+
+- **A search statement.** Before adding anything, show that nothing in the tree or its history already does it. State
+  the commands and what they found, over files *and* history:
+
+  ```
+  ## Search statement
+  - `git grep -n "ReaderGate"` (847 tracked files): src/core/reader_gate.h, src/runtime/patch/asset_cdn.cpp, ...
+  - `git log -S ReaderGate --oneline`: 3 commits, all on the existing gate; none adds a second one.
+  ```
+
+  "Nothing found" counts only with the pattern and the scope it ran over.
+- **A Symbols list.** List the symbols you edited, and separately the ones nearby that you read but did not edit, so
+  the reviewer knows what you looked at and what you left alone:
+
+  ```
+  ## Symbols
+  Edited: nevr::ReaderGate (Scope, WaitIdle, Enter (new)); test_reader_gate.cpp.
+  Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
+  ```
+- **A mutant for every changed line of behaviour.** "The test fails without the change" is not enough. For every line
+  of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
+  them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
+  restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
+
+  ```
+  ## Mutants
+  - M1 drop the epoch re-check in WaitIdle -> FAIL test_reader_gate: Overtaken
+  - M2 `undrained_` never decremented -> FAIL test_reader_gate: TimesOutWhenReadersStay
+  - restored tree: 9 tests OK
+  ```
+- **Evidence on the exact tip**, as "Review, verification and merge" says: each command run on the tip SHA and its
+  result, what was not run, and the tracking issue.
+
+**Write an issue as a falsifiable claim** (see #519 and #520), with these sections:
+
+- **Evidence at `<sha>`**: what the tree says, re-read at a named commit, with `file:line` and quoted lines.
+- **Not shown**: what the evidence does not establish.
+- **Falsifier**: the one observation that would prove the issue wrong.
+- **Work**: the steps, in order, tests first, each with what it must show.
+
+### Rules a check already enforces
+
+- **The PR body ends with `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge").
+  `.github/workflows/pr-read-check.yml` fails the PR without it. On a PR from a fork, a maintainer has to approve the
+  workflow run before it runs.
+- **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install").
+
+### The N-rules index
+
+The code carries rules tagged `N<number>` in comments (`// N62: ...`) and in the `just verify` recipe, whose sensors
+name the rule they guard in their FAIL line. A green `just verify` does **not** prove you kept every one: some are
+checked by a GTest or a Python check, some only by a live run, and some by nothing. Before you change a file named
+below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the PR and why.
+
+The index was built from `git grep -nE '\bN[0-9]+\b'` over `src/`, `plugins/` and `tools/`, the `verify` recipe in
+`justfile`, and the Python checks it runs. In the "Checked by" column, "verify" means a `just verify` sensor whose
+FAIL line names the rule, and "nothing" means no check names it. An ID cited only as history inside another rule's
+comment (for example N41, N48) is not a rule.
+
+#### Boot, shutdown and crash path
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
+| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock: after `InitializeFunctionPointers()` it logs only through `nevr_boot_log_tee::TeeFprintf`, with at most one `Log()`, the final line. | `src/runtime/lifecycle/initialize.cpp` | verify; `tools/tests/test_patch_detour_logging.py` for the callees |
+| (unnamed) | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | verify (sensor "Plugin detach teardown boundary", which names no rule) |
+| N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization under the loader lock, through kernel32 calls only (no CRT locks); it is the one documented exception to the addendum's no-file-I/O-from-DllMain rule. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |
+| N59 | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | verify |
+| N62 | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
+| N63 | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
+| N38, N64, N105 | Graceful shutdown releases the bridge listener by a direct call to `StopWebSocketBridgeListener()` before `ForceFatalExit`, so the listening socket does not outlive the process as a zombie. | `src/runtime/server/gameserver.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/compat/ws_bridge.cpp` | verify |
+| N67 | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` (and the unbuilt `plugins/crash-handler/src/plugin.cpp`) | verify |
+| N69 | The stack-overflow handler has room to run: `SetThreadStackGuarantee` at VEH install and `EnsureStackReserve()` on the thread that runs each frame. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/frame/tick.cpp` | verify |
+| N70 | The crash path (`BreakpointVEH`, `WriteCrashDump`) never calls `Log()` and never enumerates modules: it writes with `VehPrintf` (raw `WriteFile`) and reads the module table cached at init by `CacheModuleTable()`. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
+| N71 | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery_sites.h` | verify; `src/runtime/tests/test_crash_recovery.cpp` |
+| N82 | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | `tools/verify_hook_invariants.py` |
+| N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
+| N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; initialization calls `InstallGameMainHook()`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
+| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, plugins, file I/O or bridge), because the client's D3D initialization runs inside that call. The spectator-stream check in `PreprocessCommandLine` is NOPped, prologue-validated (see #519 for its ordering on a server). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`PatchMatchmakingHost`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py` (the host patch runs on every load); nothing for the rest |
+| N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline). | the launch scripts | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
+
+#### Server, bridge and login
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| N1 | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | `src/runtime/tests/test_parse_endpoint.cpp` |
+| N2 | Packet-encoder settings from the server are validated (`ValidatePacketEncoderSettings`) before they are forwarded to the game. | `src/runtime/server/messages.cpp` | nothing names it |
+| N14 | A `???-` platform prefix must not reach an XPID: the game caches EULA acceptance per platform prefix, so `???-` breaks the cache lookup (`XPID_PLATFORM_FALLBACK_PREFIX`). | `src/runtime/hook/addresses.h`, `src/runtime/patch/xpid_patch.cpp` | nothing names it |
+| N20 | No account or Discord ID literal is compiled in. Identity comes from the presented credential, or from the `config.yaml` Discord-ID fallback, which applies in client mode too (not gated on `g_isServer`). | `src/runtime/compat/ws_bridge.cpp`; `src/runtime`, `src/modules`, `src/abi`, `src/core` for literals | verify |
+| N34, N103 | `src/gameserver/` does not exist and must not come back; the server code is `src/runtime/server/`. | the tree | verify; `tools/verify_doc_paths.py` |
+| N37, N39 | ixwebsocket cannot set `SO_REUSEADDR`, so the bridge listener picks a random ephemeral port and retries the bind. | `src/runtime/compat/ws_bridge.cpp` | verify |
+| N51 | An access token read from disk is clamped to a short lifetime; a freshly issued token keeps its own `exp`. | `src/core/auth_token_model.h` | nothing names it |
+| N54 | When the login connection disconnects, its callback is cleared, so nothing calls into a freed `ProxyPair`. | `src/runtime/compat/ws_bridge.cpp` | `src/runtime/tests/test_behavioral.cpp` |
+| N60 | The bridge collects connections under `g_pairsMutex` and calls `stop()` outside it (`stop()` joins callback threads). | `src/runtime/compat/ws_bridge.cpp` | verify |
+| N61 | Each matchmaker connection (index 2 and up) registers its own callback on the shared remote; closing the login pair clears only its own. | `src/runtime/compat/ws_bridge.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
+| N85 | Never hand ixwebsocket an empty callback (`setOnMessageCallback(nullptr)`); use a no-op lambda. Callbacks have an exception boundary. | `src/runtime/compat/ws_bridge.cpp` | verify |
+| N91 | Two connections must not both inject a login; the login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp` | verify (the log line only; #520 records the gap) |
+| N92 | The WebSocket bridge is compiled into `BugSplat64.dll` and started in-process from `boot.cpp`; no ws-bridge module is built or loaded. | `src/runtime/lifecycle/boot.cpp`, `CMakeLists.txt` | verify |
+| N102 | A dedicated server that ServerDB refused, or that has no token, exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp` | verify |
+| N106 | A server exchanges its refresh token for an access token (`HasValidRefreshToken()` then `RefreshAuthToken`); without it every registration falls back to password auth. | `src/runtime/server/gameserver_serverdb.cpp` | verify |
+| N112 | The client login and the server registration carry the build identity (`nevr_identity`, from `nevr_build_identity::Get()`) and the plugin manifest (`nevr_plugins`, from `BuildPluginManifestJson()`). | `src/core/build_identity.h`, `src/core/build_identity.cpp`, `src/runtime/compat/login_profile.cpp`, `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/ext/plugin_loader.cpp` | verify (N112a-d); `src/runtime/tests/test_behavioral.cpp` |
+| N115 | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | verify |
+| N123 | The login display name is the token-auth username (`TokenAuth_GetUsername`), falling back to the account id; never a placeholder. | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/login_profile.cpp`, `src/modules/token-auth/src/token_auth.cpp` | verify |
+| N131 | The asset CDN starts only on a client: in `boot.cpp` inside `if (!g_isServer)`, never in `initialize.cpp` (where `g_isServer` is not yet set). | `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
+| N132 | `just proto` generates from one pinned BSR commit, matching the protocol revision the server side uses; bump it only with the schema. | `justfile` (`proto`) | nothing |
+
+#### Config and plugins
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| N68 | Plugins and modules tick every frame (`TickPlugins`, `TickModules`) and hear every state change (`NotifyModulesStateChange`). | `src/runtime/frame/tick.cpp`, `src/runtime/lifecycle/state_machine.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
+| N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
+| N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
+| N95 | `log-filter` is neither built nor packaged. | `plugins/CMakeLists.txt`, `CMakeLists.txt` | verify |
+| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 5. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
+| N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure. | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
+| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 31 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
+| N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
+
+#### Hooks and binary patches
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| N6, N65 | Headless mode patches the game's own gates (the D3D12 init gate is forced to the game's graphics-disabled branch, prologue-validated). `HEADLESS_GATE_TABLE` is the single list of gates; the install loop reads it. | `src/runtime/hook/addresses.h`, `src/runtime/patch/mode_patches.cpp` | `src/runtime/tests/test_xpid_patch.cpp`, `src/runtime/tests/test_behavioral.cpp`; `tools/verify_mode_patch_ground_truth.py` |
+| N7, N8, N9, N10 | N8 and N9 are two of the headless gates (`HEADLESS_RENDER_SUBMIT_INIT`, `HEADLESS_RENDER_SETUP`); `Finished initializing engine` is the witness that a headless boot completed. | `src/runtime/hook/addresses.h` | `src/runtime/tests/test_xpid_patch.cpp`; N77 keeps the witness line |
+| N22 | The peer-timeout bug in the game (unsigned subtraction of a wrapped timestamp) is fixed by the overflow-safe `GetTimeMilliseconds` replacement. | `src/runtime/hook/addresses.h`, `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
+| N25, N28 | A hook in `binary_bug_fixes.cpp` validates the expected bytes before it hooks. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it (the Guardrails rule) |
+| N26 | The `CPrecisionSleep::Wait` hook is that function's only owner; nothing chains on it. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
+| N31 | A value read from a fixed game global (the spin-wait limit) is bounds-checked, to catch a misread after the binary changes version. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
+| N32 | A caller count in `addresses.h` is a dated snapshot with the command that refreshes it; refresh it before relying on it. | `src/runtime/hook/addresses.h` | nothing names it |
+| N33, N113 | Exactly one writer patches `CPrecisionSleep::BusyWait`; it validates the prologue, saves the original byte and restores it at shutdown. | `src/runtime/patch/binary_bug_fixes.cpp` | verify |
+| N66 | `FormatSymbolId` returns 0 for a non-positive length or a null buffer. | `src/runtime/hook/symbol_corpus.cpp`, `tools/gen_symbol_corpus.py` | `src/runtime/tests/test_behavioral.cpp`; `tools/tests/test_symbol_corpus_template.py` |
+| N83 | A hooked address is named for what the binary says it is (`0x140F80ED0` is `CBroadcaster::Listen`); an address called through a live function pointer is not also detoured (self-collision); the bytes at each hooked address match the identity manifest. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/hook/addresses.h`, `tools/hook_identity_manifest.json` | `tools/verify_hook_invariants.py` |
+| N84 | `PatchDetour` records each hooked address with HookGuard and its `name` parameter is required; the loader re-verifies hooked addresses after each plugin's init (`VerifyAll`). | `src/runtime/hook/patching.h`, `src/runtime/hook/hook_guard.h`, `src/runtime/ext/plugin_loader.cpp` | verify (N84, C2); `tools/verify_hook_invariants.py`; `src/runtime/tests/test_behavioral.cpp` |
+| N86, N110 | Per-frame work runs through exactly one dispatcher, `DispatchPerFrameWork`, called from a hook that is live in server mode, with a re-entrancy gate and the host flag taken from `g_isServer`; it holds the only two production `Tick*` call sites. Every declared HookLiveness id is marked somewhere. | `src/runtime/frame/tick.cpp`, `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/hook/hook_liveness.h` | verify |
+| N96 | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `plugins/common/include/nevr_common.h`, `src` | verify |
+| N97 | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `plugins/common/include/nevr_common.h` | verify |
+| N99 | `-server` applies the game's own headless mask (`ENGINE_FLAGS_HEADLESS_MASK`, `0xFFFEFEFE`), and boot never tells the operator a flag is redundant. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
+| N126 | `PatchDetour` logs a failed hook at Warning; a failed hook is never silent. | `src/runtime/hook/patching.h` | verify |
+| N127 | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | verify; `tools/winvm/checks.py` |
+| N128 | `Hooking::Attach` records which MinHook stage failed and its `MH_STATUS`; `PatchDetour`'s failure log includes it. | `src/core/hooking.h`, `src/runtime/hook/patching.h` | verify |
+| N129 | `DllLoadHook` reports the `MH_STATUS` of each `LoadLibrary` hook that fails, with no accumulate-and-hide `ok &=`. | `src/runtime/hook/dll_load_hook.cpp` | verify |
+| N72, N73 | Guards for the broadcaster plugin, which lives in `nevr-runtime-plugins` (see "Plugins"). | not in this tree | nothing here |
+
+#### Logging and layout
+
+| Rule | Statement | Guards | Checked by |
+| --- | --- | --- | --- |
+| N17 | A component that installs several hooks reports each outcome by name, plus one aggregate line at Info. | `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | nothing names it |
+| N18 | The built-in filter is validated by a measured suppression ratio (`docs/standards/logging.md` Rule 4); see N79. | `src/runtime/log/builtin_filter.cpp` | verify (through N79) |
+| N45, N81 | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | verify |
+| N47, N94 | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `plugins/common/include/auth_token_refresh.h` | verify |
+| N77 | nEVR's own lines are exempt from game-noise suppression, and `Finished initializing engine` and `ExitProcess(` are never on the blanket suppress list. | `src/runtime/log/builtin_filter.cpp` | verify |
+| N78 | A frequent line is collapsed into a counted summary, never deleted; there is exactly one strong definition of `::Log`. | `src/runtime/log/builtin_filter.cpp`, `src/core/logging.cpp` | verify (N78, D1) |
+| N79 | Filter health is emitted periodically while the process runs, not only at shutdown. | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
+| N88 | A monitor does not depend on the thing it monitors: filter health is driven from the per-frame tick, not only from the hook it watches (`docs/standards/verification.md`, "A Monitor Must Not Depend On What It Monitors"). | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify (through N79) |
+| N80 | Both log writers stamp the same per-process run ID. | `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify |
+| N90 | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
+| N108 | `src/abi/` never includes `src/core/`. | `src/abi` | verify |
+| N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
+| N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
+
+#### Writing a sensor (N93, N99, N101, N111)
+
+A sensor in `just verify` must fail when the thing it watches is gone, and only then:
+
+- **N93.** Run stage 1 alone and capture its exit code; `sensor_stage1` aborts on 2 or more (could not read the
+  subject). Check an extracted body with `sensor_nonempty`: an empty extraction is a sensor watching nothing. Do not
+  add new single-stage `if grep -q P subject; then FAIL` sensors.
+- **N101.** Feed a capture to an early-exit reader with a herestring (`grep -qF "$pat" <<<"$CAPTURE"`), never a
+  pipeline: under `pipefail` the SIGPIPE makes a correct tree fail.
+- **N99, N111.** Strip comments before matching, so the prose that explains a rule cannot satisfy its check, and use
+  the stripper spelling in the recipe (`^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)`); the obvious `\*` form eats pointer
+  dereferences.
+
+The recipe also has sensors named by issue (#21, #41, #43, #361, #451) and by letter (C2, D1); read it before changing
+a file it names.
 
 ## Branch lifecycle (every agent-created branch)
 
@@ -32,12 +260,12 @@ or not `just verify` would notice.
 
 Every branch an agent creates has a documented deletion point from the moment it exists. A merged branch is scratch: the PR keeps the commits, so never keep one "for reference".
 
-- **One branch per PR.** Name it `<your handle>/<issue>-<slug>`.
-- **Create:** `git worktree add --no-track -b <branch> <any directory outside the repo> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
-- **Declare the end:** the PR body carries the line `Branch lifecycle: deleted when this PR merges or closes.`
-- **Push only by explicit ref:** `git push origin HEAD:refs/heads/<branch>` (to your fork's remote when you work from a fork).
-- **On merge:** whoever created the branch removes its worktree and deletes the local and remote branch as soon as they see the merge. `just reap-merged` lists worktrees whose work has landed; it is a backstop, not the plan.
-- **On close without merge:** same, the creator, as soon as they see it.
+- **One branch per PR.** Name it `<seat>/<issue>-<slug>`.
+- **Create:** `git worktree add --no-track -b <branch> .claude/worktrees/<branch> origin/main`. `--no-track` stops the branch inheriting `origin/main` as its upstream, which sends a bare push to main.
+- **Declare the end:** `git worktree lock --reason "<seat>: delete when PR #<n> merges or closes" .claude/worktrees/<branch>`, and the PR body carries the line `Branch lifecycle: deleted when this PR merges or closes.`
+- **Push only by explicit ref:** `git push origin HEAD:refs/heads/<branch>`.
+- **On merge:** the seat that created the branch removes its worktree and deletes the local and origin branch in the same turn it sees the merge. nevr-merge's `tools/reap_merged.py` is a backstop, not the plan.
+- **On close without merge:** same, the creator, same turn.
 - **No PR within 24 hours:** open one or delete the branch.
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
@@ -57,18 +285,12 @@ just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes)
-just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them
+just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
 
-The build embeds the public client defaults from `config/public-defaults.env` (git-ignored). Copy
-`config/public-defaults.env.example` to make one; the four values are public by design (every client embeds them).
-If you do not have them, ask in an issue. The build reads that file and nothing else: not `.env`, not the environment,
-and it fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored, never copied into a
-worktree, never compiled in); never print it.
-
-Releases are cut by the maintainers, never by a contributor. They are built by CI from a tag, never locally. The steps, in order, from a clone of origin:
+Releases are built by CI from a tag, never locally. The steps, in order, from a clone of origin:
 
 ```sh
 just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
@@ -117,15 +339,10 @@ just test-auth-integration    # Auth integration (needs game binary + MCP harnes
 
 just scenario invite          # One social scenario end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md)
 just scenario-all             # Every social scenario in turn, one PASS/FAIL table (tools/scenario/run_all.py)
-just test-winvm               # Built runtime on a native Windows VM you provide (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
+just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; tools/winvm/README.md)
 ```
 
-Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a throwaway copy of your install, never the install itself; see "The game install").
-
-**Keep Wine off the user's desktop.** `just verify` runs GTest binaries under Wine, and several tests and scripts start
-the game. Run every one of them with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just verify`)
-unless it is a client run on a nested display ("System test after every commit"). A Wine process that reaches the
-user's display can take over their mouse and keyboard.
+Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (the `echovr/` directory of a copy of the install, never the owner's install; see "The game install").
 
 ## Startup timing
 
@@ -164,7 +381,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 **Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
 `src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the
 include path — that flattening is what let 44 files pile into one directory and
-include each other by bare basename. Re-adding it silently undoes this (N109).
+include each other by bare basename. Re-adding it silently undoes this.
 
 GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
 
@@ -177,8 +394,14 @@ Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the g
 | `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
 | `example`            | `example.dll`            | Reference implementation for new plugin authors      |
 
-`log_filter.dll` is superseded by the built-in filter: it is not built, and the loader refuses to load it (N89, N95).
-Other plugins are maintained outside this repository; nothing here depends on them.
+`broadcaster-bridge` lives in `nevr-runtime-plugins`, not here — this repo is
+public and it is a broadcaster injection tool. `anim-debugger` lives there for the
+same reason: it is RE instrumentation that hooks three engine
+animation entry points and publishes a map of animation internals, and it does
+nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
+filter and the loader refuses to load it. Other plugins (audio-intercom,
+game-rules-override, session-unlocker, combat-mod, combat-2d) live in
+`nevr-runtime-plugins`.
 
 Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
 
@@ -209,7 +432,7 @@ Split by **what the knowledge is**, not by who uses it. A single directory named
 - **`src/nevr_api/`** → protobuf target, generated into `gen/cpp/` (see `just proto`)
 
 **The dependency runs `core` → `abi`, never the reverse** (`EchoVR::LogLevel` is a
-game enum, so logging genuinely sits on the ABI layer). `just verify` enforces it (N108).
+game enum, so logging genuinely sits on the ABI layer). `just verify` enforces it.
 
 Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `#include "echovr.h"`. `src/` is on the global include path (root
@@ -249,7 +472,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## Conventions
 
-- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `src/core/logging.h`. Fatal errors via `FatalError(msg, title)`.
+- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
 - **Hooking**: MinHook-based (`NEVR_USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
@@ -257,34 +480,40 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
-## Reverse engineering: facts come from the binary
+## ReVault — Reverse Engineering Data Warehouse
 
-The game binary is the source of truth for what an address is and what a function does. **Never name an address,
-or reason about it, from a guess or an old label**: re-derive it from the disassembly (N83 is the cost of not doing so).
+> **Maintainers only.** ReVault is private. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
-**Search the whole game, never one binary.** The game is `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`,
-`pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the
-exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that
-finds nothing says nothing about the game.
+ReVault is the single source of truth for binary analysis. It indexes every binary of the game with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
 
-1. List every binary in scope.
-2. Search **every** one of them (code and strings). Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
-3. Report it as `searched N of N binaries: hits in <binaries>`. A negative without "N of N" is not a finding.
-4. A hit in a script DLL is the game's own logic: read it before concluding anything.
+**Search the project, never one binary.** The echovr project is the whole game: `echovr.exe`, `pnsrad.dll`, `pnsradmatchmaking.dll`, `pnsovr.dll`, every script DLL in `bin/win10/scripts/` (about 567; most gameplay and UI logic lives there, not in the exe), and the Quest side (`libr15.so`, `libpnsrad*.so`, the Quest script libraries). A search on `echovr.exe` that finds nothing says nothing about the game.
 
-Use your own disassembler (Ghidra, IDA, rizin, `objdump`) on your own copy of the game files. The maintainers keep a
-private indexed database of the whole game (ReVault) that contributors cannot reach; if you need a fact you cannot
-derive yourself (a function's identity, its callers across all binaries, an existing annotation), ask in your PR or
-issue with the address and the binary, and wait for the answer. When you meet an unknown address (`fcn_*`, `DAT_*`,
-`0x180XXXXXX`) and cannot resolve it, say so; don't guess.
+1. `revault_projects`, then `revault_binaries(project)` for the full binary list.
+2. Run `revault_search_code` / `revault_search_strings` on **every** binary in the list. Fan it out across parallel subagents, a batch of binaries each; no binary is skipped.
+3. Report it as `searched N of N binaries in project <name>: hits in <binaries>`. A negative without "N of N" is not a finding.
+4. A hit in a script DLL is the game's own logic: read it (`revault_function`) before concluding anything.
+
+Available as an MCP server (`revault` in `.mcp.json`) and CLI. The CLI takes one `--binary` per call, so a search (`fn search`, `search code`) is repeated for every binary in the project; the commands that act on an address (`fn show`, `fn callers`, `fn callees`, `xref to`, `rename`) belong to the one binary the address is in:
+
+```sh
+revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
+revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
+revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
+revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
+revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
+revault fn search <pattern> --binary <binary>      # Search function names + source: once per binary in the project
+revault search code <pattern> --binary <binary>    # Search decompiled source: once per binary in the project
+```
+
+When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
 
 ## Continuity
 
 You are not the first agent to work here, and you won't be the last. Act like it.
 
-- **Search before you build.** The answer probably already exists in the binary, the project's own git history, or the Nakama server source (`EchoTools/nakama`). Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown. The PR states that search (see "What a PR carries").
+- **Search before you build.** The answer probably already exists in ReVault, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
 - **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
-- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. Stop doing sequential searches when you could dispatch five agents at once.
+- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
 - **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
 - **Don't hand off what you can finish.** Writing a handoff doc is not progress. Finishing the work is progress. Handoff docs are for when the session is genuinely ending, not when the problem gets hard.
 - **Measure everything before concluding anything.** One data point is not a finding. If you measure registered component types, also measure loaded component resources. If you compare arena vs combat, compare at every layer — code registration, resource data, runtime state, rendered output. A conclusion from a single measurement is a guess. Cross-validate before declaring anything "critical."
@@ -299,50 +528,6 @@ You are not the first agent to work here, and you won't be the last. Act like it
 - **Performance claims need load testing**: Idle measurements are not validation. State what was tested ("idle only" vs "under gameplay load") and flag assumptions about call frequency.
 - **Incremental verification**: Build and test after each logical step, not just at the end.
 
-## What a PR carries
-
-The maintainers' PRs follow the habits below; yours must too. Each is required, and the reviewer checks it. #471 is a
-merged PR that shows the search, symbols and mutants sections in practice.
-
-- **A search statement.** Before adding anything, show that nothing in the tree or its history already does it. State
-  the commands and what they found, over files *and* history:
-
-  ```
-  ## Search statement
-  - `git grep -n "ReaderGate"` (847 tracked files): src/core/reader_gate.h, src/runtime/patch/asset_cdn.cpp, ...
-  - `git log -S ReaderGate --oneline`: 3 commits, all on the existing gate; none adds a second one.
-  ```
-
-  "Nothing found" counts only with the pattern and the scope it ran over.
-- **A Symbols list.** Name every symbol you edited, and separately the ones nearby that you read but did not edit,
-  so the reviewer knows what you looked at and what you left alone:
-
-  ```
-  ## Symbols
-  Edited: nevr::ReaderGate (Scope, WaitIdle, Enter (new)); test_reader_gate.cpp.
-  Read, not edited: asset_cdn.cpp call sites of WaitIdle; g_tintGate.
-  ```
-- **A mutant for every changed line.** "The test fails without the change" is not enough: for every line you add or
-  change, delete or alter that line alone, run the tests, and show that one of them fails. A changed line no test
-  notices is untested. Paste the mutant and the failing output, then the restored tree passing:
-
-  ```
-  ## Mutants
-  - M1 drop the epoch re-check in WaitIdle -> FAIL test_reader_gate: Overtaken
-  - M2 `undrained_` never decremented -> FAIL test_reader_gate: TimesOutWhenReadersStay
-  - restored tree: 9 tests OK
-  ```
-- **Evidence on the exact tip.** The PR body states each command run on the tip SHA and its result, what was not
-  run, and the tracking issue (see "Review, verification and merge").
-- **The last line is `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge"; a workflow checks it).
-
-**An issue is written as a falsifiable claim** (see #519 and #520), with these sections:
-
-- **Evidence at `<sha>`**: what the tree says, re-read at a named commit, with `file:line` and quoted lines.
-- **Not shown** (or "What is not shown"): what the evidence does not establish.
-- **Falsifier**: the one observation that would prove the issue wrong.
-- **Work**: the steps, in order, tests first, each with what it must show.
-
 ## Working-tree hygiene and commit cadence
 
 - **One active tranche at a time.** In a shared checkout, finish, verify, and commit one logical change before starting the next finding or feature. Do not let completed fixes accumulate across findings, turns, or agent handoffs.
@@ -356,20 +541,25 @@ merged PR that shows the search, symbols and mutants sections in practice.
 
 These bind every agent that works here, whatever its model or vendor. Another agent's
 worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
-Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the maintainers.
+Only the agent the owner has told to merge merges PRs; other agents hand off. `<agent>` below is
+your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
-- **Keep a record of what you create.** Every worktree, branch, scratch file, issue, PR and push
-  to someone else's branch you make: what it is, why, and when it goes. Read it before deleting
-  anything; an item not in it is not yours.
-- **Worktrees say whose they are.** Create with `git worktree add --no-track -b <branch> <path> <base>`,
-  then `git worktree lock --reason "<who> <purpose>, remove when <condition>"` and
-  `git config branch.<branch>.description "<same>"`.
-- **Scratch lives outside the repo.** Files you create by hand (scripts, copies, logs, evidence) go
-  in a scratch directory of your choosing outside the checkout, never `/tmp` shared with other work
-  and never in the repo. When you are done, delete the scripts, copies and build output you created.
-  Run logs and evidence are kept. Never delete by pattern across a shared directory.
+> **Maintainers only.** The ledger path and the scratch layout describe the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+
+- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` is a markdown table
+  (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, issue, PR and
+  push to another agent's branch an agent has made; the owner is your seat name. Add the row in
+  the same turn you create the thing. Read the ledger before deleting anything; an item not in it
+  is not yours.
+- **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
+  .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
+  remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
+- **Scratch is per agent.** Files you create by hand go under `/var/tmp/work-nevr-runtime/<agent>/`;
+  files the repo's own tools write at the scratch root stay where they are. When you are done,
+  delete the scripts, copies and build output you created, outright, not into the user's trash.
+  Run logs and evidence are kept. Never delete by pattern across the shared directory.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
   `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
   and `git status --short --ignored` lists only build output (move any run log you need out
@@ -378,19 +568,22 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
   run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
   commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
   (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
-  the branch locally (and on the remote once merged).
-- **Disk.** Check free space before starting a worktree build (a build tree with its vcpkg root is
-  several GB), keep one build tree per agent, and remove it when its PR merges.
+  the branch locally (and on origin once merged) and update the ledger row.
+- **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
+  remove it when its PR merges.
 
 ### Builds
 
-- **Cap every build, verify, test or client run.** A full build compiles vcpkg dependencies and can
-  exhaust a machine's memory, and parallel builds starve it faster. Limit parallelism
-  (`VCPKG_MAX_CONCURRENCY` and `CMAKE_BUILD_PARALLEL_LEVEL`) and memory. On Linux with systemd:
-  `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope -p MemoryMax=8G <cmd>`.
-- **Do not run two builds at once** on a machine that cannot hold both. Never interrupt another agent's build.
+> **Maintainers only.** The shared slice is configured on the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+
+- **Every build, verify, test or client run goes in the shared user slice:**
+  `VCPKG_MAX_CONCURRENCY=6 CMAKE_BUILD_PARALLEL_LEVEL=6 systemd-run --user --scope --slice=nevr-builds.slice -p MemoryMax=8G <cmd>`.
+  The slice (`~/.config/systemd/user/nevr-builds.slice`) caps every nevr build together at 14G.
+  A cap per lane is not enough: parallel lanes each under their own cap still starve the machine.
+- **Wait for a free slot.** Before starting a build, if `pgrep -x ninja | wc -l` is 2 or more, wait.
+  Never interrupt another agent's build.
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
-  Never point a build at a shared vcpkg root directly.
+  Never point a build at `~/.vcpkg` directly.
 - **The merge gate is the local capped `just verify`** (plus `just test-android` for a change under
   `src/quest`). CI runs only when started by hand.
 
@@ -407,13 +600,15 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
 
 ### The game install
 
-- **No agent runs a deploy script against, or writes into, a real game install** (yours or anyone
-  else's). Every run uses a throwaway copy, made fresh from a pristine copy and deleted when the run
-  ends (#524). `echovr/` in a checkout is git-ignored and untracked; if yours is a link to your
-  install, the scripts below write through it by default, so it is never a deploy target. Each writer
-  below writes into the tree it is pointed at: the scripts default to `echovr/` of the checkout, the Go
-  tests to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory.
-  Point each at a copy explicitly:
+> **Maintainers only.** The paths below (`/mnt/games`, the main checkout's `echovr/` link) are the owner's machine; the rules hold everywhere. Contributors: see "For contributors", "Your game install".
+
+- **No agent runs a deploy script or writes into the owner's install.** On the owner's machine
+  the main checkout's `echovr/` is a symlink into `/mnt/games/...`, the owner's install (`echovr` is
+  git-ignored and untracked, so the repo does not guarantee this). `/mnt/games/**` and `echovr/**`
+  in the main checkout are never a deploy target. Each writer below writes into the tree it is
+  pointed at: the scripts default to `echovr/` of the main checkout (through that link), the Go tests
+  to `$EVR_GAME_DIR`, whose default is `../../ready-at-dawn-echo-arena` from the test directory. Point
+  each at a copy explicitly:
   - `verify-server.sh` deploys `BugSplat64.dll` into `echovr/bin/win10` of `$NEVR_GAME_ROOT` and, when
     `build/mingw-release/bin/plugins` exists, its files into `echovr/bin/win10/plugins`, and, when
     the install has none, a `config.yaml` into `echovr/_local`.
@@ -450,18 +645,19 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
   `--output-dir <copy>/echovr/bin/win10/_overrides/combat` (run
   `python tools/echomod/generate_resources.py` directly). A writer that cannot be pointed at the
   copy waits for a human.
-- **The copy** lives in your scratch directory. `<copy>` below is `<scratch>/game-copy`, the pristine copy.
-  - **Make it.** Dereference only the top-level link (if `echovr/` is one), and keep every link inside as a link (no `-L`):
+- **The copy** lives under `/var/tmp/work-nevr-runtime/<agent>/` (named per agent, never another
+  agent's). `<copy>` below is `<that directory>/game-copy`, the pristine copy.
+  - **Make it.** Dereference only the top-level link, and keep every link inside as a link (no `-L`):
     ```sh
-    SRC=$(readlink -f <your install's parent directory>/echovr)
+    SRC=$(readlink -f <main checkout>/echovr)
     mkdir -p <copy>/echovr && cp -a --reflink=auto "$SRC"/. <copy>/echovr/
     ```
-    `cp -aL` is wrong: a Wine prefix holds links to `/`, to the disks and to the home directory
+    `cp -aL` is wrong: a Wine prefix holds links to `/`, to `/mnt/games` and to the home directory
     (`.wineprefix/dosdevices/z:`, drive letters, `drive_c/users/*/` folders), and `-L` would copy
     all of it.
   - **Size.** The copy is the whole install including `.wineprefix`. Measure the install read-only
     with `du -sh "$SRC"` (disk usage; apparent size under-reports the many small files of a Wine
-    prefix) and compare it with `df -h` of your scratch directory; free space must exceed twice the figure while a run is live
+    prefix) and compare it with `df -h /var/tmp`; free space must exceed twice the figure while a run is live
     (the pristine copy plus the run's own copy). A full disk truncates the file being copied.
   - **Make it safe.** Remove what a run must not start with, then list every link that leaves the
     copy:
@@ -470,14 +666,15 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
     if [ -d <copy>/echovr/bin/win10/plugins ]; then find <copy>/echovr/bin/win10/plugins -mindepth 1 -delete; fi
     COPY=$(readlink -f <copy>) find <copy> -type l -exec sh -c 'for l; do t=$(readlink -f "$l"); case "$t" in "$COPY"/*) ;; *) echo "$l -> $t";; esac; done' sh {} +
     ```
-    A Wine prefix has its own device and home links, which this check prints: typically
-    `.wineprefix/dosdevices/com*` (to `/dev/ttyS*`), drive letters such as `z:` (to `/`), and
-    `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and `Templates` (to the
-    home directory); an install may also hold relative links that do not resolve in the copy and so
-    print with an empty target. The scripts start the game with its working
+    A Wine prefix has its own device and home links, which this check prints: on the owner's
+    install, `.wineprefix/dosdevices/com1` to `com32` (to `/dev/ttyS*`), `d::` (to a block device),
+    `z:` (to `/`), and `drive_c/users/<user>/{Documents,Desktop,Downloads,Music,Videos,Pictures}` and
+    `Templates` (to the home directory), 41 lines, plus `OC_ASSET_FILES/content` and
+    `OC_ASSET_FILES/_data` (relative links to `../ready-at-dawn-echo-arena/...`, which do not exist in
+    the copy, so they print with an empty target): 43 lines in all. The scripts start the game with its working
     directory inside the copy. That the runtime never writes through those links is not verified, so a
     run on the copy is isolated from the install, not from the rest of the filesystem. A line that
-    resolves into your install or `$SRC` fails the check: `rm` that link, run the check again, and
+    resolves into `/mnt/games` or `$SRC` fails the check: `rm` that link, run the check again, and
     only then start a run. A link whose target is empty is dangling and leaves nothing to write
     through.
   - **Shape.** The scripts differ:
@@ -490,7 +687,7 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
       `BugSplat64.dll` (it adds it and removes it on exit), creates `_local` when missing, and uses
       a `_local/config.yaml` that is present as it is. It sets `WINEPREFIX` to
       `echovr/.wineprefix`.
-  - **Who makes it, and reuse.** Only the human makes the pristine copy, and nobody
+  - **Who makes it, and reuse.** Only a human or the foreman makes the pristine copy, and nobody
     runs from it. A run, by a script or a Go test, uses its own copy made from the pristine one with
     `cp -a`, which it deletes when the run ends. A run writes into whatever copy it uses: the Wine
     registry under `echovr/.wineprefix`, the files it deploys, and logs. `launch-client.sh` reads the
@@ -502,9 +699,8 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
     its backup directory. `launch-server.sh` and the Go tests put nothing back (they leave the test
     DLL, or delete `BugSplat64.dll`; `launch-server.sh` also leaves plugins, which make
     `launch-client.sh` abort). `verify-server.sh` keeps its
-    backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup`; the default root is
-    `/var/tmp/work-nevr-runtime/`, so set `NEVR_RUN_SCRATCH_ROOT` to your scratch directory. It restores
-    that backup into the current copy. It also deletes, by the absolute paths it recorded, the
+    backup at one fixed place, `$NEVR_RUN_SCRATCH_ROOT/verify-server-deploy-backup` (default
+    `/var/tmp/work-nevr-runtime/`), and restores it into the current copy. It also deletes, by the absolute paths it recorded, the
     files the earlier run added (`BugSplat64.dll`, `plugins/*`, `_local/config.yaml`). Clear or
     inspect that directory before a run against a different copy than the last. When no copy exists, the run
     waits for a human; a runtime change is not verified until then.
@@ -513,13 +709,12 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
 
 - **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
   surrounding code, reproduces what the PR claims, and reports findings with `file:line` and quoted
-  evidence. A maintainer merges only when the review is clean, or when each finding is fixed and re-verified on
+  evidence. Merge only when the review is clean, or when each finding is fixed and re-verified on
   the new tip.
-- **A test must fail without the change, and every changed line has a mutant.** For every test you add
-  or change, revert or mutate the source, run it, paste the failing output, restore the source and show
-  it passing; see "What a PR carries" for the per-line mutant rule.
-- **The PR body is the evidence.** It states each command run on the exact tip and its result, what was
-  not run, and the tracking issue. Update it whenever the base or the content changes.
+- **A test must fail without the change.** For every test you add or change, revert or mutate the
+  source, run it, paste the failing output, restore the source and show it passing.
+- **The PR body is the evidence.** It states each command run on the exact tip and its result, what
+  was not run, and the tracking issue. Update it whenever the base or the content changes.
 - **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
   `<sha>` is the PR's base commit: `git merge-base HEAD origin/<target>`, where `<target>` is the
   branch the PR targets (usually `main`), the commit whose AGENTS.md you branched from (7 to 40 hex
@@ -530,20 +725,22 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
   sha that is not that commit. The scaffold line is in `.github/pull_request_template.md`. When the
   target moves after the PR is opened the base does not: it stays the commit you branched from until
   you `git merge origin/<target>`, and the check then names the new merge-base, so update the line
-  (an edit to the body re-runs the check). On a PR from a fork the workflow waits for a maintainer to
-  approve the run.
-- **Verification before merge.** `just verify` green on the tip, run capped (see "Builds") with
-  `DISPLAY` and `WAYLAND_DISPLAY` unset, and for a change to runtime code
+  (an edit to the body re-runs the check).
+- **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
   the client login test as described under "System test after every commit". The run's log must
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
-  copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and
-  `config/public-defaults.env` from the main checkout, only into places that are absent or empty. It
-  keeps anything already there (delete `gen/` to refresh it), never touches the main checkout, and
-  copies the main checkout's submodule content (it warns when this branch pins other commits: then
-  remove that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
+  checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
+  to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
+  that `extern/<d>` and run `git submodule update --init extern/<d>`).
+  The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
+  writes it from the repository's Actions variables, and `just worktree-setup` copies it from the main
+  checkout; copy `config/public-defaults.env.example` to make one) and reads nothing else: not `.env`,
+  not the environment. The build fails when the file is missing. `.env` is runtime-only (local overrides, git-ignored,
+  never copied into a worktree, never compiled in); never print it.
 - **Client login test mechanics.** Run `NEVR_GAME_ROOT=<copy> ./launch-client.sh --dll <absolute path to the
   build's BugSplat64.dll> --exit-after-login` from your checkout, where `<copy>` is a throwaway copy of the
   install (see "The game install"), one client at a time (it exits 4 while an
@@ -559,54 +756,55 @@ Only a maintainer merges PRs; a contributor's PR is reviewed and merged by the m
   narrative in markdown or comments you write or change, and no citation of a deleted file.
   Design lives in
   `docs/adr/`, tests, code comments, or a GitHub issue; `docs/design/` holds only unimplemented
-  design the maintainers have approved. A plan is a tracking issue plus ADRs. In docs and comments cite
+  design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
-  a maintainer's confirmation; move its load-bearing facts first and say where.
+  the owner's confirmation; move its load-bearing facts first and say where.
 - **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
   current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
-  retired file by its commit. Nothing in it is rewritten or deleted without a maintainer's confirmation.
+  retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
 - **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
-  with evidence, in the shape under "What a PR carries". A security-sensitive finding is never filed
-  as an issue or PR; follow `SECURITY.md`.
-- **Write down what you learn.** A fact about the game or the protocol that you measured goes where the
-  next agent will find it: a code comment at the site, `docs/reference/`, or an issue. Nobody should
-  re-derive what you already measured.
+  with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
 
 ### Dispatching agents
 
-- **Pick the model by the work.** A mid-size model for specified implementation and verification; the
-  strongest for adversarial reviews and open design questions; a small model for search and mechanical edits.
+- **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
+  adversarial reviews and open design questions; a small model for search and mechanical edits.
 - **Brief them with the rules above.** Name their worktree, their own scratch subdirectory (never
   the dispatcher's) and push refspec; forbid rebase, force-push, merging and pushing to `main`;
   require mutation proof for tests; ask for commands run with raw output and a list of what was
   not verified.
 - **Subagents report observations, not verdicts.** Check what they claim before relying on it.
 
-## Production deployment: maintainers only
+## Production Deployment — FORBIDDEN without explicit user approval
 
-Contributors and their agents never deploy. Only a maintainer, deciding for that one instance, may take any action
-that changes what production runs. Forbidden for any agent unless a maintainer explicitly approves that instance:
+> **Maintainers only.** No contributor's agent deploys, under any approval.
+
+**No deployment to production servers may be taken without Andrew's explicit, per-instance approval in the current conversation.** This applies to this project and any other project's infrastructure.
+
+Forbidden actions (without explicit approval):
 
 - Building or pushing Docker images to any registry (`docker build --push`, `docker push`, `make release`, etc.)
-- Connecting to any production server to run container lifecycle commands (`docker compose pull/up/restart/down`)
+- SSH to any production server to run `docker compose pull/up/restart/down`, or any container lifecycle command
 - Creating GitHub releases or tags that trigger CI image builds or deployments
 - Any action that causes a running production container to restart, recreate, or update
 - Cross-repo deployment: operating on a different repository's build/deploy pipeline (e.g. building/pushing `ghcr.io/echotools/nakama` from this repo)
 
-This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it.
+This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation authorizes deployment.
 
 ## System test after every commit
 
-- **Run `./launch-client.sh` against a live server, on a copy of the install (see "The game install"),**
-  after every commit that touches runtime code. Use the server your build's embedded defaults point at, or one
-  you run yourself. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
-  If you cannot run the game at all, say so in the PR; the runtime change is then unverified and a maintainer runs it.
-- **Client runs go on a nested display, never the user's own.** Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first; `launch-client.sh` refuses to start without it. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY` set) gamescope ignores it and opens on the user's desktop. Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
-- **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the human's explicit go for a run on their own display, stated for that run; it never becomes the default.
-- **Read the server's log when login fails.** The server logs the exact parse error; guessing from the client side is waste. On a server you run, read it yourself. The production server's logs are maintainer-only: ask in the PR, giving the run's time window (UTC), account and the client log lines around the failure.
+> **Maintainers only.** The production server and its logs, and the display numbers, are the owner's machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+
+- **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
+  install"),** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
+- **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
+- **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
 - **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
 
 ## Analysis: read what the program wrote, before anything else
+
+> **Maintainers only.** The last bullet's contact is the maintainers'. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 When something fails, the first act is reading the failing program's **own** logs. Console captures, your own summaries, and reading code come after, and never instead.
 
@@ -615,12 +813,19 @@ When something fails, the first act is reading the failing program's **own** log
 - **Match the log to the run.** Newest first, and confirm by timestamp, PID or session id that it belongs to the run you're analyzing before you quote it.
 - **Quote exact lines with `path:line`** in every finding. Captured stdout is a secondary source; say so when it's all you have.
 - **A fix is verified only when the program's own log for a run after the change shows the expected state.** A clean build, a passing unit test, or a quiet console isn't that evidence.
-- **If you can't find where a component logs after reading its code and config, stop and ask in the PR or issue.** Don't fill the gap with console output or inference.
+- **If you can't find where a component logs after reading its code and config, stop and ask sprockee.** Don't fill the gap with console output or inference.
 
 ## No hand-built serialization
 
 - **Use `nlohmann::json` for JSON.** Never build JSON with `snprintf` or string concatenation. A hand-built format string cannot escape its own values — a version string or username containing `"` silently produces malformed output. `nlohmann::json::dump()` guarantees valid JSON regardless of input. This applies to any structured format (protobuf, binary framing) — use the library, not string arithmetic.
 - **Validate the output.** Any function that produces wire-format bytes MUST have a test that parses its output. If `BuildLoginRequest` had a test that called `nlohmann::json::parse()` on the result, the double-quote bug would have been caught at compile time, not in production.
+
+## Write down what you learn
+
+> **Maintainers only.** `.claude/memory/` is git-ignored and local to the maintainers' machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+
+- **Facts about the game/protocol go in `.claude/memory/`.** When you learn how the game handles connections, login flow, or protocol details, write it to a memory file immediately. Future sessions (and future agents) should never re-derive what you already measured.
+- **ReVault is the source of truth for binary facts.** The Nakama server code is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
 
 ## Guardrails
 
@@ -628,121 +833,6 @@ When something fails, the first act is reading the failing program's **own** log
 - **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
 - **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
 - **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
-
-## The N-rules
-
-The code carries rules tagged `N<number>` in comments (`// N62: ...`) and in the `just verify` recipe, whose sensors
-name the rule they guard in their FAIL line. A green `just verify` does **not** prove you kept every one: some are
-checked by a GTest or a Python check, some only by a live run, and some by nothing. Before you change a file named
-below, read the rule's comment at the site and keep the rule. If a change must break one, say so in the PR and why.
-
-Built from `git grep -nE '// ?N[0-9]+'`, the `verify` recipe in `justfile`, and the Python checks it runs. "verify"
-means a `just verify` sensor whose FAIL line names the rule; "nothing" means no check names it. An ID cited only as
-history inside another rule's comment (N41, N43, N48, N54-N58) is not a rule.
-
-### Boot, shutdown and crash path
-
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock: after `InitializeFunctionPointers()` it logs only through `nevr_boot_log_tee::TeeFprintf`, with at most one `Log()`, the final line. `DllMain` never runs plugin shutdown or unload. | `src/runtime/lifecycle/initialize.cpp`, `src/runtime/lifecycle/dllmain.cpp` | verify (N36 census; plugin detach boundary); `tools/tests/test_patch_detour_logging.py` for the callees |
-| N59 | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | verify |
-| N62 | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
-| N63 | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
-| N64, N105 | Graceful shutdown releases the bridge listener by a direct call to `StopWebSocketBridgeListener()` before `ForceFatalExit`, so the listening socket does not outlive the process. | `src/runtime/server/gameserver.cpp`, `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/compat/ws_bridge.cpp` | verify |
-| N67 | The crash flags `g_crashReporterSuppressed` and `g_justSuppressedCrash` are `std::atomic<bool>`: written from any thread, read from the faulting one. | `src/runtime/lifecycle/crash_recovery.cpp` (and the unbuilt `plugins/crash-handler/src/plugin.cpp`) | verify |
-| N69 | The stack-overflow handler has room to run: `SetThreadStackGuarantee` at VEH install and `EnsureStackReserve()` on the thread that runs each frame. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N70 | The crash path (`BreakpointVEH`, `WriteCrashDump`) never calls `Log()` and never enumerates modules: it writes with `VehPrintf` (raw `WriteFile`) and reads the module table cached at init by `CacheModuleTable()`. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
-| N71 | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp` | verify; `src/runtime/tests/test_crash_recovery.cpp` |
-| N82 | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | `tools/verify_hook_invariants.py` |
-| N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
-| N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; initialization calls `InstallGameMainHook()`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, plugins, file I/O or bridge), because the client's D3D initialization runs inside that call. The spectator-stream check in `PreprocessCommandLine` is NOPped, prologue-validated (see #519 for its ordering on a server). The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`PatchMatchmakingHost`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py` (the host patch runs on every load); nothing for the boot order |
-| N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline). | the launch scripts | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
-
-### Server, bridge and login
-
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N1 | `ParseEndpoint` never throws on malformed input: it parses with `strtoul`, range-checks to `UINT16_MAX` and logs a warning. | `src/runtime/server/messages.cpp` | `src/runtime/tests/test_parse_endpoint.cpp` |
-| N20 | No account or Discord ID literal is compiled in. Identity comes from the presented credential, or from the `config.yaml` Discord-ID fallback, which applies in client mode too (not gated on `g_isServer`). | `src/runtime/compat/ws_bridge.cpp`; `src/runtime`, `src/modules`, `src/abi`, `src/core` for literals | verify |
-| N34, N103 | `src/gameserver/` does not exist and must not come back; the server code is `src/runtime/server/`. | the tree | verify; `tools/verify_doc_paths.py` |
-| N37, N39 | ixwebsocket cannot set `SO_REUSEADDR`, so the bridge listener picks a random ephemeral port and retries the bind. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N60 | The bridge collects connections under `g_pairsMutex` and calls `stop()` outside it (`stop()` joins callback threads). | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N61 | Each matchmaker connection (index 2 and up) registers its own callback on the shared remote; closing the login pair clears only its own. | `src/runtime/compat/ws_bridge.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N85 | Never hand ixwebsocket an empty callback (`setOnMessageCallback(nullptr)`); use a no-op lambda. Callbacks have an exception boundary. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N91 | Two connections must not both inject a login; the login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp` | verify (the log line only; #520 records the gap) |
-| N92 | The WebSocket bridge is compiled into `BugSplat64.dll` and started in-process from `boot.cpp`; no ws-bridge module is built or loaded. | `src/runtime/lifecycle/boot.cpp`, `CMakeLists.txt` | verify |
-| N102 | A dedicated server that ServerDB refused, or that has no token, exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp` | verify |
-| N106 | A server exchanges its refresh token for an access token (`HasValidRefreshToken()` then `RefreshAuthToken`); without it every registration falls back to password auth. | `src/runtime/server/gameserver_serverdb.cpp` | verify |
-| N112 | The client login and the server registration carry the build identity (`nevr_identity`, from `nevr_build_identity::Get()`) and the plugin manifest (`nevr_plugins`, from `BuildPluginManifestJson()`). | `src/core/build_identity.h`, `src/core/build_identity.cpp`, `src/runtime/compat/login_profile.cpp`, `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/ext/plugin_loader.cpp` | verify (N112a-d); `src/runtime/tests/test_behavioral.cpp` |
-| N115 | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N123 | The login display name is the token-auth username (`TokenAuth_GetUsername`), falling back to the account id; never a placeholder. | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/login_profile.cpp`, `src/modules/token-auth/src/token_auth.cpp` | verify |
-| N131 | The asset CDN starts only on a client: in `boot.cpp` inside `if (!g_isServer)`, never in `initialize.cpp` (where `g_isServer` is not yet set). | `src/runtime/lifecycle/boot.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N132 | `just proto` generates from one pinned BSR commit, matching the protocol revision the server side uses; bump it only with the schema. | `justfile` (`proto`) | nothing |
-
-### Config and plugins
-
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N68 | Plugins and modules tick every frame (`TickPlugins`, `TickModules`) and hear every state change (`NotifyModulesStateChange`). | `src/runtime/frame/tick.cpp`, `src/runtime/lifecycle/state_machine.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
-| N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N95 | `log-filter` is neither built nor packaged. | `plugins/CMakeLists.txt`, `CMakeLists.txt` | verify |
-| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 5. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
-| N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure. | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 31 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
-| N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
-
-### Hooks and binary patches
-
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N6, N65 | Headless mode patches the game's own gates (the D3D12 init gate is forced to the game's graphics-disabled branch, prologue-validated). `HEADLESS_GATE_TABLE` is the single list of gates; the install loop reads it. | `src/runtime/hook/addresses.h`, `src/runtime/patch/mode_patches.cpp` | `src/runtime/tests/test_xpid_patch.cpp`, `src/runtime/tests/test_behavioral.cpp`; `tools/verify_mode_patch_ground_truth.py` |
-| N7, N8, N9, N10 | N8 and N9 are two of the headless gates (`HEADLESS_RENDER_SUBMIT_INIT`, `HEADLESS_RENDER_SETUP`); `Finished initializing engine` is the witness that a headless boot completed. | `src/runtime/hook/addresses.h` | `src/runtime/tests/test_xpid_patch.cpp`; N77 keeps the witness line |
-| N33, N113 | Exactly one writer patches `CPrecisionSleep::BusyWait`; it validates the prologue, saves the original byte and restores it at shutdown. | `src/runtime/patch/binary_bug_fixes.cpp` | verify |
-| N66 | `FormatSymbolId` returns 0 for a non-positive length or a null buffer. | `src/runtime/hook/symbol_corpus.cpp`, `tools/gen_symbol_corpus.py` | `src/runtime/tests/test_behavioral.cpp`; `tools/tests/test_symbol_corpus_template.py` |
-| N83 | A hooked address is named for what the binary says it is (`0x140F80ED0` is `CBroadcaster::Listen`); an address called through a live function pointer is not also detoured (self-collision); the bytes at each hooked address match the identity manifest. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/hook/addresses.h`, `tools/hook_identity_manifest.json` | `tools/verify_hook_invariants.py` |
-| N84 | `PatchDetour` records each hooked address with HookGuard and its `name` parameter is required; the loader re-verifies hooked addresses after each plugin's init (`VerifyAll`). | `src/runtime/hook/patching.h`, `src/runtime/hook/hook_guard.h`, `src/runtime/ext/plugin_loader.cpp` | verify (N84, C2); `tools/verify_hook_invariants.py`; `src/runtime/tests/test_behavioral.cpp` |
-| N86, N110 | Per-frame work runs through exactly one dispatcher, `DispatchPerFrameWork`, called from a hook that is live in server mode, with a re-entrancy gate and the host flag taken from `g_isServer`; it holds the only two production `Tick*` call sites. Every declared HookLiveness id is marked somewhere. | `src/runtime/frame/tick.cpp`, `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/hook/hook_liveness.h` | verify |
-| N96 | No symbol is spelled plain `ResolveVA`; use `ResolveVA_Checked` or `ResolveVA_Unchecked`. | `plugins/common/include/nevr_common.h`, `src` | verify |
-| N97 | There is exactly one `ValidatePrologue`, in `nevr_common.h`. | `plugins/common/include/nevr_common.h` | verify |
-| N99 | `-server` applies the game's own headless mask (`ENGINE_FLAGS_HEADLESS_MASK`, `0xFFFEFEFE`), and boot never tells the operator a flag is redundant. | `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
-| N126 | `PatchDetour` logs a failed hook at Warning; a failed hook is never silent. | `src/runtime/hook/patching.h` | verify |
-| N127 | The Oculus-SDK block reports its real result, never an unconditional success line. | `src/runtime/patch/mode_patches.cpp` | verify; `tools/winvm/checks.py` |
-| N128 | `Hooking::Attach` records which MinHook stage failed and its `MH_STATUS`; `PatchDetour`'s failure log includes it. | `src/core/hooking.h`, `src/runtime/hook/patching.h` | verify |
-| N129 | `DllLoadHook` reports the `MH_STATUS` of each `LoadLibrary` hook that fails, with no accumulate-and-hide `ok &=`. | `src/runtime/hook/dll_load_hook.cpp` | verify |
-| N72, N73 | Guards for a plugin maintained outside this repository. | not in this tree | nothing here |
-
-### Logging and layout
-
-| Rule | Statement | Guards | Checked by |
-| --- | --- | --- | --- |
-| N45, N81 | No bare `[NEVR]` tag on a log line; use a subsystem tag from `docs/standards/logging.md` (`--help` strings in `cli.cpp` are not log lines). | `src/runtime`, `src/abi`, `src/core` | verify |
-| N47, N94 | The `[NEVR.AUTH]` per-step detail lines are Debug, pinned by their text, and the level mapping that carries them is pinned too. | `src/modules/token-auth/src/token_auth.cpp`, `src/core/device_auth_flow.cpp`, `plugins/common/include/auth_token_refresh.h` | verify |
-| N77 | nEVR's own lines are exempt from game-noise suppression, and `Finished initializing engine` and `ExitProcess(` are never on the blanket suppress list. | `src/runtime/log/builtin_filter.cpp` | verify |
-| N78 | A frequent line is collapsed into a counted summary, never deleted; there is exactly one strong definition of `::Log`. | `src/runtime/log/builtin_filter.cpp`, `src/core/logging.cpp` | verify (N78, D1) |
-| N79 | Filter health is emitted periodically while the process runs, not only at shutdown. | `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N80 | Both log writers stamp the same per-process run ID. | `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify |
-| N90 | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
-| N108 | `src/abi/` never includes `src/core/`. | `src/abi` | verify |
-| N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
-| N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
-
-### Writing a sensor (N93, N99, N101, N111)
-
-A sensor in `just verify` must fail when the thing it watches is gone, and only then:
-
-- **N93.** Run stage 1 alone and capture its exit code; `sensor_stage1` aborts on 2 or more (could not read the
-  subject). Check an extracted body with `sensor_nonempty`: an empty extraction is a sensor watching nothing. Do not
-  add new single-stage `if grep -q P subject; then FAIL` sensors.
-- **N101.** Feed a capture to an early-exit reader with a herestring (`grep -qF "$pat" <<<"$CAPTURE"`), never a
-  pipeline: under `pipefail` the SIGPIPE makes a correct tree fail.
-- **N99, N111.** Strip comments before matching, so the prose that explains a rule cannot satisfy its check, and use
-  the stripper spelling in the recipe (`^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)`); the obvious `\*` form eats pointer
-  dereferences.
-
-The recipe also has sensors named by issue (#21, #41, #43, #361, #451) and by letter (C2, D1); read it before changing
-a file it names.
 
 ## Dependencies
 
@@ -753,15 +843,21 @@ a file it names.
 
 ## Commit and verification conventions
 
+> **Maintainers only.** The "Commit identity" and "Scratch dir" bullets. Contributors: see "For contributors", "Maintainers only, and what to do instead".
+
 - **Defects.** Track defects in GitHub issues.
-- **Commit identity.** Commit as yourself: the author is the person responsible for the change, under the name and
-  email they use on GitHub. When an agent wrote the change, add one `Co-Authored-By: <agent name> <email>` trailer.
-  Use a conventional prefix (`feat:`, `fix:`, `docs:`, `ci:`) and one logical change per commit. Verify after each
+- **Commit identity.** Author `Andrew Bates <a@sprock.io>`
+  (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
+  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
+  conventional prefix, and one logical change per commit. Exception: work by
+  Teth, Spritz or Glow Sprock is authored by that sister, with
+  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **shall** verify after each
   commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
-- **Scratch dir.** All agent scratch, staging and evidence files live in a scratch directory outside the
-  repo (see "Working practices"), never in the repo.
+- **Scratch dir.** All agent scratch/staging/evidence files live under
+  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
+  repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
