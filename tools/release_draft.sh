@@ -34,7 +34,14 @@ if ! jq -e 'type == "array" and all(.[]; (.draft | type) == "boolean")' >/dev/nu
 fi
 drafts=$(jq '[.[] | select(.draft)] | length' <<<"$listing")
 published=$(jq '[.[] | select(.draft | not)] | length' <<<"$listing")
-mapfile -t want < <(release_asset_names "$version")
+# A failing name list must stop the script: a process substitution would swallow its exit status and an
+# empty list would read as "none of the built files is on the draft", so it would upload over signed files.
+want_out=$(release_asset_names "$version") || { echo "release_draft: the asset name list failed; refusing to decide" >&2; exit 1; }
+mapfile -t want <<<"$want_out"
+if [ "${#want[@]}" -eq 0 ] || [ -z "${want[0]}" ]; then
+  echo "release_draft: the asset name list is empty; refusing to decide" >&2
+  exit 1
+fi
 mapfile -t on_drafts < <(jq -r '.[] | select(.draft) | .assets[]?' <<<"$listing")
 present=()
 for name in "${want[@]}"; do

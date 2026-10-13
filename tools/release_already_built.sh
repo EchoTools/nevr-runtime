@@ -19,7 +19,14 @@ if [[ ! "$tag" =~ $release_tag_regex ]]; then
   exit 1
 fi
 version=${BASH_REMATCH[1]}
-mapfile -t want < <(release_asset_names "$version")
+# A failing name list must stop the script: a process substitution would swallow its exit status and an
+# empty list would read as "every required file is present".
+want_out=$(release_asset_names "$version") || { echo "release_already_built: the asset name list failed" >&2; exit 1; }
+mapfile -t want <<<"$want_out"
+if [ "${#want[@]}" -eq 0 ] || [ -z "${want[0]}" ]; then
+  echo "release_already_built: the asset name list is empty; refusing to decide" >&2
+  exit 1
+fi
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')
 missing=()
 for name in "${want[@]}"; do

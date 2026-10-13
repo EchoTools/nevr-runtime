@@ -45,6 +45,22 @@ class ReleaseDraftTest(unittest.TestCase):
         stdin = raw if raw is not None else json.dumps(releases)
         return subprocess.run([str(SCRIPT), tag], input=stdin, env=self.env, capture_output=True, text=True)
 
+    def test_an_empty_or_failing_name_list_is_an_error_never_a_draft(self):
+        # the names file is sourced from the script's own directory: run a copy whose list is broken
+        import shutil
+        for n, body in enumerate(("release_asset_names() { return 1; }\n", "release_asset_names() { :; }\n")):
+            with self.subTest(body=body):
+                d = self.tmp / f"copy-{n}"
+                d.mkdir()
+                for f in ("release_draft.sh", "release_asset_names.sh"):
+                    shutil.copy(REPO / "tools" / f, d / f)
+                with open(d / "release_asset_names.sh", "a") as fh:
+                    fh.write(body)
+                result = subprocess.run([str(d / "release_draft.sh"), TAG], input=json.dumps([release(True, FOUR)]),
+                                        env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertNotEqual(result.stdout.strip(), "draft")
+
     def test_exactly_one_draft_of_the_tag_is_a_draft(self):
         result = self.run_script([release(True)])
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "draft"), result.stderr)

@@ -65,7 +65,7 @@ A release whose files must be signed before anything is public goes through a DR
 started by hand on the tag ref.
 
 ```sh
-gh release create v<x.y.z> --draft --verify-tag   # D1. a draft for the pushed tag (instead of step 3)
+just release-preflight && gh release create v<x.y.z> --draft --prerelease --verify-tag   # D1. a draft for the pushed tag (instead of step 3)
 gh workflow run build.yml --ref v<x.y.z>          # D2. builds, attests and attaches the four files to the draft; it stays a draft
 ```
 
