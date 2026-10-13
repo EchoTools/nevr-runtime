@@ -15,6 +15,7 @@
  */
 
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/hook_guard.h"
 #include "core/hooking.h"
 
 #include <cstdio>
@@ -67,6 +68,38 @@ void SetModuleProbeForTest(ModuleProbe probe) {
 static HMODULE FindLoadedModule(const char* name) { return g_moduleProbe(name); }
 #else
 static HMODULE FindLoadedModule(const char* name) { return GetModuleHandleA(name); }
+#endif
+
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+static MinHookOps g_hookOps = {&MH_CreateHook, &MH_EnableHook, &MH_RemoveHook};
+
+void SetMinHookOpsForTest(const MinHookOps* ops) {
+    g_hookOps = {&MH_CreateHook, &MH_EnableHook, &MH_RemoveHook};
+    if (ops == nullptr) return;
+    if (ops->create) g_hookOps.create = ops->create;
+    if (ops->enable) g_hookOps.enable = ops->enable;
+    if (ops->remove) g_hookOps.remove = ops->remove;
+}
+
+void* OriginalForTest(const char* name) {
+    if (strcmp(name, "LoadLibraryA") == 0) return reinterpret_cast<void*>(g_origLoadLibraryA);
+    if (strcmp(name, "LoadLibraryW") == 0) return reinterpret_cast<void*>(g_origLoadLibraryW);
+    if (strcmp(name, "LoadLibraryExA") == 0) return reinterpret_cast<void*>(g_origLoadLibraryExA);
+    if (strcmp(name, "LoadLibraryExW") == 0) return reinterpret_cast<void*>(g_origLoadLibraryExW);
+    return nullptr;
+}
+
+static MH_STATUS HookCreate(void* target, void* detour, void** original) {
+    return g_hookOps.create(target, detour, original);
+}
+static MH_STATUS HookEnable(void* target) { return g_hookOps.enable(target); }
+static MH_STATUS HookRemove(void* target) { return g_hookOps.remove(target); }
+#else
+static MH_STATUS HookCreate(void* target, void* detour, void** original) {
+    return MH_CreateHook(target, detour, original);
+}
+static MH_STATUS HookEnable(void* target) { return MH_EnableHook(target); }
+static MH_STATUS HookRemove(void* target) { return MH_RemoveHook(target); }
 #endif
 
 /* Extract filename from a path and lowercase it */
@@ -270,11 +303,26 @@ void Install() {
 
     int okCount = 0;
     for (const auto& s : specs) {
-        MH_STATUS st = MH_CreateHook(s.target, s.detour, s.original);
-        if (st == MH_OK) st = MH_EnableHook(s.target);
+        const MH_STATUS created = HookCreate(s.target, s.detour, s.original);
+        const MH_STATUS st = created == MH_OK ? HookEnable(s.target) : created;
         if (st == MH_OK) {
+            nevr_hook_guard::Record(s.target, s.name);
             okCount++;
         } else {
+            // MinHook writes the trampoline only when MH_CreateHook returns MH_OK. When
+            // creation itself failed (for example MH_ERROR_ALREADY_CREATED on a second
+            // Install()), *s.original still holds the working trampoline of the hook that
+            // is installed, and the detour calls through it: nulling it would crash the
+            // next LoadLibrary. Only a hook this call created and then removed has its
+            // pointer cleared.
+            if (created == MH_OK) {
+                const MH_STATUS cleanup = HookRemove(s.target);
+                if (cleanup != MH_OK) {
+                    fprintf(stderr, "[NEVR.DLLHOOK] failed-hook cleanup FAILED name=%s reason=%s\n",
+                            s.name, MH_StatusToString(cleanup));
+                }
+                *s.original = nullptr;
+            }
             fprintf(stderr,
                     "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
                     "hardening inactive for this variant\n",

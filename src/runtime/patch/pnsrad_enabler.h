@@ -4,6 +4,7 @@
 namespace nevr_pnsrad_enabler {
     void Init(uintptr_t base_addr);
     void Shutdown();
+    void InstallPendingDiagnostics();
 
     /// pnsrad.dll's module base once it has loaded and been patched, 0 before
     /// that. Lets other patches (e.g. mic_provider's CSysDLL_GetSymbolHook

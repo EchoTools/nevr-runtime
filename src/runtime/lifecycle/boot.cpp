@@ -193,7 +193,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // engine reads natively (publisher_lock is supplied by JsonValueAsStringHook
     // when absent); a server with no config.json boots and logs in.
     if (g_bootHookFailed) {
-      ServerFatal("One or more boot hooks failed to install — server would be degraded");
+      // The cause was recorded where the flag was set (NoteBootHookFailureCause, initialize.h), so the last line names the site.
+      ServerFatal("One or more boot hooks failed to install — server would be degraded: %s",
+                  g_bootHookFailedCause[0] != '\0' ? g_bootHookFailedCause : "cause not recorded");
     }
   }
 

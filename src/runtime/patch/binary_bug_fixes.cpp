@@ -43,6 +43,7 @@
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/ext/plugin_loader.h"    // N68: TickPlugins
@@ -625,15 +626,10 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             continue;
         }
 
-        // MH_STATUS capture (was: boolean-only check, then a fabricated
-        // "expected=00000000" in the failure log below — this branch only runs
-        // after the prologue check above already passed, so there is no real
-        // "expected" bytes value to show here; MH_CreateHook/EnableHook's own
-        // status is the actual reason).
-        MH_STATUS cst = MH_CreateHook(target, h.detour, h.original);
-        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-
-        if (est == MH_OK) {
+        // The prologue matched above. PatchDetour reports the MinHook stage and
+        // status on failure and records the installed target with HookGuard.
+        *h.original = target;
+        if (PatchDetour(h.original, h.detour, h.name)) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.PATCH] hooked name=%s va=0x%llX why=\"%s\"",
                 h.name, static_cast<unsigned long long>(h.va), h.why);
@@ -641,7 +637,8 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
         } else {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.PATCH] hook failed name=%s va=0x%llX reason=%s",
-                h.name, static_cast<unsigned long long>(h.va), MH_StatusToString(est));
+                h.name, static_cast<unsigned long long>(h.va), Hooking::LastAttachError());
+            *h.original = nullptr;
             if (!failedNames.empty()) failedNames += ", ";
             failedNames += h.name;
             failed++;
@@ -702,14 +699,11 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             failedNames += "HTTPListenerBringup";
             failed++;
         } else {
-            // Prologue already validated above (matched, or this branch could
-            // not be reached) — a failure here is MH_CreateHook/EnableHook's
-            // own status, not a byte mismatch, so report that instead of
-            // re-printing prologue bytes that are known to match.
-            MH_STATUS cst = MH_CreateHook(target, (void*)&HttpListenerBringupHook,
-                                          (void**)&s_origHttpListenerBringup);
-            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-            if (est == MH_OK) {
+            // The prologue matched above; report the hook lifecycle failure
+            // rather than repeating bytes known to match.
+            s_origHttpListenerBringup = reinterpret_cast<decltype(s_origHttpListenerBringup)>(target);
+            if (PatchDetour(&s_origHttpListenerBringup,
+                            reinterpret_cast<PVOID>(&HttpListenerBringupHook), "HTTPListenerBringup")) {
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX why=\"the engine only logs a failed HTTP API listener bind and keeps running, leaving a server with a dead session API; a bind failure is now fatal in server mode\"",
                     static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
@@ -717,7 +711,8 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             } else {
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX reason=%s",
-                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP), MH_StatusToString(est));
+                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP), Hooking::LastAttachError());
+                s_origHttpListenerBringup = nullptr;
                 if (!failedNames.empty()) failedNames += ", ";
                 failedNames += "HTTPListenerBringup";
                 failed++;
@@ -755,19 +750,19 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
                 NETGAME_HOST_CHECK_PROLOGUE[2], NETGAME_HOST_CHECK_PROLOGUE[3],
                 actual[0], actual[1], actual[2], actual[3]);
         } else {
-            MH_STATUS cst = MH_CreateHook(target, (void*)&NetGameHostCheckHook,
-                                          (void**)&s_origNetGameHostCheck);
-            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-            if (est == MH_OK) {
+            s_origNetGameHostCheck = reinterpret_cast<decltype(s_origNetGameHostCheck)>(target);
+            if (PatchDetour(&s_origNetGameHostCheck,
+                            reinterpret_cast<PVOID>(&NetGameHostCheckHook), "NetGameHostCheck")) {
                 diagNetGameHostCheckStatus = "hooked";
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x%llX",
                     static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
             } else {
-                diagNetGameHostCheckStatus = MH_StatusToString(est);
+                diagNetGameHostCheckStatus = Hooking::LastAttachError();
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=%s",
-                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK), MH_StatusToString(est));
+                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK), Hooking::LastAttachError());
+                s_origNetGameHostCheck = nullptr;
             }
         }
     }
