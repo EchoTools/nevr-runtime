@@ -119,7 +119,11 @@ jobs:
 
   build:
     needs: guard
-    if: needs.guard.outputs.built != 'true'
+    # An `if:` with no status function gets an implicit success(), and success() is false when ANY ancestor
+    # job was skipped, not only the direct `needs`. `drafts` is skipped on a release event, so without
+    # `!cancelled()` here the whole chain below is skipped and a release run is green and does nothing
+    # (v5.1.0, run 38409770193). Every job below `drafts` therefore names its own status function.
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -413,7 +417,7 @@ jobs:
   sign:
     name: "sign: stubbed, policy signer not built yet"
     needs: build
-    if: github.event_name == 'release' || needs.build.outputs.version != ''
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -457,7 +461,7 @@ jobs:
   # ends here: the sealed files are a workflow artifact.
   seal:
     needs: [build, sign]
-    if: needs.build.outputs.version != ''
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && needs.build.outputs.version != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

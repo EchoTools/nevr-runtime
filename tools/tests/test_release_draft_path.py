@@ -192,7 +192,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
         self.assertIn("set -euo pipefail", find["run"])
         jobs = load()["jobs"]
         self.assertEqual(jobs["build"]["needs"], "guard", "every later job hangs off build, which hangs off guard")
-        self.assertEqual(jobs["build"]["if"], "needs.guard.outputs.built != 'true'")
+        self.assertEqual(jobs["build"]["if"], "${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' }}")
 
     def run_lookup(self, script_body, ref="v5.0.0", releases="[]"):
         """Run the lookup step's bash with a fake tools/release_draft.sh in the working directory."""
@@ -256,7 +256,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
         sign = jobs["sign"]
         download = next(s for s in sign["steps"] if s.get("with", {}).get("name") == "unsigned-packages")
         self.assertEqual(download["if"], "github.event_name == 'release' || " + DRAFT)
-        self.assertEqual(sign["if"], "github.event_name == 'release' || needs.build.outputs.version != ''")
+        self.assertEqual(sign["if"], "${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}")
 
     def test_repack_and_publish_run_for_a_release_event_as_before_and_for_a_dispatch_only_with_a_draft(self):
         jobs = load()["jobs"]
