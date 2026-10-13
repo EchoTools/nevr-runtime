@@ -29,8 +29,7 @@ Every branch an agent creates has a documented deletion point from the moment it
 just                    # Show available recipes
 just configure          # Configure CMake only
 just build              # Build all components
-just dist               # Build + create distribution packages
-just dist-lite          # Stripped binaries without debug symbols
+just dist               # Build + create the stripped distribution packages
 just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
@@ -53,10 +52,14 @@ just release-preflight && gh release create v<x.y.z> --prerelease --verify-tag  
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
 stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. `build.yml` fires on
-`published`, goes through one packaging path (the sealed zip, `SHA256SUMS`, `RELEASE-NOTES.md`, all attested, plus the two `dist/`
-zips; the `.tar.zst` archives stay a workflow artifact) and does nothing for a release that already carries those assets. Nothing in a file depends on the pre-release flag:
+`published`, goes through one packaging path (the sealed zip, `SHA256SUMS`, `RELEASE-NOTES.md`, all attested, plus the `dist/`
+zip; the `.tar.zst` archives stay a workflow artifact) and does nothing for a release that already carries those assets. Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
+The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
+stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `build.yml` checks the pair with `tools/verify_symbols.py`,
+keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
+ordinary `build/<preset>/bin/` output.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
