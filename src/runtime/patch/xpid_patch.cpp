@@ -30,18 +30,23 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
 
 /// Report a mismatch with both expected and actual bytes — `ValidateBytes`
 /// only returns a bool, so this re-derives `site` to show what was actually
-/// found, not just what was expected. Warning, not Error: these are
-/// diagnostic detail feeding into the single g_bootHookFailed decision below,
-/// which boot.cpp turns into the terminal severity once the CLI says whether
-/// this is a server — five unconditional Error lines here would read as five
-/// separate decisions when it's really one.
-static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
+/// found, not just what was expected. These are diagnostic detail feeding into
+/// the single g_bootHookFailed decision below, which boot.cpp turns into the
+/// terminal severity once the CLI says whether this is a server.
+///
+/// This runs from Initialize() under the DllMain loader lock, so it reports
+/// through the boot tee (stderr and nevr-boot.jsonl), never Log(). The first
+/// mismatch is also the cause boot.cpp names when a server refuses to start.
+static void ReportByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
-  Log(EchoVR::LogLevel::Warning,
-      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
+  nevr_boot_log_tee::TeeFprintf(
+      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x\n",
       what, static_cast<unsigned>(offset),
       expected[0], expected[1], expected[2], expected[3],
       site[0], site[1], site[2], site[3]);
+  char cause[sizeof(g_bootHookFailedCause)];
+  snprintf(cause, sizeof(cause), "XPID %s mismatch rva=0x%X", what, static_cast<unsigned>(offset));
+  NoteBootHookFailureCause(cause);
 }
 
 VOID PatchDscProvider() {
@@ -51,23 +56,23 @@ VOID PatchDscProvider() {
   // Validate all four sites before patching any.
   bool ok = true;
   if (!ValidateBytes(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    LogByteMismatch(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, "short name");
+    ReportByteMismatch(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, "short name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, sizeof(kPsnDash))) {
-    LogByteMismatch(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, "dash prefix");
+    ReportByteMismatch(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, "dash prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    LogByteMismatch(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, "compact name");
+    ReportByteMismatch(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, "compact name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, sizeof(kQmarkDash))) {
-    LogByteMismatch(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, "fallback prefix");
+    ReportByteMismatch(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, "fallback prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, sizeof(kQmarkNull))) {
-    LogByteMismatch(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, "compact fallback name");
+    ReportByteMismatch(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, "compact fallback name");
     ok = false;
   }
 
@@ -88,6 +93,7 @@ VOID PatchDscProvider() {
     // g_bootHookFailed is checked by boot.cpp once g_isServer is known, and a
     // server refuses to start with it set (a client reports ok=false and goes on).
     g_bootHookFailed = true;
+    NoteBootHookFailureCause("XPID provider-string validation failed");
     nevr_boot_log_tee::TeeFprintf(
         "[NEVR.XPID] XPID provider-string validation failed — echovr.exe is not the build this runtime "
         "targets; every patched address is suspect; a server will refuse to start\n");
@@ -112,13 +118,13 @@ VOID PatchDscProvider() {
     // Same rule as the validation failure above: no ServerFatal before the CLI is
     // parsed. The identity strings are now a mix of PSN-/DSC-, so a server must not run.
     g_bootHookFailed = true;
+    NoteBootHookFailureCause("XPID provider-string patch write failed");
     nevr_boot_log_tee::TeeFprintf(
         "[NEVR.XPID] provider-string patch FAILED — identity strings are inconsistent; "
         "a server will refuse to start\n");
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
   nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
 }
 
@@ -145,12 +151,9 @@ VOID PatchProviderPrefixOvrOrg() {
   g_RealGetProviderPrefix = reinterpret_cast<GetProviderPrefixFn>(target);
   if (PatchDetour(&g_RealGetProviderPrefix, reinterpret_cast<PVOID>(GetProviderPrefixHook),
                   "GetProviderPrefix")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
-    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
-        target, Hooking::LastAttachError());
-    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
-                           Hooking::LastAttachError());
+    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED target=%p status=%s\n",
+                                  target, Hooking::LastAttachError());
   }
 }

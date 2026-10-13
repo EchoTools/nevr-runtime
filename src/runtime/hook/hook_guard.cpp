@@ -23,9 +23,9 @@ constexpr int kSnapshotBytes = 16;
 /// initialize 8 (6 InstallBootDetour + CSysDLL_GetSymbol + CSysDLL_Load), headless_graphics 4,
 /// social_facade 4, dll_load_hook 4, coop_ai_trace 3, pnsrad_enabler 2, early_quit_lockout 2,
 /// and one each in xpid_patch, return_to_lobby, resource_override, builtin_filter. The
-/// previous capacity of 64 left 2 spare slots, so one more hook would have dropped silently.
-/// 128 is that count doubled. If the table still fills, Record() counts the drop (never
-/// silent): VerifyAll() reports it at ERROR and DroppedCount() exposes it.
+/// capacity is twice that counted 62 sites, so a new hook has room. If the table fills,
+/// Record() counts the drop (never silent): VerifyAll() reports it at ERROR and
+/// DroppedCount() exposes it.
 constexpr int kMaxGuarded = 128;
 
 struct GuardedSite {

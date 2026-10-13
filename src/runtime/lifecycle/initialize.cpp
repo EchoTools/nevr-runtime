@@ -48,6 +48,7 @@
 
 static BOOL g_initialized = FALSE;
 bool g_bootHookFailed = false;
+char g_bootHookFailedCause[96] = {};
 
 HWND g_hWindow = NULL;
 
@@ -273,6 +274,9 @@ static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequire
   if (installed) return;
   if (requirement == BootHookRequirement::kRequired) {
     g_bootHookFailed = true;
+    char cause[sizeof(g_bootHookFailedCause)];
+    snprintf(cause, sizeof(cause), "required hook %s not installed", name);
+    NoteBootHookFailureCause(cause);
     nevr_boot_log_tee::TeeFprintf(
         "[NEVR.PATCH] required boot hook not installed name=%s; a server will refuse to start, a client "
         "continues without it\n",
@@ -312,6 +316,7 @@ static VOID InitializeAfterGameImageGuard() {
   if (!Hooking::Initialize()) {
     nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
+    NoteBootHookFailureCause("hooking engine init failed");
     nevr_boot_log_tee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
@@ -363,6 +368,7 @@ static VOID InitializeAfterGameImageGuard() {
         nevr_boot_log_tee::TeeFprintf(
             "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
         g_bootHookFailed = true;
+        NoteBootHookFailureCause("CSysDLL_GetSymbol prologue mismatch");
       } else {
         const MH_STATUS created = MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
                                                  reinterpret_cast<void**>(&g_original_GetSymbol));
@@ -383,6 +389,7 @@ static VOID InitializeAfterGameImageGuard() {
           nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;
+          NoteBootHookFailureCause("CSysDLL_GetSymbol hook install failed");
         }
       }
   }
@@ -413,6 +420,7 @@ static VOID InitializeAfterGameImageGuard() {
           nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load stage=%s reason=%s\n",
                                         created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
           g_bootHookFailed = true;
+          NoteBootHookFailureCause("CSysDLL_Load hook install failed");
         }
       }
   }

@@ -21,6 +21,7 @@
 #include <iterator>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
@@ -42,6 +43,7 @@
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/patch/evrp_package.h"
 #include "runtime/patch/xpid_patch.h"
+#include "runtime/log/boot_log_tee.h"
 #include "runtime/hook/addresses.h"
 
 // ============================================================================
@@ -171,6 +173,7 @@ void ServerFatal(const CHAR* format, ...) {
 
 // --- initialize.h extern (set by xpid_patch.cpp; initialize.cpp is not linked here) ---
 bool g_bootHookFailed = false;
+char g_bootHookFailedCause[96] = {};
 
 // --- config.h extern (used by ws_bridge.cpp) ---
 PVOID g_pGame = nullptr;
@@ -2286,11 +2289,33 @@ struct XpidBaseScope {
     explicit XpidBaseScope(char* base) : saved(EchoVR::g_GameBaseAddress) {
         EchoVR::g_GameBaseAddress = base;
         g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
         g_serverFatalCalls = 0;
     }
     ~XpidBaseScope() {
         EchoVR::g_GameBaseAddress = saved;
         g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
+    }
+};
+
+// Opens the boot tee's file for one test and closes it again. Init() starts the boot phase, so
+// the code under test reports through TeeFprintf exactly as it does under the loader lock.
+// Output() returns what the tee wrote to nevr-boot.jsonl after the guard was constructed.
+struct BootTeeCapture {
+    std::string path;
+    std::streamoff start = 0;
+    BootTeeCapture() {
+        nevr_boot_log_tee::Init();
+        path = nevr_boot_log_tee::Path();
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in) start = in.tellg();
+    }
+    ~BootTeeCapture() { nevr_boot_log_tee::Close(); }
+    std::string Output() const {
+        std::ifstream in(path, std::ios::binary);
+        in.seekg(start);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
 };
 
@@ -2304,6 +2329,7 @@ TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
         XpidBaseScope scope(base);
         PatchDscProvider();
         EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "") << "a healthy image records no failure cause";
         EXPECT_EQ(g_serverFatalCalls, 0);
     }
     for (const auto& site : kXpidSites) {
@@ -2345,9 +2371,53 @@ TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
         XpidBaseScope scope(readOnly);
         PatchDscProvider();
         EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
+        EXPECT_STREQ(g_bootHookFailedCause, "XPID provider-string patch write failed");
         EXPECT_EQ(g_serverFatalCalls, 0);
     }
     EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
     UnmapViewOfFile(readOnly);
     CloseHandle(section);
+}
+
+TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog) {
+    // The boot path runs under the DllMain loader lock, where Log() is not allowed. The mismatch
+    // record is the only place the expected and actual bytes exist, so it has to reach the tee.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        written = tee.Output();
+    }
+    char expected[160];
+    snprintf(expected, sizeof(expected),
+             "[NEVR.XPID] dash prefix mismatch rva=0x%X expected=50534e2d actual=58595a2d",
+             static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+    EXPECT_NE(written.find(expected), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, TheRefusalCauseNamesTheFirstMismatchedSite) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "XYZ-", 4);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        char expected[96];
+        snprintf(expected, sizeof(expected), "XPID dash prefix mismatch rva=0x%X",
+                 static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+        EXPECT_STREQ(g_bootHookFailedCause, expected)
+            << "boot.cpp's ServerFatal prints this: it must name the failing site";
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
 }

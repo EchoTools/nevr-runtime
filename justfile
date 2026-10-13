@@ -1728,6 +1728,14 @@ verify:
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
         exit 1
     fi
+    # The flag alone is satisfied by one `g_bootHookFailed = true`, so a ServerFatal() restored on the
+    # validation path would pass the check above. It must stay out of this file altogether: it runs
+    # before the CLI is parsed, where ServerFatal only warns and the boot would go on.
+    if grep -q 'ServerFatal(' <<<"$N120_XPID"; then
+        echo "verify: FAIL — N120 xpid_patch.cpp calls ServerFatal()." >&2
+        echo "The patch runs before the CLI is parsed, so g_isServer is still false and ServerFatal only warns; report through g_bootHookFailed (boot.cpp refuses to start a server)." >&2
+        exit 1
+    fi
 
     # --- N114: the plugin capability channel must stay WIRED ---------------------
     # A plugin declaring what it does is only useful if the host actually asks.
@@ -2568,7 +2576,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 913
+    python3 tools/verify_gtest_floor.py --floor 915
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
