@@ -113,19 +113,23 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("packages-unsigned", text)
         self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), r"name: signed-")
 
-    def test_the_job_graph_is_guard_build_sign_seal_repack_publish(self):
+    def test_the_job_graph_is_drafts_guard_build_sign_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
-        self.assertEqual(list(jobs), ["guard", "build", "sign", "seal", "repack", "publish"])
+        # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
+        self.assertEqual(list(jobs), ["drafts", "guard", "build", "sign", "seal", "repack", "publish"])
+        self.assertEqual(jobs["guard"]["needs"], "drafts")
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
         self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
-        self.assertEqual(sorted(jobs["repack"]["needs"]), ["seal", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["repack", "seal", "sign"])
+        # repack and publish also need build: they read build's `draft` output (a dispatch on a draft's tag, see
+        # test_release_draft_path.py); `needs` outputs are only visible from a direct dependency.
+        self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal", "sign"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "repack", "seal", "sign"])
         self.assertEqual(jobs["sign"]["needs"], "build")
         for name in ("sign", "seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 
-    def test_nothing_is_published_without_a_release_event(self):
+    def test_nothing_is_published_without_a_release_event_or_a_draft_of_the_dispatched_tag(self):
         data, _ = load()
         for name, job in data["jobs"].items():
             uses_release_action = "softprops/action-gh-release" in steps_text(job)
@@ -230,8 +234,19 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(len(uploads), 2)
         for step in uploads:
             self.assertNotIn("prerelease", step["with"])
-            self.assertNotIn("draft", step["with"])
+            # The one argued exception: softprops/action-gh-release PUBLISHES a reused draft after uploading
+            # unless `draft: true` ("If the action reuses an existing draft release, set draft: true to keep
+            # it draft; if draft is omitted, the action will publish that draft after uploading assets"). A
+            # dispatch on a draft's tag must keep the draft a draft; for a release event the expression is
+            # false, which is the action's default (nothing about the release's state changes). Nothing else
+            # may ever be set here.
+            self.assertEqual(step["with"].get("draft"), "${{ github.event_name == 'workflow_dispatch' }}")
             self.assertTrue(step["with"]["fail_on_unmatched_files"])
+        for name, job in data["jobs"].items():
+            for step in job["steps"]:
+                if step in uploads:
+                    continue
+                self.assertNotIn("draft", step.get("with", {}), f"{name}: {step.get('name', step.get('uses'))}")
 
     def test_no_secret_is_added(self):
         text = WORKFLOW.read_text(encoding="utf-8")

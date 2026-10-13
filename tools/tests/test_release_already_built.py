@@ -88,6 +88,22 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertFalse((self.tmp / "log").exists())
 
+    def test_an_empty_or_failing_name_list_is_an_error_never_true(self):
+        # the names file is sourced from the script's own directory: run a copy whose list is broken
+        import shutil
+        for body in ("release_asset_names() { return 1; }\n", "release_asset_names() { :; }\n"):
+            with self.subTest(body=body):
+                d = self.tmp / ("copy-" + str(abs(hash(body))))
+                d.mkdir()
+                for f in ("release_already_built.sh", "release_asset_names.sh"):
+                    shutil.copy(REPO / "tools" / f, d / f)
+                with open(d / "release_asset_names.sh", "a") as fh:
+                    fh.write(body)
+                result = subprocess.run([str(d / "release_already_built.sh"), "v5.0.0", "EchoTools/nevr-runtime"],
+                                        env=dict(self.env, FAKE_ASSETS=self.names()), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertNotEqual(result.stdout.strip(), "true")
+
     def test_the_prerelease_flag_is_never_asked_for(self):
         self.run_script(FAKE_ASSETS=self.names())
         call = (self.tmp / "log").read_text()

@@ -61,8 +61,24 @@ stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `bui
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
 
+A release whose files must be signed before anything is public goes through a DRAFT: a draft fires no workflow, so the build is
+started by hand on the tag ref.
+
+```sh
+just release-preflight && gh release create v<x.y.z> --draft --prerelease --verify-tag   # D1. a draft for the pushed tag (instead of step 3)
+gh workflow run build.yml --ref v<x.y.z>          # D2. builds, attests and attaches the four files to the draft; it stays a draft
+```
+
+`tools/release_draft.sh` decides: a tag with exactly one draft, no published release, and none of the four names on the draft is
+built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
+four names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
+which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
+(a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
+`guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while
+a dispatch is running makes that run upload to the published release.
+
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
-`gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
+`gh release create` (step 3, or D1): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
