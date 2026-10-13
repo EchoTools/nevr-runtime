@@ -19,6 +19,7 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/hook/process_memory.h"
+#include "runtime/patch/broadcaster_pointer_guard.h"
 #include "runtime/patch/checked_patch.h"
 #include "runtime/log/boot_log_tee.h"
 
@@ -376,11 +377,8 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
 // Engine entity lookup null-check hook — prevent AV in server mode
 // ============================================================================
 
-/// Original function: Engine entity lookup @ 0x140f80ed0
-/// This function dereferences *(*(int64_t*)arg1 + 0x5e0) which is a hash table
-/// pointer. In server mode, this field can be uninitialized (0x10), causing an
-/// access violation at address 0x4008. We add a null check and return -1 (the
-/// function's default "not found" value) when the pointer is invalid.
+/// CBroadcaster::Listen @ 0x140f80ed0 reads the listener table through arg1.
+/// A low pointer in either link can fault before the table-value guard runs.
 typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
 static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 
@@ -409,13 +407,9 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterListen);
   if (g_isServer) {
-    // Check if the structure pointer chain is valid before calling original
-    INT64* outerPtr = (INT64*)arg1;
-    if (outerPtr == nullptr) return -1;
-    INT64 innerPtr = *outerPtr;
-    if (innerPtr == 0) return -1;
-    // Check the hash table pointer at +0x5e0
-    INT64 hashTablePtr = *(INT64*)(innerPtr + 0x5e0);
+    INT64 hashTablePtr = 0;
+    if (!nevr_broadcaster_guard::TryReadListenerTable(static_cast<std::uintptr_t>(arg1), hashTablePtr))
+      return -1;
     if (hashTablePtr < 0x10000) {
       static volatile LONG guardCount = 0;
       LONG c = InterlockedIncrement(&guardCount);
@@ -436,9 +430,9 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
 // Engine entity property dispatch null-check hook — prevent AV in server mode
 // ============================================================================
 
-/// Original function: fcn.140f87aa0 (580 bytes, 8 callers)
-/// Dereferences *(*(int64_t*)arg1 + 0x448) for a flags check. In server mode the
-/// inner pointer can be invalid (e.g. 0x10), causing READ AV at low addresses.
+/// CBroadcaster::ReceiveLocalEvent @ 0x140f87aa0 reads its broadcaster through
+/// arg1. A low pointer in either link can fault before dispatch reaches the
+/// listener table.
 typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
 static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 
@@ -471,11 +465,9 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
-    // Exact AV condition from the disassembly above — nothing broader.
-    if (arg1 == 0) return;
-    const INT64 inner = *reinterpret_cast<INT64*>(arg1);
-    if (inner == 0) return;
-    const INT64 table = *reinterpret_cast<INT64*>(inner + 0x5e0);
+    INT64 table = 0;
+    if (!nevr_broadcaster_guard::TryReadListenerTable(static_cast<std::uintptr_t>(arg1), table))
+      return;
     if (table < 0x10000) {
       static volatile LONG guardCount = 0;
       const LONG c = InterlockedIncrement(&guardCount);
