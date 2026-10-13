@@ -308,7 +308,8 @@ endif()
 # Creates the one release package, nevr-runtime-v<ver>: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
-# exact symbols. The .dbg files are never part of the package. A local build with symbols is the
+# function names through the .dbg's COFF symbol table. The release preset has no -g, so there are no source
+# lines to map to. The .dbg files are never part of the package. A local build with symbols is the
 # ordinary build output in build/<preset>/bin/.
 # Usage: cmake --build <build_dir> --target dist
 # =============================================================================

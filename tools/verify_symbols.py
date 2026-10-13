@@ -12,8 +12,10 @@ the CRC32 of its bytes: PE has no build-id, so name plus CRC32 is the link a deb
 against <symbols dir>/<file name>.dbg; a PE with no symbol file there is a problem, and so is a package
 with no PE at all.
 
-Exits 0 when the PE carries no DWARF, the .dbg carries it, and the debuglink names the .dbg with its CRC32.
-Exits 1 with one line per problem otherwise.
+Exits 0 when the PE carries no DWARF and no COFF symbol table, the .dbg carries DWARF and a non-empty COFF
+symbol table (the function names a field crash maps to; a release build has no source lines), and the
+debuglink names the .dbg with its CRC32. Exits 1 with one `verify_symbols: <file>: <reason>` line per
+problem otherwise, including a file that is not a PE, is truncated, or is missing.
 """
 from __future__ import annotations
 
@@ -23,37 +25,86 @@ import zlib
 from pathlib import Path
 
 
-def sections(blob: bytes) -> dict[str, bytes]:
-    """name -> raw data of every section of a PE/COFF image (long names resolved via the string table)."""
-    if blob[:2] != b"MZ":
-        raise ValueError("not a PE file (no MZ header)")
-    pe = struct.unpack_from("<I", blob, 0x3C)[0]
-    if blob[pe:pe + 4] != b"PE\0\0":
-        raise ValueError("not a PE file (no PE signature)")
-    count, _, symtab, nsyms, optsize = struct.unpack_from("<HIIIH", blob, pe + 6)
-    strtab = symtab + 18 * nsyms if symtab else 0
-    table = pe + 24 + optsize
-    found = {}
-    for n in range(count):
-        raw, _, _, size, ptr = struct.unpack_from("<8sIIII", blob, table + 40 * n)
-        name = raw.rstrip(b"\0").decode("ascii", "replace")
-        if name.startswith("/") and strtab:
-            start = strtab + int(name[1:])
-            name = blob[start:blob.index(b"\0", start)].decode("ascii", "replace")
-        found[name] = blob[ptr:ptr + size]
-    return found
+class Pe:
+    """The parts of a PE/COFF image the checks read: sections by name, and the COFF symbol table's extent."""
+
+    def __init__(self, blob: bytes):
+        self.size = len(blob)
+        if blob[:2] != b"MZ":
+            raise ValueError("not a PE file (no MZ header)")
+        try:
+            pe = struct.unpack_from("<I", blob, 0x3C)[0]
+            if blob[pe:pe + 4] != b"PE\0\0":
+                raise ValueError("not a PE file (no PE signature)")
+            count, _, self.symtab, self.nsyms, optsize = struct.unpack_from("<HIIIH", blob, pe + 6)
+            strtab = self.symtab + 18 * self.nsyms if self.symtab else 0
+            table = pe + 24 + optsize
+            self.sections: dict[str, bytes] = {}
+            for n in range(count):
+                raw, _, _, size, ptr = struct.unpack_from("<8sIIII", blob, table + 40 * n)
+                name = raw.rstrip(b"\0").decode("ascii", "replace")
+                if name.startswith("/") and strtab:
+                    start = strtab + int(name[1:])
+                    stop = blob.find(b"\0", start)
+                    if stop < 0:
+                        raise ValueError("truncated file (a section name runs past the end)")
+                    name = blob[start:stop].decode("ascii", "replace")
+                if ptr + size > len(blob):
+                    raise ValueError(f"truncated file (section {name} runs {ptr + size - len(blob)} bytes past the end)")
+                self.sections[name] = blob[ptr:ptr + size]
+        except struct.error as err:
+            raise ValueError("truncated file (the PE headers run past the end)") from err
+
+    def has_dwarf(self) -> bool:
+        return any(name.startswith(".debug_") for name in self.sections)
+
+    def coff_symbols(self) -> str | None:
+        """None when the COFF symbol table is present and inside the file, else why it is not."""
+        if self.symtab == 0 or self.nsyms == 0:
+            return "its COFF symbol table is empty (no function names)"
+        if self.symtab + 18 * self.nsyms > self.size:
+            return f"its COFF symbol table ({self.nsyms} symbols at {self.symtab:#x}) runs past the end of the file"
+        return None
+
+
+def load(path: Path) -> Pe:
+    try:
+        return Pe(path.read_bytes())
+    except OSError as err:
+        raise ValueError(f"cannot read: {err.strerror or err}") from err
 
 
 def problems(binary: Path, symbols: Path) -> list[str]:
+    """Every problem with the pair; a file that cannot be read as a PE is one line, never a traceback."""
     out = []
-    pe, dbg = sections(binary.read_bytes()), sections(symbols.read_bytes())
-    if any(name.startswith(".debug_") for name in pe):
+    pe = dbg = None
+    for path, role in ((binary, "binary"), (symbols, "symbol file")):
+        try:
+            parsed = load(path)
+        except ValueError as err:
+            out.append(f"{path.name}: {err}")
+            continue
+        if role == "binary":
+            pe = parsed
+        else:
+            dbg = parsed
+    if pe is not None and pe.has_dwarf():
         out.append(f"{binary.name}: still carries DWARF sections (not stripped)")
-    if not any(name.startswith(".debug_") for name in dbg):
+    if pe is not None and pe.nsyms:
+        out.append(f"{binary.name}: still carries a COFF symbol table ({pe.nsyms} symbols; not stripped)")
+    if dbg is not None and not dbg.has_dwarf():
         out.append(f"{symbols.name}: carries no DWARF sections")
-    link = pe.get(".gnu_debuglink")
+    if dbg is not None:
+        why = dbg.coff_symbols()
+        if why:
+            out.append(f"{symbols.name}: {why}: a crash cannot be mapped to function names")
+    if pe is None or dbg is None:
+        return out
+    link = pe.sections.get(".gnu_debuglink")
     if link is None:
         return out + [f"{binary.name}: no .gnu_debuglink section"]
+    if b"\0" not in link or len(link) < ((link.index(b"\0") + 4) & ~3) + 4:
+        return out + [f"{binary.name}: .gnu_debuglink section is too short to hold a name and a CRC32"]
     end = link.index(b"\0")
     name = link[:end].decode("ascii", "replace")
     crc = struct.unpack_from("<I", link, (end + 4) & ~3)[0]  # the CRC32 follows the name, 4-byte aligned

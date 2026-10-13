@@ -379,13 +379,11 @@ class DistributionArchiveTest(unittest.TestCase):
         self.assertFalse(marker.exists(), "failed distribution validation reached the upload target")
 
     def test_stripped_archive_pair_pass_runtime_validation(self):
-        for package in ("stripped",):
-            with self.subTest(package=package):
-                package_dir = self.root / package
-                package_dir.mkdir()
-                tar_archive, zip_archive = self.make_archives(package_dir)
-                result = self.run_validator(tar_archive, zip_archive)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        package_dir = self.root / "stripped"
+        package_dir.mkdir()
+        tar_archive, zip_archive = self.make_archives(package_dir)
+        result = self.run_validator(tar_archive, zip_archive)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_corrupt_and_incomplete_archives_fail_closed_without_upload(self):
         variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-launcher")

@@ -273,7 +273,9 @@ jobs:
 
     # Every shipped PE is stripped and linked (.gnu_debuglink: name and CRC32) to the symbol file the dist
     # target split off it, and the stripped DLL still carries its identity literal (version and commit):
-    # a crash from the field maps to exact symbols. PE has no build-id; the debuglink CRC32 is the link.
+    # a crash from the field maps to function names through the .dbg's COFF symbol table (a release build has
+    # no -g, so no source lines), which verify_symbols.py requires to be non-empty. PE has no build-id; the
+    # debuglink CRC32 is the link.
     - name: Verify the symbol files match the stripped binaries
       if: steps.release.outputs.version != ''
       shell: bash

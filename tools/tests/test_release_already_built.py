@@ -64,7 +64,8 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
     def test_the_tar_zst_archives_are_not_required_and_do_not_count(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "nevr-runtime-v5.0.0.tar.zst\n")
         self.assertEqual(result.stdout.strip(), "true")
-        only_tars = "nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0.tar.zst\nSHA256SUMS\nRELEASE-NOTES.md\n"
+        only_tars = ("nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0-windows.tar.zst\n"
+                     "SHA256SUMS\nRELEASE-NOTES.md\n")
         self.assertEqual(self.run_script(FAKE_ASSETS=only_tars).stdout.strip(), "false")
 
     def test_extra_assets_do_not_matter(self):
