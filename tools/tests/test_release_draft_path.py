@@ -269,10 +269,10 @@ class ReleaseDraftPathTest(unittest.TestCase):
         self.assertEqual(repack["needs"], ["build", "sign", "seal"])
         self.assertEqual(repack["if"],
             "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
-        self.assertEqual(publish["needs"], ["build", "sign", "seal", "repack"])
+        self.assertEqual(publish["needs"], ["build", "quest", "sign", "seal", "repack"])
         self.assertEqual(publish["if"],
             "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
-            "needs.repack.result == 'success' && " + gate + " }}")
+            "needs.repack.result == 'success' && needs.quest.result == 'success' && " + gate + " }}")
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})
 

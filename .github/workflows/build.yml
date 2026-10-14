@@ -440,10 +440,16 @@ jobs:
         public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
         public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
 
-    - name: Setup pinned just
-      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-      with:
-        just-version: '1.58.0'
+    # just 1.58.0 from its release tarball, checked against the digest measured when this pin was written.
+    # Not an action that edits PATH (that is what build.yml's other job must never do, #551).
+    - name: Install pinned just
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/just.tgz" https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
+        echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  $RUNNER_TEMP/just.tgz" | sha256sum -c -
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$RUNNER_TEMP/just.tgz" -C "$HOME/.local/bin" just
+        test "$("$HOME/.local/bin/just" --version)" = "just 1.58.0"
 
     - name: Locate the NDK
       id: ndk
@@ -504,7 +510,7 @@ jobs:
         set -euo pipefail
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
-        just test-android
+        "$HOME/.local/bin/just" test-android
 
     - name: Name and check the release asset
       id: asset
