@@ -365,12 +365,22 @@ std::string Utf8(const std::wstring& w) {
 constexpr size_t kLibOvrDeviceBufferChars = 1024;
 constexpr size_t kLibOvrDeviceMaxIdChars = 256;
 
-std::wstring LibOvrCaptureEndpointId(long* code) {
+// First 64 chars of a wide string as UTF-8, for rejection log lines.
+std::string Prefix64(const std::wstring& text) {
+  return Utf8(text.substr(0, 64));
+}
+
+// `log` is false for the presence probe, which asks the same question without repeating the lines.
+std::wstring LibOvrCaptureEndpointId(long* code, bool log) {
   *code = 0;
   HMODULE runtime = GetModuleHandleW(L"LibOVRRTImpl64_1.dll");
   if (runtime == nullptr) runtime = GetModuleHandleW(L"LibOVRRT64_1.dll");
   if (runtime == nullptr) {
     *code = -1;
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR code=-1: LibOVRRTImpl64_1.dll / LibOVRRT64_1.dll not loaded in this process; falling to the name match");
+    }
     return std::wstring();
   }
   using GetInGuidStrFn = int(__cdecl*)(wchar_t*);
@@ -378,6 +388,10 @@ std::wstring LibOvrCaptureEndpointId(long* code) {
       reinterpret_cast<void*>(GetProcAddress(runtime, "ovr_GetAudioDeviceInGuidStr")));
   if (fn == nullptr) {
     *code = -2;
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR code=-2: ovr_GetAudioDeviceInGuidStr is not exported by the loaded runtime; falling to the name match");
+    }
     return std::wstring();
   }
   std::vector<wchar_t> buffer(kLibOvrDeviceBufferChars, L'\0');
@@ -388,9 +402,11 @@ std::wstring LibOvrCaptureEndpointId(long* code) {
   const bool shaped =
       nevr_mic_device::LooksLikeEndpointId(result, buffer.data(), length, kLibOvrDeviceMaxIdChars);
   if (!shaped) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] LibOVR ovr_GetAudioDeviceInGuidStr result=%d length=%zu is not an endpoint id; first 64 chars=\"%s\"",
-        result, length, Utf8(std::wstring(buffer.data(), length < 64 ? length : 64)).c_str());
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR ovr_GetAudioDeviceInGuidStr code=%d length=%zu is not an endpoint id; first 64 chars=\"%s\"",
+          result, length, Utf8(std::wstring(buffer.data(), length < 64 ? length : 64)).c_str());
+    }
     return std::wstring();
   }
   return std::wstring(buffer.data(), length);
@@ -439,10 +455,15 @@ HRESULT OpenChosenCaptureDevice(IMMDeviceEnumerator* enumerator, IMMDevice** dev
   std::wstring libovrId;
   std::vector<nevr_mic_device::Endpoint> active;
   if (nevr_mic_device::ShouldChooseHeadsetDevice(isWine)) {
-    libovrId = LibOvrCaptureEndpointId(&libovrCode);
+    libovrId = LibOvrCaptureEndpointId(&libovrCode, log);
     active = EnumerateActiveCaptureEndpoints(enumerator);
   }
   nevr_mic_device::Pick pick = nevr_mic_device::Choose(isWine, libovrId, libovrCode, active);
+  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] LibOVR code=%ld answered id=\"%s\" which is not an active capture endpoint; falling to the name match",
+        libovrCode, Prefix64(libovrId).c_str());
+  }
   if (pick.choice != nevr_mic_device::Choice::OsDefault) {
     const HRESULT hr = enumerator->GetDevice(pick.endpoint.id.c_str(), device);
     if (SUCCEEDED(hr)) {
@@ -455,8 +476,10 @@ HRESULT OpenChosenCaptureDevice(IMMDeviceEnumerator* enumerator, IMMDevice** dev
     }
     if (log) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.MIC] chosen capture endpoint \"%s\" could not be opened (0x%lx); using the OS default",
-          Utf8(pick.endpoint.name).c_str(), static_cast<unsigned long>(hr));
+          "[NEVR.MIC] chosen capture endpoint \"%s\" (choice=%s, libovr_code=%ld, libovr_id=\"%s\") could not be opened "
+          "(HRESULT 0x%lx); using the OS default",
+          Utf8(pick.endpoint.name).c_str(), nevr_mic_device::ChoiceName(pick.choice), libovrCode,
+          Prefix64(libovrId).c_str(), static_cast<unsigned long>(hr));
     }
     pick = nevr_mic_device::Pick{};
     pick.reason = "the chosen endpoint could not be opened";
