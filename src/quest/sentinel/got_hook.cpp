@@ -169,10 +169,9 @@ int OpenMaps() {
 
 enum class Mapped { kYes, kNo, kUnknown };
 
-// Whether `addr` lies in a mapping, from one complete pass over the maps file. Anything short
-// of a complete pass is kUnknown, never kNo: a failed open, a read error, an end of file before
-// any data (a live process always has mappings) all say "unknown". Only a pass that read data
-// and reached end of file without finding the address says kNo.
+// Whether `addr` lies in a mapping. A positive match is conclusive after its line;
+// a negative answer needs a complete pass. A failed open, a read error, or an end
+// of file before any data (a live process always has mappings) says "unknown".
 Mapped IsMapped(const void* addr) {
   const int fd = OpenMaps();
   if (fd < 0) return Mapped::kUnknown;
@@ -206,6 +205,10 @@ Mapped IsMapped(const void* addr) {
         if (len < sizeof(line) - 1) line[len++] = chunk[i];
       } else {
         consume();
+        if (found) {
+          close(fd);
+          return Mapped::kYes;
+        }
       }
     }
   }
@@ -410,19 +413,33 @@ bool ReadBuildId(const ElfImage& image, char* out, std::size_t capacity) {
   for (std::size_t i = 0; i < image.phnum; ++i) {
     const Elf64_Phdr& ph = image.phdr[i];
     if (ph.p_type != PT_NOTE) continue;
+    // Program headers describe the loaded image, but a PT_NOTE need not itself be mapped.
+    // Only inspect notes wholly contained in a loaded segment before forming a pointer.
+    bool loaded = false;
+    for (std::size_t j = 0; j < image.phnum; ++j) {
+      const Elf64_Phdr& load = image.phdr[j];
+      if (load.p_type == PT_LOAD && ph.p_vaddr >= load.p_vaddr &&
+          ph.p_vaddr - load.p_vaddr <= load.p_memsz &&
+          ph.p_memsz <= load.p_memsz - (ph.p_vaddr - load.p_vaddr)) {
+        loaded = true;
+        break;
+      }
+    }
+    if (!loaded || ph.p_vaddr > UINTPTR_MAX - image.base ||
+        ph.p_memsz > UINTPTR_MAX - (image.base + ph.p_vaddr)) continue;
     const auto* cursor = reinterpret_cast<const unsigned char*>(image.base + ph.p_vaddr);
     const unsigned char* const end = cursor + ph.p_memsz;
     while (static_cast<std::size_t>(end - cursor) >= sizeof(Elf64_Nhdr)) {
       Elf64_Nhdr nhdr;
       std::memcpy(&nhdr, cursor, sizeof(nhdr));
-      const std::size_t nameLen = (nhdr.n_namesz + 3U) & ~3U;
-      const std::size_t descLen = (nhdr.n_descsz + 3U) & ~3U;
+      const std::size_t nameLen = (static_cast<std::size_t>(nhdr.n_namesz) + 3U) & ~std::size_t{3};
+      const std::size_t descLen = (static_cast<std::size_t>(nhdr.n_descsz) + 3U) & ~std::size_t{3};
       const std::size_t remaining = static_cast<std::size_t>(end - cursor) - sizeof(nhdr);
       if (nameLen > remaining || descLen > remaining - nameLen) break;
       const unsigned char* name = cursor + sizeof(nhdr);
       const unsigned char* desc = name + nameLen;
       if (nhdr.n_type == NT_GNU_BUILD_ID && nhdr.n_namesz == 4 &&
-          std::memcmp(name, "GNU", 4) == 0 && nhdr.n_descsz * 2U + 1U <= capacity) {
+          std::memcmp(name, "GNU", 4) == 0 && nhdr.n_descsz <= (capacity - 1) / 2) {
         static const char kHex[] = "0123456789abcdef";
         for (std::size_t b = 0; b < nhdr.n_descsz; ++b) {
           out[b * 2] = kHex[desc[b] >> 4];

@@ -27,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/compat/status_redirect_check.h"
 #include "got_hook.h"
 #include "hook_log.h"
 #include "quest/redirect/hook_adapter.h"
@@ -675,6 +676,37 @@ void UrlDecisionsHaveTheirOwnCounters() {
   ResetCountersForTest();
 }
 
+// #408 self-check: every CreateConnection URL is counted by class for the status_redirect check, including the
+// ones the redirector leaves alone. A service-domain host that is not an API or graph base (the failing shape of
+// #408, "Couldn't resolve host name") lands in `uncovered`, not nowhere.
+void EveryConnectIsCountedByClassForTheStatusRedirectCheck() {
+  Scenario s(Config(kRedirectOn));
+  nevr_status_redirect_check::ResetForTest();
+  unsigned long handle = 0;
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");
+  ConnectEntry()(&handle, "https://api-live.readyatdawn.com");
+  ConnectEntry()(&handle, "https://status.readyatdawn.com/status/services,news?env=live&projectid=rad14");
+  ConnectEntry()(&handle, "https://graph.oculus.com");
+  ConnectEntry()(&handle, "https://cdn.example.com/asset");
+  const nevr_status_redirect_check::Snapshot c = nevr_status_redirect_check::Process().Counts();
+  QCHECK(c.apiRedirected == 2);
+  QCHECK(c.apiPassthrough == 0);
+  QCHECK(c.uncovered == 1);
+  QCHECK(c.graph == 1);
+  QCHECK(c.external == 1);
+  nevr_self_check::Observation o;
+  QCHECK(nevr_status_redirect_check::Process().Take(&o));
+  QCHECK(!o.pass);
+  QCHECK(o.observed.find("hosts=status.readyatdawn.com") != std::string::npos);
+  QCHECK(o.observed.find("projectid") == std::string::npos);
+
+  Scenario noTarget(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));
+  nevr_status_redirect_check::ResetForTest();
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");  // no http target: the connect is left alone
+  QCHECK(nevr_status_redirect_check::Process().Counts().apiPassthrough == 1);
+  nevr_status_redirect_check::ResetForTest();
+}
+
 // All 16 slots computed under the current bridge state: a further value is not remembered. A change
 // of bridge state makes those entries stale, and a stale slot is recycled.
 void CacheFullAndStaleBridgeBehaviour() {
@@ -965,6 +997,7 @@ int main(int argc, char** argv) {
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
   UrlDecisionsHaveTheirOwnCounters();
+  EveryConnectIsCountedByClassForTheStatusRedirectCheck();
   CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();

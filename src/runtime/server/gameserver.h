@@ -57,6 +57,11 @@ class GameServerLib : public EchoVR::IServerLib {
   std::unique_ptr<WebSocketClient> m_wsClient;
   std::unique_ptr<TelemetryStreamer> m_telemetry;
 
+  // The WebSocket worker only records a reconnect. Update() handles game-owned
+  // broadcaster state on the game thread before processing ServerDB messages.
+  std::atomic<bool> m_reconnectPending{false};
+  std::atomic<bool> m_reconnectRegistrationEnabled{true};
+
   // Set by the graceful-shutdown thread when it finishes.
   // Destructor waits on this before tearing down members.
   std::atomic<bool> m_shutdownComplete{false};
@@ -78,6 +83,7 @@ class GameServerLib : public EchoVR::IServerLib {
   // Helper methods
   void RegisterBroadcasterCallbacks();
   void RegisterTcpCallbacks();
+  void ProcessPendingReconnect();
   void UnregisterAllCallbacks();
 
   // Connects the telemetry streamer when telemetry is enabled and configured (gameserver_telemetry.cpp);

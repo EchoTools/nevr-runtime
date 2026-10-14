@@ -387,6 +387,7 @@ if(BUILD_TESTING)
       log/url_diagnostics.cpp)
     set_source_files_properties(tests/test_websocket_client_auth.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_websocket_client_auth PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_websocket_client_auth PRIVATE
       GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
@@ -659,6 +660,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
+    # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
+    # passed through. Header only on top of the self-check unit.
+    add_executable(test_status_redirect_check
+      tests/test_status_redirect_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_status_redirect_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_status_redirect_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_status_redirect_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_status_redirect_check DISCOVERY_MODE PRE_TEST)
+
     # Legacy <-> current translator (compat/legacy_codec.cpp): platform neutral like evr_codec, so it builds
     # and runs on its own. It is not part of BugSplat64.dll until the legacy mode wires it in.
     find_package(ZLIB REQUIRED)
@@ -725,10 +739,10 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
-    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
-    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
+    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp)
+    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
@@ -770,6 +784,8 @@ if(BUILD_TESTING)
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
       patch/resource_override.cpp
+      # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
+      patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
@@ -817,6 +833,7 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
       patch/resource_override.cpp
+      patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       ext/module_loader.cpp
@@ -887,6 +904,14 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_init_fail"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_library(test_plugin_partial_init_fail SHARED
+      tests/plugin_partial_init_fail_test_dll.cpp)
+    target_compile_definitions(test_plugin_partial_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_partial_init_fail PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_partial_init_fail PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_partial_init_fail"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_library(test_plugin_info_keeper SHARED
       tests/plugin_info_keeper_test_dll.cpp)
     target_compile_definitions(test_plugin_info_keeper PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -895,7 +920,8 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail test_plugin_info_keeper)
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
+      test_plugin_partial_init_fail test_plugin_info_keeper)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -925,8 +951,8 @@ if(BUILD_TESTING)
     # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

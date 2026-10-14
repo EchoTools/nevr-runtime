@@ -50,6 +50,11 @@ void GlobalInit() {
   std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
 
+int HandshakeProgress(void* deadline, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  const auto* end = static_cast<const std::chrono::steady_clock::time_point*>(deadline);
+  return std::chrono::steady_clock::now() >= *end ? 1 : 0;
+}
+
 class CurlWsConnection final : public WsConnection {
  public:
   CurlWsConnection(CURL* curl, curl_socket_t socket, std::size_t maxMessageBytes)
@@ -219,6 +224,11 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   if (headers != nullptr) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);  // worker thread: no SIGALRM resolver timeouts
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, config_.connectTimeoutSeconds);
+  // The transfer timeout covers the attempt where libcurl checks it. Its connect-only
+  // WebSocket path may wait on a silent peer, so the progress callback enforces a
+  // wall-clock deadline even while no HTTP response bytes arrive.
+  const long handshakeTimeout = config_.handshakeTimeoutSeconds > 0 ? config_.handshakeTimeoutSeconds : 30;
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, handshakeTimeout);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");  // never route through a proxy named by the environment
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "wss");
@@ -232,6 +242,16 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   blob.flags = CURL_BLOB_COPY;
   curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &blob);
 
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(handshakeTimeout);
+  if (curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &deadline) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, HandshakeProgress) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK) {
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    result.status = ConnectStatus::NetworkError;
+    return result;
+  }
+
   const CURLcode rc = curl_easy_perform(curl);
   long http = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
@@ -242,6 +262,15 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   result.status = ClassifyCurlCode(static_cast<int>(rc), http);
   if (result.status != ConnectStatus::Ok) {
     curl_easy_cleanup(curl);
+    return result;
+  }
+  // CONNECT_ONLY=2 ends this transfer after the upgrade response. Frame traffic may live
+  // indefinitely, so the deadline used for curl_easy_perform must not follow the handle.
+  if (curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr) != CURLE_OK) {
+    curl_easy_cleanup(curl);
+    result.status = ConnectStatus::NetworkError;
     return result;
   }
   curl_socket_t sock = CURL_SOCKET_BAD;
