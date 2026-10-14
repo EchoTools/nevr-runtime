@@ -67,6 +67,7 @@ struct ActiveOverrideFrame {
     ActiveOverrideFrame* previous;
 };
 static thread_local ActiveOverrideFrame* g_active_override = nullptr;
+static void (*g_fatal_line_sink)(const char*) = nullptr;
 
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
@@ -442,6 +443,10 @@ void ResetResourceOverrides() {
     }
 }
 
+void SetResourceOverrideFatalLineSink(void (*sink)(const char* line)) {
+    g_fatal_line_sink = sink;
+}
+
 ResourceOverrideShutdownReport ShutdownResourceOverride() {
     ResourceOverrideShutdownReport report = {};
     std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> released;
@@ -499,8 +504,22 @@ void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
         for (const auto& ovr : retired) {
             if (frame->selected != ovr.get()) continue;
             // The void plugin API cannot safely return while the caller may
-            // unload bytes that this callback still uses. Do no I/O or joins
-            // on this path: it can run with arbitrary game/plugin locks held.
+            // unload bytes that this callback still uses. Log() allocates and
+            // takes locks, and this can run with arbitrary game/plugin locks
+            // held, so the one record goes out through a raw, non-allocating
+            // sink (the crash record's WriteFile path) before the process ends.
+            char line[192];
+            snprintf(line, sizeof(line),
+                     "[NEVR.RESOURCE] FATAL reentrant deregistration: label=%s was deregistered from inside its own "
+                     "game callback; terminating with exit code 0x%lX",
+                     ovr->label ? ovr->label : "(null)", static_cast<unsigned long>(kReentrantDeregisterExitCode));
+            if (g_fatal_line_sink) {
+                g_fatal_line_sink(line);
+            } else {
+                fputs(line, stderr);
+                fputc('\n', stderr);
+                fflush(stderr);
+            }
             TerminateProcess(GetCurrentProcess(), kReentrantDeregisterExitCode);
             std::abort();
         }

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <future>
 #include <mutex>
@@ -120,6 +121,25 @@ TEST(ResourceOverride, DeregistrationWaitsForOriginalCallbackAndReentryWorks) {
 TEST(ResourceOverride, ReentrantDeregistrationFailsClosed) {
   EXPECT_EXIT(RunSelfDeregisterFixture(),
               ::testing::ExitedWithCode(static_cast<int>(0xE0000478u)), ".*");
+}
+
+void StderrSink(const char* line) {
+  std::fputs("SINK: ", stderr);
+  std::fputs(line, stderr);
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+}
+
+void RunSelfDeregisterFixtureWithSink() {
+  SetResourceOverrideFatalLineSink(&StderrSink);
+  RunSelfDeregisterFixture();
+}
+
+// The fail-closed exit used to leave only an exit code. It now writes one record through the sink first.
+TEST(ResourceOverride, ReentrantDeregistrationLeavesARecordBeforeItTerminates) {
+  EXPECT_EXIT(RunSelfDeregisterFixtureWithSink(),
+              ::testing::ExitedWithCode(static_cast<int>(0xE0000478u)),
+              "SINK: \\[NEVR\\.RESOURCE\\] FATAL reentrant deregistration: label=test .*0xE0000478");
 }
 
 void NoopOriginal(void*) {}

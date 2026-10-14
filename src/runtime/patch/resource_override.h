@@ -9,6 +9,10 @@ void TestHook_RunResourceCallback(void* callback_data);
 void TestHook_CloseResourceOverrides();
 #endif
 
+/// Where the fail-closed path (a callback deregistering its own replacement) leaves its one line before it
+/// terminates the process. The sink must not allocate or take locks. Optional: stderr is the fallback.
+void SetResourceOverrideFatalLineSink(void (*sink)(const char* line));
+
 /// What ShutdownResourceOverride found, returned so the figures are testable as well as logged.
 struct ResourceOverrideShutdownReport {
     uint64_t registered;
