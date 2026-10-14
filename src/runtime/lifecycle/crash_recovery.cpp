@@ -371,6 +371,10 @@ static void VehPrintf(const char* fmt, ...) {
   VehWrite(buf, slen + 1);
 }
 
+void WriteCrashRecordLine(const char* line) {
+  if (line != nullptr) VehPrintf("%s", line);
+}
+
 // ============================================================================
 // N70 — module table cached at init, never enumerated from the handler
 // ============================================================================
