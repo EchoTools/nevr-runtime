@@ -96,8 +96,8 @@ static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 // provider handle. So the mic exports are intercepted HERE, by name, against
 // pnsrad.dll's module handle specifically — never by hooking pnsrad's own
 // stub bodies.
-// Decided once, before the GetSymbol hook is enabled (see where it is installed): the provider answers only
-// under Wine/Proton (mic_policy.h, #402).
+// Decided once, before the GetSymbol hook is enabled (see where it is installed): the provider answers on
+// native Windows and under Wine/Proton alike (mic_policy.h).
 static bool g_micProviderInstalled = false;
 
 static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name) {
@@ -357,8 +357,9 @@ static VOID InitializeAfterGameImageGuard() {
   PatchProviderPrefixOvrOrg();
 
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing CSysDLL hooks...\n");
-  g_micProviderInstalled = nevr_mic_policy::ShouldInstallProvider(nevr_system_info::Get().IsWine());
-  nevr_boot_log_tee::TeeFprintf("%s", nevr_mic_policy::BootLine(g_micProviderInstalled));
+  const bool isWine = nevr_system_info::Get().IsWine();
+  g_micProviderInstalled = nevr_mic_policy::ShouldInstallProvider(isWine);
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_mic_policy::BootLine(g_micProviderInstalled, isWine));
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));

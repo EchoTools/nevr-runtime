@@ -153,7 +153,7 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | V01 | The runtime's mic provider is installed under Wine/Proton only; native Windows uses the game's own mic | PC | Log-only: read the boot log | `[NEVR.MIC] provider installed: Wine` (src/runtime/patch/mic_policy.h)<br>`[NEVR.MIC] provider not installed: native Windows` (src/runtime/patch/mic_policy.h) |
+| [ ] | V01 | The runtime's mic provider is installed on native Windows and under Wine/Proton | PC | Log-only: read the boot log | `[NEVR.MIC] provider installed: Wine` (src/runtime/patch/mic_policy.h)<br>`[NEVR.MIC] provider installed: native Windows` (src/runtime/patch/mic_policy.h) |
 | [ ] | V02 | Mic capture starts when you join voice | PC | Join a lobby with voice; speak; a second tester hears you | `[NEVR.MIC] capture started (caller thread %lu, owner thread %lu)` (src/runtime/patch/mic_provider.cpp) |
 | [ ] | V03 | The capture device is opened and resampled to mono 48 kHz | PC (Wine) | Log-only: read the log after V02 | `[NEVR.MIC] capture device ready: %u Hz, %u ch, %u-bit, tag=%u -> resampling to %u Hz mono int16` (src/runtime/patch/mic_provider.cpp) |
 | [ ] | V04 | The pnsrad mic symbols resolve to the WASAPI provider | PC (Wine) | Log-only: read the log | `[NEVR.MIC] pnsrad mic export(s) resolved -> WASAPI provider` (src/runtime/lifecycle/initialize.cpp) |
