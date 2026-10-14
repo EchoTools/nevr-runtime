@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -68,6 +69,10 @@ struct ActiveOverrideFrame {
 };
 static thread_local ActiveOverrideFrame* g_active_override = nullptr;
 static void (*g_fatal_line_sink)(const char*) = nullptr;
+// Not a measured limit: no callback has been observed to hold a lease this long. It exists so a blocked game
+// callback cannot hang plugin unload with nothing in the log; the timeout is reported as an Error below.
+static unsigned g_deregister_wait_ms = 30000;
+static unsigned long long g_deregister_timeouts = 0;
 
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
@@ -526,14 +531,37 @@ void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
     }
 
     // Future callbacks cannot select these entries. The game callback may
-    // still be reading their bytes, so wait without holding the registry lock.
-    g_overrides_idle.wait(lock, [&] {
+    // still be reading their bytes, so wait without holding the registry lock,
+    // and say so: an unattributed wait looks like a hang.
+    auto busy = [&] {
         for (const auto& ovr : retired) {
-            if (ovr->in_flight != 0) return false;
+            if (ovr->in_flight != 0) return true;
         }
-        return true;
-    });
+        return false;
+    };
+    bool timedOut = false;
+    if (busy()) {
+        uint32_t inFlight = 0;
+        for (const auto& ovr : retired) inFlight += ovr->in_flight;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] deregistration waiting for %u in-flight game callback(s) first_label=%s bound_ms=%u",
+            inFlight, retired.front()->label, g_deregister_wait_ms);
+        timedOut = !g_overrides_idle.wait_for(lock, std::chrono::milliseconds(g_deregister_wait_ms),
+                                              [&] { return !busy(); });
+        if (timedOut) ++g_deregister_timeouts;
+    }
     lock.unlock();
+    if (timedOut) {
+        // Freeing now would hand the game's callback freed memory. The entries are already out of the registry,
+        // so nothing new selects them; the owned buffers are leaked on purpose and the caller is told.
+        for (const auto& ovr : retired) {
+            Log(EchoVR::LogLevel::Error,
+                "[NEVR.RESOURCE] deregistration gave up after %u ms with the game callback still running: label=%s "
+                "buffer %s; the plugin's bytes may still be read",
+                g_deregister_wait_ms, ovr->label, ovr->owned ? "leaked" : "not owned here");
+        }
+        return;
+    }
     for (const auto& ovr : retired) {
         if (ovr->owned && ovr->data) {
             VirtualFree(const_cast<void*>(ovr->data), 0, MEM_RELEASE);
@@ -575,6 +603,9 @@ void TestHook_InitResourceOverrides(void (*original)(void*)) {
     g_overrides = std::make_unique<std::vector<std::shared_ptr<ResourceOverride>>>();
     g_orig = original;
 }
+
+void TestHook_SetDeregisterWaitMs(unsigned ms) { g_deregister_wait_ms = ms; }
+unsigned long long TestHook_DeregisterTimeouts() { return g_deregister_timeouts; }
 
 void TestHook_SetOriginal(void (*original)(void*)) {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);

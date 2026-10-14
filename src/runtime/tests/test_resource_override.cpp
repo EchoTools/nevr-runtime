@@ -183,4 +183,40 @@ TEST(ResourceOverride, ShutdownWithNoHookReleasesTheRegistry) {
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
 }
 
+// A game callback that never returns used to hang plugin unload with nothing in the log. The wait is bounded
+// (shortened here), reports the timeout, and leaves the buffers alone.
+TEST(ResourceOverride, DeregistrationGivesUpOnABlockedCallbackAndSaysSo) {
+  {
+    std::lock_guard<std::mutex> lock(g_gateMutex);
+    g_originalEntered = false;
+    g_releaseOriginal = false;
+    g_forwardedBuffer = nullptr;
+  }
+  TestHook_SetDeregisterWaitMs(100);
+  TestHook_InitResourceOverrides(&BlockingOriginal);
+  static char replacement[] = "replacement";
+  RegisterResourceOverride(kType, kName, replacement, sizeof(replacement), "test");
+
+  std::thread callbackThread([] { RunCallbackFor(kName); });
+  {
+    std::unique_lock<std::mutex> lock(g_gateMutex);
+    ASSERT_TRUE(g_gate.wait_for(lock, 5s, [] { return g_originalEntered; }));
+  }
+  const unsigned long long before = TestHook_DeregisterTimeouts();
+  auto deregister = std::async(std::launch::async, [&] {
+    DeregisterResourceOverrides(replacement, replacement + sizeof(replacement));
+  });
+  EXPECT_EQ(deregister.wait_for(5s), std::future_status::ready)
+      << "the bound did not release deregistration while the callback was still blocked";
+  EXPECT_EQ(TestHook_DeregisterTimeouts(), before + 1);
+  {
+    std::lock_guard<std::mutex> lock(g_gateMutex);
+    g_releaseOriginal = true;
+  }
+  g_gate.notify_all();
+  callbackThread.join();
+  TestHook_SetDeregisterWaitMs(30000);
+  TestHook_CloseResourceOverrides();
+}
+
 }  // namespace

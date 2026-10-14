@@ -5,6 +5,8 @@
 #ifdef NEVR_TEST_HOOKS
 void TestHook_InitResourceOverrides(void (*original)(void*));
 void TestHook_SetOriginal(void (*original)(void*));
+void TestHook_SetDeregisterWaitMs(unsigned ms);
+unsigned long long TestHook_DeregisterTimeouts();
 void TestHook_RunResourceCallback(void* callback_data);
 void TestHook_CloseResourceOverrides();
 #endif
