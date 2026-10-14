@@ -23,7 +23,7 @@ Commit `@COMMIT@`.
 ## What to test
 - Sign in (the device-code prompt on first run), reach the lobby, see your friends.
 - Invite a friend and join a party; mute and ghost toggles.
-- Leave and re-enter a match; voice chat (Windows: the game's own microphone path).
+- Leave and re-enter a match; voice chat (Windows: the runtime's microphone provider picks your headset's microphone first; the log's `[NEVR.MIC] capture device:` line names the one it used).
 - Report anything odd with the newest log file (see below).
 
 ## Install and uninstall
