@@ -122,4 +122,45 @@ TEST(ResourceOverride, ReentrantDeregistrationFailsClosed) {
               ::testing::ExitedWithCode(static_cast<int>(0xE0000478u)), ".*");
 }
 
+void NoopOriginal(void*) {}
+
+void RunCallbackFor(std::uint64_t name) {
+  std::array<std::uint8_t, 0x40> resource{};
+  std::array<std::uint8_t, 0x28> callback{};
+  void* resourcePtr = resource.data();
+  std::memcpy(resource.data() + 0x28, &kType, sizeof(kType));
+  std::memcpy(resource.data() + 0x38, &name, sizeof(name));
+  std::memcpy(callback.data() + 0x08, &resourcePtr, sizeof(resourcePtr));
+  TestHook_RunResourceCallback(callback.data());
+}
+
+TEST(ResourceOverride, ShutdownReportsEveryOverrideTheGameNeverRequested) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  static char first[] = "first";
+  static char second[] = "second";
+  RegisterResourceOverride(kType, kName, first, sizeof(first), "first");
+  RegisterResourceOverride(kType, kName + 2, second, sizeof(second), "second");
+  RunCallbackFor(kName);  // only "first" is ever requested
+
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 2u);
+  EXPECT_EQ(report.never_applied, 1u) << "the never-requested override must be counted";
+  EXPECT_TRUE(report.hook_installed) << "with the hook live the registry is kept (module pinned)";
+  TestHook_CloseResourceOverrides();
+}
+
+TEST(ResourceOverride, ShutdownWithNoHookReleasesTheRegistry) {
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  static char only[] = "only";
+  RegisterResourceOverride(kType, kName, only, sizeof(only), "only");
+  TestHook_SetOriginal(nullptr);  // the hook never installed
+
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 1u);
+  EXPECT_EQ(report.never_applied, 1u);
+  EXPECT_FALSE(report.hook_installed);
+  // The registry was released: a second shutdown has nothing to report.
+  EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
 }  // namespace

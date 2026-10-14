@@ -442,6 +442,41 @@ void ResetResourceOverrides() {
     }
 }
 
+ResourceOverrideShutdownReport ShutdownResourceOverride() {
+    ResourceOverrideShutdownReport report = {};
+    std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> released;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return report;
+        report.registered = g_overrides->size();
+        report.hook_installed = g_orig != nullptr;
+        for (const auto& ovr : *g_overrides) {
+            if (ovr->applied) continue;
+            ++report.never_applied;
+            // A registered-but-never-matched override (wrong hash, or the expected resource genuinely never
+            // loaded this session) must not read the same as one that worked.
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was never requested "
+                "this session",
+                ovr->label, static_cast<unsigned long long>(ovr->name_hash));
+        }
+        // With the hook live the module is pinned and a callback may be running: keep the registry. With no
+        // hook nothing can reach the buffers, so release them.
+        if (!report.hook_installed) released = std::move(g_overrides);
+    }
+    if (released) {
+        for (const auto& ovr : *released) {
+            if (ovr->owned && ovr->data) VirtualFree(const_cast<void*>(ovr->data), 0, MEM_RELEASE);
+        }
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] shutdown complete overrides_registered=%llu overrides_never_applied=%llu hook_installed=%s "
+        "registry_released=%s",
+        static_cast<unsigned long long>(report.registered), static_cast<unsigned long long>(report.never_applied),
+        report.hook_installed ? "true" : "false", report.hook_installed ? "false" : "true");
+    return report;
+}
+
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
     std::unique_lock<std::mutex> lock(g_overrides_mutex);
     if (!g_overrides) return;
@@ -519,6 +554,11 @@ void NEVR_DeregisterResourceOverrides(const void* data_start,
 void TestHook_InitResourceOverrides(void (*original)(void*)) {
     std::lock_guard<std::mutex> lock(g_overrides_mutex);
     g_overrides = std::make_unique<std::vector<std::shared_ptr<ResourceOverride>>>();
+    g_orig = original;
+}
+
+void TestHook_SetOriginal(void (*original)(void*)) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
     g_orig = original;
 }
 

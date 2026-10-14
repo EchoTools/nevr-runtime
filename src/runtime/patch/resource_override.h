@@ -4,9 +4,22 @@
 
 #ifdef NEVR_TEST_HOOKS
 void TestHook_InitResourceOverrides(void (*original)(void*));
+void TestHook_SetOriginal(void (*original)(void*));
 void TestHook_RunResourceCallback(void* callback_data);
 void TestHook_CloseResourceOverrides();
 #endif
+
+/// What ShutdownResourceOverride found, returned so the figures are testable as well as logged.
+struct ResourceOverrideShutdownReport {
+    uint64_t registered;
+    uint64_t never_applied;
+    bool hook_installed;
+};
+
+/// Reports the registry at dynamic unload: one warning per override the game never requested, and a summary
+/// line. When the hook is live the module is pinned (it cannot be unloaded), so the registry is kept; when it
+/// never installed, owned buffers are freed and the registry released.
+ResourceOverrideShutdownReport ShutdownResourceOverride();
 
 /// Install the resource override hook on AsyncResourceIOCallback.
 /// Registers built-in overrides (splash texture) and scans _overrides/
