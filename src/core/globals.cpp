@@ -37,5 +37,3 @@ FLOAT g_arenaCelebrationTime = 0.0f;
 FLOAT g_arenaMercyScore = 0.0f;
 /// Whether the -noovr flag was passed (or implied by -server).
 BOOL g_noOvr = FALSE;
-/// Set to 1 by POSIX signal handler to request graceful shutdown.
-volatile sig_atomic_t g_shutdownRequested = 0;

@@ -216,7 +216,10 @@ void InstallJsonProbe(std::uint64_t virtualAddress, const std::array<std::uint8_
         enableStatus = MH_EnableHook(target);
         return enableStatus == MH_OK;
       });
-  if (enabled) return;
+  if (enabled) {
+    nevr_hook_guard::Record(target, probeName);
+    return;
+  }
   if (created) {
     removeStatus = MH_RemoveHook(target);
     if (removeStatus == MH_OK) original.store(nullptr, std::memory_order_release);

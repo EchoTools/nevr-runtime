@@ -38,6 +38,7 @@
 #include "quest/social/social_frames.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
+#include "runtime/compat/status_redirect_check.h"
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -418,6 +419,7 @@ class ProductionSteps final : public Steps {
       hooks.log = &SelfCheckLog;
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
+      nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
                                  &MatchmakingReloadProbe});
