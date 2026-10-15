@@ -102,6 +102,12 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
         Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
             s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, pathToUse);
+      } else {
+        // The old fixed buffer truncated silently; falling through unfixed must not be silent either.
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] malformed NT path NOT fixed: current directory unavailable or longer than MAX_PATH "
+            "(GetCurrentDirectoryW returned %lu, error %lu); passing '%ls' through unchanged",
+            static_cast<unsigned long>(length), static_cast<unsigned long>(GetLastError()), lpPathName);
       }
     }
 
