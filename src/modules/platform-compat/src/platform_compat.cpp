@@ -18,6 +18,7 @@
 #include <schannel.h>
 #include <security.h>
 #include <sspi.h>
+#include <string>
 
 #include "extension/module_interface.h"
 #include "core/hooking.h"
@@ -44,14 +45,17 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
     _In_opt_ void* pvGetKeyArgument, _Out_ PCredHandle phCredential,
     _Out_opt_ PTimeStamp ptsExpiry) {
 
+  SCHANNEL_CRED modernizedCred = {};
+  void* forwardedAuthData = pAuthData;
   if (pszPackage != NULL && lstrcmpW(pszPackage, UNISP_NAME_W) == 0 &&
       (fCredentialUse & SECPKG_CRED_OUTBOUND) != 0) {
     if (nevr::IsLegacySchannelCred(pAuthData)) {
-      SCHANNEL_CRED* schannelCred = (SCHANNEL_CRED*)pAuthData;
-      schannelCred->grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | 0x00002000;
-      schannelCred->dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
-      schannelCred->dwFlags &= ~SCH_CRED_MANUAL_CRED_VALIDATION;
-      schannelCred->dwFlags |= SCH_USE_STRONG_CRYPTO;
+      modernizedCred = *static_cast<const SCHANNEL_CRED*>(pAuthData);
+      modernizedCred.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | 0x00002000;
+      modernizedCred.dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
+      modernizedCred.dwFlags &= ~SCH_CRED_MANUAL_CRED_VALIDATION;
+      modernizedCred.dwFlags |= SCH_USE_STRONG_CRYPTO;
+      forwardedAuthData = &modernizedCred;
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support");
     } else if (pAuthData != NULL) {
@@ -66,7 +70,7 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
 
   if (OriginalAcquireCredentialsHandleW != NULL) {
     return OriginalAcquireCredentialsHandleW(
-        pszPrincipal, pszPackage, fCredentialUse, pvLogonId, pAuthData,
+        pszPrincipal, pszPackage, fCredentialUse, pvLogonId, forwardedAuthData,
         pGetKeyFn, pvGetKeyArgument, phCredential, ptsExpiry);
   }
   return SEC_E_UNSUPPORTED_FUNCTION;
@@ -81,22 +85,30 @@ static CreateDirectoryWFunc OriginalCreateDirectoryW = nullptr;
 
 BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
   if (lpPathName && wcsstr(lpPathName, L"_temp")) {
-    wchar_t fixedPath[512];
+    std::wstring fixedPath;
     const wchar_t* pathToUse = lpPathName;
 
     if (wcsncmp(lpPathName, L"\\\\?\\", 4) == 0 && lpPathName[4] != L'\\' && lpPathName[5] != L':') {
-      WCHAR currentDir[MAX_PATH];
-      GetCurrentDirectoryW(MAX_PATH, currentDir);
-      _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
-      pathToUse = fixedPath;
-      // This bug has no counterpart on native Windows —
-      // nevr_system_info::Get().IsWine() makes that explicit
-      // instead of leaving the branch looking like an unexplained ad hoc fix,
-      // and flags the anomaly loudly if it's ever hit off Wine.
-      static const bool s_isWine = nevr_system_info::Get().IsWine();
-      Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
-          s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, fixedPath);
+      WCHAR currentDir[MAX_PATH] = {};
+      const DWORD length = GetCurrentDirectoryW(MAX_PATH, currentDir);
+      if (length > 0 && length < MAX_PATH) {
+        fixedPath = std::wstring(currentDir) + L"\\" + (lpPathName + 4);
+        pathToUse = fixedPath.c_str();
+        // This bug has no counterpart on native Windows —
+        // nevr_system_info::Get().IsWine() makes that explicit
+        // instead of leaving the branch looking like an unexplained ad hoc fix,
+        // and flags the anomaly loudly if it's ever hit off Wine.
+        static const bool s_isWine = nevr_system_info::Get().IsWine();
+        Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
+            s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, pathToUse);
+      } else {
+        // The old fixed buffer truncated silently; falling through unfixed must not be silent either.
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] malformed NT path NOT fixed: current directory unavailable or longer than MAX_PATH "
+            "(GetCurrentDirectoryW returned %lu, error %lu); passing '%ls' through unchanged",
+            static_cast<unsigned long>(length), static_cast<unsigned long>(GetLastError()), lpPathName);
+      }
     }
 
     BOOL result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
@@ -109,12 +121,11 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
         return TRUE;
       } else if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Parent path missing for '%ls', creating recursively", pathToUse);
-        wchar_t parentPath[512];
-        wcsncpy(parentPath, pathToUse, 512);
-        wchar_t* lastSlash = wcsrchr(parentPath, L'\\');
-        if (lastSlash && lastSlash != parentPath) {
-          *lastSlash = L'\0';
-          CreateDirectoryWHook(parentPath, lpSecurityAttributes);
+        std::wstring parentPath(pathToUse);
+        const size_t lastSlash = parentPath.find_last_of(L'\\');
+        if (lastSlash != std::wstring::npos && lastSlash != 0) {
+          parentPath.resize(lastSlash);
+          CreateDirectoryWHook(parentPath.c_str(), lpSecurityAttributes);
         }
         result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
         if (result || GetLastError() == ERROR_ALREADY_EXISTS) {
