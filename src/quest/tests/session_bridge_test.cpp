@@ -467,6 +467,12 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   const std::string path = PathOf(bridge.LocalUri());
   Client config(port), login(port);
   QCHECK(config.Upgrade(path));
+  // The role of a connection is its order at the router, and each connection's thread flushes the 101 BEFORE it
+  // tells the router the game opened. Without this wait the login socket's thread can reach the router first,
+  // the sockets swap roles, and the 1011 goes to the "config" socket (#565). The router's connection count is
+  // the proof the first connection has been counted (a config socket with no account is closed again at once,
+  // so a count of live games is not).
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 1; }));
   QCHECK(login.Upgrade(path));
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
   account.Set("", nevr_session_router::LoginGate::Refused);
