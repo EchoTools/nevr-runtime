@@ -288,6 +288,58 @@ TEST_F(SelfCheck, PreLoginQueueIsBoundedAndReportsWhatItDropped) {
   EXPECT_TRUE(sawDropped);
 }
 
+TEST_F(SelfCheck, ResultsUnsentWhenASessionEndsAreDroppedAndCounted) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  g_sent.accept = false;  // the connection is gone: nothing can be delivered
+  for (int i = 0; i < 3; ++i) nevr_self_check::Report(id, "r" + std::to_string(i), true);
+  nevr_self_check::Flush();
+  nevr_self_check::SetLoggedIn(false);  // the session ends with 3 results unsent
+  g_sent.accept = true;
+  nevr_self_check::Flush();
+  EXPECT_TRUE(g_sent.frames.empty()) << "nothing is sent while no session is logged in";
+
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 2});
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_EQ(results.size(), 1u) << "only the count of the loss arrives, none of the old results";
+  EXPECT_EQ(results[0]["check"], "self_check");
+  ASSERT_TRUE(results[0].contains("dropped_at_session_end"));
+  EXPECT_EQ(results[0]["dropped_at_session_end"].get<int>(), 3);
+  EXPECT_EQ(results[0]["userid"], "OVR-ORG-2");  // attributed to the session that reports it
+}
+
+TEST_F(SelfCheck, TheDropCountIsReportedOnceAndNothingIsStored) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  g_sent.accept = false;
+  nevr_self_check::Report(id, "a", true);
+  nevr_self_check::Report(id, "b", true);
+  nevr_self_check::SetLoggedIn(false);
+  g_sent.accept = true;
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  nevr_self_check::Flush();
+  ASSERT_EQ(g_sent.frames.size(), 1u);
+  const auto first = AllSent();
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(first[0]["dropped_at_session_end"].get<int>(), 2);
+  nevr_self_check::SetLoggedIn(false);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  EXPECT_EQ(g_sent.frames.size(), 1u) << "a later session carries neither the results nor the count again";
+}
+
+TEST_F(SelfCheck, ResultsQueuedBeforeTheFirstLoginSurviveIt) {
+  const auto id = nevr_self_check::Register({"drop_probe", "ok", nullptr});
+  nevr_self_check::Report(id, "early", true);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId{4, 1});
+  nevr_self_check::Flush();
+  const auto results = AllSent();
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]["observed"], "early");
+}
+
 namespace {
 int g_probeCalls = 0;
 bool CountingProbe(nevr_self_check::Observation* out) {
