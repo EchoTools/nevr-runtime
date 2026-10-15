@@ -107,7 +107,10 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] malformed NT path NOT fixed: current directory unavailable or longer than MAX_PATH "
             "(GetCurrentDirectoryW returned %lu, error %lu); passing '%ls' through unchanged",
-            static_cast<unsigned long>(length), static_cast<unsigned long>(GetLastError()), lpPathName);
+            static_cast<unsigned long>(length),
+            // length 0 is a failure with a real error; >= MAX_PATH is not an error, and GetLastError() would be
+            // whatever an earlier call left behind.
+            static_cast<unsigned long>(length == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER), lpPathName);
       }
     }
 

@@ -1366,21 +1366,20 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   auth.refresh_token_expiry = 2100000000U;
   auth.user_id = "account-17";
   auth.username = "cached-player";
-  if (nevr_system_info::Get().IsWine()) {
-    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-    EXPECT_FALSE(std::filesystem::exists(location.credentialsPath));
-    EXPECT_EQ(Read(yamlPath), yamlContents);
-    return;
-  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_FALSE(std::filesystem::exists(location.credentialsPath + ".tmp")) << "the temp file is renamed away";
 
   nlohmann::json expected = {{"refresh_token", "refresh-token-v1"},
                              {"refresh_token_expiry", 2100000000U},
                              {"user_id", "account-17"},
                              {"username", "cached-player"}};
-  std::ifstream saved(location.credentialsPath, std::ios::binary);
-  ASSERT_TRUE(saved.is_open());
-  const nlohmann::json actual = nlohmann::json::parse(saved);
+  nlohmann::json actual;
+  {
+    // Closed before the next save: a handle without delete sharing blocks the rename, as it would on Windows.
+    std::ifstream saved(location.credentialsPath, std::ios::binary);
+    ASSERT_TRUE(saved.is_open());
+    actual = nlohmann::json::parse(saved);
+  }
   EXPECT_EQ(actual, expected);
   EXPECT_FALSE(actual.contains("token"));
   EXPECT_FALSE(actual.contains("token_expiry"));
@@ -1400,24 +1399,119 @@ TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutCh
   EXPECT_EQ(Read(yamlPath), yamlContents);
 }
 
-TEST_F(CredentialsDirFixture, WineRefusesCacheWriteBeforeCreatingFile) {
-  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+namespace {
+CachedAuthToken* g_midWriteObserved = nullptr;
+const std::string* g_midWriteExeDir = nullptr;
+void ObserveCacheDuringWrite() {
+  if (g_midWriteObserved != nullptr && g_midWriteExeDir != nullptr) {
+    *g_midWriteObserved = LoadCachedAuthToken(*g_midWriteExeDir);
+  }
+}
+
+CachedAuthToken TokenWith(const std::string& refresh) {
   CachedAuthToken auth;
-  auth.refresh_token = "protected-refresh-token";
+  auth.refresh_token = refresh;
   auth.refresh_token_expiry = 2100000000U;
+  auth.user_id = "account-17";
+  return auth;
+}
+}  // namespace
+
+// #562: under Wine the Windows DACL calls do not set the host mode (measured), so the file is protected with
+// the host's chmod and the mode is read back; the token is written only after that.
+TEST_F(CredentialsDirFixture, WineCacheWriteSetsAndVerifiesHostMode600) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
   const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
   std::filesystem::create_directories(path.parent_path());
-  HANDLE changes = FindFirstChangeNotificationA(path.parent_path().string().c_str(), FALSE,
-      FILE_NOTIFY_CHANGE_FILE_NAME);
-  ASSERT_NE(changes, INVALID_HANDLE_VALUE);
-  EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_EQ(WaitForSingleObject(changes, 50), WAIT_TIMEOUT);
-  FindCloseChangeNotification(changes);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  ASSERT_TRUE(SaveAuthToken(TokenWith("wine-refresh"), exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "wine-refresh");
+  EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
 
-  Write(path, "existing-cache-content");
-  EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-  EXPECT_EQ(Read(path), "existing-cache-content");
+// A crash can leave a temp file with a wrong mode and stale bytes: it is re-protected before being reused.
+TEST_F(CredentialsDirFixture, AStaleTempFileDoesNotWeakenTheProtection) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  Write(path.string() + ".tmp", "stale-bytes-from-a-crashed-write");
+  ASSERT_TRUE(SaveAuthToken(TokenWith("after-crash"), exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "after-crash");
+  EXPECT_EQ(nevr_credential_write::WineHostMode(path.string()), "600");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+// A leftover, read-only result file holding "600" must never be read as this call's answer: the helper's
+// result path must not exist beforehand, and nothing is written when it does.
+TEST_F(CredentialsDirFixture, AStaleReadOnlyResultFileWritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  const std::string stale = path.string() + ".stale.mode";
+  Write(stale, "600\n");
+  ASSERT_NE(SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_READONLY), 0);
+
+  nevr_credential_write::g_forceResultPath = stale;
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forceResultPath.clear();
+  SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path)) << "a token landed behind a stale 600";
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+  EXPECT_EQ(Read(stale), "600\n") << "the stale file was left as found";
+}
+
+// A host chmod that "succeeds" but leaves a mode that is not 600 must stop the write before a byte lands.
+TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+// #563: a write that fails part-way must leave the previous token exactly as it was.
+TEST_F(CredentialsDirFixture, AFailedWriteLeavesTheOldTokenIntact) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh-token"), exe_dir_));
+  const std::string before = Read(path);
+  ASSERT_FALSE(before.empty());
+
+  nevr_credential_write::g_failAfterBytes = 20;  // inside the JSON, after the first chunks are on disk
+  const bool saved = SaveAuthToken(TokenWith("new-refresh-token-that-must-not-land"), exe_dir_);
+  nevr_credential_write::g_failAfterBytes = SIZE_MAX;
+
+  EXPECT_FALSE(saved);
+  EXPECT_EQ(Read(path), before) << "the failed write changed the cache";
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "old-refresh-token");
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp")) << "the temp file is removed on failure";
+}
+
+// #563: a reader opening the cache while a write is in flight is never blocked and never sees a partial file.
+TEST_F(CredentialsDirFixture, AReaderDuringAWriteSeesTheOldTokenNotABlockedOrPartialFile) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  ASSERT_TRUE(SaveAuthToken(TokenWith("old-refresh"), exe_dir_));
+
+  CachedAuthToken observed;
+  g_midWriteObserved = &observed;
+  g_midWriteExeDir = &exe_dir_;
+  nevr_credential_write::g_midWriteHook = &ObserveCacheDuringWrite;
+  const bool saved = SaveAuthToken(TokenWith("new-refresh"), exe_dir_);
+  nevr_credential_write::g_midWriteHook = nullptr;
+  g_midWriteObserved = nullptr;
+  g_midWriteExeDir = nullptr;
+
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(observed.refresh_token, "old-refresh") << "the reader met a locked or half-written cache";
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "new-refresh");
 }
 
 TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
@@ -1434,12 +1528,6 @@ TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
   CachedAuthToken auth;
   auth.refresh_token = "rotated-near";
   auth.refresh_token_expiry = 2100000000U;
-  if (nevr_system_info::Get().IsWine()) {
-    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-    EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near-existing");
-    EXPECT_EQ(Read(fartherYaml), fartherContents);
-    return;
-  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "rotated-near");
   EXPECT_EQ(Read(fartherYaml), fartherContents);
@@ -1470,11 +1558,6 @@ TEST_F(CredentialsDirFixture, FirstYamlDirectoryInSuffixOrderWinsWhenNoCredentia
   CachedAuthToken auth;
   auth.refresh_token = "near-yaml-refresh";
   auth.refresh_token_expiry = 2100000000U;
-  if (nevr_system_info::Get().IsWine()) {
-    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-    EXPECT_FALSE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
-    return;
-  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_TRUE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
   EXPECT_FALSE(std::filesystem::exists(fartherYaml.parent_path() / ".credentials.json"));
@@ -1508,12 +1591,6 @@ TEST_F(CredentialsDirFixture, MalformedSelectedCredentialsDoNotFallThroughAndSav
   CachedAuthToken auth;
   auth.refresh_token = "repaired-selected";
   auth.refresh_token_expiry = 2100000000U;
-  if (nevr_system_info::Get().IsWine()) {
-    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-    EXPECT_EQ(Read(selected), "{ malformed");
-    EXPECT_EQ(Read(farther), fartherContents);
-    return;
-  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "repaired-selected");
   EXPECT_EQ(Read(farther), fartherContents);
@@ -1527,11 +1604,6 @@ TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
   CachedAuthToken auth;
   auth.refresh_token = "fallback-refresh";
   auth.refresh_token_expiry = 2100000000U;
-  if (nevr_system_info::Get().IsWine()) {
-    EXPECT_FALSE(SaveAuthToken(auth, exe_dir_));
-    EXPECT_FALSE(std::filesystem::exists(fallback));
-    return;
-  }
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
   EXPECT_TRUE(std::filesystem::exists(fallback));
