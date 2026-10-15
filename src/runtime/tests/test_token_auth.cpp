@@ -1440,6 +1440,42 @@ TEST_F(CredentialsDirFixture, AStaleTempFileDoesNotWeakenTheProtection) {
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
 }
 
+// A leftover, read-only result file holding "600" must never be read as this call's answer: the helper's
+// result path must not exist beforehand, and nothing is written when it does.
+TEST_F(CredentialsDirFixture, AStaleReadOnlyResultFileWritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  const std::string stale = path.string() + ".stale.mode";
+  Write(stale, "600\n");
+  ASSERT_NE(SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_READONLY), 0);
+
+  nevr_credential_write::g_forceResultPath = stale;
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forceResultPath.clear();
+  SetFileAttributesA(stale.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path)) << "a token landed behind a stale 600";
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+  EXPECT_EQ(Read(stale), "600\n") << "the stale file was left as found";
+}
+
+// A host chmod that "succeeds" but leaves a mode that is not 600 must stop the write before a byte lands.
+TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+
+  EXPECT_FALSE(saved);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
 // #563: a write that fails part-way must leave the previous token exactly as it was.
 TEST_F(CredentialsDirFixture, AFailedWriteLeavesTheOldTokenIntact) {
   const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";

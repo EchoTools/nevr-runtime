@@ -25,6 +25,7 @@
 #endif
 #include <windows.h>
 #include <aclapi.h>
+#include <atomic>
 #include <fstream>
 #include <vector>
 #else
@@ -43,6 +44,11 @@ namespace nevr_credential_write {
 // blocked while a write is in flight).
 inline std::size_t g_failAfterBytes = SIZE_MAX;
 inline void (*g_midWriteHook)() = nullptr;
+// Wine: use this (Windows) path for the helper's result file, and report this mode from the host helper in
+// place of what stat printed (empty = off). They stand in for a leftover result file and a chmod that
+// "succeeds" without producing 600.
+inline std::string g_forceResultPath;
+inline std::string g_forcedHostMode;
 #endif
 
 // Bytes written per call: small enough that the injection point above lands inside a short token file.
@@ -94,13 +100,23 @@ inline bool WineHostScript(const std::string& windowsPath, const char* script, s
   }
   // The script redirects its own stdout into the result file: Wine does not always hand a redirected std
   // handle to a Unix child (the child got /dev/null under the test binary, measured), so none is relied on.
-  const std::string resultPath = windowsPath + ".mode";
+  // The result path is unique to this call and must not exist: a leftover "600" must never be readable as
+  // this call's answer, so an existing file (or one that cannot be removed afterwards) fails closed.
+  static std::atomic<unsigned> sequence{0};
+  std::string resultPath = windowsPath + "." + std::to_string(GetCurrentProcessId()) + "." +
+                           std::to_string(sequence.fetch_add(1)) + ".mode";
+#ifdef NEVR_TEST_HOOKS
+  if (!g_forceResultPath.empty()) resultPath = g_forceResultPath;
+#endif
+  if (GetFileAttributesA(resultPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    *why = "the helper result file already exists";
+    return false;
+  }
   std::string hostResult;
   if (!WineHostPath(resultPath, &hostResult)) {
     *why = "no safe host path for the helper result file";
     return false;
   }
-  DeleteFileA(resultPath.c_str());
 
   std::string command = "sh -c \"{ ";
   command += script;
@@ -132,6 +148,10 @@ inline bool WineHostScript(const std::string& windowsPath, const char* script, s
     }
   }
   DeleteFileA(resultPath.c_str());
+  if (GetFileAttributesA(resultPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    *why = "the helper result file could not be removed";
+    return false;
+  }
   if (!got) *why = "the host helper printed nothing within 3 s";
   return got;
 }
@@ -142,16 +162,30 @@ inline std::string WineHostMode(const std::string& windowsPath) {
   return WineHostScript(windowsPath, "stat -c %a -- \\\"$1\\\"", &mode, &why) ? mode : std::string();
 }
 
-// chmod 600 the host file, then require the mode read back to be exactly 600.
-inline bool WineProtectHostFile(const std::string& windowsPath, std::string* why) {
+// The mode a helper reported, after the test seam (a forced value stands in for what stat printed).
+inline std::string ReportedMode(std::string mode) {
+#ifdef NEVR_TEST_HOOKS
+  if (!g_forcedHostMode.empty()) mode = g_forcedHostMode;
+#endif
+  return mode;
+}
+inline bool ModeIs600(const std::string& mode) { return ReportedMode(mode) == "600"; }
+
+// Creates the temp file ON THE HOST, born mode 600: the helper's umask is 077 and noclobber makes it fail
+// if the name already exists, so there is no moment at which the inode has a wider mode for another local
+// user to open and keep. The mode is read back and must be exactly 600. The caller removes any stale temp
+// first and opens the result with OPEN_EXISTING.
+inline bool WineCreateProtectedTemp(const std::string& windowsPath, std::string* why) {
   std::string mode;
   std::string detail;
-  if (!WineHostScript(windowsPath, "chmod 600 -- \\\"$1\\\" && stat -c %a -- \\\"$1\\\"", &mode, &detail)) {
-    *why = "the host chmod/stat helper failed: " + detail;
+  if (!WineHostScript(windowsPath,
+                      "umask 077 && set -C && : > \\\"$1\\\" && chmod 600 -- \\\"$1\\\" && stat -c %a -- \\\"$1\\\"",
+                      &mode, &detail)) {
+    *why = "the host helper could not create the temp file: " + detail;
     return false;
   }
-  if (mode != "600") {
-    *why = "host mode is " + mode + ", not 600";
+  if (!ModeIs600(mode)) {
+    *why = "host mode is " + ReportedMode(mode) + ", not 600";
     return false;
   }
   return true;
@@ -248,41 +282,41 @@ inline bool WriteProtectedTemp(const std::string& tempPath, const std::string& d
     if (!PrepareNativeProtection(&protection, why)) return false;
     attributes = &protection.attributes;
   }
-  // Readers may open the temp file; the cache itself is only ever replaced by rename.
-  HANDLE file = CreateFileA(tempPath.c_str(),
-                            GENERIC_WRITE | (isWine ? 0 : (WRITE_DAC | READ_CONTROL)), FILE_SHARE_READ, attributes,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    *why = "cannot create the temp file: " + std::to_string(GetLastError());
-    return false;
-  }
-  bool protectedOk = false;
+  HANDLE file = INVALID_HANDLE_VALUE;
   if (isWine) {
-    // The file exists and is empty: protect it on the host before a byte of the token goes in. The handle is
-    // closed while the host helper runs (it printed nothing with the file held open, measured) and the file
-    // is reopened with TRUNCATE_EXISTING, which keeps the host inode and so the mode.
-    CloseHandle(file);
-    protectedOk = WineProtectHostFile(tempPath, why);
-    if (protectedOk) {
-      file = CreateFileA(tempPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, TRUNCATE_EXISTING,
-                         FILE_ATTRIBUTE_HIDDEN, nullptr);
-      if (file == INVALID_HANDLE_VALUE) {
-        *why = "cannot reopen the protected temp file: " + std::to_string(GetLastError());
-        DeleteFileA(tempPath.c_str());
-        return false;
-      }
-    } else {
+    // A stale temp (crash leftover) is removed, never reused: its inode may have been opened by someone
+    // else. The helper then creates the file new, already 600; this process only opens what exists.
+    SetFileAttributesA(tempPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+    DeleteFileA(tempPath.c_str());
+    if (GetFileAttributesA(tempPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+      *why = "a stale temp file could not be removed";
+      return false;
+    }
+    if (!WineCreateProtectedTemp(tempPath, why)) {
+      DeleteFileA(tempPath.c_str());
+      return false;
+    }
+    file = CreateFileA(tempPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      *why = "cannot open the protected temp file: " + std::to_string(GetLastError());
       DeleteFileA(tempPath.c_str());
       return false;
     }
   } else {
-    // CREATE_ALWAYS keeps an existing temp file's old DACL (a crash leftover): set it again and read it back.
-    protectedOk = ApplyAndVerifyNativeDacl(file, &protection, why);
-  }
-  if (!protectedOk) {
-    CloseHandle(file);
-    DeleteFileA(tempPath.c_str());
-    return false;
+    // Readers may open the temp file; the cache itself is only ever replaced by rename.
+    file = CreateFileA(tempPath.c_str(), GENERIC_WRITE | WRITE_DAC | READ_CONTROL, FILE_SHARE_READ,
+                       attributes, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      *why = "cannot create the temp file: " + std::to_string(GetLastError());
+      return false;
+    }
+    // CREATE_ALWAYS keeps an existing temp file's old DACL (a crash leftover): set it again, read it back.
+    if (!ApplyAndVerifyNativeDacl(file, &protection, why)) {
+      CloseHandle(file);
+      DeleteFileA(tempPath.c_str());
+      return false;
+    }
   }
 
   bool written = true;
@@ -326,20 +360,31 @@ inline bool WriteProtectedTemp(const std::string& tempPath, const std::string& d
     DeleteFileA(tempPath.c_str());
     return false;
   }
+  if (isWine) {
+    // Written and closed: the mode is read back once more, immediately before the replace.
+    std::string mode, detail;
+    if (!WineHostScript(tempPath, "stat -c %a -- \\\"$1\\\"", &mode, &detail) || !ModeIs600(mode)) {
+      *why = "host mode before the replace is not 600: " + (detail.empty() ? mode : detail);
+      DeleteFileA(tempPath.c_str());
+      return false;
+    }
+  }
   return true;
 }
 
 // Atomically replaces the cache with the temp file. The old file is untouched if this fails.
 inline bool ReplaceCache(const std::string& tempPath, const std::string& finalPath, std::string* why) {
-  // A cache an earlier build left HIDDEN is refused by the replace with access denied (measured under Wine).
+  // A cache an earlier build left HIDDEN/READONLY is refused by the replace with access denied (measured
+  // under Wine): clear the attributes for the move and put them back if the move fails.
   const DWORD existing = GetFileAttributesA(finalPath.c_str());
-  if (existing != INVALID_FILE_ATTRIBUTES && (existing & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY)) != 0) {
-    SetFileAttributesA(finalPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-  }
+  const bool cleared = existing != INVALID_FILE_ATTRIBUTES &&
+                       (existing & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY)) != 0;
+  if (cleared) SetFileAttributesA(finalPath.c_str(), FILE_ATTRIBUTE_NORMAL);
   if (MoveFileExA(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     return true;
   }
   *why = "cannot replace the cache: " + std::to_string(GetLastError());
+  if (cleared) SetFileAttributesA(finalPath.c_str(), existing);
   DeleteFileA(tempPath.c_str());
   return false;
 }
@@ -348,13 +393,15 @@ inline bool ReplaceCache(const std::string& tempPath, const std::string& finalPa
 
 inline bool WriteProtectedTemp(const std::string& tempPath, const std::string& data, bool /*isWine*/,
                                std::string* why) {
-  // 0600 at creation: the file is never readable by anyone else, not even briefly.
-  const int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  // A stale temp (crash leftover) is removed, never reused or followed: the file is created new with
+  // O_EXCL|O_NOFOLLOW and 0600 at creation, so it is never readable by anyone else, not even briefly.
+  ::unlink(tempPath.c_str());
+  const int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
   if (fd < 0) {
     *why = std::string("cannot create the temp file: ") + std::to_string(errno);
     return false;
   }
-  // An existing temp file keeps its old mode through O_CREAT; make the mode what it must be.
+  // The creation mode is narrowed by the umask only; state the mode outright and fail if it cannot be set.
   if (::fchmod(fd, 0600) != 0) {
     *why = std::string("fchmod failed: ") + std::to_string(errno);
     ::close(fd);
@@ -401,7 +448,19 @@ inline bool WriteProtectedTemp(const std::string& tempPath, const std::string& d
 }
 
 inline bool ReplaceCache(const std::string& tempPath, const std::string& finalPath, std::string* why) {
-  if (::rename(tempPath.c_str(), finalPath.c_str()) == 0) return true;
+  if (::rename(tempPath.c_str(), finalPath.c_str()) == 0) {
+    // Make the rename itself durable: fsync the directory. Best effort; the cache is already in place.
+    const std::size_t slash = finalPath.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? "." : (slash == 0 ? "/" : finalPath.substr(0, slash));
+    const int dirFd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dirFd >= 0) {
+      if (::fsync(dirFd) != 0) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] directory fsync after the credential replace failed: %d", errno);
+      }
+      ::close(dirFd);
+    }
+    return true;
+  }
   *why = std::string("cannot replace the cache: ") + std::to_string(errno);
   ::unlink(tempPath.c_str());
   return false;
