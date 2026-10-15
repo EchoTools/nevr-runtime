@@ -29,6 +29,7 @@
 #endif
 
 #include "core/auth_token_model.h"
+#include "core/credential_write.h"
 
 // Get the directory containing the main executable.
 // All _local/ paths are resolved relative to this.
@@ -128,19 +129,6 @@ inline CachedAuthToken LoadCachedAuthToken() { return LoadCachedAuthToken(GetExe
 inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir) {
     if (auth.refresh_token.empty()) return false;
 
-#ifdef _WIN32
-    // Wine's Windows ACL readback does not prove the host file's Unix mode.
-    // No token bytes may be written until host permissions can be enforced.
-    if (nevr_system_info::Get().IsWine()) {
-        static std::atomic_flag warned = ATOMIC_FLAG_INIT;
-        if (!warned.test_and_set()) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.AUTH] Credential cache persistence disabled under Wine: host permissions cannot be verified");
-        }
-        return false;
-    }
-#endif
-
     const CredentialCacheLocation location = SelectCredentialCacheLocation(exeDir);
     const std::string& target_dir = location.directory;
     if (!CredentialPathExists(target_dir)) {
@@ -152,146 +140,28 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
     }
 
     const std::string& path = location.credentialsPath;
-
+    const std::string tempPath = nevr_credential_write::TempPathFor(path);
 #ifdef _WIN32
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot inspect current user token: %lu", GetLastError());
-        return false;
-    }
-    DWORD tokenBytes = 0;
-    GetTokenInformation(token, TokenUser, nullptr, 0, &tokenBytes);
-    std::vector<BYTE> tokenInfo(tokenBytes);
-    const bool haveUser = tokenBytes != 0 &&
-        GetTokenInformation(token, TokenUser, tokenInfo.data(), tokenBytes, &tokenBytes);
-    const DWORD userError = haveUser ? ERROR_SUCCESS : GetLastError();
-    CloseHandle(token);
-    if (!haveUser) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot read current user SID: %lu", userError);
-        return false;
-    }
-
-    const auto* user = reinterpret_cast<const TOKEN_USER*>(tokenInfo.data());
-    EXPLICIT_ACCESSA access = {};
-    access.grfAccessPermissions = GENERIC_ALL;
-    access.grfAccessMode = SET_ACCESS;
-    access.grfInheritance = NO_INHERITANCE;
-    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    access.Trustee.ptstrName = reinterpret_cast<LPSTR>(user->User.Sid);
-    PACL acl = nullptr;
-    const DWORD aclError = SetEntriesInAclA(1, &access, nullptr, &acl);
-    if (aclError != ERROR_SUCCESS) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot build credentials DACL: %lu", aclError);
-        return false;
-    }
-
-    SECURITY_DESCRIPTOR descriptor = {};
-    if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
-        !SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) ||
-        !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) {
-        const DWORD error = GetLastError();
-        LocalFree(acl);
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot prepare credentials security descriptor: %lu", error);
-        return false;
-    }
-    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &descriptor, FALSE};
-    HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE | WRITE_DAC | READ_CONTROL, 0, &attributes,
-        OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        const DWORD error = GetLastError();
-        LocalFree(acl);
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to open %s for writing: %lu", path.c_str(), error);
-        return false;
-    }
-    const bool newlyCreated = GetLastError() != ERROR_ALREADY_EXISTS;
-
-    // OPEN_ALWAYS does not replace an existing file's DACL. Protect it before
-    // truncating or writing, then read it back. Wine can report success here
-    // without enforcing the requested ACL on its host file.
-    const DWORD protectError = SetSecurityInfo(file, SE_FILE_OBJECT,
-        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-        nullptr, nullptr, acl, nullptr);
-    LocalFree(acl);
-    PSECURITY_DESCRIPTOR observed = nullptr;
-    PACL observedAcl = nullptr;
-    const DWORD readError = protectError == ERROR_SUCCESS
-        ? GetSecurityInfo(file, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-              nullptr, nullptr, &observedAcl, nullptr, &observed)
-        : protectError;
-    SECURITY_DESCRIPTOR_CONTROL control = 0;
-    DWORD revision = 0;
-    void* ace = nullptr;
-    const bool protectedForUser = readError == ERROR_SUCCESS && observed != nullptr &&
-        observedAcl != nullptr && GetSecurityDescriptorControl(observed, &control, &revision) &&
-        (control & SE_DACL_PROTECTED) != 0 && observedAcl->AceCount == 1 &&
-        GetAce(observedAcl, 0, &ace) &&
-        static_cast<ACE_HEADER*>(ace)->AceType == ACCESS_ALLOWED_ACE_TYPE &&
-        EqualSid(user->User.Sid, &static_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart);
-    if (observed != nullptr) LocalFree(observed);
-    if (!protectedForUser) {
-        CloseHandle(file);
-        if (newlyCreated) DeleteFileA(path.c_str());
-        if (readError == ERROR_SUCCESS) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.AUTH] User-only DACL was not preserved for %s; credentials not written",
-                path.c_str());
-        } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.AUTH] Cannot verify DACL for %s before writing: %lu",
-                path.c_str(), readError);
-        }
-        return false;
-    }
-
-    LARGE_INTEGER start = {};
-    bool written = SetFilePointerEx(file, start, nullptr, FILE_BEGIN) && SetEndOfFile(file);
-    if (written) {
-        const std::string json = SerializeCredentialsJson(auth);
-        size_t offset = 0;
-        while (offset < json.size()) {
-            const size_t remaining = json.size() - offset;
-            const DWORD count = remaining > MAXDWORD ? MAXDWORD : static_cast<DWORD>(remaining);
-            DWORD actual = 0;
-            if (!WriteFile(file, json.data() + offset, count, &actual, nullptr) || actual == 0) {
-                written = false;
-                break;
-            }
-            offset += actual;
-        }
-    }
-    const DWORD writeError = written ? ERROR_SUCCESS : GetLastError();
-    const bool closed = CloseHandle(file);
-    if (!written || !closed) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to write %s: %lu",
-            path.c_str(), written ? GetLastError() : writeError);
-        return false;
-    }
-    if (!SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN)) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.AUTH] SetFileAttributesA failed for %s: %lu — credentials file left visible",
-            path.c_str(), GetLastError());
-    }
+    const bool isWine = nevr_system_info::Get().IsWine();
 #else
-    // Set restrictive umask before creating file so it's never world-readable.
-    mode_t old_umask = umask(0177);
-    std::ofstream out(path, std::ios::trunc);
-    if (!out.is_open()) {
-        // Was a raw fprintf(stderr, ...) — Hard Stop violation (CPP-MINGW-ADDENDUM
-        // "No printf"; docs/standards/logging.md Rule 6, Log() is the single entry
-        // point). Log() is already in scope in this TU (see the includes above).
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to open %s for writing",
-            path.c_str());
-        umask(old_umask);
-        return false;
-    }
-
-    // Access token deliberately NOT written (see SerializeCredentialsJson).
-    out << SerializeCredentialsJson(auth);
-    out.close();
-
-    umask(old_umask);
+    const bool isWine = false;
 #endif
 
+    // Access token deliberately NOT written (see SerializeCredentialsJson). The token is protected, written
+    // and flushed in a temp file, then renamed over the cache; any failure leaves the previous cache as it was
+    // (core/credential_write.h).
+    std::string why;
+    if (!nevr_credential_write::WriteProtectedTemp(tempPath, SerializeCredentialsJson(auth), isWine, &why)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] Credentials not written to %s: %s; the previous cache is unchanged%s", path.c_str(),
+            why.c_str(), isWine ? " (Wine: host permissions could not be set and verified)" : "");
+        return false;
+    }
+    if (!nevr_credential_write::ReplaceCache(tempPath, path, &why)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Credentials not written to %s: %s; the previous cache is unchanged",
+            path.c_str(), why.c_str());
+        return false;
+    }
     return true;
 }
 
