@@ -246,6 +246,11 @@ differently because of how it was stamped.
   one with `"observed":"capped"`; at most 16 strings per frame.
   The same result is written to the build's own log at Info: PC `[NEVR.SELFCHECK] check=... pass=...`, Quest
   `self_check {check, pass, expected, observed}`.
+- **A session that ends with results unsent drops them and counts them; nothing is stored.** When a logged-in
+  session ends (`SetLoggedIn`), one delivery attempt runs, the rest of the queue is discarded, and the next
+  session's first frame carries one `self_check` note with `"dropped_at_session_end":N`. The drop is also
+  logged at Info as `check=self_check ... observed="N dropped"`. Results queued before the first login are not
+  a session's and stay queued.
 - **Adding a check** is one registration and one call at the event:
 
   ```cpp
