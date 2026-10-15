@@ -483,6 +483,33 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   bridge.Stop();
 }
 
+// #565: roles follow the ORDER THE CONNECTIONS WERE ACCEPTED, not the order their threads reach the router. The
+// first connection's thread is stalled for 300 ms between its 101 and its open report (the window a loaded
+// phone puts it in), and the second socket is opened the moment the first one's 101 arrives, with no wait for the
+// router: the login socket must still be the login (held, then closed 1011), and the config socket must not be.
+void TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  SessionBridge::Config cfg = MakeHeldConfig(&connector, &seen, &account);
+  cfg.loopback.beforeOpenHook = [](nevr_session_router::GameId id) {
+    if (id == 1) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  };
+  SessionBridge bridge(std::move(cfg));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(login.Upgrade(path));  // straight after the first 101: the first connection has not reported its open
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  account.Set("", nevr_session_router::LoginGate::Refused);
+  bridge.ReevaluateLoginGate();
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  bridge.Stop();
+}
+
 void TestPlaintextRemoteUriDoesNotStart() {
   FakeConnector connector;
   Observed seen;
@@ -588,6 +615,7 @@ int main() {
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
   TestHeldLoginSurvivesUntilSignInThenRoutesByRole();
   TestHeldLoginIsClosedWhenSignInFails();
+  TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
   TestReconnectedLoginSocketIsToldItsLoginWasRemoved();

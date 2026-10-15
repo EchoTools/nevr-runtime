@@ -482,6 +482,16 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   const GameId id = conn->id;
   const auto started = std::chrono::steady_clock::now();
   bool opened = false;
+  bool committed = false;  // the 101 was committed: this id is in committing_ until its open is reported
+  auto releaseOpenTurn = [&] {
+    if (!committed) return;
+    committed = false;
+    {
+      const std::lock_guard<std::mutex> lock(openOrderMutex_);
+      committing_.erase(id);
+    }
+    openOrderCv_.notify_all();
+  };
   bool open = true;
   const char* endReason = nullptr;  // a fixed token; set where the loop decides to end
   std::string inbox;               // handshake bytes
@@ -632,6 +642,11 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         FlushSome(conn->fd, conn->writeBuf);
         break;
       }
+      {
+        const std::lock_guard<std::mutex> lock(openOrderMutex_);
+        committing_.insert(id);
+      }
+      committed = true;
       queueWrite(BuildUpgradeResponse(request.key), true);
       handshaken = true;
       upgradedAt = std::chrono::steady_clock::now();
@@ -649,7 +664,17 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         record["handshake_ms"] = MillisSince(started);
         Log(LogLevel::Info, Dump(record));
       }
+      if (config_.beforeOpenHook) config_.beforeOpenHook(id);
+      {
+        // Report the open in accept order: wait while an earlier-accepted connection has committed its 101 and
+        // not yet reported. Bounded, so a stuck peer thread can only delay this open, never wedge it.
+        std::unique_lock<std::mutex> lock(openOrderMutex_);
+        openOrderCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+          return stop_.load() || committing_.empty() || *committing_.begin() >= id;
+        });
+      }
       router_->OnGameOpen(id);
+      releaseOpenTurn();
       const std::string leftover = inbox.substr(request.consumed);
       inbox.clear();
       if (!leftover.empty()) decoder.Feed(leftover.data(), leftover.size());
@@ -708,6 +733,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
   }
 
+  releaseOpenTurn();  // a connection that failed between its 101 and its open must not hold the line
   if (endReason == nullptr) endReason = stop_ ? "server_stopped" : "unknown";
   nlohmann::json record = Record(kConnEvent, "ended");
   record["conn"] = id;

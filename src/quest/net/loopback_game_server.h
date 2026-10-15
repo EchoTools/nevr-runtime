@@ -33,11 +33,14 @@
 #include <sys/types.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -81,6 +84,9 @@ class LoopbackGameServer final : public nevr_session_router::GameTransport {
     int closeFlushTimeoutMs = 1000;
     int listenerCheckMs = 2000;  // how often the listening socket is proven to still be ours and listening
     nevr_session_router::LogSink log;
+    // Test seam: runs on a connection's thread after its 101 is on the wire and before the router is told the
+    // game opened, i.e. inside the window a stalled thread would sit in. Production leaves it empty.
+    std::function<void(nevr_session_router::GameId)> beforeOpenHook;
   };
 
   explicit LoopbackGameServer(Config config);
@@ -165,6 +171,13 @@ class LoopbackGameServer final : public nevr_session_router::GameTransport {
   std::mutex mutex_;  // guards conns_ only
   std::map<nevr_session_router::GameId, std::shared_ptr<Conn>> conns_;
   nevr_session_router::GameId nextId_ = 1;
+  // Connections whose 101 has been committed to the wire and whose OnGameOpen has not yet been reported. A
+  // connection's role at the router is its place in the order the opens reach it, so a connection must not
+  // report its open while a lower-numbered (accepted earlier) one is in this set: that thread has been
+  // promised the earlier place and is only waiting to be scheduled.
+  std::mutex openOrderMutex_;
+  std::condition_variable openOrderCv_;
+  std::set<nevr_session_router::GameId> committing_;
 };
 
 }  // namespace quest_net
