@@ -132,6 +132,24 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
         self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
+
+    def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
+        # A name written inline in build.yml can drift from tools/release_asset_names.sh, and then the guard
+        # never sees all five names and a published, signed release is rebuilt over. The quest job must take
+        # its output name from release_quest_asset_name, and that name must be one the list yields.
+        jobs = load()[0]["jobs"]
+        naming = [s for s in jobs["quest"]["steps"] if s.get("id") == "asset"]
+        self.assertEqual(len(naming), 1)
+        run = naming[0]["run"]
+        self.assertIn("source tools/release_asset_names.sh", run)
+        self.assertIn('$(release_quest_asset_name "$version")', run)
+        self.assertNotIn("-quest-", run, "the release name must not be written inline")
+        names = REPO / "tools" / "release_asset_names.sh"
+        quest = subprocess.run(["bash", "-c", f'source "{names}"; release_quest_asset_name 9.8.7'],
+                               capture_output=True, text=True, check=True).stdout.strip()
+        listed = subprocess.run(["bash", "-c", f'source "{names}"; release_asset_names 9.8.7'],
+                                capture_output=True, text=True, check=True).stdout.split()
+        self.assertIn(quest, listed)
         self.assertEqual(jobs["sign"]["needs"], "build")
         for name in ("sign", "seal", "repack", "publish"):
             self.assertNotIn("rc", name)

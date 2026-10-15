@@ -6,8 +6,8 @@
 # build.yml's `guard` job calls this on every release event. A release whose draft was already built,
 # signed and filled with the attested assets fires `published` when it is published; rebuilding it would
 # replace the signed files. The signal is the release's asset NAMES: all five files this workflow
-# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md and the dist
-# zip). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
+# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md, the dist
+# zip and the Quest library). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
 # tag) is an error (exit 1), not "false": a check that cannot run must not decide to rebuild.
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}

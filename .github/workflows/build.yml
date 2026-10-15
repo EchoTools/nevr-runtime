@@ -527,7 +527,9 @@ jobs:
         # this commit.
         grep -aq -- "$version" "$so"
         grep -aq -- "${GITHUB_SHA:0:7}" "$so"
-        out="quest-asset/nevr-runtime-v$version-quest-libovrplatformloader.so"
+        # The name has one source, shared with the published guard and the draft attach.
+        source tools/release_asset_names.sh
+        out="quest-asset/$(release_quest_asset_name "$version")"
         mkdir -p quest-asset
         cp "$so" "$out"
         ls -l "$out"

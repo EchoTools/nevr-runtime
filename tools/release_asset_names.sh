@@ -7,14 +7,24 @@
 #     nevr-runtime-vX.Y.Z-windows.zip   the sealed zip
 #     SHA256SUMS, RELEASE-NOTES.md      its checksums and notes
 #     nevr-runtime-vX.Y.Z.zip           the dist archive (stripped, linked to the symbols artifact)
-#     nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so   the Quest library (a loose ELF: attested,
-#                                       not signed, not in SHA256SUMS; declared in the signer's sources.yml)
+#     nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so   the Quest library (a loose ELF: attested and not
+#                                       signed; our own seal does not list it in SHA256SUMS, the signer's
+#                                       updateSums appends it, so a signed release does; declared in the
+#                                       signer's config/sources.yml)
+# The Quest library's name has ONE source, release_quest_asset_name: build.yml's quest job names its output
+# with it, so the file it uploads is the one this list (and so the published guard) expects.
 # The .tar.zst archives are a workflow artifact and never a release asset.
 # The tag a release has: a plain semver vX.Y.Z (no leading zeros); BASH_REMATCH[1] is X.Y.Z.
 release_tag_regex='^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
 
+release_quest_asset_name() {
+  local version=${1:?usage: release_quest_asset_name <X.Y.Z>}
+  printf '%s\n' "nevr-runtime-v$version-quest-libovrplatformloader.so"
+}
+
 release_asset_names() {
   local version=${1:?usage: release_asset_names <X.Y.Z>}
   printf '%s\n' "nevr-runtime-v$version-windows.zip" SHA256SUMS RELEASE-NOTES.md \
-    "nevr-runtime-v$version.zip" "nevr-runtime-v$version-quest-libovrplatformloader.so"
+    "nevr-runtime-v$version.zip"
+  release_quest_asset_name "$version"
 }
