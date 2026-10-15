@@ -132,6 +132,9 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
         self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
+        self.assertEqual(jobs["sign"]["needs"], "build")
+        for name in ("sign", "seal", "repack", "publish"):
+            self.assertNotIn("rc", name)
 
     def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
         # A name written inline in build.yml can drift from tools/release_asset_names.sh, and then the guard
@@ -150,9 +153,6 @@ class WorkflowStructureTest(unittest.TestCase):
         listed = subprocess.run(["bash", "-c", f'source "{names}"; release_asset_names 9.8.7'],
                                 capture_output=True, text=True, check=True).stdout.split()
         self.assertIn(quest, listed)
-        self.assertEqual(jobs["sign"]["needs"], "build")
-        for name in ("sign", "seal", "repack", "publish"):
-            self.assertNotIn("rc", name)
 
     def test_no_job_below_a_skippable_ancestor_relies_on_the_implicit_success(self):
         # GitHub prepends success() to an `if:` with no status function, and success() is false when ANY
