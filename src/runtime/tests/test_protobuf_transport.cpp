@@ -80,6 +80,25 @@ TEST(ProtobufTransport, ConnectedTransportSuccessIsReportedAsSent) {
   EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, MakeEnvelope()), nevr_game_server::ProtobufSendResult::AcceptedSent);
 }
 
+TEST(ProtobufTransport, OpenBetweenDisconnectedReadAndQueueLockSendsDirectly) {
+  WebSocketClient client;
+  const auto envelope = MakeEnvelope();
+  size_t transportSends = 0;
+  client.TestSetTransportHandler([&](const std::string& frame) {
+    ++transportSends;
+    ExpectEncodedEnvelope(frame, envelope);
+    return true;
+  });
+  client.TestSetBeforePendingLock([&] {
+    client.TestSetConnected(true);
+    client.TestFlushPendingMessages();
+  });
+
+  EXPECT_EQ(nevr_game_server::SendProtobufEnvelope(client, envelope), nevr_game_server::ProtobufSendResult::AcceptedSent);
+  EXPECT_EQ(transportSends, 1U);
+  EXPECT_TRUE(client.TestCopyPendingMessages().empty());
+}
+
 // Issue #43. The receive handler forwards payloads to CBroadcaster::ReceiveLocalEvent
 // (echovr.exe 0x140F87AA0), whose msg parameter is mutable and is handed on to every
 // registered engine listener. A const payload pointer forced const_cast at each

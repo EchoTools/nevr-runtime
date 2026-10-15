@@ -138,7 +138,7 @@ func TestWindowedClientAvoidsOvrAndSpectatorStream(t *testing.T) {
 	for _, forbidden := range []string{
 		"Failed to initialize OVR library",
 		"Unable to load LibOVRRT",
-		"[NEVR.PATCH] Spectator-stream check NOP'd",
+		"spectatorstream_check",
 	} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("windowed client emitted forbidden %q\n%s", forbidden, output)

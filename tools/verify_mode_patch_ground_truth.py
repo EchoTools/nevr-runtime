@@ -169,6 +169,33 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
             continue
         targets.add(resolve(expression, constants))
 
+    # The spectator-stream guard is written through nevr_checked_patch::Apply
+    # (src/runtime/patch/checked_patch.h): `site` is the game base plus one
+    # named RVA, and the only writer handed to Apply is a lambda that forwards
+    # its three parameters, unchanged and in order, to ProcessMemcpy.  Any
+    # other lambda body, writer or site expression does not match and falls
+    # through to the ProcessMemcpy census below.  The span between the `site`
+    # declaration and Apply stays inside one function: it cannot cross another
+    # `site =` or a function's closing brace at column 0, so an earlier decoy
+    # declaration cannot stand in for the one Apply really uses.  Limit: this
+    # verifier alone accepts a decoy placed AFTER the real declaration in a
+    # nested scope (an indented block before Apply); the shipped-source tests in
+    # tools/tests/test_verify_mode_patch_ground_truth.py pin SPECTATOR_RVA, so
+    # that substitution still fails the suite.
+    checked_write = re.search(
+        r"uint8_t\s*\*\s*const\s+site\s*=\s*"
+        r"reinterpret_cast<uint8_t\*>\(\s*EchoVR::g_GameBaseAddress\s*\)\s*\+\s*"
+        r"nevr_patch_addresses::(\w+)\s*;"
+        r"(?:(?!ProcessMemcpy|\bsite\s*=(?!=)|^\}).)*?nevr_checked_patch::Apply\s*\(\s*site\s*,\s*\w+\s*,\s*"
+        r"\[\]\s*\(\s*void\s*\*\s*(\w+)\s*,\s*const\s+void\s*\*\s*(\w+)\s*,\s*size_t\s+(\w+)\s*\)\s*"
+        r"\{\s*return\s+ProcessMemcpy\s*\(\s*\2\s*,\s*\3\s*,\s*\4\s*\)\s*;\s*\}\s*\)",
+        source,
+        re.DOTALL | re.MULTILINE,
+    )
+    if checked_write is not None:
+        targets.add(resolve(checked_write.group(1), constants))
+
+    # The older direct form: `uintptr_t addr = base + RVA; ... ProcessMemcpy(addr, ...)`.
     spectator_write = re.search(
         r"uintptr_t\s+addr\s*=.*?\+\s*nevr_patch_addresses::(\w+).*?"
         r"ProcessMemcpy\s*\(\s*reinterpret_cast<VOID\*>\(addr\)",
@@ -179,7 +206,9 @@ def byte_rewrite_targets(source: str, addresses: str) -> set[int]:
         targets.add(resolve(spectator_write.group(1), constants))
 
     process_memcpy_count = len(re.findall(r"\bProcessMemcpy\s*\(", source))
-    recognized_process_memcpy = 1 + (1 if spectator_write is not None else 0)
+    recognized_process_memcpy = (
+        1 + (1 if checked_write is not None else 0) + (1 if spectator_write is not None else 0)
+    )
     # The first ProcessMemcpy is ForceHeadlessSkip(offset), which is covered by
     # HEADLESS_GATE_TABLE. The second is the direct D3D12 write above.
     if process_memcpy_count != 3 or recognized_process_memcpy != 2:

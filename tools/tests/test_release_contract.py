@@ -171,27 +171,37 @@ class ReleaseContractTest(unittest.TestCase):
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()
         build = justfile.split("# Build all components\n", 1)[1].split("# Build only", 1)[0]
-        dist = justfile.split("# Create distribution packages\n", 1)[1].split("# Create distribution with full output", 1)[0]
+        dist = justfile.split("# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
         self.assertIn("cmake --build --preset {{ preset }}", build)
         self.assertNotIn("|", build)
         self.assertIn("cmake --build --preset {{ preset }} --target dist", dist)
         self.assertNotIn("|| true", dist)
 
+    def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
+        cmake = (REPO / "CMakeLists.txt").read_text()
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")', cmake)
+        dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
+        self.assertIn("--strip-all", dist)
+        self.assertIn("add_custom_target(dist\n", dist)
+        self.assertIn("DEPENDS dist dist-legacy", cmake)
+        justfile = (REPO / "justfile").read_text()
+        workflows = "".join(path.read_text() for path in (REPO / ".github/workflows").glob("*.yml"))
+        for name, text in (("CMakeLists.txt", cmake), ("justfile", justfile), ("workflows", workflows)):
+            self.assertNotRegex(text, r"(?i)dist[-_](lite|debug)|DIST_(LITE|DEBUG)|PROJECT_VERSION}-(lite|debug)", name)
+
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
         self.assertIn("add_dependencies(dist-prepare nevr_runtime)", cmake)
-        self.assertIn("add_dependencies(dist-lite-prepare nevr_runtime)", cmake)
         self.assertIn("add_dependencies(dist-prepare echovr_server)", cmake)
-        self.assertIn("add_dependencies(dist-lite-prepare echovr_server)", cmake)
         self.assertIn("find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)", cmake)
-        self.assertGreaterEqual(cmake.count('$<TARGET_FILE:echovr_server>'), 2)
+        self.assertGreaterEqual(cmake.count('$<TARGET_FILE:echovr_server>'), 1)
         self.assertIn("VerifyDistribution.cmake", cmake)
-        lite_distribution = cmake.split("# Lite Distribution Package Target", 1)[1].split(
+        distribution_section = cmake.split("# Distribution Package Target", 1)[1].split(
             "# Legacy Distribution Package Target", 1)[0]
-        self.assertEqual(lite_distribution.count("add_custom_command(TARGET dist-lite POST_BUILD"), 1)
-        lite_post_build = lite_distribution.split("add_custom_command(TARGET dist-lite POST_BUILD", 1)[1]
-        self.assertLess(lite_post_build.index("VerifyDistribution.cmake"),
-                        lite_post_build.index('COMMAND ${CMAKE_COMMAND} -E echo "Lite distribution packages'))
+        self.assertEqual(distribution_section.count("add_custom_command(TARGET dist POST_BUILD"), 1)
+        post_build = distribution_section.split("add_custom_command(TARGET dist POST_BUILD", 1)[1]
+        self.assertLess(post_build.index("VerifyDistribution.cmake"),
+                        post_build.index('COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages'))
         validator = (REPO / "cmake/VerifyDistribution.cmake").read_text()
         self.assertIn("echovr_server.exe", validator)
         distribution = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
@@ -200,7 +210,10 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_release_ci_installs_tools_and_uploads_the_actual_artifact_directory(self):
         workflow = (REPO / ".github/workflows/build.yml").read_text()
-        self.assertIn("just-version:", workflow)
+        # just comes from the builder image, not from an action that edits PATH (PATH is hashed into every
+        # mingw package ABI, #551): the job asserts the image carries the pinned version.
+        self.assertNotIn("extractions/setup-just", workflow)
+        self.assertIn('test "$(just --version)" = "just 1.58.0"', workflow)
         # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
         # from pacman, installed once in the builder image (.github/builder/Dockerfile) that the job
         # runs in, with every version logged per run.
@@ -218,7 +231,7 @@ class ReleaseContractTest(unittest.TestCase):
         # there; the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
-        self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", dockerfile)
+        self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
@@ -246,7 +259,6 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn('option(NEVR_CODESIGN_REQUIRED', cmake)
         self.assertIn("--required-signing", cmake)
         self.assertIn('"${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}"', cmake)
-        self.assertIn('"${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_LITE_NAME}"', cmake)
         self.assertIn("verify_archives(tar_candidate, zip_candidate, package_candidate, signing)", driver)
         self.assertIn("moved_old", driver)
         self.assertIn("CODESIGN_SKIP is forbidden in required signing mode", driver)
@@ -262,10 +274,10 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_just_sign_uses_required_transactional_distribution_signing(self):
         justfile = (REPO / "justfile").read_text()
-        recipe = justfile.split("# Build normal and lite archives with required local Authenticode signing.\n", 1)[1].split(
+        recipe = justfile.split("# Build the stripped archives with required local Authenticode signing.\n", 1)[1].split(
             "# Verify Authenticode signature on a file", 1)[0]
         self.assertIn("-DNEVR_CODESIGN_REQUIRED=ON", recipe)
-        self.assertIn("--target dist dist-lite", recipe)
+        self.assertIn("--target dist", recipe)
         self.assertNotIn("osslsigncode sign", recipe)
 
     def test_auth_unit_recipe_builds_and_runs_mic_dsp(self):
@@ -369,14 +381,12 @@ class DistributionArchiveTest(unittest.TestCase):
         self.assertNotEqual(built.returncode, 0, built.stdout + built.stderr)
         self.assertFalse(marker.exists(), "failed distribution validation reached the upload target")
 
-    def test_normal_and_lite_archive_pairs_pass_runtime_validation(self):
-        for package in ("normal", "lite"):
-            with self.subTest(package=package):
-                package_dir = self.root / package
-                package_dir.mkdir()
-                tar_archive, zip_archive = self.make_archives(package_dir)
-                result = self.run_validator(tar_archive, zip_archive)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    def test_stripped_archive_pair_pass_runtime_validation(self):
+        package_dir = self.root / "stripped"
+        package_dir.mkdir()
+        tar_archive, zip_archive = self.make_archives(package_dir)
+        result = self.run_validator(tar_archive, zip_archive)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_corrupt_and_incomplete_archives_fail_closed_without_upload(self):
         variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-launcher")

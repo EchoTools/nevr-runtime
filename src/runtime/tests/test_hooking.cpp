@@ -1,8 +1,20 @@
 #include <gtest/gtest.h>
 
+#include <thread>
 #include <vector>
 
 #include "core/hooking.h"
+
+TEST(Hooking, LastAttachErrorBelongsToTheCallingThread) {
+  Hooking::LastAttachErrorRef() = "main failure";
+  std::thread worker([] {
+    Hooking::LastAttachErrorRef() = "worker failure";
+    EXPECT_STREQ(Hooking::LastAttachError(), "worker failure");
+  });
+  worker.join();
+  EXPECT_STREQ(Hooking::LastAttachError(), "main failure");
+  Hooking::LastAttachErrorRef() = "";
+}
 
 TEST(Hooking, PublishesTrampolineBeforeEnable) {
   int targetValue = 0;
