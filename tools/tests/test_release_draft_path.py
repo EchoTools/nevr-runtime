@@ -1,4 +1,4 @@
-"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's four files,
+"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's five files,
 attests them and attaches them to that tag's DRAFT release (kept a draft), so a signer can replace the draft's
 assets before anything is public; a release event and a dispatch with no draft behave as before.
 
@@ -27,7 +27,8 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 BUILT = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
 
 DRAFT = "needs.build.outputs.draft == 'true'"
 
@@ -268,10 +269,10 @@ class ReleaseDraftPathTest(unittest.TestCase):
         self.assertEqual(repack["needs"], ["build", "sign", "seal"])
         self.assertEqual(repack["if"],
             "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
-        self.assertEqual(publish["needs"], ["build", "sign", "seal", "repack"])
+        self.assertEqual(publish["needs"], ["build", "quest", "sign", "seal", "repack"])
         self.assertEqual(publish["if"],
             "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
-            "needs.repack.result == 'success' && " + gate + " }}")
+            "needs.repack.result == 'success' && needs.quest.result == 'success' && " + gate + " }}")
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})
 
@@ -303,7 +304,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
             self.assertNotRegex(text.split("source ", 1)[1], r'nevr-runtime-v\$version[-.]', script)
         names = (REPO / "tools" / "release_asset_names.sh").read_text(encoding="utf-8")
         self.assertNotIn("tar.zst\"", names, "the .tar.zst archives are a workflow artifact, not a release asset")
-        self.assertEqual(names.count('"nevr-runtime-v$version'), 2)
+        self.assertEqual(names.count('"nevr-runtime-v$version'), 3)
 
     # ---- the published guard (tools/release_already_built.sh) meets the draft this path fills -------------
     def built(self, assets):
