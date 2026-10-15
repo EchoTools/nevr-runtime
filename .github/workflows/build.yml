@@ -481,10 +481,12 @@ jobs:
         if [ "${{ steps.ndk.outputs.present }}" = "true" ]; then ndk="${{ steps.ndk.outputs.dir }}"; else ndk="$RUNNER_TEMP/android-ndk-r26d"; fi
         grep -q "^Pkg.Revision = $NDK_REVISION" "$ndk/source.properties"
         echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
-        # The Quest tests run llvm-objdump from PATH; the hosted runner has none, so use the NDK's (v5.2.0 failed here).
+        # The Quest tests run llvm-objdump from PATH and the hosted runner has none (v5.2.0 failed here). Link the
+        # NDK's into /usr/local/bin rather than editing PATH: PATH is hashed into the vcpkg ABI (test_vcpkg_pin).
         bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
         test -x "$bin/llvm-objdump" || { echo "no llvm-objdump in $bin"; exit 1; }
-        echo "$bin" >> "$GITHUB_PATH"
+        sudo ln -sf "$bin/llvm-objdump" /usr/local/bin/llvm-objdump
+        llvm-objdump --version
 
     - name: Bootstrap vcpkg
       id: vcpkg
