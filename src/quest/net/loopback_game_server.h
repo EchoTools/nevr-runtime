@@ -171,13 +171,12 @@ class LoopbackGameServer final : public nevr_session_router::GameTransport {
   std::mutex mutex_;  // guards conns_ only
   std::map<nevr_session_router::GameId, std::shared_ptr<Conn>> conns_;
   nevr_session_router::GameId nextId_ = 1;
-  // Connections whose 101 has been committed to the wire and whose OnGameOpen has not yet been reported. A
-  // connection's role at the router is its place in the order the opens reach it, so a connection must not
-  // report its open while a lower-numbered (accepted earlier) one is in this set: that thread has been
-  // promised the earlier place and is only waiting to be scheduled.
+  // Connections accepted and not yet resolved: opened and reported to the router, or ended without one. A
+  // connection's role at the router is the order opens reach it, so a connection reports its open only when
+  // no earlier-accepted one is in this set.
   std::mutex openOrderMutex_;
   std::condition_variable openOrderCv_;
-  std::set<nevr_session_router::GameId> committing_;
+  std::set<nevr_session_router::GameId> pending_;
 };
 
 }  // namespace quest_net

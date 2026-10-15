@@ -388,6 +388,10 @@ int LoopbackGameServer::AcceptPending(bool* resourceBlocked, bool* identityLost)
       conn->id = nextId_++;
       conns_[conn->id] = conn;
     }
+    {
+      const std::lock_guard<std::mutex> lock(openOrderMutex_);
+      pending_.insert(conn->id);  // accept order: ids are taken under mutex_ above, one accept thread
+    }
     nlohmann::json record = Record(kConnEvent, "accepted");
     record["conn"] = conn->id;
     record["open"] = count + 1;
@@ -482,13 +486,12 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   const GameId id = conn->id;
   const auto started = std::chrono::steady_clock::now();
   bool opened = false;
-  bool committed = false;  // the 101 was committed: this id is in committing_ until its open is reported
+  // This id entered pending_ at accept. It leaves when its open has been reported to the router, or the
+  // connection ends without one; every connection accepted after it waits for that before reporting its own.
   auto releaseOpenTurn = [&] {
-    if (!committed) return;
-    committed = false;
     {
       const std::lock_guard<std::mutex> lock(openOrderMutex_);
-      committing_.erase(id);
+      pending_.erase(id);
     }
     openOrderCv_.notify_all();
   };
@@ -642,11 +645,6 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         FlushSome(conn->fd, conn->writeBuf);
         break;
       }
-      {
-        const std::lock_guard<std::mutex> lock(openOrderMutex_);
-        committing_.insert(id);
-      }
-      committed = true;
       queueWrite(BuildUpgradeResponse(request.key), true);
       handshaken = true;
       upgradedAt = std::chrono::steady_clock::now();
@@ -666,12 +664,27 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       }
       if (config_.beforeOpenHook) config_.beforeOpenHook(id);
       {
-        // Report the open in accept order: wait while an earlier-accepted connection has committed its 101 and
-        // not yet reported. Bounded, so a stuck peer thread can only delay this open, never wedge it.
+        // The router gives a connection its role from the order opens reach it, so opens are reported in
+        // ACCEPT order: wait until every earlier-accepted connection has reported or ended. An earlier one
+        // that is still handshaking ends itself within handshakeTimeoutMs, and one past its handshake is
+        // already running toward its report, so this wait ends without a clock. It never goes ahead out of
+        // order; if an earlier connection has not resolved after the handshake time plus the close-flush
+        // time, that is said once, naming both ids, and the wait goes on.
+        const auto slow = std::chrono::milliseconds(config_.handshakeTimeoutMs + config_.closeFlushTimeoutMs);
         std::unique_lock<std::mutex> lock(openOrderMutex_);
-        openOrderCv_.wait_for(lock, std::chrono::seconds(2), [&] {
-          return stop_.load() || committing_.empty() || *committing_.begin() >= id;
-        });
+        bool said = false;
+        const auto inOrder = [&] { return stop_.load() || pending_.empty() || *pending_.begin() >= id; };
+        while (!openOrderCv_.wait_for(lock, slow, inOrder)) {
+          if (said) continue;
+          said = true;
+          nlohmann::json record = Record(kConnEvent, "open_order_wait_slow");
+          record["conn"] = id;
+          record["waiting_on_conn"] = *pending_.begin();
+          record["after_ms"] = static_cast<int64_t>(slow.count());
+          lock.unlock();
+          Log(LogLevel::Warning, Dump(record));
+          lock.lock();
+        }
       }
       router_->OnGameOpen(id);
       releaseOpenTurn();
@@ -733,7 +746,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
   }
 
-  releaseOpenTurn();  // a connection that failed between its 101 and its open must not hold the line
+  releaseOpenTurn();  // a connection that ends without an open must not hold the line
   if (endReason == nullptr) endReason = stop_ ? "server_stopped" : "unknown";
   nlohmann::json record = Record(kConnEvent, "ended");
   record["conn"] = id;
