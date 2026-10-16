@@ -81,7 +81,7 @@ inline void OnServerMessage(std::uint64_t symbol, const std::uint8_t* payload, s
     if (invite) {
       std::uint64_t account = 0;
       for (int i = 7; payload != nullptr && length >= 16 && i >= 0; --i) account = (account << 8) | payload[8 + i];
-      if (payload == nullptr || length < 16 || account == 0) {
+      if (account == 0) {  // also what a payload shorter than its two ids leaves it
         nevr_self_check::RegisterSessionReset(&detail::ResetSession);
         observed = "request invite unreadable length=" + std::to_string(length) + " malformed";
         pass = false;
