@@ -3,8 +3,8 @@
 #include <atomic>
 #include <cstdint>
 
-// The DLL notification only records the module address. Optional MinHook
-// diagnostics are installed by the runtime tick after the load callback ends.
+// The pnsrad apply step only records the module address. Optional MinHook
+// diagnostics are installed by the runtime tick, never while a load is being applied.
 class PnsradDiagQueue {
  public:
   void NoteLoaded(uintptr_t base) { pending_.store(base, std::memory_order_release); }

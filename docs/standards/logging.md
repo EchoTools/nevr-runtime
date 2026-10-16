@@ -401,9 +401,12 @@ This applies to:
 
 Every log line that relates to a specific WebSocket connection SHALL
 include the connection index (`conn=%d`). Connections are identified by
-index in the ws-bridge (0 = config connection, 1+ = game login
-connections). Without the index, an operator cannot correlate the
-connect, message, and disconnect events for a single connection.
+index in the ws-bridge (0 = a config socket, 1 = the login socket, 2 and up =
+the sockets that share the login session). The index is the slot the socket
+took, decided by the request target it asked for (`/config`, `/login`), not by
+the order it connected in; the `game socket admitted` line records the target,
+the role and the basis for each socket. Without the index, an operator cannot
+correlate the connect, message, and disconnect events for a single connection.
 
 ```cpp
 // BEFORE (no conn index — which connection?)

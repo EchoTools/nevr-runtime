@@ -50,6 +50,17 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by);
  * logs then reports through the boot tee, because Log() routes by boot phase (core/logging.h). */
 void OnLoad(const char* dll_name, PatchCallback callback);
 
+/* Called after every LoadLibraryA/W/ExA/ExW call the hooks see returns from the real loader, whatever it
+ * loaded and whether it succeeded, on the calling thread, before the call returns to its caller. The loader lock
+ * is released by then, so an observer may patch a module the call mapped before the caller can resolve any of
+ * its exports. Observers are skipped when the calling thread holds the loader lock (a LoadLibrary call from
+ * inside a DllMain): the next call that returns outside the lock runs them. */
+typedef void (*PostLoadObserver)();
+void AddPostLoadObserver(PostLoadObserver observer);
+
+/* True when the calling thread owns the process's loader lock (PEB LoaderLock). */
+bool LoaderLockHeldByThisThread();
+
 /* Trigger callbacks for a DLL that was loaded through a non-LoadLibrary path
  * (e.g., the game's CSysDLL_Load). Only fires each callback once per DLL. */
 void FireCallbacksForModule(const char* lower_name, HMODULE module);

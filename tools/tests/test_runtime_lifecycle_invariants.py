@@ -457,18 +457,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         body = extract_braced_function(source, "void InstallGameMainHook(")
         self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
 
-    def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
-        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
-        # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
-        # that OnDllLoaded does not guard it lives here.
-        source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
-        body = extract_braced_function(source, "static void CALLBACK OnDllLoaded(")
-        start = body.index("IsMatchmakingModule(")
-        branch = body[start:body.index("OnModuleNotification(", start)]
-        self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
-                            "a guard around the matchmaking host patch leaves a reloaded image unpatched")
-        # The decision itself (which notification, which module) is the header's OnModuleNotification: it
-        # holds no state either, so every load notification reaches Apply().
+    def test_matchmaking_host_patch_decision_is_stateless(self):
+        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so every load is
+        # patched. That the apply step holds no guard is pinned in test_pnsrad_load_boundary.py (#504); the
+        # header's per-image decision holds no state either, so a reloaded image reaches Apply().
         header = strip_comments((ROOT / "src/runtime/patch/matchmaker_host_patch.h").read_text())
         decision = extract_braced_function(header, "std::optional<Result> OnModuleNotification(")
         self.assertNotRegex(decision, r"\bstatic\b|\bonce\b|\bdone\b|\bPatched\b",

@@ -362,7 +362,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_socket_role
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -486,7 +486,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_socket_role; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1278,7 +1278,7 @@ verify:
         exit 1
     fi
     # N61: matchmaker must register independent callback on shared remote
-    if ! grep -q 'g_loginRemoteWs->setOnMessageCallback' src/runtime/compat/ws_bridge.cpp; then
+    if ! grep -q 'loginRemote->setOnMessageCallback' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — N61 matchmaker callback registration missing from ws_bridge" >&2
         exit 1
     fi
@@ -2284,6 +2284,23 @@ verify:
         echo "verify: FAIL — logging.md Rule 2: login injection does not log the XPID." >&2
         exit 1
     fi
+    # N91 / #520: a game socket's role comes from the request target it asked for, not from the
+    # order it connected in. The Open handler takes its slot through AdmitGameSocket with the
+    # upgrade request's target (WebSocketOpenInfo::uri) and the listener; the connect-order counter
+    # that once decided the roles is gone. The decision itself is tested in test_socket_role and,
+    # through the real bridge, in test_behavioral (RolesByPathTest).
+    I520_RC=0; I520_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || I520_RC=$?
+    sensor_stage1 "#520 roles by request target" "src/runtime/compat/ws_bridge.cpp" "$I520_RC"
+    sensor_nonempty "#520 roles by request target" "non-comment lines of compat/ws_bridge.cpp" "$I520_WS"
+    if ! grep -qF 'AdmitGameSocket(&gameWs, msg->openInfo.uri, listener)' <<<"$I520_WS"; then
+        echo "verify: FAIL — #520 the Open handler no longer admits a game socket by its request target" >&2
+        echo "(AdmitGameSocket(&gameWs, msg->openInfo.uri, listener)): the roles would follow the connect order again." >&2
+        exit 1
+    fi
+    if grep -qF 'g_connectionCount' <<<"$I520_WS"; then
+        echo "verify: FAIL — #520 ws_bridge.cpp counts connections again (g_connectionCount): a login socket that connects before config would be labelled config." >&2
+        exit 1
+    fi
     # logging.md: no INFO-level logging inside a per-frame hot path (~125Hz).
     python3 tools/verify_log_rules.py
     # D1/N78: exactly ONE strong definition of ::Log. A second definition (e.g. in
@@ -2681,7 +2698,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1047
+    python3 tools/verify_gtest_floor.py --floor 1089
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

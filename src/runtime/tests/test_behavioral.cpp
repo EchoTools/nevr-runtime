@@ -15,12 +15,20 @@
 #include <windows.h>
 
 #include <gtest/gtest.h>
+#include <ixwebsocket/IXNetSystem.h>
+#include <ixwebsocket/IXWebSocket.h>
+#include <ixwebsocket/IXWebSocketServer.h>
+#include <chrono>
+#include <condition_variable>
 #include <cstdarg>
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <utility>
+#include <atomic>
 #include <iterator>
+#include <memory>
+#include <random>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -47,6 +55,7 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/hook/addresses.h"
+#include <MinHook.h>  // XpidPrefixDetourBoot initialises the hooking engine for one test
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -118,6 +127,7 @@ const char* GetLogLevelString(EchoVR::LogLevel) { return "info"; }
 std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { return "{}"; }
 
 std::mutex g_testLogMutex;
+std::condition_variable g_testLogCv;  // notified on every line, so a test waits for a line without sleeping
 std::vector<std::string> g_testLogMessages;
 
 bool TestLogContains(const std::string& needle) {
@@ -154,6 +164,7 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   nevr_test_log_cap::Append(g_testLogMessages, buffer);
   g_testLogLeveled.emplace_back(level, buffer);
+  g_testLogCv.notify_all();
 }
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
@@ -226,6 +237,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/socket_role.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -1291,6 +1303,358 @@ TEST_F(N61_WsBridgeTest, N60_StopCalledOutsideMutex) {
   // Post-condition: mutex is free. If stop() were inside the lock, this fails.
   EXPECT_TRUE(TestHook_N60_IsMutexFree())
       << "N60: mutex must be free after Close — stop() was called inside the lock";
+}
+
+// ============================================================================
+// #520: which game socket is config and which is login. These tests run the REAL bridge: a game-side
+// client connects to its listener, the bridge's Open handler assigns the role, and a stand-in for the
+// community service answers every frame it gets. Nothing here sleeps; each wait is on a condition
+// variable (a log line, a received frame) with a bound that only a failing run reaches.
+// ============================================================================
+
+namespace {
+
+constexpr auto kRoleWait = std::chrono::seconds(20);
+
+// Waits for `done()` by yielding, for a state ixwebsocket changes without telling anyone (a closed
+// connection leaving a server's client set). Bounded; false when the bound passes.
+template <typename Done>
+bool YieldUntil(Done done) {
+  const auto deadline = std::chrono::steady_clock::now() + kRoleWait;
+  while (!done()) {
+    if (std::chrono::steady_clock::now() > deadline) return false;
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+std::vector<std::string> LogLinesContaining(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::vector<std::string> lines;
+  for (const std::string& line : g_testLogMessages) {
+    if (line.find(needle) != std::string::npos) lines.push_back(line);
+  }
+  return lines;
+}
+
+bool WaitForLogLines(const std::string& needle, size_t count) {
+  std::unique_lock<std::mutex> lock(g_testLogMutex);
+  return g_testLogCv.wait_for(lock, kRoleWait, [&] {
+    return static_cast<size_t>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                             [&needle](const std::string& line) {
+                                               return line.find(needle) != std::string::npos;
+                                             })) >= count;
+  });
+}
+
+// The community service as the bridge's remote: it counts the LoginRequests it receives and answers each
+// binary frame, a LoginRequest with LoginSettings and anything else with DocumentSuccess, so a test can see
+// which game socket the bridge routed a reply to and which request the reply answers.
+class RemoteService {
+ public:
+  bool Start() {
+    std::random_device device;
+    std::mt19937 generator(device());
+    std::uniform_int_distribution<int> ports(49152, 65535);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      const int port = ports(generator);
+      server_ = std::make_unique<ix::WebSocketServer>(port, "127.0.0.1");
+      server_->disablePerMessageDeflate();
+      server_->setOnClientMessageCallback(
+          [this](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& socket, const ix::WebSocketMessagePtr& message) {
+            if (message->type != ix::WebSocketMessageType::Message || !message->binary) return;
+            const bool isLogin = nevr_evr_codec::FirstSymbol(message->str) == nevr_evr_codec::kSymLoginRequest;
+            if (isLogin) ++loginRequests_;
+            socket.sendBinary(nevr_evr_codec::BuildMessage(
+                isLogin ? nevr_evr_codec::kSymLoginSettings : nevr_evr_codec::kSymDocumentSuccess, ""));
+          });
+      if (server_->listen().first) {
+        port_ = port;
+        server_->start();
+        return true;
+      }
+    }
+    server_.reset();
+    return false;
+  }
+  void Stop() {
+    if (server_) server_->stop();
+    server_.reset();
+  }
+  void CloseEveryClient() {
+    for (const auto& client : server_->getClients()) client->close();
+  }
+  // ixwebsocket's server stop closes every client it still holds, and a connection that is finishing when
+  // that happens can be left waiting for a close it will never get, which hangs the stop. So the service
+  // is stopped only once its client set is empty.
+  bool WaitForNoClients() {
+    return YieldUntil([this] { return server_->getClients().empty(); });
+  }
+  std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
+  int LoginRequests() const { return loginRequests_.load(); }
+
+ private:
+  std::unique_ptr<ix::WebSocketServer> server_;
+  int port_ = 0;
+  std::atomic<int> loginRequests_{0};
+};
+
+// A game-side socket: connects to the bridge at a request target and counts the frames the bridge sends it.
+class GameSocket {
+ public:
+  ~GameSocket() { socket_.stop(); }
+  bool Connect(uint16_t bridgePort, const std::string& target) {
+    socket_.setUrl("ws://127.0.0.1:" + std::to_string(bridgePort) + target);
+    socket_.disableAutomaticReconnection();
+    socket_.disablePerMessageDeflate();
+    socket_.setOnMessageCallback([this](const ix::WebSocketMessagePtr& message) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (message->type == ix::WebSocketMessageType::Open) open_ = true;
+      if (message->type == ix::WebSocketMessageType::Message) {
+        ++frames_;
+        symbols_.push_back(nevr_evr_codec::FirstSymbol(message->str));
+      }
+      changed_.notify_all();
+    });
+    socket_.start();
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [this] { return open_; });
+  }
+  bool WaitForFrames(int count) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [&] { return frames_ >= count; });
+  }
+  int Frames() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return frames_;
+  }
+  // Waits for a frame whose first message is `symbol`.
+  bool WaitForSymbol(uint64_t symbol) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [&] { return Received(symbol); });
+  }
+  bool Received(uint64_t symbol) {
+    for (const uint64_t seen : symbols_) {
+      if (seen == symbol) return true;
+    }
+    return false;
+  }
+  bool HasReceived(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Received(symbol);
+  }
+  void SendRequest() { Send(nevr_evr_codec::kSymDocumentRequest); }
+  void Send(uint64_t symbol) { socket_.sendBinary(nevr_evr_codec::BuildMessage(symbol, "")); }
+
+ private:
+  ix::WebSocket socket_;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool open_ = false;
+  int frames_ = 0;
+  std::vector<uint64_t> symbols_;
+};
+
+constexpr const char* kConnectedLine = "Proxy: game connected (conn=";
+
+class RolesByPathTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ix::initNetSystem();
+    TestHook_N61_ResetState();
+    ClearTestLogs();
+    ASSERT_TRUE(remote_.Start());
+    SetWebSocketBridgeTarget(remote_.Uri().c_str());
+    InstallWebSocketBridge();
+    port_ = GetWebSocketBridgePort();
+    ASSERT_NE(port_, 0);
+  }
+  void TearDown() override {
+    // The game-side sockets are closed by now; stop the bridge once its server has let go of them (the
+    // same ixwebsocket stop hazard as the service's, below).
+    EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
+    StopWebSocketBridgeListener();
+    // The login session's remote outlives the game sockets that used it; dropping it closes the service's
+    // connection, which the service's stop waits for.
+    TestHook_N61_ResetState();
+    SetWebSocketBridgeTarget("");
+    EXPECT_TRUE(remote_.WaitForNoClients());
+    remote_.Stop();
+  }
+  // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
+  void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
+    ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
+    ASSERT_TRUE(WaitForLogLines(kConnectedLine, ++admitted_)) << "the bridge never admitted " << target;
+  }
+  std::string AdmittedLine(size_t index) {
+    const std::vector<std::string> lines = LogLinesContaining(kConnectedLine);
+    return index < lines.size() ? lines[index] : std::string("<no such line>");
+  }
+  RemoteService remote_;
+  uint16_t port_ = 0;
+  size_t admitted_ = 0;
+};
+
+}  // namespace
+
+// The game's login socket may connect before its config socket. The role comes from the request target,
+// not from the order, so the socket that asked for /login is the login and receives the LoginRequest's
+// reply. By order the first connection is config: the login socket is labelled config, gets no
+// LoginRequest, and the config socket is labelled login and gets it (#520).
+TEST_F(RolesByPathTest, LoginSocketThatConnectsFirstIsStillTheLogin) {
+  GameSocket login, config;
+  Admit(login, "/login");
+  Admit(config, "/config");
+  EXPECT_NE(AdmittedLine(0).find("(conn=1, login"), std::string::npos) << AdmittedLine(0);
+  EXPECT_NE(AdmittedLine(1).find("(conn=0, config"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings))
+      << "the /login socket never received the reply to the LoginRequest";
+  // The config socket's own request is answered on its own remote connection, after anything the bridge
+  // sent on it first; so once that answer is here, a LoginRequest injected on the config socket would
+  // already have been answered too.
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess));
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings)) << "a LoginRequest was injected on the /config socket";
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// N91: a second socket that asks for /login while a login session exists is not a second login. It takes
+// no login slot and sends no LoginRequest; it shares the session.
+TEST_F(RolesByPathTest, SecondLoginSocketIsNotALoginAndInjectsNothing) {
+  GameSocket first, second;
+  Admit(first, "/login");
+  ASSERT_TRUE(first.WaitForFrames(1)) << "the first /login socket never received the reply to the LoginRequest";
+  Admit(second, "/login");
+  EXPECT_NE(AdmittedLine(0).find("(conn=1, login"), std::string::npos) << AdmittedLine(0);
+  EXPECT_EQ(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(AdmittedLine(1).find("sharing login session (no LoginRequest)"), std::string::npos) << AdmittedLine(1);
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// A config socket that opens after login is a config socket: it does not share the login session and the
+// login session's replies keep going to the login socket (it was counted as a matchmaker and took them).
+TEST_F(RolesByPathTest, ConfigSocketAfterLoginStaysConfigAndTakesNoLoginReplies) {
+  GameSocket firstConfig, login, lateConfig;
+  Admit(firstConfig, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  Admit(lateConfig, "/config");
+  EXPECT_NE(AdmittedLine(2).find("(conn=0, config"), std::string::npos) << AdmittedLine(2);
+  EXPECT_EQ(AdmittedLine(2).find("sharing login session"), std::string::npos) << AdmittedLine(2);
+  login.SendRequest();
+  EXPECT_TRUE(login.WaitForFrames(2)) << "the reply to the login socket's request went to another socket";
+  EXPECT_EQ(lateConfig.Frames(), 0);
+}
+
+// #70: when the login session ends, the game's next /login is a new login (the numbering starts again).
+TEST_F(RolesByPathTest, LoginSocketAfterTheSessionEndsIsANewLogin) {
+  GameSocket first, second;
+  Admit(first, "/login");
+  ASSERT_TRUE(first.WaitForFrames(1));
+  remote_.CloseEveryClient();
+  ASSERT_TRUE(WaitForLogLines("login session ended", 1)) << "the remote closing did not end the login session";
+  Admit(second, "/login");
+  EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(second.WaitForFrames(1)) << "the new /login socket never received the reply to its LoginRequest";
+}
+
+// The measurement the issue asks for: every admission is one structured line with the slot, the role, why,
+// and the path the game asked for.
+TEST_F(RolesByPathTest, EachAdmissionLogsTheRoleItsBasisAndThePathItAskedFor) {
+  GameSocket login, config;
+  Admit(login, "/login");
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[0].find("conn=1 role=login basis=path listener=service target=/login has_query=false"), std::string::npos)
+      << lines[0];
+  EXPECT_NE(lines[1].find("conn=0 role=config basis=path listener=service target=/config has_query=false"), std::string::npos)
+      << lines[1];
+}
+
+// logging.md Rule 4: a query can carry a credential. The role is read from the path, and only the path is logged.
+TEST_F(RolesByPathTest, AQueryOnTheRequestTargetDoesNotChangeTheRoleAndIsNotLogged) {
+  GameSocket login;
+  Admit(login, "/login?token=SECRET-VALUE-520");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("conn=1 role=login basis=path listener=service target=/login has_query=true"), std::string::npos)
+      << lines[0];
+  EXPECT_TRUE(LogLinesContaining("SECRET-VALUE-520").empty());
+}
+
+// The matchmaker listener is a matchmaker whatever it asked for, and it shares the login session.
+TEST_F(RolesByPathTest, ASocketOnTheMatchmakerListenerSharesTheLoginSession) {
+  GameSocket login, matchmaker;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  EXPECT_NE(AdmittedLine(1).find("(conn=2, matchmaker"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(AdmittedLine(1).find("sharing login session (no LoginRequest)"), std::string::npos) << AdmittedLine(1);
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[1].find("conn=2 role=matchmaker basis=listener listener=matchmaker"), std::string::npos) << lines[1];
+}
+
+// While the redirect has tagged the config and login services, a socket that names neither is not given
+// either slot by the connect order; the tagged sockets still get theirs.
+TEST_F(RolesByPathTest, ASocketWithNoTargetDoesNotTakeASlotATaggedSocketIsExpectedFor) {
+  nevr_socket_role::GlobalAdvertisement().Note(nevr_socket_role::Role::Config);
+  nevr_socket_role::GlobalAdvertisement().Note(nevr_socket_role::Role::Login);
+  GameSocket pathless, matchmaker, login, config;
+  Admit(pathless, "/");
+  // A matchmaker with no login session has none to share, and the socket that has none is not a login
+  // session for the next one to share either.
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  Admit(login, "/login");
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 4U);
+  EXPECT_NE(lines[0].find("role=matchmaker basis=slot-reserved"), std::string::npos) << lines[0];
+  EXPECT_EQ(AdmittedLine(1).find("sharing login session"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(lines[2].find("conn=1 role=login basis=path"), std::string::npos) << lines[2];
+  EXPECT_NE(lines[3].find("conn=0 role=config basis=path"), std::string::npos) << lines[3];
+  EXPECT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+}
+
+// The first frame a socket sends names its role (ADR 0003). A frame that contradicts the role the socket was
+// admitted with is logged once, with both roles.
+TEST_F(RolesByPathTest, AFirstFrameThatContradictsTheRoleIsLoggedOnce) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  login.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(WaitForLogLines("first frame contradicts the socket's role", 1));
+  const std::string line = LogLinesContaining("first frame contradicts the socket's role").front();
+  EXPECT_NE(line.find("conn=1 role=login first_frame_role=config"), std::string::npos) << line;
+  login.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(login.WaitForFrames(3));  // the LoginRequest's reply, then one reply per frame sent
+  EXPECT_EQ(LogLinesContaining("first frame contradicts the socket's role").size(), 1U);
+}
+
+TEST_F(RolesByPathTest, AFirstFrameThatMatchesTheRoleOrNamesNoneIsNotLogged) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  login.Send(nevr_evr_codec::kSymDocumentRequest);  // names no role: the login connection can send anything
+  ASSERT_TRUE(config.WaitForFrames(1));
+  ASSERT_TRUE(login.WaitForFrames(2));
+  EXPECT_TRUE(LogLinesContaining("first frame contradicts the socket's role").empty());
+}
+
+// A socket with no recognised request target keeps the connect order when nothing says otherwise:
+// config, then login.
+TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
+  GameSocket first, second;
+  Admit(first, "/");
+  Admit(second, "/");
+  EXPECT_NE(AdmittedLine(0).find("(conn=0, config"), std::string::npos) << AdmittedLine(0);
+  EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(second.WaitForFrames(1));
 }
 
 // ============================================================================
@@ -2744,5 +3108,64 @@ TEST(XpidPatchBoot, TheRefusalCauseNamesTheFirstMismatchedSite) {
         EXPECT_STREQ(g_bootHookFailedCause, expected)
             << "boot.cpp's ServerFatal prints this: it must name the failing site";
     }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+// ============================================================================
+// #532 — a failed GetProviderPrefix (OVR-ORG) detour refuses to start a server, the same as a
+// failed five-site byte patch. A server that kept running would build 17 callers' xpids with the
+// game's own PSN- prefixes while the bridge logs in as OVR-ORG.
+// ============================================================================
+
+namespace {
+
+// Real x86-64 prologue (mov [rsp+8],rbx; mov [rsp+10h],rsi; ret) at GetProviderPrefix, in memory
+// that can be executed, so MinHook can really detour it.
+constexpr unsigned char kStandInPrefixFunction[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0xC3};
+
+}  // namespace
+
+TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself) {
+    // MinHook is not initialised in this process, so MH_CreateHook refuses: the detour fails for real.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";
+        EXPECT_EQ(std::string(g_bootHookFailedCause).rfind("XPID GetProviderPrefix detour failed", 0), 0u)
+            << "boot.cpp's ServerFatal prints this: it must name the detour, was '" << g_bootHookFailedCause << "'";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+        written = tee.Output();
+    }
+    EXPECT_NE(written.find("[NEVR.XPID] warn; GetProviderPrefix detour FAILED"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_NE(written.find("a server will refuse to start"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinues) {
+    ASSERT_EQ(MH_Initialize(), MH_OK);
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    memcpy(base + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG, "OVR-ORG", 8);
+    {
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_FALSE(g_bootHookFailed) << "a working detour must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "");
+        using PrefixFn = const char* (*)(uint32_t*);
+        uint32_t provider = 2;  // PSN: the detour answers OVR-ORG whatever the game asked for
+        const char* prefix = reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider);
+        EXPECT_STREQ(prefix, "OVR-ORG");
+    }
+    MH_Uninitialize();
     VirtualFree(base, 0, MEM_RELEASE);
 }

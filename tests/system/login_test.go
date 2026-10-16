@@ -98,7 +98,8 @@ func TestMatchmakerListenerBound(t *testing.T) {
 }
 
 // TestMatchmakerClientConnects requires conn=2, rather than any generic
-// connection, because conn=0 and conn=1 are the config and login connections.
+// connection, because conn=0 and conn=1 are the slots of the config and login
+// sockets (a socket's slot comes from the request target it asked for).
 // The conn=2 branch is the matchmaker path that reuses the authenticated login
 // session.
 func TestMatchmakerClientConnects(t *testing.T) {

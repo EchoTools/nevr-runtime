@@ -119,11 +119,13 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/socket_role.h"
     "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/pnsrad_load_queue.h"
     "patch/mic_provider.h"
     "patch/party_invite_gate.h"
     "patch/social_facade.h"
@@ -665,6 +667,13 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
+    # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
+    add_executable(test_socket_role tests/test_socket_role.cpp)
+    set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_socket_role PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
+
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.
     add_executable(test_status_redirect_check
@@ -755,6 +764,8 @@ if(BUILD_TESTING)
     target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    # #504's timing fixture loads the stand-in pnsrad.dll that test_export_trace builds.
+    add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
 
     # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
@@ -982,8 +993,8 @@ if(BUILD_TESTING)
     # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)
