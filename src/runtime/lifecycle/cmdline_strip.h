@@ -128,7 +128,7 @@ struct StripResult {
   std::string commandLine;             ///< The text to give the game.
   std::vector<std::string> removed;    ///< Each removed token's text (an option or a parameter), in order.
   std::vector<std::string> options;    ///< The canonical name of each removed option, in order.
-  std::vector<std::string> kept;       ///< The text of each token left in `commandLine`, in order.
+  std::vector<std::string> kept;       ///< The text of each token left in `commandLine`, in order (empty for a client, which is not tokenized).
 };
 
 namespace detail {
@@ -173,12 +173,12 @@ inline StripResult StripServerTimestepArgs(std::string_view commandLine) {
     copied = tokens[k].end;
     result.removed.emplace_back(tokens[k].text);
   }
-  if (result.removed.empty()) return result;
-  detail::Append(out, commandLine.substr(copied));
-  result.commandLine = std::move(out);
   for (std::size_t k = 0; k < tokens.size(); ++k) {
     if (!drop[k]) result.kept.emplace_back(tokens[k].text);
   }
+  if (result.removed.empty()) return result;
+  detail::Append(out, commandLine.substr(copied));
+  result.commandLine = std::move(out);
   return result;
 }
 
