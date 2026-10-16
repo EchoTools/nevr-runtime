@@ -234,7 +234,7 @@ TEST(NevrConfig, BareVarUnsetKeepsLiteralText) {
   EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "pre-${NEVR_TEST_BARE}-post");
 }
 
-// One name per unset variable however often it is referenced: the load logs one warning per entry.
+// One name per unset variable however often it is referenced: the load reports one entry per name, and the PC caller logs one warning per entry.
 TEST(NevrConfig, UnsetBareVarIsReportedOncePerName) {
   UnsetEnv("NEVR_TEST_BARE_ONCE");
   UnsetEnv("NEVR_TEST_BARE_TWICE");
@@ -388,6 +388,91 @@ TEST(NevrConfig, AcceptsSocialFacadeSection) {
   const auto cfg = nevr::NevrConfig::LoadFromString("social:\n  facade: true\n");
   ASSERT_TRUE(cfg.GetBool("social.facade").has_value());
   EXPECT_TRUE(*cfg.GetBool("social.facade"));
+}
+
+// `diagnostics` is a top-level section (the Quest's hardware dump is `diagnostics.hardware_dump`, #573). The PC
+// accepts it and reads nothing from it.
+TEST(NevrConfig, AcceptsDiagnosticsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("diagnostics:\n  hardware_dump: true\n");
+  ASSERT_TRUE(cfg.GetBool("diagnostics.hardware_dump").has_value());
+  EXPECT_TRUE(*cfg.GetBool("diagnostics.hardware_dump"));
+  EXPECT_FALSE(cfg.Empty());
+}
+
+// A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
+// (a key, a value), which the Quest's sentinel log must not repeat.
+TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
+  const auto reasonOf = [](const std::string& yaml) {
+    try {
+      nevr::NevrConfig::LoadFromString(yaml);
+    } catch (const nevr::NevrConfigError& e) {
+      return std::string(nevr::ReasonToken(e.Kind()));
+    }
+    return std::string("no error");
+  };
+  UnsetEnv("NEVR_TEST_REASON_REQUIRED");
+  EXPECT_EQ(reasonOf("services: [unterminated\n"), "yaml_syntax");
+  EXPECT_EQ(reasonOf("- a\n- b\n"), "not_a_mapping");
+  EXPECT_EQ(reasonOf("bogus_section:\n  x: 1\n"), "unknown_top_level_key");
+  EXPECT_EQ(reasonOf("plugins: 3\n"), "bad_plugins");
+  EXPECT_EQ(reasonOf("plugins:\n  - 3\n"), "bad_plugins");
+  EXPECT_EQ(reasonOf("auth:\n  http_key: \"${NEVR_TEST_REASON_REQUIRED:?must be set}\"\n"), "unset_required_variable");
+  EXPECT_EQ(reasonOf("services:\n  serverdb: \"x\"\n"), "no error");
+  try {
+    nevr::NevrConfig::LoadFromFile(ScratchConfigPath("no-such-file"));
+    FAIL() << "an unreadable file must throw";
+  } catch (const nevr::NevrConfigError& e) {
+    EXPECT_STREQ(nevr::ReasonToken(e.Kind()), "unreadable");
+  }
+}
+
+// The parser logs nothing (the Quest builds it without the PC logger); the PC's callers log the unset-variable
+// warning, once per name, through LogUnsetBareVars.
+TEST(NevrConfig, LoadingLogsNothingAndTheCallerLogsEachUnsetVariableOnce) {
+  UnsetEnv("NEVR_TEST_BARE_LOG_A");
+  UnsetEnv("NEVR_TEST_BARE_LOG_B");
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_A}\"\n  loginservice: \"${NEVR_TEST_BARE_LOG_A}/${NEVR_TEST_BARE_LOG_B}\"\n");
+  const std::string duringLoad = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(duringLoad, "");
+
+  testing::internal::CaptureStderr();
+  nevr::LogUnsetBareVars(cfg);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  const auto occurrences = [&logged](const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t at = logged.find(needle); at != std::string::npos; at = logged.find(needle, at + 1)) ++n;
+    return n;
+  };
+  EXPECT_EQ(occurrences("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_A is not set"), 1u) << logged;
+  EXPECT_EQ(occurrences("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_B is not set"), 1u) << logged;
+  EXPECT_NE(logged.find("kept as written"), std::string::npos) << logged;
+
+  // Nothing unset, nothing logged.
+  SetEnv("NEVR_TEST_BARE_LOG_A", "x");
+  const nevr::NevrConfig set = nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_A}\"\n");
+  testing::internal::CaptureStderr();
+  nevr::LogUnsetBareVars(set);
+  EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
+  UnsetEnv("NEVR_TEST_BARE_LOG_A");
+}
+
+// The policy wrapper keeps logging the same warning when it loads a file (it is the PC caller).
+TEST(NevrConfig, LoadFromFileOrFailLogsTheUnsetVariableWarning) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("unset-var-config"));
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << "services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_C}\"\n";
+  }
+  UnsetEnv("NEVR_TEST_BARE_LOG_C");
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_NE(logged.find("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_C is not set"), std::string::npos) << logged;
 }
 
 }  // namespace

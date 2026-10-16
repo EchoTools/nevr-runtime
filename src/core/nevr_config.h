@@ -21,13 +21,34 @@
 
 namespace nevr {
 
+/// Why a load failed, as a class a caller can log without repeating the parser's text. The text (`what()`)
+/// echoes the file's own words (a key, a line of YAML), which the Quest's sentinel log must not carry.
+enum class NevrConfigErrorKind {
+  kOther,
+  kUnreadable,
+  kYamlSyntax,
+  kNotAMapping,
+  kUnknownTopLevelKey,
+  kBadPlugins,
+  kUnsetRequiredVariable,
+};
+
+/// A stable, value-free token for a kind: "unreadable", "yaml_syntax", "not_a_mapping", "unknown_top_level_key",
+/// "bad_plugins", "unset_required_variable", and "invalid_config" for kOther.
+const char* ReasonToken(NevrConfigErrorKind kind);
+
 /// Thrown by the parsing entry points on ANY failure: file not readable, YAML
 /// parse error, an unknown top-level key, a malformed `plugins` list, or an
 /// unresolved `${VAR:?}` interpolation. Internal to the runtime — it is caught
-/// at the (future) consumer call sites and never crosses a DLL export boundary.
+/// at the consumer call sites and never crosses a DLL export boundary.
 class NevrConfigError : public std::runtime_error {
  public:
-  using std::runtime_error::runtime_error;
+  explicit NevrConfigError(const std::string& what, NevrConfigErrorKind kind = NevrConfigErrorKind::kOther)
+      : std::runtime_error(what), kind_(kind) {}
+  NevrConfigErrorKind Kind() const noexcept { return kind_; }
+
+ private:
+  NevrConfigErrorKind kind_;
 };
 
 /// One entry of the ordered `plugins:` list. `args` is flattened to dotted keys
@@ -56,10 +77,12 @@ class NevrConfig {
   static NevrConfig LoadFromString(const std::string& yaml);
   static NevrConfig LoadFromFile(const std::string& path);
 
-  /// Production policy wrapper (no consumer in S2). On failure:
+  /// Production policy wrapper (PC only: defined in nevr_config_policy.cpp, which the Quest does not build).
+  /// On failure:
   ///   server mode -> FatalError(...) — delegates to the registered handler
   ///                  (ForceFatalExit in a real server; the N4 path);
   ///   client mode -> logs a Warning and returns an empty config (Empty()==true).
+  /// On success it logs LogUnsetBareVars for the loaded config.
   static NevrConfig LoadFromFileOrFail(const std::string& path, bool is_server);
 
   /// Typed getters. `path` is dotted, e.g. "services.serverdb". Return nullopt
@@ -77,7 +100,7 @@ class NevrConfig {
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
   /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
-  /// the value as written; LoadFromString logs one warning per name.
+  /// the value as written; the loader does not log them (LogUnsetBareVars, or the caller, does).
   const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
 
  private:
@@ -87,6 +110,10 @@ class NevrConfig {
   bool empty_ = true;
   std::vector<std::string> unsetBareVars_;
 };
+
+/// PC only (defined in nevr_config_policy.cpp): logs one Warning per name in cfg.UnsetBareVars(), through Log().
+/// The parser itself logs nothing, so the Quest can build it without the PC logger.
+void LogUnsetBareVars(const NevrConfig& cfg);
 
 /// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The plugin-list
 /// flags and the flat-key consumers use it; NevrConfig::GetBool also falls back to yaml-cpp's

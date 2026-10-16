@@ -3,6 +3,15 @@
 // yaml-cpp. This file is compiled WITHOUT the core PCH (SKIP_PRECOMPILE_HEADERS in
 // CMake): the PCH includes <windows.h> without NOMINMAX, and its min/max macros
 // break yaml-cpp and <limits>.
+//
+// The parser is shared with the Quest sentinel (src/quest/sentinel/quest_config.cpp), which does not build the
+// PC logger: this file includes no core/logging.h and logs nothing. What the PC does on a failed load (N4) and
+// its unset-variable warning live in nevr_config_policy.cpp.
+
+// Before any header that could reach <windows.h>: its min/max macros break yaml-cpp and <limits>.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 
 #include "core/nevr_config.h"
 
@@ -13,19 +22,6 @@
 #include <sstream>
 #include <utility>
 
-#ifdef _WIN32
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>  // CHAR / VOID typedefs used by core/logging.h
-#endif
-
-#include "core/logging.h"  // Log(), FatalError()
-
-// yaml-cpp AFTER windows.h so NOMINMAX has suppressed the min/max macros.
 #include <yaml-cpp/yaml.h>
 
 namespace nevr {
@@ -82,11 +78,12 @@ std::string ResolveVar(const std::string& inner) {
   if (mode == '?') {
     throw NevrConfigError(rest.empty()
                               ? ("config: required environment variable " + var + " is not set")
-                              : ("config: " + rest));
+                              : ("config: " + rest),
+                          NevrConfigErrorKind::kUnsetRequiredVariable);
   }
   // Bare ${VAR}, unset: the text stays as written. Failing here would cost a client
   // its whole config (every plugin) over one value; secrets use ${VAR:?msg}, which
-  // still throws. The name is reported once per load by LoadFromString.
+  // still throws. The name is collected for the caller (UnsetBareVars()), which reports it.
   if (t_unsetBareVars != nullptr) t_unsetBareVars->insert(var);
   return "${" + inner + "}";
 }
@@ -181,7 +178,8 @@ YAML::Node ResolvePath(const YAML::Node& root, const std::string& path) {
 const std::set<std::string>& AllowedTopLevelKeys() {
   static const std::set<std::string> kKeys = {
       "version", "identity", "auth",    "services", "network", "assets",
-      "arena",   "guilds",   "telemetry", "plugins", "profiles", "social"};
+      "arena",   "guilds",   "telemetry", "plugins", "profiles", "social",
+      "diagnostics"};
   return kKeys;
 }
 
@@ -192,7 +190,8 @@ void ValidateTopLevel(const YAML::Node& root) {
       throw NevrConfigError(
           "config: unknown top-level key '" + key +
           "' (allowed: version, identity, auth, services, network, assets, arena, "
-          "guilds, telemetry, plugins, profiles, social; use x-* for extensions)");
+          "guilds, telemetry, plugins, profiles, social, diagnostics; use x-* for extensions)",
+          NevrConfigErrorKind::kUnknownTopLevelKey);
     }
   }
 }
@@ -224,15 +223,17 @@ void FlattenArgs(const YAML::Node& node, const std::string& prefix,
 void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
   const YAML::Node plugins = ChildByKey(root, "plugins");
   if (!plugins.IsDefined() || plugins.IsNull()) return;
-  if (!plugins.IsSequence()) throw NevrConfigError("config: 'plugins' must be a list");
+  if (!plugins.IsSequence()) throw NevrConfigError("config: 'plugins' must be a list", NevrConfigErrorKind::kBadPlugins);
 
   for (const auto& entry : plugins) {
-    if (!entry.IsMap()) throw NevrConfigError("config: each plugin entry must be a mapping");
+    if (!entry.IsMap()) {
+      throw NevrConfigError("config: each plugin entry must be a mapping", NevrConfigErrorKind::kBadPlugins);
+    }
 
     PluginSpec spec;
     const YAML::Node nameN = ChildByKey(entry, "name");
     if (!nameN.IsScalar() || nameN.Scalar().empty()) {
-      throw NevrConfigError("config: a plugin entry is missing a non-empty 'name'");
+      throw NevrConfigError("config: a plugin entry is missing a non-empty 'name'", NevrConfigErrorKind::kBadPlugins);
     }
     spec.name = InterpolateString(nameN.Scalar());
 
@@ -257,6 +258,19 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
 
 }  // namespace
 
+const char* ReasonToken(NevrConfigErrorKind kind) {
+  switch (kind) {
+    case NevrConfigErrorKind::kUnreadable: return "unreadable";
+    case NevrConfigErrorKind::kYamlSyntax: return "yaml_syntax";
+    case NevrConfigErrorKind::kNotAMapping: return "not_a_mapping";
+    case NevrConfigErrorKind::kUnknownTopLevelKey: return "unknown_top_level_key";
+    case NevrConfigErrorKind::kBadPlugins: return "bad_plugins";
+    case NevrConfigErrorKind::kUnsetRequiredVariable: return "unset_required_variable";
+    case NevrConfigErrorKind::kOther: break;
+  }
+  return "invalid_config";
+}
+
 std::optional<bool> ParseBool(const std::string& s) {
   std::string t;
   t.reserve(s.size());
@@ -278,7 +292,7 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   try {
     raw = YAML::Load(yaml);
   } catch (const YAML::Exception& e) {
-    throw NevrConfigError(std::string("config: YAML parse error: ") + e.what());
+    throw NevrConfigError(std::string("config: YAML parse error: ") + e.what(), NevrConfigErrorKind::kYamlSyntax);
   }
 
   NevrConfig cfg;
@@ -289,7 +303,9 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
     cfg.empty_ = true;
     return cfg;
   }
-  if (!raw.IsMap()) throw NevrConfigError("config: the top level must be a mapping");
+  if (!raw.IsMap()) {
+    throw NevrConfigError("config: the top level must be a mapping", NevrConfigErrorKind::kNotAMapping);
+  }
 
   ValidateTopLevel(raw);
   std::set<std::string> unsetBare;
@@ -298,12 +314,6 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
     ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
   }
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
-  for (const std::string& name : unsetBare) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written, and a "
-        "service key that uses it counts as unset",
-        name.c_str(), name.c_str());
-  }
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_);
   cfg.empty_ = false;
@@ -312,29 +322,10 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
 
 NevrConfig NevrConfig::LoadFromFile(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
-  if (!f) throw NevrConfigError("config: cannot open " + path);
+  if (!f) throw NevrConfigError("config: cannot open " + path, NevrConfigErrorKind::kUnreadable);
   std::stringstream ss;
   ss << f.rdbuf();
   return LoadFromString(ss.str());
-}
-
-NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_server) {
-  try {
-    return LoadFromFile(path);
-  } catch (const NevrConfigError& e) {
-    if (is_server) {
-      // In a real server the registered handler routes this to ForceFatalExit
-      // (the N4 path); the unregistered fallback message-boxes + exits. Never
-      // reached by the unit test, which drives the client branch only.
-      FatalError(e.what(), "NEVR Config Error");
-    } else {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONFIG] %s — continuing with empty config (all config-driven "
-          "behavior uses defaults)",
-          e.what());
-    }
-    return NevrConfig();  // empty
-  }
 }
 
 std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* hadUnsetBare) const {

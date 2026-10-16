@@ -6,7 +6,7 @@
 # Depends on nevr_abi (PUBLIC): EchoVR::LogLevel is the game's enum, so logging
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
-set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp"
+set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "nevr_config_policy.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp" "mic_owner_thread.cpp"
   "device_poll_response.cpp" "auth_refresh.cpp" "device_auth_flow.cpp")
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
@@ -37,6 +37,9 @@ target_include_directories(nevr_core SYSTEM PRIVATE
 # includes windows.h WITHOUT NOMINMAX, whose min/max macros break yaml-cpp/<limits>.
 # Compile this one file without the PCH.
 set_source_files_properties(nevr_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# nevr_config_policy.cpp is the PC-only half (the N4 fail-loud wrapper and the unset-variable warning): it logs, so
+# the Quest, which builds nevr_config.cpp without the PC logger, does not build it. Same PCH reason as above.
+set_source_files_properties(nevr_config_policy.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # mic_dsp.cpp is deliberately platform-independent (no windows.h) so a GTest
 # target can compile it directly without the Windows PCH — see
 # tests/test_mic_dsp.cpp.
