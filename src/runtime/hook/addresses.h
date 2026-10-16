@@ -120,12 +120,14 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
 /// reasons, and the SECOND is the decisive one.
 ///
-/// (1) It only matters under fixed timestep. A server is now always fixed-timestep
-///     (boot.cpp sets the game's flag, config.cpp writes the step from
-///     network.tick_rate_hz), so this reason no longer rules the patch out by
-///     itself. `-timestep`/`-fixedtimestep` stay deprecated-and-ignored (boot.cpp
-///     logs "is deprecated and ignored" and discards the value); the rate comes
-///     from the config key, not from v1's `headlessTimeStep`.
+/// (1) It only matters under fixed timestep. A server is always fixed-timestep:
+///     boot.cpp sets the game's flag and config.cpp writes the step from
+///     network.tick_rate_hz. `-timestep`/`-fixedtimestep` are removed from a
+///     server's command line before the game parses it (cmdline_strip.h); the
+///     rate comes from the config key, not from v1's `headlessTimeStep`. Whether
+///     a server's clock holds the step is read back once and logged
+///     (config.cpp LogServerStepReadBack), not assumed here. This reason
+///     therefore does not rule the patch out by itself; (2) does.
 ///
 /// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
 ///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:
@@ -676,7 +678,15 @@ constexpr uintptr_t LOADOUT_RESOLVE_DATA_FROM_ID = 0x004F37A0;
 // Global Data Addresses
 // ============================================================================
 
-/// Pointer to fixed timestep value (in microseconds)
+/// The clock global: a pointer to the CClock the game runs on, at echovr.exe 0x1420a00e8 (ReVault).
+/// Its step is the 64-bit field at +0x90 (microseconds) and its mode word is at +0x50 (bits 0x8 fixed,
+/// 0x10 paced). CClock::CClock stores the default 33333 at 0x1400cd964; SetUseFixedTimeStep (0x1405114d0)
+/// stores 33333 again at 0x140511506 when called with 1. TWO writers of the global exist:
+/// NRadPhysics::InitGlobals (0x141549074) and CR15Game::InitRenderWindowFromEngineFlags (0x1404f5aef,
+/// which replaces it with a new CClock when 0x1400cd8f0 returns one, then calls SetUseFixedTimeStep(1) at
+/// 0x1404f5b2b when [pGame+0x828] has 0x2000000). Whether the step ApplyServerTimestep writes survives
+/// the later one is what the read-back line answers, at ONE moment (per-frame tick 125, about 1.2 s in):
+/// it says the step was live then, not that it stays live.
 constexpr uintptr_t FIXED_TIMESTEP_PTR = 0x020A00E8;
 constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 

@@ -362,7 +362,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_socket_role
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_socket_role
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -450,6 +450,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_early_quit_lockout.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_cmdline_strip.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1683,6 +1689,124 @@ verify:
         exit 1
     fi
 
+    # --- #515: a server's time-step arguments are removed before the game parses them ----
+    # echovr.exe builds its CMainArgs in Main_ from the string GameMainWrapper passes on, before
+    # PreprocessCommandLine (lifecycle/cmdline_strip.h says where). The wrapper hook is the one place
+    # the removal reaches the game's parser. The decision is a pure function (PrepareForGame, GTest
+    # test_cmdline_strip); no test runs the hook, so this pins that the hook makes that one call, hands
+    # the game its result, records the report boot.cpp logs, and keeps the exception boundary (never
+    # catch(...)). The server's two writes are pure helpers too (server_timestep.h, GTest
+    # test_server_timestep); this pins that both call sites still call them with g_isServer: 8d26b1a8
+    # removed this writer once, and a deleted call passes every unit test.
+    # Comment-stripped (N99/N111), reusing the N125 capture of crash_recovery.cpp.
+    sensor_515_need() { # $1 capture, $2 fixed-string pattern, $3 why it matters
+        if ! grep -qF -- "$2" <<<"$1"; then
+            echo "verify: FAIL — #515 sensor: '$2' is missing. $3" >&2
+            exit 1
+        fi
+    }
+    # Trailing `// ...` comments are stripped too (a mutant `GameMain(arg1);  // not GameMain(gameArg);` must not
+    # satisfy a pattern); only a `//` preceded by whitespace, so a URL in a string survives.
+    S515_STRIP_TRAILING='s#[[:space:]]+//.*$##'
+    S515_CR=$(sed -E "$S515_STRIP_TRAILING" <<<"$N125_CR")
+    sensor_515_need "$S515_CR" 'nevr_cmdline::PrepareForGame(' "The strip helper must make the one call that decides what the game parses; a server would give the game -fixedtimestep and -timestep."
+    sensor_515_need "$S515_CR" 'report.tokensRemoved = handOff.tokensRemoved;' "boot.cpp reads the report to log removed or NOT removed; without it a failed removal is silent."
+    sensor_515_need "$S515_CR" 'report.residual = handOff.residual;' "The report must say when a time-step option is left in the string the game parses."
+    sensor_515_need "$S515_CR" 'report.options = handOff.optionsText;' "The report must name the removed options."
+    sensor_515_need "$S515_CR" 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' "The game must be handed the result of PrepareForGame; passing the original string undoes the removal."
+    sensor_515_need "$S515_CR" 'g_stripReport = std::move(report);' "The report must be published (after everything that can throw)."
+    sensor_515_need "$S515_CR" 'g_stripReportReady.store(true' "The report must be published or boot.cpp sees none."
+    sensor_515_need "$S515_CR" 'const INT64 gameArg = PrepareGameArgument(arg1);' "GameMainWrapperHook must get the game's argument from the helper, whose std::string and report die before GameMain."
+    sensor_515_need "$S515_CR" 'GameMain(gameArg);' "The game must be called with that result."
+    sensor_515_need "$S515_CR" 'catch (const std::bad_alloc&)' "The helper allocates while the game calls it; a failure must fall back to the original string."
+    sensor_515_need "$S515_CR" 'catch (const std::exception&' "The helper allocates while the game calls it; a failure must fall back to the original string."
+    # Order: gameArg and the report are assigned only after everything that can throw (#515 review SF1): the
+    # options string is built before gameArg is assigned, and both catches put gameArg back.
+    S515_OPT=$(grep -nF 'report.options = handOff.optionsText;' <<<"$S515_CR" | cut -d: -f1)
+    S515_ARG=$(grep -nF 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' <<<"$S515_CR" | cut -d: -f1)
+    if [ -z "$S515_OPT" ] || [ -z "$S515_ARG" ] || [ "$S515_OPT" -ge "$S515_ARG" ]; then
+        echo "verify: FAIL — #515 sensor: gameArg is assigned before the report's options string is built (or one is missing)." >&2
+        echo "An allocation after gameArg throws leaves the game the stripped string while the log says the original." >&2
+        exit 1
+    fi
+    if [ "$(grep -cE '^[[:space:]]+gameArg = arg1;' <<<"$S515_CR")" -lt 2 ]; then
+        echo "verify: FAIL — #515 sensor: the exception handlers no longer put gameArg back to arg1." >&2
+        exit 1
+    fi
+    if [ "$(grep -cF 'report = nevr_timestep_log::FailedReport();' <<<"$S515_CR")" -lt 2 ]; then
+        echo "verify: FAIL — #515 sensor: a handler no longer records the failure with FailedReport()." >&2
+        echo "boot.cpp would not know the removal threw and would log 'NOT removed' without hook_failed=true." >&2
+        exit 1
+    fi
+    # N2: the helper's std::string and report must be gone before GameMain, which the VEH longjmps out of.
+    S515_REPORT_LINE=$(grep -nE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR" | cut -d: -f1 | sed -n 1p)
+    S515_HOOK_LINE=$(grep -nF 'static INT64 GameMainWrapperHook(INT64 arg1) {' <<<"$S515_CR" | cut -d: -f1)
+    if [ -z "$S515_REPORT_LINE" ] || [ -z "$S515_HOOK_LINE" ] || [ "$S515_REPORT_LINE" -ge "$S515_HOOK_LINE" ] || [ "$(grep -cE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR")" -ne 1 ]; then
+        echo "verify: FAIL — #515 sensor: a TimestepStripReport local is alive in GameMainWrapperHook (or the helper moved)." >&2
+        echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
+    fi
+    # N2, any type: from the hook's first line through the GameMain(gameArg); line, the hook declares exactly the three trivial
+    # locals below. Any other declaration (a report, a std:: or repo type, `auto`, in any form) could be alive
+    # across the call the VEH longjmps out of, which is undefined behaviour for a non-trivial local.
+    S515_PRE_GAMEMAIN=$(awk -v start="$S515_HOOK_LINE" 'NR>=start {print} NR>=start && /GameMain\(gameArg\);/ {exit}' <<<"$S515_CR")
+    sensor_nonempty "#515 hook body before GameMain" "GameMainWrapperHook up to GameMain(gameArg);" "$S515_PRE_GAMEMAIN"
+    S515_DECLS=$(grep -E '^[[:space:]]+(const[[:space:]]+)?[A-Za-z_][A-Za-z0-9_:<>,]*[[:space:]*&]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(=|;|\{|\(|\[)' <<<"$S515_PRE_GAMEMAIN" | grep -vE '^[[:space:]]+(return|else|case|goto|delete|throw)[[:space:]]' | sed -E 's/^[[:space:]]+//' || true)
+    S515_ALLOWED=$'int crashCount = setjmp(g_gameLoopJmpBuf);\nconst INT64 gameArg = PrepareGameArgument(arg1);\nconst INT64 gameResult = GameMain(gameArg);'
+    if [ "$S515_DECLS" != "$S515_ALLOWED" ]; then
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's declarations through GameMain(gameArg); are not exactly the three trivial locals." >&2
+        echo "Found: $S515_DECLS" >&2
+        echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
+    fi
+    # The allowlist reads one-line declarations only (a type split over lines, or with spaces inside its template
+    # arguments, would pass it), so the hook's whole text through the GameMain(gameArg); line is also pinned: any edit
+    # there fails here until a reviewer has checked it adds no non-trivial local and updates the pin.
+    S515_PRE_SHA=$(sha256sum <<<"$S515_PRE_GAMEMAIN" | cut -c1-64)
+    if [ "$S515_PRE_SHA" != "5c1fe4be63ca49aacae848c47932f247b5634604d1b12b8b0141546f6d1c42f1" ]; then
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text through GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
+        echo "Check that the edit leaves no local with a destructor alive across GameMain, then set the pin to that hash." >&2
+        exit 1
+    fi
+    if grep -qF 'catch (...)' <<<"$S515_CR"; then
+        echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
+        exit 1
+    fi
+    S515_RC=0; S515_CFG=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
+    sensor_stage1 "#515 server step call site" "src/runtime/lifecycle/config.cpp" "$S515_RC"
+    sensor_nonempty "#515 server step call site" "non-comment lines of config.cpp" "$S515_CFG"
+    S515_RC=0; S515_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
+    sensor_stage1 "#515 server flag call site" "src/runtime/lifecycle/boot.cpp" "$S515_RC"
+    sensor_nonempty "#515 server flag call site" "non-comment lines of boot.cpp" "$S515_BOOT"
+    S515_RC=0; S515_TICK=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/frame/tick.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
+    sensor_stage1 "#515 read-back call site" "src/runtime/frame/tick.cpp" "$S515_RC"
+    sensor_nonempty "#515 read-back call site" "non-comment lines of tick.cpp" "$S515_TICK"
+    if ! grep -qE '^[[:space:]]*ApplyServerTimestep\(\);' <<<"$S515_CFG"; then
+        echo "verify: FAIL — #515 sensor: LoadLocalConfigHook no longer calls ApplyServerTimestep();" >&2
+        echo "The server would run on the game's own time step (#511); nothing else writes it." >&2
+        exit 1
+    fi
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);' "ApplyServerTimestep must resolve the step field from the game's clock state."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);' "ApplyServerTimestep must pass g_isServer and the configured rate to the step writer."
+    sensor_515_need "$S515_CFG" 'g_stepRecord.Store(w);' "The step outcome must be recorded: boot.cpp and the read-back report it."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::StepWrite ServerStepWrite() { return g_stepRecord.Load(); }' "The recorded outcome must be what boot.cpp and the read-back read."
+    sensor_515_need "$S515_CFG" 'const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);' "The read-back must check the clock readable before it reads (N31)."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::ReadClockIf(readable, state);' "The read-back must read the clock only when the guard says it is readable."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::DecideReadBack(ServerStepWrite(), g_headlessTickRateHz, rb, tick);' "The read-back's expected step and liveness must come from the tested decision, with the recorded outcome."
+    sensor_515_need "$S515_CFG" 'Log(d.live ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s", d.line.c_str());' "The read-back level must follow the decision."
+    sensor_515_need "$S515_CFG" '"[NEVR.PATCH] server clock read-back failed (out of memory)"' "The read-back runs inside the per-frame dispatcher; a throw would leave its re-entrancy flag set for good, so it needs a named catch."
+    sensor_515_need "$S515_BOOT" 'nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);' "boot.cpp must resolve the game's flags field (a null field is logged as field_missing, but only if this is the call)."
+    sensor_515_need "$S515_BOOT" 'nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);' "boot.cpp must set the server's fixed-time-step flag, with g_isServer, before the original PreprocessCommandLine (#511)."
+    sensor_515_need "$S515_BOOT" 'g_flagRecord.Store(flagOutcome);' "The flag outcome must be recorded for LogTimestepArgs."
+    sensor_515_need "$S515_BOOT" '  LogTimestepArgs();' "boot.cpp must report what happened to the time-step arguments."
+    sensor_515_need "$S515_BOOT" 'nevr_timestep_log::BuildInputs(' "LogTimestepArgs must assemble its inputs with the tested function."
+    sensor_515_need "$S515_BOOT" 'GetTimestepStripReport(), g_isServer != FALSE, nevr_cmdline::HasTimestepOption(GetCommandLineA()),' "LogTimestepArgs must pass the hook's report, boot.cpp's reading of server and the command line's time-step options."
+    sensor_515_need "$S515_BOOT" 'ServerStepWrite(), g_flagRecord.Load(), g_headlessTickRateHz);' "LogTimestepArgs must pass the recorded step and flag outcomes and the rate."
+    sensor_515_need "$S515_BOOT" 'nevr_timestep_log::Decide(in)' "LogTimestepArgs must log what the tested decision returns."
+    sensor_515_need "$S515_BOOT" 'Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,' "The log level must follow the decision's level."
+    sensor_515_need "$S515_BOOT" 'catch (const std::bad_alloc&)' "LogTimestepArgs allocates inside a game-called hook; it needs a named catch."
+    sensor_515_need "$S515_TICK" 'nevr_server_timestep::ShouldReadBack(g_isServer != FALSE, t)) LogServerStepReadBack(t);' "The server's one clock read-back must be called from the per-frame dispatcher (N86/N110); without it the run's log cannot say whether the step is live."
+
     # --- N123: the login display name must be SOURCED, not a literal -------------
     # Every NEVR client announced the identical hardcoded name, so eight players in
     # one session rendered eight identical nameplates. The name was available the
@@ -2698,7 +2822,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1087
+    python3 tools/verify_gtest_floor.py --floor 1145
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
