@@ -32,9 +32,7 @@ void ShutdownWebSocketBridge();
 
 /// N105: the real stop — closes remote connections and the listener, releasing
 /// the socket FD. Call ONLY from a context that does not hold the loader lock:
-/// the SIGINT/SIGTERM graceful path and gameserver's BeginGracefulShutdown.
-/// It is a direct call because a GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown")
-/// lookup resolves to null on every run since the N92 fold.
+/// console-control shutdown and gameserver's BeginGracefulShutdown.
 void StopWebSocketBridgeListener();
 
 // ============================================================================

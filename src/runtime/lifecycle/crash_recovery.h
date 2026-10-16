@@ -1,6 +1,11 @@
 #pragma once
 
 #include "core/pch.h"
+#include "runtime/lifecycle/veh_policy.h"
+
+/// Writes one line to stderr and, when armed, the crash record, with raw WriteFile only (no allocation, no
+/// Log(), no locks): safe where a fatal path must leave a record before the process dies.
+void WriteCrashRecordLine(const char* line);
 
 /// Installs CreateProcessA, CreateProcessW, ExitProcess, and TerminateProcess hooks
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.
@@ -21,8 +26,8 @@ unsigned TimestepArgsRemoved();
 /// Also snapshots the module table (N70 — the handler must never enumerate,
 /// which would take the loader lock) and reserves crash-handler stack for the
 /// calling thread (N69).
-/// Returns true when the handler was installed, false when it was skipped (Wine client).
-bool InstallVEH();
+/// Reports whether the handler is active, deferred until CLI preflight, or failed to install.
+nevr_veh_policy::InstallResult InstallVEH();
 
 /// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
 /// path. Purely diagnostic — always calls the original.
@@ -66,9 +71,7 @@ void NotifyGameServerLibStarted();
 /// N87: TRUE once a console CTRL+C/close/break event has been observed. Read by
 /// GameServerLib::Terminate to exit cleanly at the end of the game's own
 /// teardown, instead of letting the game fault in the client-side teardown that
-/// follows it. Distinct from g_shutdownRequested, which triggers an immediate
-/// PerformGracefulShutdown from the per-frame and per-state-transition hooks and
-/// would therefore kill the process before the lobby is unregistered.
+/// follows it.
 bool ConsoleShutdownPending();
 
 /// Forces a genuine process exit with the given code, bypassing the server-mode
@@ -90,10 +93,8 @@ void InstallFatalErrorHandler();
 /// socket FD to prevent wineserver zombie — N38 root cause), (2) unhooks BinaryBugFixes
 /// MinHook hooks, (3) calls ForceFatalExit to terminate the process.
 /// Safe to call from any thread — uses InterlockedExchange to prevent re-entry.
-/// Primary call sites: POSIX signal handler (SIGINT/SIGTERM — direct call, NOT
-/// flag-deferred), SetConsoleCtrlHandler lambda (direct), per-frame
-/// PrecisionSleepWaitHook (flag check, now dead-code defense), per-transition
-/// NetGameSwitchStateHook (flag check + session-end path).
+/// Primary call sites: console control handler, per-frame
+/// PrecisionSleepWaitHook, and per-transition NetGameSwitchStateHook.
 void PerformGracefulShutdown(unsigned int exitCode);
 
 /// Server-mode fatal exit — logs the cause as the last log line and immediately
