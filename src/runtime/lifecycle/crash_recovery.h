@@ -3,6 +3,10 @@
 #include "core/pch.h"
 #include "runtime/lifecycle/veh_policy.h"
 
+/// Writes one line to stderr and, when armed, the crash record, with raw WriteFile only (no allocation, no
+/// Log(), no locks): safe where a fatal path must leave a record before the process dies.
+void WriteCrashRecordLine(const char* line);
+
 /// Installs CreateProcessA, CreateProcessW, ExitProcess, and TerminateProcess hooks
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.
 void InstallCrashRecoveryHooks();

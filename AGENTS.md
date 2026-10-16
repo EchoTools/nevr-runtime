@@ -604,6 +604,11 @@ your seat name, for example `claude-main` or `codex`.
   Never point a build at `~/.vcpkg` directly.
 - **The merge gate is the local capped `just verify`** (plus `just test-android` for a change under
   `src/quest`). CI runs only when started by hand.
+- **`just verify` runs once per tip, never again to re-prove it.** Its log starts with `verify: HEAD <sha>` and
+  `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends `verify: OK` is the proof:
+  a reviewer reads that log and does not run verify again. A missing HEAD line is checked in seconds
+  (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time), never by a re-run.
+  Run verify again only when the tip changes.
 
 ### Git
 

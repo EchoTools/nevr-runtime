@@ -20,6 +20,10 @@
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/boot_replay.h"
 #include "runtime/log/game_line_format.h"
+#include "runtime/log/gpu_hung_notice.h"
+#include "core/globals.h"
+#include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/crash_recovery.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -1045,6 +1049,48 @@ typedef void(__fastcall* CLogPrintfImpl_t)(uint32_t level, int64_t category,
                                             const char* fmt, int64_t* varargs);
 static CLogPrintfImpl_t orig_PrintfImpl = nullptr;
 
+/* #553: recognise the game's DXGI_ERROR_DEVICE_HUNG crash and say what it is. The record (nevr log and
+ * crash record) comes first; the dialog is a courtesy, once per run, and never on a server or headless run
+ * (policy in gpu_hung_notice.h). */
+static std::mutex g_gpuHungMutex;
+static nevr_gpu_hung::Tracker g_gpuHung;
+
+#ifdef _WIN32
+static DWORD WINAPI GpuHungDialogThread(LPVOID text) {
+    MessageBoxA(nullptr, static_cast<const char*>(text), "Echo VR - graphics driver problem",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+    return 0;
+}
+#endif
+
+static void ObserveGpuHung(const char* line) {
+    /* Cheap pre-filter: every game line passes through here. */
+    if (std::strstr(line, "DXGI_ERROR_DEVICE_HUNG") == nullptr && std::strstr(line, "Video Card:") == nullptr &&
+        std::strstr(line, "Driver Version:") == nullptr) {
+        return;
+    }
+    nevr_gpu_hung::Result result;
+    {
+        std::lock_guard<std::mutex> lock(g_gpuHungMutex);
+        result = g_gpuHung.Observe(line, g_isServer != FALSE, g_isHeadless != FALSE);
+    }
+    if (result.action == nevr_gpu_hung::Action::None) return;
+
+    EmitLine(LOG_LEVEL_WARNING, result.log_line.c_str(), static_cast<int>(result.log_line.size()));
+    WriteCrashRecordLine(result.log_line.c_str());
+#ifdef _WIN32
+    if (result.action == nevr_gpu_hung::Action::LogAndNotify) {
+        /* The text must outlive this call: the dialog runs on its own thread so the game thread (which is
+         * about to crash anyway) is never held by a modal box. Leaked once per process on purpose. */
+        char* text = _strdup(result.dialog_text.c_str());
+        if (text != nullptr) {
+            HANDLE thread = CreateThread(nullptr, 0, GpuHungDialogThread, text, 0, nullptr);
+            if (thread != nullptr) CloseHandle(thread);
+        }
+    }
+#endif
+}
+
 static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
                                         const char* fmt, int64_t* varargs) {
     if (!g_config.valid || fmt == nullptr) {
@@ -1081,6 +1127,8 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     }
 
     MaybeEmitHealth();  /* N79 */
+
+    ObserveGpuHung(buf);
 
     if (ShouldSuppress(buf, level)) {
         g_suppressed_count++;

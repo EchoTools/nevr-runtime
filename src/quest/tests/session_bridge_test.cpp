@@ -467,6 +467,12 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   const std::string path = PathOf(bridge.LocalUri());
   Client config(port), login(port);
   QCHECK(config.Upgrade(path));
+  // The role of a connection is its order at the router, and each connection's thread flushes the 101 BEFORE it
+  // tells the router the game opened. Without this wait the login socket's thread can reach the router first,
+  // the sockets swap roles, and the 1011 goes to the "config" socket (#565). The router's connection count is
+  // the proof the first connection has been counted (a config socket with no account is closed again at once,
+  // so a count of live games is not).
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 1; }));
   QCHECK(login.Upgrade(path));
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
   account.Set("", nevr_session_router::LoginGate::Refused);
@@ -475,6 +481,93 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   QCHECK(login.Read(closeFrame.size()) == closeFrame);
   QCHECK(connector.Calls() == 0);
   bridge.Stop();
+}
+
+// #565: roles follow the ORDER THE CONNECTIONS WERE ACCEPTED, not the order their threads reach the router. The
+// first connection's thread is stalled for 300 ms between its 101 and its open report (the window a loaded
+// phone puts it in), and the second socket is opened the moment the first one's 101 arrives, with no wait for the
+// router: the login socket must still be the login (held, then closed 1011), and the config socket must not be.
+void TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  SessionBridge::Config cfg = MakeHeldConfig(&connector, &seen, &account);
+  cfg.loopback.beforeOpenHook = [](nevr_session_router::GameId id) {
+    if (id == 1) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  };
+  SessionBridge bridge(std::move(cfg));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(login.Upgrade(path));  // straight after the first 101: the first connection has not reported its open
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  account.Set("", nevr_session_router::LoginGate::Refused);
+  bridge.ReevaluateLoginGate();
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  bridge.Stop();
+}
+
+// #565, second door: the first-accepted connection is still HANDSHAKING (connected, no upgrade request yet) when
+// the second one upgrades. Opens are reported in accept order, so the second waits for the first and the roles
+// are the accept order's: config first, login second.
+void TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  SessionBridge bridge(MakeHeldConfig(&connector, &seen, &account));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+  Client config(port);  // accepted first, silent
+  QCHECK(WaitFor([&] { return config.fd >= 0; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  Client login(port);  // accepted second, upgrades at once
+  QCHECK(login.Upgrade(path));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  QCHECK(config.Upgrade(path));  // the slow handshake finishes
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  account.Set("", nevr_session_router::LoginGate::Refused);
+  bridge.ReevaluateLoginGate();
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  bridge.Stop();
+}
+
+// #565, third door: the first connection's stall (2.5 s) outlasts the longest wait a healthy server should see
+// here (handshake 0.8 s + close flush 1 s). The second connection does NOT go ahead out of order: the roles are
+// still the accept order, and the slow wait is said once in the log (a silent fallback is a defect).
+void TestRolesFollowAcceptOrderWhenTheFirstConnectionStallsPastTwoSeconds() {
+  FakeConnector connector;
+  Observed seen;
+  Account account;
+  SessionBridge::Config cfg = MakeHeldConfig(&connector, &seen, &account);
+  cfg.loopback.beforeOpenHook = [](nevr_session_router::GameId id) {
+    if (id == 1) std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+  };
+  std::mutex logMutex;
+  bool waitedSlow = false;
+  cfg.loopback.log = [&](nevr_session_router::LogLevel, const std::string& line) {
+    const std::lock_guard<std::mutex> lock(logMutex);
+    if (line.find("open_order_wait_slow") != std::string::npos) waitedSlow = true;
+  };
+  SessionBridge bridge(std::move(cfg));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  const std::string path = PathOf(bridge.LocalUri());
+  Client config(port), login(port);
+  QCHECK(config.Upgrade(path));
+  QCHECK(login.Upgrade(path));
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }, 8000));
+  account.Set("", nevr_session_router::LoginGate::Refused);
+  bridge.ReevaluateLoginGate();
+  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
+  QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  bridge.Stop();
+  const std::lock_guard<std::mutex> lock(logMutex);
+  QCHECK(waitedSlow);  // the stall outlasted handshake + flush time (0.8 s + 1 s here): said, and still in order
 }
 
 void TestPlaintextRemoteUriDoesNotStart() {
@@ -582,6 +675,9 @@ int main() {
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
   TestHeldLoginSurvivesUntilSignInThenRoutesByRole();
   TestHeldLoginIsClosedWhenSignInFails();
+  TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls();
+  TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake();
+  TestRolesFollowAcceptOrderWhenTheFirstConnectionStallsPastTwoSeconds();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();
   TestReconnectedLoginSocketIsToldItsLoginWasRemoved();

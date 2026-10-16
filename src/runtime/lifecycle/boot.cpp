@@ -166,6 +166,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // one was found — g_earlyConfigPtr does not gate them.
   LoadEarlyConfig();
   ArmServiceRedirects();
+  SetResourceOverrideFatalLineSink(&WriteCrashRecordLine);
   InstallResourceOverride();
 
   // Early-detect -server before auth — full CLI parse happens below.
