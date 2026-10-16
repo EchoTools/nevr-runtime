@@ -121,11 +121,14 @@ __attribute__((constructor(101))) void ArmAlarm() {
 __attribute__((constructor(102))) void HostCtor() {
   ::mkdir(Dir().c_str(), 0755);
   // Stale leftovers from an interrupted earlier run.
-  for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.json"}) ::unlink((Dir() + stale).c_str());
-  WriteFile(Dir() + "/nevr-quest.json",
-            R"({"nevr_socket_uri":"wss://file.example/nevr","nevr_http_key":"FILE-SECRET-KEY-31337",)"
-            R"("nevr_server_key":"FILE-SERVER-SECRET-42042",)"
-            R"("features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.yaml", "/bad.yaml", "/absent-dir/config.yaml"}) {
+    ::unlink((Dir() + stale).c_str());
+  }
+  WriteFile(Dir() + "/config.yaml",
+            "services:\n  socket_uri: \"wss://file.example/nevr\"\n"
+            "auth:\n  http_key: \"FILE-SECRET-KEY-31337\"\n  server_key: \"FILE-SERVER-SECRET-42042\"\n");
+  // A file left over from the JSON configuration: it is not read, whatever it says, and is reported once.
+  WriteFile(Dir() + "/nevr-quest.json", R"({"nevr_socket_uri":"wss://legacy.example/nevr","features":{"social":false}})");
   sentinel::InitActivation();
 }
 
@@ -165,6 +168,25 @@ void ConfigSurvivesStaticInitialisation() {
   CHECK(sentinel::FeatureEnabled(nevr_quest::Feature::kSocial));
   CHECK(Count("feature=social requested=on effective=on") == 1);
   CHECK(Count("feature=login requested=on effective=on") == 1);
+  // The sentinel log names the file it read.
+  CHECK(Count("config file=" + Dir() + "/config.yaml loaded") == 1);
+  CHECK(Count("absent, using embedded defaults") == 0);
+}
+
+void ALeftoverJsonConfigIsReportedAndNeverRead() {
+  // Warn priority (Android log priority 5), once, naming both files; its content (social:false, another socket
+  // URI) changed nothing.
+  int warns = 0;
+  for (const Line& l : Captured()) {
+    if (l.text.find("nevr-quest.json present and ignored; settings come from config.yaml") != std::string::npos) {
+      ++warns;
+      CHECK(l.prio == 5);
+    }
+  }
+  CHECK(warns == 1);
+  CHECK(sentinel::ActiveConfig().socketUri.text == "wss://file.example/nevr");
+  CHECK(sentinel::ActiveConfig().effective.social);
+  CHECK(Count("legacy.example") == 0);
 }
 
 void ScanDiskLogForValues(const char* when) {
@@ -226,33 +248,45 @@ void ReadConfigFileNeverBlocksOnNonRegularFiles() {
   CHECK(::mkfifo(fifo.c_str(), 0600) == 0);
   CHECK(sentinel::ReadConfigFile(fifo, &out, &err) == sentinel::ReadStatus::kNotRegularFile);
   CHECK(sentinel::ReadConfigFile(Dir(), &out, &err) == sentinel::ReadStatus::kNotRegularFile);
-  CHECK(sentinel::ReadConfigFile(Dir() + "/missing.json", &out, &err) == sentinel::ReadStatus::kAbsent);
+  CHECK(sentinel::ReadConfigFile(Dir() + "/missing.yaml", &out, &err) == sentinel::ReadStatus::kAbsent);
   CHECK(err == ENOENT);
 
   Captured().clear();
   const nevr_quest::ResolvedConfig c = sentinel::ResolveFromDisk(fifo);
   CHECK(c.socketUri.source == nevr_quest::Source::kEmbedded);
-  CHECK(!c.effective.redirect && !c.effective.bridge && !c.effective.login);
-  CHECK(Count("is not a regular file") == 1);
+  CHECK(c.effective.redirect && c.effective.bridge && c.effective.login);  // the embedded defaults carry them
+  CHECK(Count("config file=" + fifo + " is not a regular file, not read, using embedded defaults") == 1);
   ::unlink(fifo.c_str());
 
-  const std::string big = Dir() + "/big.json";
+  // A path with no file: one Info line naming it, the embedded defaults, no Error.
+  Captured().clear();
+  const std::string none = Dir() + "/absent-dir/config.yaml";
+  const nevr_quest::ResolvedConfig absent = sentinel::ResolveFromDisk(none);
+  CHECK(absent.socketUri.source == nevr_quest::Source::kEmbedded && absent.effective.login);
+  CHECK(Count("config file=" + none + " absent, using embedded defaults") == 1);
+  CHECK(Count("nevr-quest.json present") == 0);
+
+  const std::string big = Dir() + "/big.yaml";
   WriteFile(big, std::string(nevr_quest::kMaxConfigBytes * 3, 'x'));
   CHECK(sentinel::ReadConfigFile(big, &out, &err) == sentinel::ReadStatus::kRead);
   CHECK(out.size() > nevr_quest::kMaxConfigBytes && out.size() <= nevr_quest::kMaxConfigBytes + 4096);
+  Captured().clear();
   const nevr_quest::ResolvedConfig rejected = sentinel::ResolveFromDisk(big);
-  CHECK(rejected.socketUri.source == nevr_quest::Source::kEmbedded && !rejected.effective.redirect);
+  CHECK(rejected.socketUri.source == nevr_quest::Source::kEmbedded && rejected.effective.redirect);
+  CHECK(Count("config file=" + big + " rejected reason=") == 1);
   ::unlink(big.c_str());
 
   // Rejected and invalid-value files that carry configured values: none may reach a log line.
-  const std::string bad = Dir() + "/bad.json";
-  WriteFile(bad, R"({"nevr_http_key":"FILE-SECRET-KEY-31337","nevr_server_key":"FILE-SERVER-SECRET-42042")");
+  const std::string bad = Dir() + "/bad.yaml";
+  WriteFile(bad, "auth:\n  http_key: \"FILE-SECRET-KEY-31337\"\n  server_key: \"FILE-SERVER-SECRET-42042\"\n  x: [\n");
+  Captured().clear();
   static_cast<void>(sentinel::ResolveFromDisk(bad));
-  WriteFile(bad, R"({"nevr_socket_uri":"http://file.example/wrong","nevr_http_key":"has space FILE-SECRET-KEY-31337"})");
+  CHECK(Count("config file=" + bad + " rejected reason=yaml_syntax (embedded defaults stay)") == 1);
+  WriteFile(bad, "services:\n  socket_uri: \"http://file.example/wrong\"\nauth:\n  http_key: \"has space FILE-SECRET-KEY-31337\"\n");
   static_cast<void>(sentinel::ResolveFromDisk(bad));
-  WriteFile(bad, R"({"FILE-SECRET-KEY-31337":1,"features":{"login":"FILE-SERVER-SECRET-42042"}})");
+  WriteFile(bad, "FILE-SECRET-KEY-31337: 1\nauth:\n  server_key: FILE-SERVER-SECRET-42042\n");
   static_cast<void>(sentinel::ResolveFromDisk(bad));
-  WriteFile(bad, R"({"5f4dcc3b5aa765d61d8327deb882cf99":"x","defaultkey":1,"defaultkey":2,"features":{"s3cr3tlowercase":true}})");
+  WriteFile(bad, "5f4dcc3b5aa765d61d8327deb882cf99: x\ndefaultkey: 1\nsocial:\n  s3cr3tlowercase: true\n");
   static_cast<void>(sentinel::ResolveFromDisk(bad));
   ::unlink(bad.c_str());
   ScanDiskLogForValues("after rejected files");
@@ -423,6 +457,7 @@ void LogIsRotatedInProcessAtTheBound() {
 void EachDiskFailureClassIsReportedOnce() {
   ClearLogs();
   ::unlink((Dir() + "/nevr-quest.json").c_str());
+  ::unlink((Dir() + "/config.yaml").c_str());
   CHECK(::rmdir(Dir().c_str()) == 0);
   g_fakeNow = 100000;
 
@@ -641,6 +676,7 @@ int __android_log_print(int prio, const char*, const char* fmt, ...) {
 
 int main() {
   ConfigSurvivesStaticInitialisation();
+  ALeftoverJsonConfigIsReportedAndNeverRead();
   NoLogLineCarriesAValue();
   DiskLogIsOneJsonObjectPerLine();
   FormatEscapesHostileMessages();

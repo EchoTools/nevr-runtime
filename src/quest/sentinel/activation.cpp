@@ -68,17 +68,26 @@ ReadStatus ReadConfigFile(const std::string& path, std::string* out, int* err) {
   return ReadStatus::kRead;
 }
 
+namespace {
+
+// `<dir of path>/nevr-quest.json`: a copy of the file the sentinel read before config.yaml.
+std::string LegacyPathBeside(const std::string& configPath) {
+  const std::size_t slash = configPath.find_last_of('/');
+  return nevr_quest::LegacyConfigFilePath(slash == std::string::npos ? std::string() : configPath.substr(0, slash));
+}
+
+}  // namespace
+
 nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
   std::string text;
   int err = 0;
   const ReadStatus status = ReadConfigFile(path, &text, &err);
   if (status == ReadStatus::kError) {
-    Emit(nevr_quest::LogLevel::kError,
-         std::string("config file ") + nevr_quest::kConfigFileName + " unreadable errno=" + std::to_string(err) +
-             " (" + std::strerror(err) + "), using embedded defaults");
+    Emit(nevr_quest::LogLevel::kError, "config file=" + path + " unreadable errno=" + std::to_string(err) + " (" +
+                                           std::strerror(err) + "), using embedded defaults");
   } else if (status == ReadStatus::kNotRegularFile) {
-    Emit(nevr_quest::LogLevel::kError, std::string("config file ") + nevr_quest::kConfigFileName +
-                                           " is not a regular file, not read, using embedded defaults");
+    Emit(nevr_quest::LogLevel::kError,
+         "config file=" + path + " is not a regular file, not read, using embedded defaults");
   }
 
   nevr_quest::EmbeddedDefaults defaults;
@@ -86,14 +95,21 @@ nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
   defaults.httpUri = nevr_builtin::kHttpUri;
   defaults.httpKey = nevr_builtin::kPublicApiKey;
   defaults.serverKey = nevr_builtin::kPublicSocketKey;
-  defaults.features = nevr_build::kDefaultFeatures;
 
   // Which build this is, so a log names its version and commit (neither is a configured value).
   Emit(nevr_quest::LogLevel::kInfo,
        std::string("build version=") + nevr_build::kVersion + " commit=" + nevr_build::kCommit);
+  // A file that was there but could not be read (kError, kNotRegularFile) was reported above; the resolver then
+  // sees no file, and says "absent" as well. That is accurate: nothing of it was used.
   nevr_quest::LoadResult result =
-      nevr_quest::ResolveConfig(defaults, status == ReadStatus::kRead ? &text : nullptr);
+      nevr_quest::ResolveConfig(defaults, status == ReadStatus::kRead ? &text : nullptr, path);
   for (const nevr_quest::LogEvent& e : result.events) Emit(e.level, e.message);
+  // The JSON file the sentinel used to read is not read any more. Say so once if one is lying there.
+  if (::access(LegacyPathBeside(path).c_str(), F_OK) == 0) {
+    Emit(nevr_quest::LogLevel::kWarn,
+         std::string(nevr_quest::kLegacyConfigFileName) + " present and ignored; settings come from " +
+             nevr_quest::kConfigFileName);
+  }
   return std::move(result.config);
 }
 

@@ -109,10 +109,17 @@ foreach(social_test social_facade_test social_install_test social_names_test)
   target_compile_options(${social_test} PRIVATE -Wall -Wextra -Werror)
 endforeach()
 
-# Quest configuration and feature activation (pure; the sentinel links it, the host test compiles it).
-add_library(nevr_quest_config STATIC "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/quest_config.cpp")
+# Quest configuration and feature activation (the sentinel links it, the host test compiles it). The file is
+# config.yaml, parsed by the SAME nevr_config source the PC compiles (src/core/nevr_config.cpp, yaml-cpp); the
+# PC-only half (nevr_config_policy.cpp: the N4 wrapper, the logged warning) is not built here, and nevr_config.cpp
+# includes no PC logger. Both are built WITH exceptions: quest_config.cpp catches every one by name, and nothing on
+# the hook path (entry.cpp, login_prompt_hook.cpp, obb_skip_hook.cpp) is built that way.
+find_package(yaml-cpp CONFIG REQUIRED)
+add_library(nevr_quest_config STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/quest_config.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../core/nevr_config.cpp")
 target_include_directories(nevr_quest_config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(nevr_quest_config PUBLIC nevr_quest_service_redirect PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(nevr_quest_config PUBLIC nevr_quest_service_redirect PRIVATE nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp)
 target_compile_options(nevr_quest_config PRIVATE -Wall -Wextra -Werror)
 
 add_executable(quest_config_test tests/quest_config_test.cpp)
@@ -126,7 +133,7 @@ add_subdirectory(redirect)
 # at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
 nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
-# The version (with its commit) and the features on by default.
+# The version (with its commit).
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_build_info.cmake")
 nevr_generate_build_info("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 

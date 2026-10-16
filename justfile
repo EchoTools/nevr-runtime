@@ -204,11 +204,12 @@ release-preflight base="main":
 # .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
 # otherwise, and refuses a binary whose identity literal is not this commit's development version.
 # `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
-# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
-# the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
+# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK.
+# Neither build needs a config file: the Quest redirects, bridges, logs in and runs the social facade from the
+# embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
@@ -226,9 +227,8 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-dev), the default features.
-    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev \
-        -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+    # Quest sentinel: its own build tree (build/android-dev).
+    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
@@ -505,16 +505,35 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# yaml-cpp for the Quest host tests: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
+# build/quest-host-vcpkg (never a system package), with this checkout's own vcpkg root like _vcpkg-mingw. The
+# sentinel parses config.yaml with the PC's nevr_config, so the host tests that compile quest_config.cpp link it.
+_vcpkg-quest-host:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
+    cd "$root"
+    unset VCPKG_ROOT
+    ./vcpkg install --triplet=x64-linux --host-triplet=x64-linux \
+        --x-manifest-root="{{ justfile_directory() }}/tools/quest-host-deps" \
+        --x-install-root="{{ justfile_directory() }}/build/quest-host-vcpkg"
+
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
 # compiles the same test, the same vectors (service_redirect_vectors.h) and the same
 # shared source (src/runtime/lifecycle/service_redirect.cpp) with the host g++ and runs
 # it. No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
-test-quest-shared:
+test-quest-shared: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-shared-host"
     mkdir -p "$out"
+    # config.yaml is parsed by src/core/nevr_config.cpp with yaml-cpp (the PC's parser, shared). yaml-cpp comes
+    # from the tools/quest-host-deps manifest for the x64-linux triplet, never a system package.
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-shared: FAIL — $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    yaml_inc=(-isystem "$yaml_host/include")
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/tests/service_redirect_test.cpp \
@@ -538,10 +557,10 @@ test-quest-shared:
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     timeout -k 5 120 "$out/evr_codec_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" \
         src/runtime/lifecycle/service_redirect.cpp \
-        src/quest/sentinel/quest_config.cpp \
-        src/quest/tests/quest_config_test.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
+        src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
     # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
@@ -563,13 +582,13 @@ test-quest-shared:
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
     rm -rf "$files"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
         src/quest/sentinel/sentinel_log.cpp \
-        src/quest/sentinel/quest_config.cpp \
-        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp "$yaml_lib" \
         -o "$out/sentinel_host_test"
     "$out/sentinel_host_test"
     # The platform-neutral token-auth core and the Quest session, under a fake HTTP
@@ -813,11 +832,14 @@ test-quest-hooks:
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
 # redirect_test, which drives the production ServiceRedirector, the typed thunks and GotHook
 # against them with a fake game config. No NDK, no Android. Fail-close.
-test-quest-redirect:
+test-quest-redirect: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-redirect-host"
     mkdir -p "$out"
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-redirect: FAIL - $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
     # never a system package: the CI builder image has none.
     json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
@@ -828,7 +850,7 @@ test-quest-redirect:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -850,16 +872,16 @@ test-quest-redirect:
     fi
     grep -q '"zR"' "$frames" || { echo "test-quest-redirect: FAIL - tstring_thunks.o has no zR frames to check" >&2; exit 1; }
     srcs=("$fx/redirect_test.cpp" src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
-        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
         src/runtime/lifecycle/stable_string_pool.cpp)
     objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o")
-    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test" -ldl -pthread
+    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" "$yaml_lib" -o "$out/redirect_test" -ldl -pthread
     "$out/redirect_test" "$out"
     # The same test under ThreadSanitizer at -O1: the cache lock is only observable as a data race, and
     # -O1 also exercises the warnings that -O0 hides. The thunk TU and backend stay uninstrumented
     # objects (they hold no shared state beyond atomics).
     tsan=(-fsanitize=thread -O1 -g)
-    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test_tsan" -ldl -pthread
+    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" "$yaml_lib" -o "$out/redirect_test_tsan" -ldl -pthread
     TSAN_OPTIONS="halt_on_error=1 exitcode=66" "$out/redirect_test_tsan" "$out"
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so /
@@ -983,11 +1005,14 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
 # source, the social switch, the frame tap, the counter budget over the real hook libraries, and the
 # bridge end to end through the real loopback server and router with a fake connector. The hook
 # translation units are built -fno-exceptions as on the device. No NDK, no Android. Fail-close.
-test-quest-integration:
+test-quest-integration: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-integration-host"
     mkdir -p "$out"
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-integration: FAIL - $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
     if [[ ! -f "$json_src/json.hpp" ]]; then
         echo "test-quest-integration: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
@@ -996,7 +1021,7 @@ test-quest-integration:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     off=("${on[@]}" -fno-exceptions)
     # 1. sequence, post-load policy, identity, social switch, frame tap
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
@@ -1035,13 +1060,13 @@ test-quest-integration:
     grep -q '"zR"' "$out/dlopen_hook.frames.txt" || { echo "test-quest-integration: FAIL - dlopen_hook.o has no zR frames to check" >&2; exit 1; }
     "${on[@]}" src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp \
         src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
-        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
-        -o "$out/integration_hooks_test" -ldl -pthread -lzstd
+        "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
     # builds when none is injected)
@@ -2484,6 +2509,45 @@ verify:
         echo "verify: FAIL — N133 S7d: sample config.yaml missing required sections" >&2
         echo "(found $N133_S7D of 4: auth, services, identity, version)." >&2
         echo "The tracked example is the source copied into a server's local config." >&2
+        exit 1
+    fi
+    # #573 — the Quest reads config.yaml through the PC's nevr_config, so the shared parser and its Quest wiring are
+    # part of the source. The behaviour is proved by quest_config_test (test-quest-shared) and, on the device
+    # image, by check-android-static-init and tests/quest; this sensor is the tripwire for the shapes they rely on:
+    #   (a) src/core/nevr_config.cpp is built into the Quest sentinel, which has no PC logger, no windows.h and no
+    #       thread-local state (TestNoEmulatedTLSInHookPath): no core/logging.h, no <windows.h>, no Log( or
+    #       FatalError( call, no thread_local. The PC-only half is src/core/nevr_config_policy.cpp.
+    #   (b) src/quest/sentinel/quest_config.cpp parses through nevr_config (LoadFromString) and holds no JSON parser.
+    #   (c) src/quest/CMakeLists.txt compiles ../core/nevr_config.cpp into nevr_quest_config and never the policy file.
+    #   (d) yaml-cpp reaches the Quest only through the overlay port whose patch removes its static initializers
+    #       (the sentinel allows one load-time initializer: tools/check_quest_static_init.sh).
+    Q573A_RC=0; Q573A_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/core/nevr_config.cpp) || Q573A_RC=$?
+    sensor_stage1 "#573 shared parser" "src/core/nevr_config.cpp" "$Q573A_RC"
+    sensor_nonempty "#573 shared parser" "non-comment lines of src/core/nevr_config.cpp" "$Q573A_CODE"
+    if grep -qE 'core/logging\.h|<windows\.h>|\bthread_local\b|\bLog\(|\bFatalError\(' <<<"$Q573A_CODE"; then
+        echo "verify: FAIL — #573: src/core/nevr_config.cpp includes the PC logger or windows.h, calls Log/FatalError, or declares a" >&2
+        echo "thread_local. It is built into the Quest sentinel, which has none of them. Put PC-only behaviour in src/core/nevr_config_policy.cpp." >&2
+        exit 1
+    fi
+    Q573B_RC=0; Q573B_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/quest_config.cpp) || Q573B_RC=$?
+    sensor_stage1 "#573 quest config" "src/quest/sentinel/quest_config.cpp" "$Q573B_RC"
+    sensor_nonempty "#573 quest config" "non-comment lines of src/quest/sentinel/quest_config.cpp" "$Q573B_CODE"
+    if ! grep -qF 'NevrConfig::LoadFromString' <<<"$Q573B_CODE" || grep -qE 'json::parse' <<<"$Q573B_CODE"; then
+        echo "verify: FAIL — #573: src/quest/sentinel/quest_config.cpp must parse config.yaml through nevr::NevrConfig::LoadFromString and hold no JSON parser." >&2
+        exit 1
+    fi
+    Q573C_RC=0; Q573C_CODE=$(grep -vE '^[[:space:]]*#' src/quest/CMakeLists.txt) || Q573C_RC=$?
+    sensor_stage1 "#573 quest cmake" "src/quest/CMakeLists.txt" "$Q573C_RC"
+    sensor_nonempty "#573 quest cmake" "non-comment lines of src/quest/CMakeLists.txt" "$Q573C_CODE"
+    if ! grep -qF '../core/nevr_config.cpp' <<<"$Q573C_CODE" || grep -qF 'nevr_config_policy' <<<"$Q573C_CODE"; then
+        echo "verify: FAIL — #573: nevr_quest_config must compile ../core/nevr_config.cpp and must not compile nevr_config_policy.cpp (src/quest/CMakeLists.txt)." >&2
+        exit 1
+    fi
+    if ! grep -qF 'yaml-cpp-no-static-init.patch' src/quest/vcpkg-overlay-ports/yaml-cpp/portfile.cmake \
+        || [ ! -s src/quest/vcpkg-overlay-ports/yaml-cpp/yaml-cpp-no-static-init.patch ] \
+        || ! grep -qF 'vcpkg-overlay-ports' src/quest/vcpkg-configuration.json; then
+        echo "verify: FAIL — #573: the Quest build must take yaml-cpp from src/quest/vcpkg-overlay-ports (portfile lists yaml-cpp-no-static-init.patch," >&2
+        echo "the patch exists, src/quest/vcpkg-configuration.json names the overlay). Stock yaml-cpp adds six load-time initializers to the sentinel." >&2
         exit 1
     fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
