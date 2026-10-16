@@ -622,6 +622,22 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
+// #596: the address GetLoadedPluginInfo hands out belongs to the storage, not to a prediction of how
+// many plugins a later pass adds. Registering plugins the loader never planned for (the test hook
+// appends exactly as a load does) must not move the first one's entry.
+static void NoOpPluginFrame(const NvrGameContext*) {}
+
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan) {
+  TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  ASSERT_NE(first, nullptr);
+
+  for (int i = 0; i < 256; ++i) TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+
+  ASSERT_EQ(GetLoadedPluginCount(), 257);
+  EXPECT_EQ(first, GetLoadedPluginInfo(0)) << "adding plugins moved an entry a plugin may have kept";
+}
+
 // #496: an entry marked early loads in the early pass, alone; the normal pass loads the
 // rest, the early one is not loaded again, and the report covers both passes.
 static PluginLoadItem EarlyItem(const char* name, const char* file) {
