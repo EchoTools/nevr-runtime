@@ -371,9 +371,6 @@ TEST(OculusPlatformPath, AllowsAFileWhoseFolderIsNamedLikeTheSdk) {
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(nullptr));
 }
 
-// #495: a callback for a DLL already loaded when it registers waits for FireHeldCallbacks() during
-// the runtime's boot (the game's log isn't usable before the log filter; an injector like Revive's has
-// dxgi/d3d12 loaded before the runtime starts); after boot it fires right away.
 namespace {
 
 int g_fired = 0;
@@ -386,50 +383,18 @@ void Count(const char*, HMODULE module) {
 
 }  // namespace
 
-TEST(DllLoadHookHeld, HoldsALoadedDllsCallbackDuringBootUntilFired) {
-  g_fired = 0;
-  nevr_dll_load_hook::HoldEarlyCallbacks();
-  nevr_dll_load_hook::OnLoad("KERNEL32.dll", Count);
-  EXPECT_EQ(g_fired, 0);
-
-  nevr_dll_load_hook::FireHeldCallbacks();
-  EXPECT_EQ(g_fired, 1);
-  EXPECT_EQ(g_module, GetModuleHandleA("kernel32.dll"));
-
-  // Held callbacks fire once.
-  nevr_dll_load_hook::FireHeldCallbacks();
-  EXPECT_EQ(g_fired, 1);
-  nevr_dll_load_hook::Shutdown();
-}
-
-TEST(DllLoadHookHeld, AfterBootALoadedDllsCallbackFiresRightAway) {
-  g_fired = 0;
-  nevr_dll_load_hook::HoldEarlyCallbacks();
-  nevr_dll_load_hook::FireHeldCallbacks();
-  nevr_dll_load_hook::OnLoad("kernel32.dll", Count);
-  EXPECT_EQ(g_fired, 1);
-  nevr_dll_load_hook::Shutdown();
-}
-
-TEST(DllLoadHookHeld, ADllNotLoadedYetIsNotFiredByTheHeldOnes) {
-  g_fired = 0;
-  nevr_dll_load_hook::HoldEarlyCallbacks();
-  nevr_dll_load_hook::OnLoad("nevr-not-a-real-module.dll", Count);
-  nevr_dll_load_hook::FireHeldCallbacks();
-  EXPECT_EQ(g_fired, 0);
-  nevr_dll_load_hook::Shutdown();
-}
-
-// #495: Install() is what starts the boot hold, so a callback registered right after it for a DLL
-// that is already loaded waits for FireHeldCallbacks().
-TEST(DllLoadHookHeld, InstallHoldsCallbacksOfAlreadyLoadedDlls) {
+// #593: a callback for a DLL that is already loaded when it registers fires right away, also during
+// the runtime's boot (an injector such as Revive's loads dxgi/d3d12 before the runtime starts, #495).
+// What made that unsafe was the callbacks' Log() reaching the game's CLog; Log() reports through the
+// boot tee while the runtime boots (test_boot_log_routing).
+TEST(DllLoadHookOnLoad, AnAlreadyLoadedDllsCallbackFiresAtOnceAfterInstall) {
   UseFakeHooks();
   nevr_dll_load_hook::Install();
   g_fired = 0;
-  nevr_dll_load_hook::OnLoad("kernel32.dll", Count);
-  EXPECT_EQ(g_fired, 0) << "Install() must start holding callbacks of loaded DLLs";
-  nevr_dll_load_hook::FireHeldCallbacks();
-  EXPECT_EQ(g_fired, 1);
+  g_module = nullptr;
+  nevr_dll_load_hook::OnLoad("KERNEL32.dll", Count);
+  EXPECT_EQ(g_fired, 1) << "Install() must not delay the callback of a loaded DLL";
+  EXPECT_EQ(g_module, GetModuleHandleA("kernel32.dll"));
   nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
   nevr_dll_load_hook::Shutdown();
 }

@@ -8,7 +8,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tools.tests.test_runtime_lifecycle_invariants import extract_braced_function
+from tools.tests.test_runtime_lifecycle_invariants import extract_braced_function, strip_comments
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,22 +93,15 @@ class SpectatorStreamOrder(unittest.TestCase):
         source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
         return extract_braced_function(source, ROUTINE_SIGNATURE)
 
-    def test_routine_validates_logs_through_the_boot_tee_and_never_logs_under_the_loader_lock(self):
-        body = self.routine_body()
+    def test_routine_validates_and_records_through_log(self):
+        # Log() routes by boot phase itself (#593): through the boot tee while the routine runs under
+        # the loader lock at boot, through the game's CLog after. The routine does not branch on it.
+        body = strip_comments(self.routine_body())
         self.assertIn("nevr_checked_patch::Apply(", body)
-        match = re.search(
-            r"if\s*\(\s*nevr_boot_log_tee::InBootPhase\(\)\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<other>.*?)\}",
-            body,
-            re.S,
-        )
-        self.assertIsNotNone(match, "the record must branch on nevr_boot_log_tee::InBootPhase()")
-        self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("then"))
-        self.assertNotRegex(match.group("then").replace("TeeFprintf(", ""), r"\bLog\(")
-        self.assertIn("Log(", match.group("other"))
-        # No unguarded Log() anywhere else in the routine: it runs under the loader lock at boot.
-        outside = body.replace(match.group(0), "")
-        self.assertNotRegex(outside, r"\bLog\s*\(", "PatchSpectatorStreamCheck logs outside the InBootPhase else branch")
-        self.assertNotRegex(outside, r"\bfprintf\s*\(|\bprintf\s*\(", "PatchSpectatorStreamCheck prints outside the tee")
+        self.assertRegex(body, r"\bLog\(\s*ok\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning\s*,\s*\"%s\"\s*,\s*record\s*\)")
+        self.assertNotIn("InBootPhase", body)
+        self.assertNotIn("TeeFprintf", body)
+        self.assertNotRegex(body, r"\bfprintf\s*\(|\bprintf\s*\(", "PatchSpectatorStreamCheck prints outside Log()")
 
     def test_routine_uses_the_tested_site_pair_the_named_rva_and_the_shared_record(self):
         body = self.routine_body()

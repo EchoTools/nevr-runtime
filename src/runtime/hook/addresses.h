@@ -120,11 +120,12 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
 /// reasons, and the SECOND is the decisive one.
 ///
-/// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
-///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
-///     ignored" and discards the value). v1 applies it inside
-///     `if (isHeadless && headlessTimeStep != 0)` — a condition that can no
-///     longer be true.
+/// (1) It only matters under fixed timestep. A server is now always fixed-timestep
+///     (boot.cpp sets the game's flag, config.cpp writes the step from
+///     network.tick_rate_hz), so this reason no longer rules the patch out by
+///     itself. `-timestep`/`-fixedtimestep` stay deprecated-and-ignored (boot.cpp
+///     logs "is deprecated and ignored" and discards the value); the rate comes
+///     from the config key, not from v1's `headlessTimeStep`.
 ///
 /// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
 ///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:

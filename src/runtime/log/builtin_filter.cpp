@@ -1273,8 +1273,8 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
             MH_StatusToString(status));
         const MH_STATUS cleanup = MH_RemoveHook(g_hook_target);
         if (cleanup != MH_OK) {
-            // Init() runs from InitializeAfterGameImageGuard under the DllMain loader lock (N36):
-            // the record goes through the boot tee, never Log().
+            // Init() runs from InitializeAfterGameImageGuard, in the boot phase (N36): the
+            // record goes to the boot tee.
             nevr_boot_log_tee::TeeFprintf(
                 "[NEVR.PATCH] CLog::PrintfImpl failed-hook cleanup status=%s\n",
                 MH_StatusToString(cleanup));
