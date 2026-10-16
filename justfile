@@ -1746,25 +1746,25 @@ verify:
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
         exit 1
     fi
-    # N2, any type: from the hook's first line up to (not including) GameMain(gameArg); the hook declares exactly the two trivial
+    # N2, any type: from the hook's first line through the GameMain(gameArg); line, the hook declares exactly the three trivial
     # locals below. Any other declaration (a report, a std:: or repo type, `auto`, in any form) could be alive
     # across the call the VEH longjmps out of, which is undefined behaviour for a non-trivial local.
-    S515_PRE_GAMEMAIN=$(awk -v start="$S515_HOOK_LINE" 'NR>=start && /GameMain\(gameArg\);/ {exit} NR>=start {print}' <<<"$S515_CR")
+    S515_PRE_GAMEMAIN=$(awk -v start="$S515_HOOK_LINE" 'NR>=start {print} NR>=start && /GameMain\(gameArg\);/ {exit}' <<<"$S515_CR")
     sensor_nonempty "#515 hook body before GameMain" "GameMainWrapperHook up to GameMain(gameArg);" "$S515_PRE_GAMEMAIN"
     S515_DECLS=$(grep -E '^[[:space:]]+(const[[:space:]]+)?[A-Za-z_][A-Za-z0-9_:<>,]*[[:space:]*&]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(=|;|\{|\(|\[)' <<<"$S515_PRE_GAMEMAIN" | grep -vE '^[[:space:]]+(return|else|case|goto|delete|throw)[[:space:]]' | sed -E 's/^[[:space:]]+//' || true)
-    S515_ALLOWED=$'int crashCount = setjmp(g_gameLoopJmpBuf);\nconst INT64 gameArg = PrepareGameArgument(arg1);'
+    S515_ALLOWED=$'int crashCount = setjmp(g_gameLoopJmpBuf);\nconst INT64 gameArg = PrepareGameArgument(arg1);\nconst INT64 gameResult = GameMain(gameArg);'
     if [ "$S515_DECLS" != "$S515_ALLOWED" ]; then
-        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's declarations before GameMain(gameArg); are not exactly the two trivial locals." >&2
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's declarations through GameMain(gameArg); are not exactly the three trivial locals." >&2
         echo "Found: $S515_DECLS" >&2
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
         exit 1
     fi
     # The allowlist reads one-line declarations only (a type split over lines, or with spaces inside its template
-    # arguments, would pass it), so the hook's whole text up to GameMain(gameArg); is also pinned: any edit
+    # arguments, would pass it), so the hook's whole text through the GameMain(gameArg); line is also pinned: any edit
     # there fails here until a reviewer has checked it adds no non-trivial local and updates the pin.
     S515_PRE_SHA=$(sha256sum <<<"$S515_PRE_GAMEMAIN" | cut -c1-64)
-    if [ "$S515_PRE_SHA" != "2fb1f115631d585fa27c1eefc7ec2b14f0e1f42d97344a667c1ea35e79a12bb3" ]; then
-        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text before GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
+    if [ "$S515_PRE_SHA" != "5c1fe4be63ca49aacae848c47932f247b5634604d1b12b8b0141546f6d1c42f1" ]; then
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text through GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
         echo "Check that the edit leaves no local with a destructor alive across GameMain, then set the pin to that hash." >&2
         exit 1
     fi
