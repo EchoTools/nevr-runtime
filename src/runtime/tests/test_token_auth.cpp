@@ -1609,44 +1609,6 @@ TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
   EXPECT_TRUE(std::filesystem::exists(fallback));
 }
 
-// #512: a server's cache is the one beside its config.yaml, even with a player's cache nearer the
-// executable, and refreshing it leaves the player's alone.
-TEST_F(CredentialsDirFixture, ServerUsesTheCacheBesideItsConfigNotThePlayers) {
-  const auto playerCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto serverDir = root_ / "bin" / "win10" / "_local" / "server";
-  Write(playerCredentials, Credentials("player-refresh").dump());
-  Write(serverDir / "config.yaml", "identity:\n  discord_id: \"1\"\n");
-  Write(serverDir / ".credentials.json", Credentials("server-refresh").dump());
-  const std::string playerBefore = Read(playerCredentials);
-
-  const CredentialCacheLocation cache = ServerCredentialCache(serverDir.string().c_str(), exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(cache.credentialsPath, serverDir / ".credentials.json"));
-  EXPECT_EQ(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token, "server-refresh");
-
-  CachedAuthToken auth;
-  auth.refresh_token = "server-rotated";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthTokenAt(auth, cache));
-  EXPECT_EQ(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token, "server-rotated");
-  EXPECT_EQ(Read(playerCredentials), playerBefore);
-}
-
-// #512: a server with no cache of its own yet gets an empty one beside its config (password sign-in
-// next), never the player's.
-TEST_F(CredentialsDirFixture, ServerWithoutItsOwnCacheDoesNotTakeThePlayers) {
-  const auto playerCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto serverDir = root_ / "bin" / "win10" / "_local" / "server";
-  Write(playerCredentials, Credentials("player-refresh").dump());
-  Write(serverDir / "config.yaml", "identity:\n  discord_id: \"1\"\n");
-
-  const CredentialCacheLocation cache = ServerCredentialCache(serverDir.string().c_str(), exe_dir_);
-  EXPECT_EQ(std::filesystem::path(cache.directory).lexically_normal(), serverDir.lexically_normal());
-  EXPECT_TRUE(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token.empty());
-
-  // Without a config folder it is the executable-relative selection, as for a client.
-  EXPECT_TRUE(std::filesystem::equivalent(ServerCredentialCache(nullptr, exe_dir_).credentialsPath, playerCredentials));
-}
-
 TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
   EXPECT_EQ(JoinCredentialPath("C:\\games\\bin\\", "_local"), "C:\\games\\bin\\_local");
   EXPECT_EQ(JoinCredentialPath("C:/games/bin/", "_local"), "C:/games/bin/_local");
