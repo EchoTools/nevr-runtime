@@ -280,6 +280,16 @@ void HardwareDumpIsOnlyEverOnByTheDiagnosticsKey() {
     const LoadResult r = Load(EmbeddedDefaults(), "diagnostics:\n  hardware_dump: true\n");
     CHECK(r.config.effective.hwdump && !r.config.effective.redirect);
   }
+  // The spellings that turn it on (nevr_config's ParseBool, then yaml-cpp's boolean spellings), and some that do not.
+  for (const char* word : {"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON", "1", "y", "Y", "tRuE"}) {
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  hardware_dump: ") + word + "\n");
+    CHECK(r.config.effective.hwdump);
+  }
+  for (const char* word : {"false", "no", "n", "off", "0", "2", "t", "enable", "maybe", "\"${NEVR_QUEST_TEST_UNSET_HW_ZXQ}\""}) {
+    ::unsetenv("NEVR_QUEST_TEST_UNSET_HW_ZXQ");
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  hardware_dump: ") + word + "\n");
+    CHECK(!r.config.effective.hwdump);
+  }
   // Anywhere but diagnostics.hardware_dump leaves it off; so does false and the old feature name.
   for (const char* text : {"diagnostics:\n  hardware_dump: false\n", "diagnostics:\n  hwdump: true\n",
                            "social:\n  hardware_dump: true\n", "hardware_dump: true\n", "x-hardware_dump: true\n",
