@@ -12,8 +12,10 @@
  *   2. NOPs the OVR platform branch so PlatformModuleDecisionAndInitialize
  *      takes Path 2 (full networking).
  *
- *   3. Registers an LdrDllNotification callback to patch pnsrad.dll's login
- *      provider check the moment it loads.
+ *   3. Patches pnsrad.dll's login provider check when it loads. The loader's
+ *      DLL notification only records the load (it runs under the loader lock);
+ *      the patches land when the game's LoadLibraryW returns, before the game
+ *      resolves any export of the module (docs/reference/pnsrad-load-boundary.md).
  *
  *   4. NOPs LogInSuccessCB's identity comparison so it processes LoginSuccess
  *      even with uninitialized local identity.
@@ -30,6 +32,8 @@
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/provider_identity.h"
 #include "runtime/patch/pnsrad_diag_queue.h"
+#include "runtime/patch/pnsrad_load_queue.h"
+#include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/hook/patching.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
@@ -42,6 +46,7 @@
 #include <cstring>
 #include <string>
 #include <atomic>
+#include <mutex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -96,9 +101,9 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // "[EVR] [NSLOBBY] loading matchmaking library 'pnsradmatchmaking'" — via a
 // native LoadLibrary-style path in cnslobby.cpp (confirmed by the clean
 // "failed to load module ... Unable to load matchmaking library" error when
-// the file was absent). LdrRegisterDllNotification catches this regardless
-// of when it fires, so no ordering change was needed against the existing
-// pnsrad.dll callback below.
+// the file was absent). The DLL notification records this load whenever it
+// happens, and the patch lands when that LoadLibrary returns, the same path
+// as pnsrad.dll's patches below.
 //
 // pnsradmatchmaking.dll, ImageBase 0x180000000 (confirmed via
 // `objdump -p pnsradmatchmaking.dll | grep -i imagebase`):
@@ -182,11 +187,11 @@ typedef NTSTATUS (NTAPI *LdrRegisterDllNotification_fn)(ULONG flags,
 typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
-static bool  s_pnsradPatched  = false;
+static std::atomic<bool> s_pnsradPatched{false};
 
 /* Self-check "matchmaking_reload_patch" (#18, docs/engine/remote-log.md): the game loads
- * pnsradmatchmaking.dll once per lobby and every load must have its host default re-applied. The loader
- * callback only counts (it runs under the loader lock); the probe reads the counts on the frame tick. */
+ * pnsradmatchmaking.dll once per lobby and every load must have its host default re-applied. The apply
+ * step counts each load; the probe reads the counts on the frame tick. */
 static nevr_matchmaker_host_patch::ReloadLedger s_mmLedger;
 
 static bool MatchmakingReloadProbe(nevr_self_check::Observation* out) {
@@ -202,7 +207,11 @@ static void RegisterMatchmakingReloadCheck() {
 }
 static std::atomic<uintptr_t> s_pnsradModuleBase{0};
 static PnsradDiagQueue s_pendingDiagnostics;
-static thread_local bool s_inDllNotification = false;
+/* Loads the DLL notification recorded and the apply step has not patched yet. */
+static nevr_pnsrad_load::PendingLoads s_pendingLoads;
+/* One apply at a time: a LoadLibrary that returns while another thread is patching waits here, so it cannot
+ * hand the caller a module whose patches are still being written. */
+static std::mutex s_applyMutex;
 
 /* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
  * matchmaker connection reaches our own listener instead of the dead
@@ -381,82 +390,114 @@ static void PnsradUserProviderIdPatch(uintptr_t base) {
     }
 }
 
+static void ApplyPnsradLoad(uintptr_t base) {
+    // pnsrad.dll is loaded once per process; a second record is the same image or a reload this runtime
+    // does not expect, and its patches were already counted.
+    if (s_pnsradPatched.exchange(true)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] pnsrad.dll loaded a second time — patches not re-applied (pnsrad.dll is expected to "
+            "load once; the login patches cover the first image only)");
+        return;
+    }
+    s_pnsradModuleBase.store(base, std::memory_order_release);
+
+    PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK),
+                   PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED), 2,
+                   "login check", (unsigned)PNSRAD_LOGIN_CHECK);
+    PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_IDENTITY_CHECK),
+                   PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED), 6,
+                   "identity guard", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
+    PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
+                   PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
+                   "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+    PnsradUserProviderIdPatch(base);
+    // Optional diagnostics: MinHook suspends every other thread, so the frame tick installs them.
+    s_pendingDiagnostics.NoteLoaded(base);
+
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
+        "(friends/party/login) %s",
+        s_pnsradOk, s_pnsradFail,
+        (s_pnsradFail == 0 && s_pnsradOk == 4) ? "ENABLED"
+        : (s_pnsradOk == 0) ? "NOT PATCHED"
+                            : "PARTIALLY PATCHED");
+}
+
+static void ApplyMatchmakingLoad(uintptr_t base) {
+    // No once-only guard: the game unloads and reloads this DLL, and every load maps a fresh, unpatched image.
+    // The matchmaker listener binds at early boot (InstallWebSocketBridge) and this DLL loads at the lobby
+    // stage, so the port is already chosen. That ordering is observed, not enforced; a zero port is reported.
+    const uint16_t port = GetMatchmakerBridgePort();
+    auto* image = reinterpret_cast<uint8_t*>(base);
+    DWORD err = 0;
+    const auto result = nevr_matchmaker_host_patch::Apply(
+        image, port, [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
+    ReportMatchmakingHostResult(result, image, port, err);
+    s_mmLedger.NoteLoad(result);
+}
+
+/* Where a recorded load was patched. LibraryReturn is the proven boundary: the game's LoadLibraryW returned
+ * and the game has not yet resolved an export. FrameTick is the fallback, for a record at least one tick old: a
+ * load that did not pass through a hooked LoadLibrary* (or returned while its thread held the loader lock), which
+ * the game may already have run. */
+enum class ApplyPoint { LibraryReturn, FrameTick };
+
+static bool ModuleStillMappedAt(uintptr_t base) {
+    HMODULE module = nullptr;
+    return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(base), &module) &&
+           reinterpret_cast<uintptr_t>(module) == base;
+}
+
+static size_t ApplyPendingLoads(ApplyPoint at) {
+    std::lock_guard<std::mutex> lock(s_applyMutex);
+    const uint64_t dropped = s_pendingLoads.TakeDropped();
+    if (dropped != 0) {
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.PATCH] pnsrad load queue full: %llu load(s) of pnsrad.dll or pnsradmatchmaking.dll were not "
+            "recorded and stay unpatched (login or matchmaking fails for them)",
+            static_cast<unsigned long long>(dropped));
+    }
+    const auto apply = [at](nevr_pnsrad_load::Module module, uintptr_t base) {
+        const bool pnsrad = module == nevr_pnsrad_load::Module::Pnsrad;
+        const char* name = pnsrad ? nevr_pnsrad_load::kPnsradName : nevr_matchmaker_host_patch::kModuleName;
+        if (!ModuleStillMappedAt(base)) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] %s unloaded before its patches were applied (apply_point=%s) — nothing left to patch",
+                name, at == ApplyPoint::LibraryReturn ? "library_return" : "frame_tick");
+            if (!pnsrad) s_mmLedger.NoteLoad(std::nullopt);
+            return;
+        }
+        if (at == ApplyPoint::FrameTick) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] %s patched at the frame tick, not when its LoadLibrary returned — the load did not "
+                "pass through a hooked LoadLibrary*, so the game may have used the module unpatched",
+                name);
+        }
+        if (pnsrad) {
+            ApplyPnsradLoad(base);
+        } else {
+            ApplyMatchmakingLoad(base);
+        }
+    };
+    if (at == ApplyPoint::LibraryReturn) return s_pendingLoads.Drain(apply);
+    return s_pendingLoads.DrainNotedBefore(s_pendingLoads.AdvanceEpoch(), apply);
+}
+
+/* DllLoadHook post-load observer: runs on the thread whose LoadLibrary* call just returned from the loader,
+ * outside the loader lock, before that call returns to the game. */
+static void ApplyPendingLoadsAtLibraryReturn() { ApplyPendingLoads(ApplyPoint::LibraryReturn); }
+
+/* LdrDllNotification callback. It runs under the loader lock, where calling into another module is unsafe,
+ * so it records the load and returns: no memory write, no log, no call out of this module. */
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
     // Only loads act (an unload leaves nothing to undo: the image and its patch are gone together).
-    if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName) return;
-    struct NotificationScope {
-        bool previous;
-        NotificationScope() : previous(s_inDllNotification) { s_inDllNotification = true; }
-        ~NotificationScope() { s_inDllNotification = previous; }
-    } notificationScope;
+    if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName || !data->DllBase) {
+        return;
+    }
     const UNICODE_STRING* name = data->BaseDllName;
-
-    // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
-    // loads much later (native CNSLobby module load, well after login, per
-    // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
-    // must not be gated on s_pnsradPatched.
-    //
-    // This DLL unloads and reloads mid-session: a reload gets a fresh DllBase with the original
-    // (unpatched) bytes, so a one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
-    // uses, since that DLL does not reload) would leave the reloaded copy unpatched and the
-    // matchmaker on the dead readyatdawn.com default. No guard: patch on every load.
-    // OnModuleNotification's Apply memcmps the slot against PNSRADMATCHMAKING_HOST_EXPECTED, so a second
-    // notification for an image that is already patched no-ops (with a Warning log).
-    if (nevr_matchmaker_host_patch::IsMatchmakingModule(name->Buffer, name->Length / sizeof(WCHAR))) {
-        // The matchmaker listener binds before login (InstallWebSocketBridge, at early boot) while
-        // pnsradmatchmaking.dll loads at the lobby stage, so the port is already chosen here. That
-        // ordering is observed, not enforced; a zero port is reported instead of patched in.
-        const uint16_t port = GetMatchmakerBridgePort();
-        auto* image = reinterpret_cast<uint8_t*>(data->DllBase);
-        DWORD err = 0;
-        const auto result = nevr_matchmaker_host_patch::OnModuleNotification(
-            reason, name->Buffer, name->Length / sizeof(WCHAR), image, port,
-            [&err](uint8_t* dst, const char* src, size_t len) { return ProcessMemcpy(dst, src, len, &err); });
-        if (result) ReportMatchmakingHostResult(*result, image, port, err);
-        s_mmLedger.NoteLoad(result);
-    }
-
-    if (s_pnsradPatched) return;
-    if (name->Length < 10 * sizeof(WCHAR)) return;
-
-    const WCHAR* p = name->Buffer;
-    if ((p[0] == L'p' || p[0] == L'P') &&
-        (p[1] == L'n' || p[1] == L'N') &&
-        (p[2] == L's' || p[2] == L'S') &&
-        (p[3] == L'r' || p[3] == L'R') &&
-        (p[4] == L'a' || p[4] == L'A') &&
-        (p[5] == L'd' || p[5] == L'D') &&
-        p[6] == L'.' &&
-        (p[7] == L'd' || p[7] == L'D') &&
-        (p[8] == L'l' || p[8] == L'L') &&
-        (p[9] == L'l' || p[9] == L'L')) {
-
-        s_pnsradPatched = true;
-        uintptr_t base = reinterpret_cast<uintptr_t>(data->DllBase);
-        s_pnsradModuleBase.store(base, std::memory_order_release);
-
-        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK),
-                       PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED), 2,
-                       "login check", (unsigned)PNSRAD_LOGIN_CHECK);
-        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_IDENTITY_CHECK),
-                       PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED), 6,
-                       "identity guard", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
-        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
-                       PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
-                       "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
-        PnsradUserProviderIdPatch(base);
-        // These are optional diagnostics. MinHook's thread suspension must not
-        // run from the loader notification; the frame dispatcher drains this.
-        s_pendingDiagnostics.NoteLoaded(base);
-
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
-            "(friends/party/login) %s",
-            s_pnsradOk, s_pnsradFail,
-            (s_pnsradFail == 0 && s_pnsradOk == 4) ? "ENABLED"
-            : (s_pnsradOk == 0) ? "NOT PATCHED"
-                                : "PARTIALLY PATCHED");
-    }
+    const auto module = nevr_pnsrad_load::Classify(name->Buffer, name->Length / sizeof(WCHAR));
+    if (module) s_pendingLoads.Note(*module, reinterpret_cast<uintptr_t>(data->DllBase));
 }
 
 #endif // _WIN32
@@ -547,8 +588,9 @@ void nevr_pnsrad_enabler::Init(uintptr_t base_addr) {
         }
     }
 
-    /* Patch 4 (deferred): Register DLL notification for pnsrad.dll patches */
+    /* Patch 4 (deferred): record pnsrad.dll and pnsradmatchmaking.dll loads, patch them when LoadLibrary returns */
     {
+        nevr_dll_load_hook::AddPostLoadObserver(&ApplyPendingLoadsAtLibraryReturn);
         HMODULE ntdll = GetModuleHandleA("ntdll");
         auto regFn = reinterpret_cast<LdrRegisterDllNotification_fn>(
             GetProcAddress(ntdll, "LdrRegisterDllNotification"));
@@ -592,9 +634,14 @@ void nevr_pnsrad_enabler::Shutdown() {
 #endif
 }
 
+void nevr_pnsrad_enabler::ApplyLoadsMissedAtLibraryReturn() {
+#ifdef _WIN32
+    ApplyPendingLoads(ApplyPoint::FrameTick);
+#endif
+}
+
 void nevr_pnsrad_enabler::InstallPendingDiagnostics() {
 #ifdef _WIN32
-    if (s_inDllNotification) return;
     s_pendingDiagnostics.Drain([](uintptr_t base) {
         const HMODULE loaded = GetModuleHandleA("pnsrad.dll");
         if (reinterpret_cast<uintptr_t>(loaded) != base) {
