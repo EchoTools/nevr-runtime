@@ -3,6 +3,7 @@
 // login path; this class only reads a snapshot, so it never blocks and never touches the network.
 #pragma once
 
+#include <atomic>
 #include <functional>
 
 #include "quest/auth/session.h"
@@ -50,19 +51,27 @@ class TokenIdentitySource final : public nevr_quest_login::IdentitySource {
   static nevr_session_router::LoginGate GateFor(const nevr::quest_auth::Snapshot& snap) noexcept;
 
   // The #240 login prerequisites ask this from the Oculus message pump before they stand in for an Oculus
-  // answer (login_rewrite.h). It is one lock-free atomic load of the process-wide attempt gate
-  // (login_attempt_gate.h) that Observe and Fetch keep, which the sign-in prompt's page-enable hook reads
+  // answer (login_rewrite.h). It reads the terminal flag and process-wide attempt gate
+  // (login_attempt_gate.h) with lock-free atomics. Observe and Fetch keep the gate, which the page-enable hook reads
   // too: no snapshot, no allocation, no lock. True only after the last observed state was one in which
   // Fetch returns Ok (token auth Ready with an access token and a NEVR account id) and the current login
   // attempt has not been poisoned by a skipped logging-in page.
-  bool Ready() const noexcept override { return nevr_quest_login::attempt_gate::LoginMayProceed(); }
+  bool Ready() const noexcept override {
+    return !Terminal() && nevr_quest_login::attempt_gate::LoginMayProceed();
+  }
 
-  // The #581 hold, one lock-free atomic load of the same attempt gate. The login prerequisites ask it on every
+  // The #581 hold reads the terminal flag and attempt gate with lock-free atomics. The login prerequisites ask it on every
   // pump of the game's message queue: while it is true the four local login answers wait for token auth; while it
   // is false they are delivered, and an identity that is not ready then makes the game fail the login on its own
   // path, which is the screen the sign-in code is written onto. True only while the gate is not ready, not
   // poisoned, and the last observed state was one for which HoldsFor is true.
-  bool HoldsAnswers() const noexcept override { return nevr_quest_login::attempt_gate::HoldsAnswers(); }
+  bool HoldsAnswers() const noexcept override {
+    return !Terminal() && nevr_quest_login::attempt_gate::HoldsAnswers();
+  }
+
+  // A final failure is sticky so a Fetch racing the auth thread cannot restore a Starting hold.
+  // AuthSnapshot also uses it while there is no QuestTokenAuth object to read.
+  bool Terminal() const noexcept { return terminal_.load(std::memory_order_acquire); }
 
   // Whether the login answers wait for token auth in this state: a token is coming without the player. The
   // router's gate is Awaiting (GateFor) and the session is not waiting for the player: starting, refreshing,
@@ -88,6 +97,7 @@ class TokenIdentitySource final : public nevr_quest_login::IdentitySource {
 
   SnapshotFn snapshot_;
   std::function<int()> socialLevel_;
+  std::atomic<bool> terminal_{false};
 };
 
 }  // namespace nevr_quest::integration
