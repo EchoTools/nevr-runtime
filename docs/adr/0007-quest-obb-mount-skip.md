@@ -1,6 +1,7 @@
 # ADR 0007: Quest OBB mount skip
 
-Status: accepted, implemented (`src/quest/sentinel/obb_skip_hook.{h,cpp}`, #319). Off by default until a headset run confirms it.
+Status: accepted, implemented (`src/quest/sentinel/obb_skip_hook.{h,cpp}`, #319). On in every Quest build, with no feature
+flag (#572).
 
 ## Context
 
@@ -27,12 +28,15 @@ result into `gOBBPath`, logs `OBB mounted at '%s'` and sets the flag byte. `CSys
 
 ## Decision
 
-**The feature flag.** `features.obb_skip` in `nevr-quest.json`, row `obb_skip` of `kFeatures` in
-`sentinel/quest_config.cpp`. It defaults off, needs no other feature, and is not forced off by any prerequisite.
+**No feature flag.** The skip runs on every launch: nothing in the configuration turns it off, and it needs no other
+feature. A fix has no reason to be switched off, and a flag is a second code path to support. `obb_skip` is a retired
+feature name (`kRetiredFeatures` in `sentinel/quest_config.cpp`): a config file that names it gets one warning saying
+so, and `NEVR_QUEST_DEFAULT_FEATURES` naming it fails the configure (`cmake/nevr_build_info.cmake`).
 
 **The ctor steps.** `register_obb_skip_counters` (with the other counters, before the single reporter start) and
-`install_obb_skip` (right after the clock hook, so it is in place before libr15 runs `CSysFile::Init`). Skipped with
-`obb_skip_off` when the flag is off, and with `counters_refused` when a counter was refused.
+`install_obb_skip` (right after the clock hook, so it is in place before libr15 runs `CSysFile::Init`), both on every
+launch, also when the configuration cannot be resolved. `install_obb_skip` is skipped with `counters_refused` when a
+counter was refused.
 
 **The hooks** (`pinned_targets.h`: `LibR15MountObb` JUMP_SLOT `0x36c39d0`, `LibR15GetMountedObbPath` JUMP_SLOT
 `0x36f5b48`; build ID `b243509c08ce677aeb95fa348016949b3fc45230`; both imports have value 0):
@@ -61,7 +65,7 @@ refused mount: the same ~30 s, elsewhere), or it binds to the library's own copy
 ever called, runs the refused mount regardless of this hook). The sentinel counters do not show either; only the logcat
 deviation lines do (a second `Loading OBB from`, any `mounting encrypted OBBs is no longer supported`, a ~30 s gap).
 
-## Prediction (logcat, with the flag on)
+## Prediction (logcat, every launch)
 
 - one `Loading OBB from '<path>'`, then `OBB mounted at '/storage/emulated/0/readyatdawn'`, then
   `OBB loading complete (took 0 ms)`;
@@ -77,7 +81,8 @@ services the looper, and that remaining time is not measured. A missing extracte
 | test | pins |
 | --- | --- |
 | `obb_skip_hook_test` (`just test-quest-hooks`) | the handlers through the thunk entries against a model of the callback and the wait loop: no wait when armed, the callback gets state 1 and its own arguments, the root is served, a call without a callback and a path request before the skip go to the original, a thunk without an original is a fault |
-| `integration_sequence_test` | skipped by default with `obb_skip_off`; runs alone; counters before the reporter; `counters_refused`; a failing or throwing step leaves the others unchanged |
+| `integration_sequence_test` | installed with every feature off and when the configuration cannot be resolved; counters before the reporter; `counters_refused`; a failing or throwing step leaves the others unchanged |
 | `integration_hooks_test` | the counter budget with the four counters |
-| `quest_config_test` | off by default; only a file boolean turns it on; a rejected file leaves it off |
+| `quest_config_test` | not a feature: the feature report does not name it; a file naming `obb_skip` gets the retired warning and nothing changes |
+| `tools/tests/test_quest_default_features.py` | `NEVR_QUEST_DEFAULT_FEATURES` naming `obb_skip` fails the configure |
 | `got_pinned_test` (`just test-quest-hooks-pinned`) | both slots resolve in the pinned `libr15.so` |

@@ -47,7 +47,7 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
 }
 
 bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.obbSkip && !f.presenceNames && !f.presenceLocal;
+  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.presenceNames && !f.presenceLocal;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -73,10 +73,8 @@ void DefaultsWithoutFile() {
   CHECK(!r.config.requested.hwdump && !r.config.effective.hwdump);
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
   CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
-  // The OBB-mount skip (#319) is off until a file turns it on.
-  CHECK(!r.config.requested.obbSkip && !r.config.effective.obbSkip);
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
-  CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
+  // The OBB-mount skip (#319) is not a feature (#572): the feature report does not name it.
+  CHECK(!EventsContain(r, "obb_skip"));
   CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
   CHECK(!HasLevel(r, LogLevel::kError));
 }
@@ -372,29 +370,6 @@ void HwDumpIsOnlyEverOnByAFileBoolean() {
   }
 }
 
-// The OBB-mount skip (#319) needs nothing else: the file's boolean alone turns it on, and anything but a
-// JSON true leaves it off.
-void ObbSkipIsOnlyEverOnByAFileBoolean() {
-  {
-    const LoadResult r = Load(Full(), R"({"features":{"obb_skip":true}})");
-    CHECK(r.config.requested.obbSkip && r.config.effective.obbSkip);
-    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
-    CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
-          !r.config.effective.social && !r.config.effective.hwdump);
-    CHECK(EventsContain(r, "feature=obb_skip requested=on effective=on"));
-    CHECK(!HasLevel(r, LogLevel::kWarn));
-  }
-  for (const char* text : {R"({"features":{"obb_skip":"true"}})", R"({"features":{"obb_skip":1}})",
-                           R"({"obb_skip":true})", R"({"features":{}})"}) {
-    const LoadResult r = Load(Full(), text);
-    CHECK(!r.config.effective.obbSkip);
-    CHECK(EventsContain(r, "feature=obb_skip requested=off effective=off"));
-  }
-  // A rejected file contributes nothing, so the feature stays off.
-  const LoadResult rejected = Load(Full(), R"({"features":{"obb_skip":true})");
-  CHECK(rejected.fileRejected && !rejected.config.effective.obbSkip);
-}
-
 // The no-config gate (the release packages): a build that turns the login features on by default logs in with no
 // nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
 constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
@@ -414,7 +389,6 @@ void NoConfigFileLogsInFromTheEmbeddedDefaultsAlone() {
   CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
   CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));  // diagnostics stay off
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kObbSkip));
   CHECK(EventsContain(r, "feature=login requested=on effective=on"));
 }
 
@@ -504,15 +478,29 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
-// The Quest `self_check` feature is gone (#451: self-checks are on in every build). A file that still names it is
-// not an error: it is told the feature is retired, by name (the name is one of ours, so nothing a file supplies
-// reaches the log), nothing else about it counts as an unknown feature, and startup carries on.
+// The Quest `self_check` (#451: self-checks are on in every build) and `obb_skip` (#572) features are gone. A file
+// that still names one is not an error: it is told the feature is retired, by name and why (the name is one of ours,
+// so nothing a file supplies reaches the log), nothing else about it counts as an unknown feature, and startup
+// carries on.
 void ARetiredFeatureNamedInAFileIsIgnoredByName() {
   LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
   CHECK(EventsContain(r, "feature=self_check retired ignored"));
   CHECK(!EventsContain(r, "unknown feature #"));
   CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
   CHECK(!AllOff(r.config.effective));
+  // `obb_skip` is retired too (#572: the OBB mount is skipped on every launch). Whatever value the file gives it,
+  // it is named with why, it is not counted as unknown, and it turns nothing on or off.
+  for (const char* text : {R"({"features":{"obb_skip":true}})", R"({"features":{"obb_skip":false}})",
+                           R"({"features":{"obb_skip":"yes"}})"}) {
+    r = Load(Full(), text);
+    CHECK(EventsContain(r, "feature=obb_skip retired ignored (the OBB mount is skipped on every launch)"));
+    CHECK(!EventsContain(r, "unknown feature #"));
+    CHECK(!EventsContain(r, "obb_skip requested="));
+    CHECK(!r.fileRejected && AllOff(r.config.effective));
+  }
+  r = Load(Full(), R"({"features":{"self_check":true,"obb_skip":true}})");
+  CHECK(EventsContain(r, "feature=self_check retired ignored (self-checks are on in every build)"));
+  CHECK(EventsContain(r, "feature=obb_skip retired ignored (the OBB mount is skipped on every launch)"));
   // an unrelated unknown name is still only counted, never named
   r = Load(Full(), R"({"features":{"made_up_name":true}})");
   CHECK(EventsContain(r, "unknown feature #1 ignored"));
@@ -547,7 +535,6 @@ int main() {
   ConfigPathIsNeverGameConfigJson();
   RedirectIsGatedByActivation();
   HwDumpIsOnlyEverOnByAFileBoolean();
-  ObbSkipIsOnlyEverOnByAFileBoolean();
   PresenceNamesNeedSocialAndAreOffByDefault();
   PresenceLocalNeedsSocialAndIsOffByDefault();
   if (g_failures != 0) {
