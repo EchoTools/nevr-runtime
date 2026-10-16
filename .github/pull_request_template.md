@@ -25,3 +25,9 @@ See docs/standards/verification.md.
 - [ ] The PR has the same milestone as the issue it resolves
 - [ ] One logical change, with a conventional-prefix commit message (`feat`, `fix`, `docs`, `ci`, ...)
 - [ ] `src/legacy/` is untouched, and no generated protobuf (`gen/cpp/*.pb.*`) was edited by hand
+
+<!-- The last non-empty line of the PR body must be this one, with <sha> replaced by the merge-base of
+your branch and the PR's target: `git fetch origin main && git merge-base HEAD origin/main`
+(7 to 40 hex characters; see AGENTS.md, "Review, verification and merge"). -->
+
+Read AGENTS.md at <sha>

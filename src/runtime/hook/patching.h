@@ -15,8 +15,19 @@
 /// <param name="offset">The offset from the game base address.</param>
 /// <param name="patchData">Pointer to the patch data.</param>
 /// <param name="patchSize">Size of the patch in bytes.</param>
-static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(patchData), patchSize);
+static inline bool ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
+  DWORD error = ERROR_SUCCESS;
+  if (ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, patchData, patchSize, &error)) return true;
+  if (nevr_boot_log_tee::InBootPhase()) {
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.PATCH] patch FAILED offset=0x%llX size=%llu error=%lu\n",
+        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(patchSize), error);
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] patch FAILED offset=0x%llX size=%llu error=%lu",
+        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(patchSize), error);
+  }
+  return false;
 }
 
 /// Install a MinHook detour on a function pointer.

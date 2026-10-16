@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/globals.h"
@@ -96,6 +97,16 @@ static void FailPluginLoad(const PluginLoadItem& item, const std::string& reason
 }
 
 namespace {
+
+// `file` names a DLL inside plugins/. The legacy `.\name.dll` spelling is
+// accepted, but no other path component belongs in a configured filename.
+bool PluginFileStaysInDirectory(const std::string& file) {
+  std::string_view name(file);
+  if (name.substr(0, 2) == ".\\") name.remove_prefix(2);
+  if (name.empty() || name == "." || name == "..") return false;
+  return name.find_first_of("\\/:") == std::string_view::npos &&
+         name.find('\0') == std::string_view::npos;
+}
 
 struct StagedPlugin {
   HMODULE                  hModule;
@@ -234,6 +245,10 @@ class PluginLoadRun {
     }
     if (SkipSuperseded(item, itemReport)) return;
     if (SkipDuplicateEntry(planIndex)) return;
+    if (!PluginFileStaysInDirectory(item.file)) {
+      FailPluginLoad(item, "file is outside plugins directory", itemReport);
+      return;
+    }
     HMODULE hPlugin = LoadModule(path, filename);
     if (!hPlugin) {
       FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()), itemReport);
@@ -499,7 +514,18 @@ class PluginLoadRun {
       case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
     if (result != 0) {
-      FreeLibrary(s.hModule);
+      // An unsuccessful init may already have installed detours or acquired
+      // resources. Give the plugin its documented cleanup call before unmapping
+      // its code. Without that export there is no safe way to prove cleanup;
+      // retain the module reference until process exit.
+      if (s.shutdownFn) {
+        s.shutdownFn();
+        FreeLibrary(s.hModule);
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] %s: init failed without shutdown export — module retained until process exit",
+            s.item.file.c_str());
+      }
       FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
                      report[s.planIndex]);
       continue;
