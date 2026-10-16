@@ -359,6 +359,24 @@ TEST(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
   nevr_dll_load_hook::Shutdown();
 }
 
+// #630: a create that fails for any other reason (a first Install() that could not hook) leaves no hook, so its
+// line says the variant's loads run no filter, observer or callback, never that a hook stays in place.
+TEST(DllLoadHookInstall, ACreateThatFailsForAnotherReasonSaysItsLoadsRunNoFilter) {
+  UseFakeHooks();
+  g_fakeHooks.createResult = MH_ERROR_NOT_EXECUTABLE;
+  testing::internal::CaptureStderr();
+  nevr_dll_load_hook::Install();
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(err.find("hook FAILED name=LoadLibraryA reason=MH_ERROR_NOT_EXECUTABLE — loads through this variant run no "
+                     "load filter, observer or callback"),
+            std::string::npos)
+      << err;
+  EXPECT_EQ(err.find("stays in place"), std::string::npos) << err;
+  EXPECT_EQ(g_fakeHooks.removeCalls, 0) << "nothing was created, so there is nothing to remove";
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
 TEST(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
