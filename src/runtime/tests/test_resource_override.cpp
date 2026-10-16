@@ -7,10 +7,16 @@
 #include <cstdio>
 #include <cstring>
 #include <future>
+#include <fstream>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <windows.h>
 
 #include "runtime/patch/resource_override.h"
+
+bool TestLogContains(const std::string& needle);
+void ClearTestLogs();
 
 namespace {
 
@@ -181,6 +187,30 @@ TEST(ResourceOverride, ShutdownWithNoHookReleasesTheRegistry) {
   EXPECT_FALSE(report.hook_installed);
   // The registry was released: a second shutdown has nothing to report.
   EXPECT_EQ(ShutdownResourceOverride().registered, 0u);
+}
+
+TEST(ResourceOverride, ShutdownReportsOwnedBuffersKeptByLiveHook) {
+  char directory[MAX_PATH] = {};
+  char path[MAX_PATH] = {};
+  ASSERT_NE(GetTempPathA(MAX_PATH, directory), 0u);
+  ASSERT_NE(GetTempFileNameA(directory, "nvr", 0, path), 0u);
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << "owned";
+    ASSERT_TRUE(file.good());
+  }
+
+  TestHook_InitResourceOverrides(&NoopOriginal);
+  RegisterResourceOverrideFromFile(kType, kName, path, "owned-test");
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 1u);
+  EXPECT_TRUE(report.hook_installed);
+  EXPECT_TRUE(TestLogContains("owned_buffers_process_lifetime=1"));
+
+  TestHook_SetOriginal(nullptr);
+  ShutdownResourceOverride();
+  EXPECT_NE(DeleteFileA(path), 0);
 }
 
 // A game callback that never returns used to hang plugin unload with nothing in the log. The wait is bounded

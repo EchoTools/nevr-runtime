@@ -122,6 +122,15 @@ def extract_braced_function(source: str, signature: str) -> str:
 
 
 class RuntimeLifecycleInvariantTest(unittest.TestCase):
+    def test_normal_exit_reports_resource_buffers_before_process_termination(self):
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        client_exit = extract_braced_function(source, "VOID WINAPI ExitProcessHook(")
+        server_exit = extract_braced_function(source, "void PerformGracefulShutdown(")
+        self.assertRegex(client_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*OriginalExitProcess\s*\(\s*uExitCode\s*\)")
+        self.assertRegex(server_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")

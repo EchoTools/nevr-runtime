@@ -27,6 +27,7 @@
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
+#include "runtime/patch/resource_override.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
 // its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
@@ -267,6 +268,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called — not suppressed, process exiting", uExitCode);
+  ShutdownResourceOverride();
   OriginalExitProcess(uExitCode);
 }
 
@@ -1338,5 +1340,6 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   //    OriginalTerminateProcess which kills all threads immediately.
   //    On Wine, this also terminates the wineserver association, so the
   //    listener socket released in step 1 is reclaimed by the kernel.
+  ShutdownResourceOverride();
   ForceFatalExit(exitCode);
 }
