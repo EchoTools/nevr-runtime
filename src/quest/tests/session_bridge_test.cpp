@@ -119,6 +119,7 @@ class FakeConnector : public WsConnector {
 
 struct Client {
   int fd = -1;
+  std::string pending;
   explicit Client(uint16_t port) {
     fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -142,7 +143,9 @@ struct Client {
     }
   }
   std::string Read(std::size_t want, int ms = 3000, bool* eof = nullptr) {
-    std::string out;
+    const std::size_t take = pending.size() < want ? pending.size() : want;
+    std::string out = pending.substr(0, take);
+    pending.erase(0, take);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
     while (out.size() < want && std::chrono::steady_clock::now() < deadline) {
       pollfd p{fd, POLLIN, 0};
@@ -165,7 +168,19 @@ struct Client {
           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
     return Read(50);
   }
-  bool Upgrade(const std::string& path = "/x") { return UpgradeBytes(path).rfind("HTTP/1.1 101", 0) == 0; }
+  bool Upgrade(const std::string& path = "/x") {
+    std::string response = UpgradeBytes(path);
+    if (response.rfind("HTTP/1.1 101", 0) != 0) return false;
+    std::size_t end = response.find("\r\n\r\n");
+    while (end == std::string::npos) {
+      const std::string more = Read(1);
+      if (more.empty()) return false;
+      response += more;
+      end = response.find("\r\n\r\n");
+    }
+    pending = response.substr(end + 4);
+    return true;
+  }
 };
 
 // "/<token>/" out of "ws://127.0.0.2:<port>/<token>/".
@@ -217,6 +232,43 @@ bool WaitFor(const std::function<bool()>& pred, int ms = 3000) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return pred();
+}
+
+void TestUpgradeKeepsCloseFrameSentWithResponse() {
+  const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+  QCHECK(listener >= 0);
+  if (listener < 0) return;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+  socklen_t addrLen = sizeof(addr);
+  const bool listening = ::inet_pton(AF_INET, quest_net::kListenAddress, &addr.sin_addr) == 1 &&
+                         ::bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0 &&
+                         ::listen(listener, 1) == 0 &&
+                         ::getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &addrLen) == 0;
+  QCHECK(listening);
+  if (!listening) {
+    ::close(listener);
+    return;
+  }
+  Client client(ntohs(addr.sin_port));
+  QCHECK(client.fd >= 0);
+  if (client.fd < 0) {
+    ::close(listener);
+    return;
+  }
+  const int peer = ::accept(listener, nullptr, nullptr);
+  QCHECK(peer >= 0);
+  if (peer >= 0) {
+    const std::string closeFrame = BuildCloseFrame(1011, "sign-in failed");
+    const std::string bytes = BuildUpgradeResponse("dGhlIHNhbXBsZSBub25jZQ==") + closeFrame;
+    // Queue one combined write before Upgrade reads, so the client cannot observe separate arrivals.
+    QCHECK(::send(peer, bytes.data(), bytes.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(bytes.size()));
+    QCHECK(client.Upgrade());
+    QCHECK(client.Read(closeFrame.size(), 100) == closeFrame);
+    ::close(peer);
+  }
+  ::close(listener);
 }
 
 void TestLoginRelayTapAndSideChannel() {
@@ -670,6 +722,7 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
 }  // namespace
 
 int main() {
+  TestUpgradeKeepsCloseFrameSentWithResponse();
   TestLoginRelayTapAndSideChannel();
   TestUpgradeWithoutTheTokenIsRefused();
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
