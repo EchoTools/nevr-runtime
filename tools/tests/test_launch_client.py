@@ -46,7 +46,7 @@ def make_game_root(root: pathlib.Path) -> pathlib.Path:
 
 
 def make_fake_bin(directory: pathlib.Path) -> None:
-    """pgrep: an X server is up on :101 (the script's Xvfb-or-Xephyr pattern); echovr.exe is "running" iff FAKE_ECHOVR_PIDS is set AND the caller matches
+    """pgrep: Xephyr is up; echovr.exe is "running" iff FAKE_ECHOVR_PIDS is set AND the caller matches
     on the command line (-f), because the real game's process name is "Main Thread", so a `-x echovr.exe`
     match finds nothing. wine writes the log a logged-in run leaves. wineserver and the rest do nothing."""
     directory.mkdir()
