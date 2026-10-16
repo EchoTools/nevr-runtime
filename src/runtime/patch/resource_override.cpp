@@ -454,6 +454,7 @@ void SetResourceOverrideFatalLineSink(void (*sink)(const char* line)) {
 
 ResourceOverrideShutdownReport ShutdownResourceOverride() {
     ResourceOverrideShutdownReport report = {};
+    uint64_t owned_buffers_process_lifetime = 0;
     std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> released;
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
@@ -461,6 +462,7 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
         report.registered = g_overrides->size();
         report.hook_installed = g_orig != nullptr;
         for (const auto& ovr : *g_overrides) {
+            if (report.hook_installed && ovr->owned) ++owned_buffers_process_lifetime;
             if (ovr->applied) continue;
             ++report.never_applied;
             // A registered-but-never-matched override (wrong hash, or the expected resource genuinely never
@@ -481,9 +483,10 @@ ResourceOverrideShutdownReport ShutdownResourceOverride() {
     }
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] shutdown complete overrides_registered=%llu overrides_never_applied=%llu hook_installed=%s "
-        "registry_released=%s",
+        "registry_released=%s owned_buffers_process_lifetime=%llu",
         static_cast<unsigned long long>(report.registered), static_cast<unsigned long long>(report.never_applied),
-        report.hook_installed ? "true" : "false", report.hook_installed ? "false" : "true");
+        report.hook_installed ? "true" : "false", report.hook_installed ? "false" : "true",
+        static_cast<unsigned long long>(owned_buffers_process_lifetime));
     return report;
 }
 

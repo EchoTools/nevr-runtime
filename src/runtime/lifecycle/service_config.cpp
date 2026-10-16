@@ -139,10 +139,11 @@ const nevr::NevrConfig& NevrCfg() {
     } catch (const nevr::NevrConfigError& e) {
       // Server: fail loud (ServerFatal -> ForceFatalExit). Client: ServerFatal
       // warns and returns, then we fall through to the warn+empty client path.
+      const std::string detail = nevr::ConfigRejectionDetail(e);
       ServerFatal("config.yaml at %s is invalid: %s — refusing to run a server on a "
                   "broken or incomplete config (an unset required secret must fail loud, "
                   "never silently degrade to no login)",
-                  path.c_str(), e.what());
+                  path.c_str(), detail.c_str());
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] continuing with built-in defaults after config.yaml rejection (client mode)");
       return nevr::NevrConfig();

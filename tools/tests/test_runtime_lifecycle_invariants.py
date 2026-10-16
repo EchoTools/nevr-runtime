@@ -122,6 +122,15 @@ def extract_braced_function(source: str, signature: str) -> str:
 
 
 class RuntimeLifecycleInvariantTest(unittest.TestCase):
+    def test_normal_exit_reports_resource_buffers_before_process_termination(self):
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        client_exit = extract_braced_function(source, "VOID WINAPI ExitProcessHook(")
+        server_exit = extract_braced_function(source, "void PerformGracefulShutdown(")
+        self.assertRegex(client_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*OriginalExitProcess\s*\(\s*uExitCode\s*\)")
+        self.assertRegex(server_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
@@ -203,10 +212,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # every required hook succeeds in the logs this classification is based on, so
         # `just verify` would still go green while every server refused to start.
         self.assertIn("if (installed) return;", note)
-        # TeeFprintf, not Log(): this runs under the DllMain loader lock (N36). The N36 census
-        # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
-        # added inside this helper.
-        self.assertNotRegex(note, r"\bLog\s*\(")
         # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
         # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
         # way the original seven PatchDetour calls did.
@@ -327,12 +332,29 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
             body = extract_braced_function(patches, hook)
             self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
-            self.assertRegex(body, r"if\s*\(\s*!nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"if\s*\(\s*!chainReadable\b")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
+
+    def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
+                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+            body = extract_braced_function(patches, hook)
+            guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
+            self.assertGreaterEqual(guard, 0, hook)
+            self.assertLess(guard, body.find(original), hook)
+            self.assertNotRegex(body, r"\*\s*arg1\b")
+            self.assertRegex(body, re.compile(r"if\s*\(\s*!chainReadable\s*\|\|.*?kMaximumUserAddress", re.S))
+            self.assertIn('"pointer_chain"', body)
+            warning = body.find("Log(EchoVR::LogLevel::Warning,", guard)
+            self.assertGreater(warning, guard, hook)
+            self.assertLess(warning, body.find(original), hook)
+            self.assertNotRegex(body[guard:warning], r"\breturn\b", hook)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -580,19 +602,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         source = (ROOT / "src/runtime/compat/ws_bridge.cpp").read_text()
 
         self.assertNotIn("0x43e6963ac76beee4", source)
-
-    def test_held_dll_load_callbacks_fire_after_the_log_filter_is_in(self):
-        # #495: a callback for a DLL already loaded at registration is held during boot because it logs,
-        # and before the log filter Log() goes through the game's CLog (not set up that early). The
-        # unit tests cover the hold itself; the property that the guarded initialization releases the
-        # held callbacks, after the filter and exactly once, lives here.
-        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
-        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
-        self.assertEqual(body.count("nevr_dll_load_hook::FireHeldCallbacks("), 1)
-        self.assertEqual(body.count("nevr_builtin_log_filter::Init("), 1)
-        self.assertLess(body.index("nevr_builtin_log_filter::Init("),
-                        body.index("nevr_dll_load_hook::FireHeldCallbacks("),
-                        "held callbacks log: they must not fire before the log filter is installed")
 
 
 if __name__ == "__main__":

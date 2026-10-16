@@ -124,10 +124,22 @@ nevr_quest::LogLevel MapAuth(nevr::auth::LogLevel level) {
 nevr::quest_auth::Snapshot AuthSnapshot() {
   nevr::quest_auth::Snapshot snap;
   nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
-  if (auth == nullptr) return snap;  // Starting
+  if (auth == nullptr) {
+    if (R().identity && R().identity->Terminal()) snap.readiness = nevr::quest_auth::Readiness::Failed;
+    return snap;
+  }
   snap = auth->Get();
   snap.access_token = auth->Token();  // empty once the access token is past its expiry
   return snap;
+}
+
+void PublishTokenAuthState(const nevr::quest_auth::Snapshot& snap) {
+  Runtime& rt = R();
+  if (rt.identity) rt.identity->Observe(snap);
+  const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
+  if (rt.loginGate.exchange(gate) != gate) {
+    if (quest_net::SessionBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
+  }
 }
 
 // Logs the token session's readiness whenever it changes (stage line `token_auth_state`), until shutdown.
@@ -142,7 +154,7 @@ void PollTokenAuthState() {
     const nevr::quest_auth::Snapshot snap = AuthSnapshot();
     // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
     // token that ran out without a readiness change.
-    if (rt.identity) rt.identity->Observe(snap);
+    PublishTokenAuthState(snap);
     // The held login connection opens when the account appears and closes when it will not (router gate).
     // One structured line each time the router has dropped more Unrequires (a drop is deliberate; see drop_report.h).
     if (quest_net::SessionBridge* const reporting = rt.bridge.load(std::memory_order_acquire)) {
@@ -156,10 +168,6 @@ void PollTokenAuthState() {
                              {"unmatched_embedded_total", static_cast<long long>(lastUnmatched)},
                              {"unmatched_embedded_since_last", static_cast<long long>(unmatchedDelta)}});
       }
-    }
-    const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
-    if (rt.loginGate.exchange(gate) != gate) {
-      if (quest_net::SessionBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
     }
     if (static_cast<int>(snap.readiness) != last) {
       last = static_cast<int>(snap.readiness);
@@ -378,6 +386,9 @@ class ProductionSteps final : public Steps {
         if (!created) {
           sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
                               {{"status", "failed"}, {"class", "create_failed"}});
+          nevr::quest_auth::Snapshot failed;
+          failed.readiness = nevr::quest_auth::Readiness::Failed;
+          PublishTokenAuthState(failed);
           return;
         }
         nevr::quest_auth::QuestTokenAuth* const auth = created.release();  // process lifetime
@@ -386,6 +397,9 @@ class ProductionSteps final : public Steps {
       } catch (const std::exception&) {
         sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
                             {{"status", "failed"}, {"class", "start_threw"}});
+        nevr::quest_auth::Snapshot failed;
+        failed.readiness = nevr::quest_auth::Readiness::Failed;
+        PublishTokenAuthState(failed);
         return;
       }
       PollTokenAuthState();

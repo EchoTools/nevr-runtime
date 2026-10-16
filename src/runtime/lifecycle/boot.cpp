@@ -7,6 +7,7 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/state_machine.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -140,13 +141,14 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
   // the NOP is written here, before the first original call, rather than only from
   // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
-  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
-  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
-  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
-  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
-  // run earlier is not established. Server only: the client's first original call initializes
-  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
-  // attempted on the first server entry only and its record is emitted once.
+  // first original call (tools/tests/test_spectatorstream_order.py). The NOP does not begin
+  // multiplayer: what begins it on a server is the call the state machine queues when the login
+  // completes (state_machine.cpp, #514). Not part of this write: PatchEnableHeadless,
+  // PatchBypassOvrPlatform and PatchBlockOculusSDK run in RunDeferredRuntimeBootstrap, after the
+  // original call returns; whether any of them has to run earlier is not established. Server only:
+  // the client's first original call initializes D3D and is left alone (N146). This hook may be
+  // entered more than once, so the write is attempted on the first server entry only and its
+  // record is emitted once.
   static std::atomic_bool s_spectatorStreamPatchAttempted{false};
   if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
     PatchSpectatorStreamCheck("pre-preprocess");
@@ -155,9 +157,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // game reads its manifests and opens its packages during it, before the graphics
   // device exists (where the rest load), so a plugin that serves game data from
   // elsewhere has to be in place now. Nothing marked early: nothing loads here.
-  static bool s_earlyPlugins = false;
-  if (!s_earlyPlugins) {
-    s_earlyPlugins = true;
+  static std::atomic_bool s_earlyPlugins{false};
+  if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
     LoadPlugins(PluginPhase::Early);
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
@@ -229,6 +230,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       ServerFatal("One or more boot hooks failed to install — server would be degraded: %s",
                   g_bootHookFailedCause[0] != '\0' ? g_bootHookFailedCause : "cause not recorded");
     }
+
+    // #592: the two game functions that begin multiplayer after the login are checked once, here;
+    // a mismatch exits the server now rather than leaving it logged in and idle after its login.
+    ValidateServerBringup();
   }
 
   // Load modules. Order matters — dependencies must load first.
