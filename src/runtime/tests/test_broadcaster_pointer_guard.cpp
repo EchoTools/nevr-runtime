@@ -9,8 +9,28 @@ TEST(BroadcasterPointerGuard, RejectsLowPointersBeforeReadingAndAcceptsValidChai
   std::int64_t table = 0x1234;
   EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(0x10, table));
   EXPECT_EQ(table, 0x1234U);
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(0x11, table));
+  EXPECT_EQ(table, 0x1234U);
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(0xFFFF, table));
+  EXPECT_EQ(table, 0x1234U);
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(0x7FFFFFFF0000ULL, table));
+  EXPECT_EQ(table, 0x1234U);
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(UINTPTR_MAX, table));
+  EXPECT_EQ(table, 0x1234U);
 
   std::uintptr_t outer = 0x10;
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(
+      reinterpret_cast<std::uintptr_t>(&outer), table));
+  EXPECT_EQ(table, 0x1234U);
+  outer = 0x11;
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(
+      reinterpret_cast<std::uintptr_t>(&outer), table));
+  EXPECT_EQ(table, 0x1234U);
+  outer = 0x7FFFFFFF0000ULL;
+  EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(
+      reinterpret_cast<std::uintptr_t>(&outer), table));
+  EXPECT_EQ(table, 0x1234U);
+  outer = UINTPTR_MAX;
   EXPECT_FALSE(nevr_broadcaster_guard::TryReadListenerTable(
       reinterpret_cast<std::uintptr_t>(&outer), table));
   EXPECT_EQ(table, 0x1234U);

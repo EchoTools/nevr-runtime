@@ -323,12 +323,29 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
             body = extract_braced_function(patches, hook)
             self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
-            self.assertRegex(body, r"if\s*\(\s*!nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"if\s*\(\s*!chainReadable\b")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
+
+    def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
+                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+            body = extract_braced_function(patches, hook)
+            guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
+            self.assertGreaterEqual(guard, 0, hook)
+            self.assertLess(guard, body.find(original), hook)
+            self.assertNotRegex(body, r"\*\s*arg1\b")
+            self.assertRegex(body, re.compile(r"if\s*\(\s*!chainReadable\s*\|\|.*?kMaximumUserAddress", re.S))
+            self.assertIn('"pointer_chain"', body)
+            warning = body.find("Log(EchoVR::LogLevel::Warning,", guard)
+            self.assertGreater(warning, guard, hook)
+            self.assertLess(warning, body.find(original), hook)
+            self.assertNotRegex(body[guard:warning], r"\breturn\b", hook)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
