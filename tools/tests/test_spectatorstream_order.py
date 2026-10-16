@@ -1,8 +1,8 @@
 """#519: the -spectatorstream NOP sits inside PreprocessCommandLine itself, so on a server it
 is written BEFORE the original call, not only from RunDeferredRuntimeBootstrap (which runs after
 that call), and once.  These are source-order sensors; they pin where the write is made, not
-whether it starts the lobby (#45 is neither confirmed nor refuted).  The byte logic is covered
-by src/runtime/tests/test_checked_patch.cpp."""
+whether it starts the lobby (it does not: the call the state machine queues after the login
+does).  The byte logic is covered by src/runtime/tests/test_checked_patch.cpp."""
 
 import re
 import unittest
