@@ -801,6 +801,18 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
+    # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_prerequisites.cpp -o "$out/chain_login_prerequisites.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
+    "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_signin_code_chain_test" -ldl
+    timeout 120 "$out/login_signin_code_chain_test"
     # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
     # game's callback and wait loop.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \

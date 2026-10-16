@@ -136,6 +136,7 @@ nevr::quest_auth::Snapshot AuthSnapshot() {
 void PollTokenAuthState() {
   Runtime& rt = R();
   int last = -1;
+  int lastHold = -1;
   std::uint64_t lastDropped = 0, lastUnmatched = 0;
   for (;;) {
     const nevr::quest_auth::Snapshot snap = AuthSnapshot();
@@ -167,6 +168,11 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
+    // The login answers' hold (#581), one line each time it changes and on the first poll: "held" while token auth
+    // has a token coming without the player, "answered" otherwise (the game then gets its answers and, with the
+    // identity not ready, fails the login on its own path, the screen the sign-in code is written onto).
+    TokenIdentitySource::ReportHold(TokenIdentitySource::HoldsFor(snap), nevr::quest_auth::ReadinessName(snap.readiness),
+                                    &lastHold);
     nevr_self_check::Flush();  // probes and queued results, every poll (cheap: nothing is sent before LoginSuccess)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
