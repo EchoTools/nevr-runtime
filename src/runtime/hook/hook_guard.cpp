@@ -87,9 +87,8 @@ void Record(const void* target, const char* name) {
   for (;;) {
     idx = InterlockedCompareExchange(&g_reserved, 0, 0);
     if (idx >= kMaxGuarded) {
-      // No Log() here: Record() runs under the DllMain loader lock during boot (N36).
-      // The drop is counted and VerifyAll() (tick, plugin loader: never under the lock)
-      // reports it.
+      // No Log() here, one line per dropped hook would repeat itself: the drop is counted
+      // and VerifyAll() (tick, plugin loader: never under the lock) reports it.
       if (InterlockedCompareExchange(&g_firstDropClaimed, 1, 0) == 0) {
         g_firstDropTarget = target;
         g_firstDropName = name != nullptr ? name : "(unnamed)";

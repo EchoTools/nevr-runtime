@@ -362,7 +362,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -486,7 +486,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1427,22 +1427,20 @@ verify:
         echo "verify: FAIL — N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path." >&2
         exit 1
     fi
-    # N36: Log() is unsafe under the loader lock. InitializeAfterGameImageGuard() runs from DllMain, and
-    # the Log() fallback to stderr stops applying the moment
-    # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
-    # that point in guarded initialization must use nevr_boot_log_tee::TeeFprintf. Exactly one Log()
-    # call is permitted — the final line, emitted after nevr_boot_log_tee::Close().
+    # N36: InitializeAfterGameImageGuard() runs from DllMain under the loader lock, where the game's CLog is
+    # not usable. Log() reports through the boot tee while the tee's sink is set (nevr_boot_log_tee::Init() to
+    # Close(), core/logging.h), so the boot phase must start before InitializeFunctionPointers() makes
+    # EchoVR::WriteLog non-null. The routing itself is driven by test_boot_log_routing; the sink and its
+    # callers are checked by tools/tests/test_patch_detour_logging.py.
     N36_RC=0; N36_BODY=$(awk '/^static VOID InitializeAfterGameImageGuard\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
-    sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
-    sensor_nonempty "N36 Initialize Log census" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
-    # Every Log( call, ternary-selected levels included (a literal 'Log(EchoVR::LogLevel' match
-    # missed `Log(cond ? ... : ...)`); // comments are dropped first. Callees are covered by
-    # tools/tests/test_patch_detour_logging.py.
-    LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | sed 's#//.*##' | grep -cE '(^|[^A-Za-z_:])Log\(' || true)
-    if [ "$LOGS_IN_INIT" -gt 1 ]; then
-        echo "verify: FAIL — N36 guarded initialization contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
-        echo "InitializeAfterGameImageGuard() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
-        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use nevr_boot_log_tee::TeeFprintf." >&2
+    sensor_stage1 "N36 boot phase before function pointers" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
+    sensor_nonempty "N36 boot phase before function pointers" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
+    N36_CODE=$(sed 's#//.*##' <<<"$N36_BODY")
+    N36_INIT_LINE=$(awk '/nevr_boot_log_tee::Init\(\);/ { print NR; exit }' <<<"$N36_CODE")
+    N36_FP_LINE=$(awk '/EchoVR::InitializeFunctionPointers\(\);/ { print NR; exit }' <<<"$N36_CODE")
+    if [ -z "$N36_INIT_LINE" ] || [ -z "$N36_FP_LINE" ] || [ "$N36_INIT_LINE" -ge "$N36_FP_LINE" ]; then
+        echo "verify: FAIL — N36 InitializeAfterGameImageGuard() in src/runtime/lifecycle/initialize.cpp does not call" >&2
+        echo "nevr_boot_log_tee::Init() before EchoVR::InitializeFunctionPointers(): Log() would enter the game's CLog under the loader lock." >&2
         exit 1
     fi
     # Plugin shutdown can join threads and release module references. DllMain
@@ -2683,7 +2681,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1005
+    python3 tools/verify_gtest_floor.py --floor 1004
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
