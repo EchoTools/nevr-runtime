@@ -268,8 +268,8 @@ enum class BootHookRequirement { kRequired, kOptional };
 
 // Issue #42: every boot hook's install result goes through here, so no call site
 // can drop it. PatchDetour has already logged the MinHook reason on failure; this
-// adds what the failure means for the boot. TeeFprintf, not Log(): this runs
-// under the DllMain loader lock (see the N36 note in `just verify`).
+// adds what the failure means for the boot. It runs only in the boot phase (N36),
+// so it writes to the boot tee directly.
 static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequirement requirement) {
   if (installed) return;
   if (requirement == BootHookRequirement::kRequired) {
@@ -440,13 +440,6 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing log filter...\n");
   nevr_builtin_log_filter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] log filter installed\n");
-
-  // DLL load callbacks held during boot: a DLL already loaded when its callback registered (an
-  // injector such as Revive's loads dxgi/d3d12 before the runtime starts). They log, and before the log
-  // filter Log() goes through the game's CLog, not set up yet (#495).
-  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] firing held DLL load callbacks...\n");
-  nevr_dll_load_hook::FireHeldCallbacks();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] held DLL load callbacks fired\n");
 
   // --- Game function hooks ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing game function hooks...\n");

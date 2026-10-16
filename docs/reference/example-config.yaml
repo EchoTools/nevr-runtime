@@ -203,6 +203,14 @@ network:
   # Not a secret.
   # upnp_port: 7777
 
+  # A dedicated server's tick rate in Hz: the fixed time step is 1,000,000 / rate microseconds.
+  # Valid: 10-1000, or 0 to keep the game's own fixed step (30 a second). A server is always
+  # fixed-timestep; 0 does not unpace the loop. Out of range or not a whole number: the default, with
+  # a warning in the log. Ignored by a client.
+  # Absent: 120.
+  # Not a secret.
+  # tick_rate_hz: 120
+
 # ---------------------------------------------------------------------------
 # identity — server identity fields sent during ServerDB registration
 #

@@ -1,6 +1,7 @@
 #include "runtime/ext/plugin_loader.h"
 
 #include <algorithm>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,7 +32,9 @@ struct LoadedPlugin {
   std::string                 path;
 };
 
-static std::vector<LoadedPlugin> g_plugins;
+// A deque: push_back never moves an element already stored, so the address GetLoadedPluginInfo hands
+// out for a plugin stays valid across every later load, whatever it adds.
+static std::deque<LoadedPlugin> g_plugins;
 
 // #60: what happened to each configured plugin at the last LoadPlugins(), in
 // config.yaml order. Written once at the end of LoadPlugins (boot thread), read
@@ -59,9 +62,8 @@ const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   if (index < 0 || static_cast<size_t>(index) >= g_plugins.size()) return nullptr;
   // The plugin's own NvrLoadedPluginInfo. Not a cast of p.info: NvrPluginInfo is
   // padded to 32 bytes, so through it api_version read the padding and
-  // capabilities read api_version. Stable for the process lifetime: LoadPlugins
-  // reserves g_plugins before any init, so it never reallocates under a plugin
-  // that kept the pointer (and it never shrinks after load).
+  // capabilities read api_version. Stable for the process lifetime: g_plugins is a deque, so a
+  // later push_back never moves an entry whose pointer a plugin kept.
   return &g_plugins[index].loaded_info;
 }
 
@@ -161,13 +163,6 @@ class PluginLoadRun {
   // the early one loaded: a repeat of its entries, the same module under another spelling, the report.
   void Stage(PluginPhase phase) {
     staged.clear();
-    // What the normal pass of this run loads after an early one: InitStaged keeps room for it.
-    laterCount = 0;
-    if (phase == PluginPhase::Early) {
-      for (const PluginLoadItem& item : plan) {
-        if (item.enabled && !item.early) ++laterCount;
-      }
-    }
     for (size_t planIndex = 0; planIndex < plan.size(); ++planIndex) {
       if (PluginInPhase(plan[planIndex], phase, earlyPassRan)) StageOne(planIndex);
     }
@@ -197,7 +192,6 @@ class PluginLoadRun {
   std::vector<StagedPlugin> staged;
   std::vector<LoadedModule> loaded;
   size_t enabledCount = 0;
-  size_t laterCount = 0;
   bool earlyPassRan = false;
 
   // A repeat of an entry is skipped (see below), but if the repeat is `required`
@@ -500,10 +494,6 @@ class PluginLoadRun {
 
   // Init each staged plugin in order; record the outcome in `report` and `g_plugins`.
   void InitStaged(const NvrGameContext& ctx) {
-  // A plugin may keep what get_plugin_info returned from inside its init: no
-  // push_back below, in this pass or the normal pass after an early one, may move
-  // the ones already loaded.
-  g_plugins.reserve(g_plugins.size() + staged.size() + laterCount);
   for (const StagedPlugin& s : staged) {
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
@@ -668,9 +658,7 @@ void UnloadPlugins() {
     }
     FreeLibrary(it->hModule);
   }
-  // Release the storage as well: the next load starts from capacity 0, so it is the reserve in
-  // LoadPlugins (not leftover capacity from an earlier load) that keeps kept info pointers valid.
-  std::vector<LoadedPlugin>().swap(g_plugins);
+  g_plugins.clear();
   g_earlyRun.reset();
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }

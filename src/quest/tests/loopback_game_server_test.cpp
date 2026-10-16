@@ -56,6 +56,7 @@ class FakeRemotes : public RemoteTransport {
   void Close(RemoteId remote, uint16_t) override {
     std::lock_guard<std::mutex> lock(mutex);
     closedRemotes.push_back(remote);
+    cv.notify_all();
   }
   template <class Pred>
   bool WaitFor(Pred pred, int ms = 3000) {
@@ -415,6 +416,7 @@ void TestOversizedMessage() {
   QCHECK(game.Read(expected.size()) == expected);
   QCHECK(game.WaitEof());
   QCHECK(rig.remotes.sent.empty());
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.closedRemotes.size() == 1; }));
   QCHECK(rig.router->GetStats().games == 0);
 }
 
