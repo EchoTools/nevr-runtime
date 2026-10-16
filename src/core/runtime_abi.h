@@ -3,9 +3,10 @@
 // Host <-> runtime C ABI between BugSplat64.dll and nevr.dll
 // (docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 //
-// BugSplat64.dll (the stable host the game statically imports) loads nevr.dll
-// lazily, resolves NEVR_GetRuntimeApi, and validates the descriptor it returns
-// BEFORE calling anything through it. The runtime validates the host context it
+// BugSplat64.dll (the stable host the game statically imports) loads nevr.dll at
+// the entry of the game's main wrapper (the one rendezvous), resolves
+// NEVR_GetRuntimeApi, and validates the descriptor it returns BEFORE calling
+// anything through it. The runtime validates the host context it
 // is handed the same way. Only C types cross this boundary: no C++ classes, no
 // STL, no exceptions, no allocator-owned objects.
 //
@@ -29,10 +30,10 @@
 
 extern "C" {
 
-/// echovr.exe PreprocessCommandLine, `UINT64 (PVOID pGame)` in the x64 Microsoft
-/// ABI (PreprocessCommandLineFunc in src/abi/echovr_functions.h; ReVault echovr.exe 0x140116720
-/// CR15Game::vfunction1, single argument moved from RCX at 0x14011672F).
-typedef std::uint64_t (*NevrPreprocessCommandLineFn)(void* game);
+/// echovr.exe GameMainWrapper (0x1400CD510), `INT64 (INT64 command_line)` in the x64 Microsoft
+/// ABI: the game passes the GetCommandLineA pointer and returns the result to its CRT as the
+/// process exit code. Also the type of the runtime's `game_main`.
+typedef std::int64_t (*NevrGameMainFn)(std::int64_t command_line);
 
 /// The first 16 bytes of every descriptor crossing the host/runtime boundary.
 struct NevrAbiHeader {
@@ -47,21 +48,27 @@ struct NevrHostContext {
   NevrAbiHeader header;
   HMODULE host_module;
   HMODULE game_module;
-  /// The MinHook trampoline for the host-owned PreprocessCommandLine detour. The
-  /// runtime calls the original through this and never installs a second hook
-  /// on the rendezvous address.
-  NevrPreprocessCommandLineFn original_preprocess;
+  /// The MinHook trampoline for the host-owned GameMainWrapper detour. The runtime
+  /// calls the original wrapper through this and never installs a second hook on the
+  /// wrapper's address.
+  NevrGameMainFn original_game_main_wrapper;
+  /// The address the host hooked, and the first 16 bytes found there after the host's
+  /// MH_EnableHook (the host's jump). The runtime registers the host's hook with
+  /// HookGuard from this record instead of hooking the wrapper itself.
+  const void* wrapper_hook_target;
+  unsigned char wrapper_hook_bytes[16];
 };
 
 /// Returned by nevr.dll's NEVR_GetRuntimeApi export. All entries are required in v1.
 struct NevrRuntimeApi {
   NevrAbiHeader header;
-  /// Returns 0 on success. Called once, after the descriptor validated.
+  /// Returns 0 on success. Called once, after the descriptor validated, at the
+  /// wrapper's entry.
   std::int32_t (*initialize)(const NevrHostContext* host);
-  /// Called by the host detour before the original PreprocessCommandLine.
-  void (*preprocess_before)(void* game);
-  /// Called by the host detour after the original, with its exact result.
-  void (*preprocess_after)(void* game, std::uint64_t result);
+  /// Runs the game's main under the runtime's recovery, in place of the original
+  /// wrapper. Called by the host detour with the wrapper's argument; its result is
+  /// the wrapper's result.
+  std::int64_t (*game_main)(std::int64_t command_line);
 };
 
 /// Signature of nevr.dll's single versioned entry point.
@@ -77,9 +84,12 @@ inline constexpr std::uint32_t kMinor = 0;
 
 /// Smallest struct_size a v1 writer may report: every v1 field present.
 inline constexpr std::uint32_t kRuntimeApiV1Size =
-    static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, preprocess_after) + sizeof(void*));
-inline constexpr std::uint32_t kHostContextV1Size =
-    static_cast<std::uint32_t>(offsetof(NevrHostContext, original_preprocess) + sizeof(void*));
+    static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, game_main) + sizeof(void*));
+inline constexpr std::uint32_t kHostContextV1Size = static_cast<std::uint32_t>(
+    offsetof(NevrHostContext, wrapper_hook_bytes) + sizeof(NevrHostContext::wrapper_hook_bytes));
+
+/// Bytes of the host's hook recorded in NevrHostContext::wrapper_hook_bytes.
+inline constexpr std::size_t kHookBytesSize = sizeof(NevrHostContext::wrapper_hook_bytes);
 
 static_assert(std::is_standard_layout_v<NevrAbiHeader> && std::is_trivially_copyable_v<NevrAbiHeader>);
 static_assert(std::is_standard_layout_v<NevrHostContext> && std::is_trivially_copyable_v<NevrHostContext>);
@@ -88,12 +98,14 @@ static_assert(std::is_standard_layout_v<NevrRuntimeApi> && std::is_trivially_cop
 static_assert(sizeof(NevrAbiHeader) == 16);
 static_assert(offsetof(NevrHostContext, host_module) == 16);
 static_assert(offsetof(NevrHostContext, game_module) == 24);
-static_assert(offsetof(NevrHostContext, original_preprocess) == 32);
-static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 40);
+static_assert(offsetof(NevrHostContext, original_game_main_wrapper) == 32);
+static_assert(offsetof(NevrHostContext, wrapper_hook_target) == 40);
+static_assert(offsetof(NevrHostContext, wrapper_hook_bytes) == 48);
+static_assert(kHookBytesSize == 16);
+static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 64);
 static_assert(offsetof(NevrRuntimeApi, initialize) == 16);
-static_assert(offsetof(NevrRuntimeApi, preprocess_before) == 24);
-static_assert(offsetof(NevrRuntimeApi, preprocess_after) == 32);
-static_assert(sizeof(NevrRuntimeApi) == kRuntimeApiV1Size && kRuntimeApiV1Size == 40);
+static_assert(offsetof(NevrRuntimeApi, game_main) == 24);
+static_assert(sizeof(NevrRuntimeApi) == kRuntimeApiV1Size && kRuntimeApiV1Size == 32);
 
 enum class Status : std::uint32_t {
   kOk = 0,
@@ -136,10 +148,7 @@ inline bool DescriptorCovers(const NevrAbiHeader* header, std::size_t field_end)
 inline Status ValidateRuntimeApi(const NevrRuntimeApi* api) noexcept {
   const Status header = CheckHeader(api == nullptr ? nullptr : &api->header, kRuntimeApiV1Size);
   if (header != Status::kOk) return header;
-  if (api->initialize == nullptr || api->preprocess_before == nullptr ||
-      api->preprocess_after == nullptr) {
-    return Status::kMissingEntry;
-  }
+  if (api->initialize == nullptr || api->game_main == nullptr) return Status::kMissingEntry;
   return Status::kOk;
 }
 
@@ -147,7 +156,8 @@ inline Status ValidateRuntimeApi(const NevrRuntimeApi* api) noexcept {
 inline Status ValidateHostContext(const NevrHostContext* host) noexcept {
   const Status header = CheckHeader(host == nullptr ? nullptr : &host->header, kHostContextV1Size);
   if (header != Status::kOk) return header;
-  if (host->game_module == nullptr || host->original_preprocess == nullptr) {
+  if (host->game_module == nullptr || host->original_game_main_wrapper == nullptr ||
+      host->wrapper_hook_target == nullptr) {
     return Status::kMissingEntry;
   }
   return Status::kOk;

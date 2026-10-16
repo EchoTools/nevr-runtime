@@ -10,15 +10,15 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <type_traits>
 
 #include <windows.h>
 
 namespace {
 
 std::int32_t Initialize(const NevrHostContext*) { return 0; }
-void Before(void*) {}
-void After(void*, std::uint64_t) {}
-std::uint64_t Original(void*) { return 0; }
+std::int64_t GameMain(std::int64_t command_line) { return command_line; }
+std::int64_t OriginalWrapper(std::int64_t command_line) { return command_line + 1; }
 
 NevrRuntimeApi ValidApi() {
   NevrRuntimeApi api{};
@@ -26,8 +26,7 @@ NevrRuntimeApi ValidApi() {
   api.header.abi_major = nevr_runtime_abi::kMajor;
   api.header.abi_minor = nevr_runtime_abi::kMinor;
   api.initialize = &Initialize;
-  api.preprocess_before = &Before;
-  api.preprocess_after = &After;
+  api.game_main = &GameMain;
   return api;
 }
 
@@ -38,7 +37,11 @@ NevrHostContext ValidHost() {
   host.header.abi_minor = nevr_runtime_abi::kMinor;
   host.host_module = GetModuleHandleW(nullptr);
   host.game_module = GetModuleHandleW(nullptr);
-  host.original_preprocess = &Original;
+  host.original_game_main_wrapper = &OriginalWrapper;
+  host.wrapper_hook_target = reinterpret_cast<const void*>(&OriginalWrapper);
+  for (std::size_t at = 0; at < sizeof(host.wrapper_hook_bytes); ++at) {
+    host.wrapper_hook_bytes[at] = static_cast<unsigned char>(0xE9 + at);
+  }
   return host;
 }
 
@@ -85,7 +88,7 @@ TEST(RuntimeAbi, RejectsMajorMismatchInEitherDirection) {
 }
 
 TEST(RuntimeAbi, RejectsStructSmallerThanV1) {
-  for (const std::uint32_t size : {16u, 24u, 32u, nevr_runtime_abi::kRuntimeApiV1Size - 1}) {
+  for (const std::uint32_t size : {16u, 24u, nevr_runtime_abi::kRuntimeApiV1Size - 1}) {
     NevrRuntimeApi api = ValidApi();
     api.header.struct_size = size;
     EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kStructTooSmall) << size;
@@ -102,11 +105,41 @@ TEST(RuntimeAbi, RejectsEachMissingRequiredEntry) {
   api.initialize = nullptr;
   EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kMissingEntry);
   api = ValidApi();
-  api.preprocess_before = nullptr;
+  api.game_main = nullptr;
   EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kMissingEntry);
-  api = ValidApi();
-  api.preprocess_after = nullptr;
-  EXPECT_EQ(nevr_runtime_abi::ValidateRuntimeApi(&api), nevr_runtime_abi::Status::kMissingEntry);
+}
+
+// The v1 layout is the contract: the rendezvous is the game's main wrapper, so the descriptor
+// carries `game_main` and the context carries the wrapper's trampoline and a record of the
+// host's hook on it. Pinned here as well as by the header's static_asserts, so a change to
+// either fails a test with a name.
+TEST(RuntimeAbi, V1LayoutIsPinned) {
+  EXPECT_EQ(sizeof(NevrAbiHeader), 16u);
+  EXPECT_EQ(offsetof(NevrRuntimeApi, initialize), 16u);
+  EXPECT_EQ(offsetof(NevrRuntimeApi, game_main), 24u);
+  EXPECT_EQ(nevr_runtime_abi::kRuntimeApiV1Size, 32u);
+  EXPECT_EQ(sizeof(NevrRuntimeApi), 32u);
+  EXPECT_EQ(offsetof(NevrHostContext, host_module), 16u);
+  EXPECT_EQ(offsetof(NevrHostContext, game_module), 24u);
+  EXPECT_EQ(offsetof(NevrHostContext, original_game_main_wrapper), 32u);
+  EXPECT_EQ(offsetof(NevrHostContext, wrapper_hook_target), 40u);
+  EXPECT_EQ(offsetof(NevrHostContext, wrapper_hook_bytes), 48u);
+  EXPECT_EQ(sizeof(NevrHostContext::wrapper_hook_bytes), nevr_runtime_abi::kHookBytesSize);
+  EXPECT_EQ(nevr_runtime_abi::kHookBytesSize, 16u);
+  EXPECT_EQ(nevr_runtime_abi::kHostContextV1Size, 64u);
+  EXPECT_EQ(sizeof(NevrHostContext), 64u);
+}
+
+// The wrapper takes the command-line pointer and returns the process exit code as a 64-bit
+// integer: the whole range goes through the descriptor unchanged.
+TEST(RuntimeAbi, GameMainCarriesAFullWidthArgumentAndResult) {
+  static_assert(std::is_same_v<NevrGameMainFn, std::int64_t (*)(std::int64_t)>);
+  const NevrRuntimeApi api = ValidApi();
+  for (const std::int64_t value : {std::int64_t{0}, std::int64_t{-1}, INT64_MIN, INT64_MAX}) {
+    EXPECT_EQ(api.game_main(value), value);
+  }
+  const NevrHostContext host = ValidHost();
+  EXPECT_EQ(host.original_game_main_wrapper(41), 42);
 }
 
 // A truthful pre-v1 writer whose descriptor is only the 16-byte header, placed
@@ -143,7 +176,10 @@ TEST(RuntimeAbi, NeverReadsPastAShortDescriptor) {
 TEST(RuntimeAbi, HostContextAcceptsValidAndRejectsMissingRendezvousEntries) {
   NevrHostContext host = ValidHost();
   EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kOk);
-  host.original_preprocess = nullptr;
+  host.original_game_main_wrapper = nullptr;
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kMissingEntry);
+  host = ValidHost();
+  host.wrapper_hook_target = nullptr;
   EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kMissingEntry);
   host = ValidHost();
   host.game_module = nullptr;
@@ -154,6 +190,19 @@ TEST(RuntimeAbi, HostContextAcceptsValidAndRejectsMissingRendezvousEntries) {
   host = ValidHost();
   host.header.struct_size = nevr_runtime_abi::kHostContextV1Size - 1;
   EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kStructTooSmall);
+}
+
+// A host that reports a size which stops short of the hook record is a v1 writer without the
+// record: the runtime must not read the bytes it would register with HookGuard.
+TEST(RuntimeAbi, HostContextNeedsTheWholeHookRecord) {
+  NevrHostContext host = ValidHost();
+  for (const std::uint32_t size : {static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_target)),
+                                   static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes)),
+                                   static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes) +
+                                                              nevr_runtime_abi::kHookBytesSize - 1)}) {
+    host.header.struct_size = size;
+    EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kStructTooSmall) << size;
+  }
 }
 
 TEST(RuntimeAbi, StatusNamesAreDistinctDiagnosticTokens) {
