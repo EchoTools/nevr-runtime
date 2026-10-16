@@ -90,24 +90,65 @@ VOID LoadEarlyConfig() {
 }
 
 /// <summary>
-// #511: a server's fixed time step, 1,000,000 / g_headlessTickRateHz microseconds. The step's state
+// #511, #595: a server's fixed time step, 1,000,000 / network.tick_rate_hz microseconds (flat key
+// nevr_tick_rate_hz, default 120; 0 keeps the game's own 30 a second). The step's state
 // (echovr.exe + FIXED_TIMESTEP_PTR) is there once the local config loads; the flag that makes the game
-// use it is set before PreprocessCommandLine (boot.cpp).
+// use it is set before PreprocessCommandLine (boot.cpp). The rate is range-checked and the slot's
+// current value bounds-checked before the write (N31), and the write is read back.
 static void ApplyServerTimestep() {
   if (!g_isServer) return;
-  const uint32_t step = nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz);
-  if (step == 0) return;
+  const CHAR* rateText = NevrCfgGetFlat("nevr_tick_rate_hz");
+  std::string rateProblem;
+  g_headlessTickRateHz = nevr_server_timestep::ParseTickRateHz(rateText, &rateProblem);
+  if (!rateProblem.empty()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] network.tick_rate_hz=%s is %s (allowed 0 or %u..%u); using %u Hz", rateText,
+        rateProblem.c_str(), static_cast<unsigned>(nevr_server_timestep::kMinTickRateHz),
+        static_cast<unsigned>(nevr_server_timestep::kMaxTickRateHz), static_cast<unsigned>(g_headlessTickRateHz));
+  }
   CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
   if (state == nullptr) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] server tick rate not set: the game's time step state is not there when the local config loads");
+        "[NEVR.PATCH] server tick rate not set rate=%u Hz: the game's time step state is not there when the "
+        "local config loads",
+        static_cast<unsigned>(g_headlessTickRateHz));
     return;
   }
-  auto* stepUs = reinterpret_cast<UINT32*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+  auto* stepUs = reinterpret_cast<volatile UINT32*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
   const UINT32 was = *stepUs;
-  *stepUs = step;
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %u us)",
-      static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(step), static_cast<unsigned>(was));
+  const nevr_server_timestep::StepPlan plan = nevr_server_timestep::PlanStepWrite(g_headlessTickRateHz, was);
+  switch (plan.action) {
+    case nevr_server_timestep::StepAction::KeepGameStep:
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] server tick rate: 0 keeps the game's own step (%u us); source=%s", static_cast<unsigned>(was),
+          rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default");
+      return;
+    case nevr_server_timestep::StepAction::RefuseRate:
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server tick rate not set rate=%u Hz: outside the allowed range",
+          static_cast<unsigned>(g_headlessTickRateHz));
+      return;
+    case nevr_server_timestep::StepAction::RefuseSlot:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the step slot holds %u us, which is no step "
+          "(version drift; allowed %u..%u us)",
+          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(was),
+          static_cast<unsigned>(nevr_server_timestep::kMinPlausibleStepUs),
+          static_cast<unsigned>(nevr_server_timestep::kMaxPlausibleStepUs));
+      return;
+    case nevr_server_timestep::StepAction::Write:
+      break;
+  }
+  *stepUs = plan.stepUs;
+  const UINT32 after = *stepUs;
+  if (!nevr_server_timestep::ReadBackMatches(plan.stepUs, after)) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] server tick rate write did not hold rate=%u Hz wrote=%u us read_back=%u us",
+        static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(plan.stepUs), static_cast<unsigned>(after));
+    return;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %u us); source=%s",
+      static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(plan.stepUs), static_cast<unsigned>(was),
+      rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default");
 }
 
 /// A detour hook for the game's function to load the local config.json for the game instance.

@@ -60,6 +60,9 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"upnp_port", "network.upnp_port"},
       // #58 — seconds an empty server holds its return to lobby; 0 (default) holds nothing.
       {"nevr_empty_server_ttl_s", "network.empty_server_ttl_seconds"},
+      // #595 — a server's tick rate in Hz (config.cpp ApplyServerTimestep): default 120, range-checked,
+      // 0 keeps the game's own step.
+      {"nevr_tick_rate_hz", "network.tick_rate_hz"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
