@@ -77,7 +77,7 @@ struct SignInPresenter {
 
 // Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up (#202).
 static constexpr unsigned kMaxConsecutivePollErrors = 5;
-static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/login/device";
+static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/device";
 
 // ---------------------------------------------------------------------------
 // DeviceAuth — adapted from plugins/token-auth/src/device_auth.{h,cpp}

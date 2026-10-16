@@ -269,6 +269,11 @@ TEST(the_signed_in_notice_tells_the_player_to_select_retry_not_to_restart) {
   CHECK(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity);
 }
 
+// The page the player is sent to is the short one, the same address the game's screen shows them to type.
+TEST(the_default_sign_in_page_is_the_short_device_url) {
+  CHECK_EQ(std::string(kDefaultLoginUrl), std::string("https://echovrce.com/device"));
+}
+
 TEST(credentials_roundtrip_never_persists_the_access_token) {
   CachedAuthToken a = CachedWithRefresh();
   a.token = "access-token-should-not-be-written";
@@ -983,7 +988,7 @@ std::string BoardText(prompt_board::Mode* mode = nullptr) {
 
 TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) {
   LoginPrompt p = SamplePrompt();
-  p.url = "https://echovrce.com/login/device";
+  p.url = "https://echovrce.com/device";
   p.code = "ABCDEFGHI";
   std::string text, why;
   CHECK(FormatGamePromptText(p, text, why));
@@ -991,7 +996,7 @@ TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) 
   const std::vector<std::string> lines = SplitLines(text);
   CHECK_EQ(lines.size(), prompt_board::kMaxLines);
   for (const std::string& l : lines) CHECK(l.size() <= prompt_board::kMaxLineChars);
-  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));  // what the player types, no scheme
+  CHECK_EQ(lines[1], std::string("echovrce.com/device"));  // what the player types, no scheme
   CHECK_EQ(lines[2], std::string("and enter the code ABCDEFGHI"));
   CHECK(text.size() <= prompt_board::kCapacity);
 }
@@ -1000,14 +1005,14 @@ TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) 
 // the client assumes the old XXXX-XXXX shape: the prompt is the page and "and enter the code " + the code.
 TEST(a_four_character_dashless_code_is_shown_whole) {
   LoginPrompt p = SamplePrompt();
-  p.url = "https://echovrce.com/login/device";
+  p.url = "https://echovrce.com/device";
   p.code = "K7RX";
   std::string text, why;
   CHECK(FormatGamePromptText(p, text, why));
   CHECK(why.empty());
   const std::vector<std::string> lines = SplitLines(text);
   CHECK_EQ(lines.size(), prompt_board::kMaxLines);
-  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));
+  CHECK_EQ(lines[1], std::string("echovrce.com/device"));
   CHECK_EQ(lines[2], std::string("and enter the code K7RX"));
   CHECK(text.find("K7RX-") == std::string::npos);  // no dash appended
 }
