@@ -43,6 +43,8 @@ REQUIRED = [
      "the PC observer does not hand the service's messages to the friend_request check"),
     ("src/quest/integration/production_steps.cpp", r"nevr_friend_request_check::OnServerMessage\(message\.symbol, message\.payload,",
      "the Quest observer does not hand the service's messages to the friend_request check"),
+    ("src/runtime/lifecycle/crash_recovery.cpp", r"nevr_quit_check::OnGameLoopReturned\(gameResult\);[\s\S]{0,120}return gameResult;",
+     "the client's game loop return does not report the pc_quit check before the process exits"),
     ("src/runtime/lifecycle/config.cpp", r"nevr_status_redirect_check::NoteConnect\(gameUri, uri\);",
      "the PC connect hook does not count the game's connects for the status_redirect check"),
     ("src/runtime/compat/ws_bridge.cpp", r"nevr_status_redirect_check::Register\(&nevr_status_redirect_check::ProcessProbe\);",

@@ -64,7 +64,6 @@ class QuitCheck : public ::testing::Test {
  protected:
   void SetUp() override {
     nevr_self_check::ResetForTest();
-    nevr_quit_check::ResetForTest();
     g_frames.clear();
     nevr_self_check::SetEnabled(true);
     nevr_self_check::SetSender(&Sender);
