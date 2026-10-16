@@ -25,7 +25,8 @@
 // may stop after `args_json` (or after `enabled`) without a missing-initializer warning.
 // `args_replaced_keys` names the arg keys whose key or value held invalid UTF-8
 // and reached the plugin with U+FFFD in place of the bad bytes (never the values);
-// it is empty when args_json is byte-exact.
+// it is empty when args_json is byte-exact. `early` true loads the entry in the
+// early pass (see PluginInPhase); it is last, with a default, for the same reason.
 struct PluginLoadItem {
   std::string name;
   std::string file;
@@ -34,7 +35,23 @@ struct PluginLoadItem {
   std::string args_json;
   bool        enabled = true;
   std::vector<std::string> args_replaced_keys{};
+  bool        early = false;
 };
+
+// The two load passes (#496). Early runs once, at the game's first
+// PreprocessCommandLine, before the original call: before the game reads its data
+// (manifests, packages), so a plugin that serves game data from elsewhere is in
+// place in time. The rest load in the normal pass, after the graphics device
+// (client) or the first PreprocessCommandLine (server).
+enum class PluginPhase : std::uint8_t { Early = 0, Normal = 1 };
+
+// Whether `phase` loads `item`: the early pass takes the entries marked early, the
+// normal pass the rest, and the early ones as well when no early pass ran, so a
+// boot path that never reaches it still loads every plugin.
+inline bool PluginInPhase(const PluginLoadItem& item, PluginPhase phase, bool earlyPassRan) {
+  if (phase == PluginPhase::Early) return item.early;
+  return !item.early || !earlyPassRan;
+}
 
 // The ordered plugin load plan from config.yaml's `plugins:` list: every entry,
 // disabled ones included with enabled=false. Reads the same config.yaml singleton
