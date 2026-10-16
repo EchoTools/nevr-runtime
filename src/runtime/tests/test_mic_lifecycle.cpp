@@ -2,6 +2,7 @@
 #include "core/mic_capture_drain.h"
 #include "core/mic_dsp.h"
 #include "core/mic_endpoint_loss.h"
+#include "runtime/patch/mic_device_choice.h"
 #include "runtime/patch/mic_policy.h"
 
 #include <gtest/gtest.h>
@@ -552,16 +553,92 @@ TEST(MicComBalance, SuccessfulSOkAndSFalseRequireUninitializeButChangedModeDoesN
 
 }  // namespace
 
-// #402: the WASAPI provider answers the game's Mic* lookups under Wine/Proton only; on native Windows the
-// game's own mic path stays, and the boot line says which.
-TEST(MicProviderPolicy, InstalledUnderWineAndNotOnNativeWindows) {
+// The WASAPI provider answers the game's Mic* lookups on native Windows as well as under Wine/Proton: with the
+// OVR platform branch bypassed and "pnsovr" patched to "pnsrad", the game's mic path ends at pnsrad's stub
+// exports on both, so the game's own path captures nothing there (a native-Windows player could not be heard).
+TEST(MicProviderPolicy, InstalledOnNativeWindowsAndUnderWine) {
+  EXPECT_TRUE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/false));
   EXPECT_TRUE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/true));
-  EXPECT_FALSE(nevr_mic_policy::ShouldInstallProvider(/*isWine=*/false));
 }
 
 TEST(MicProviderPolicy, BootLineNamesTheDecisionAndNeverClaimsAProviderThatIsNotInstalled) {
-  EXPECT_STREQ(nevr_mic_policy::BootLine(true), "[NEVR.MIC] provider installed: Wine\n");
-  EXPECT_STREQ(nevr_mic_policy::BootLine(false), "[NEVR.MIC] provider not installed: native Windows\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/true), "[NEVR.MIC] provider installed: Wine\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(true, /*isWine=*/false), "[NEVR.MIC] provider installed: native Windows\n");
+  EXPECT_STREQ(nevr_mic_policy::BootLine(false, /*isWine=*/false), "[NEVR.MIC] provider not installed\n");
+}
+
+// Which capture endpoint the provider opens (mic_device_choice.h): LibOVR's headset mic, then a headset name,
+// then the OS default; Wine keeps the OS default.
+namespace {
+
+using nevr_mic_device::Choice;
+using nevr_mic_device::Endpoint;
+
+const Endpoint kChromium{L"{0.0.1.00000000}.{aaaa}", L"Microphone (Chromium Capture Device)"};
+const Endpoint kHeadset{L"{0.0.1.00000000}.{bbbb}", L"Headset Microphone (Oculus Virtual Audio Device)"};
+const Endpoint kWebcam{L"{0.0.1.00000000}.{cccc}", L"Webcam Microphone (HD Pro)"};
+
+}  // namespace
+
+TEST(MicDeviceChoice, LibOvrsAnswerWinsWhenItIsAnActiveEndpoint) {
+  // LibOVR names the webcam: its answer wins over a name match on the other headset-named endpoint.
+  const auto pick = nevr_mic_device::Choose(false, kWebcam.id, 0, {kChromium, kHeadset, kWebcam});
+  EXPECT_EQ(pick.choice, Choice::LibOvr);
+  EXPECT_EQ(pick.endpoint.id, kWebcam.id);
+  EXPECT_EQ(pick.endpoint.name, kWebcam.name);
+}
+
+TEST(MicDeviceChoice, ALibOvrIdThatIsNotActiveFallsToTheNameMatch) {
+  const auto pick = nevr_mic_device::Choose(false, L"{0.0.1.00000000}.{stale}", 0, {kChromium, kHeadset});
+  EXPECT_EQ(pick.choice, Choice::NameMatch);
+  EXPECT_EQ(pick.endpoint.id, kHeadset.id);
+  EXPECT_NE(pick.reason.find("not an active capture endpoint"), std::string::npos) << pick.reason;
+}
+
+TEST(MicDeviceChoice, NoLibOvrAnswerFallsToTheNameMatchAndTheReasonCarriesTheCode) {
+  const auto pick = nevr_mic_device::Choose(false, L"", -2, {kChromium, kHeadset});
+  EXPECT_EQ(pick.choice, Choice::NameMatch);
+  EXPECT_EQ(pick.endpoint.id, kHeadset.id);
+  EXPECT_NE(pick.reason.find("code -2"), std::string::npos) << pick.reason;
+}
+
+TEST(MicDeviceChoice, NoHeadsetNameFallsToTheOsDefault) {
+  const auto pick = nevr_mic_device::Choose(false, L"", -1, {kChromium, kWebcam});
+  EXPECT_EQ(pick.choice, Choice::OsDefault);
+  EXPECT_TRUE(pick.endpoint.id.empty());  // empty: the caller opens the OS default endpoint
+  EXPECT_NE(pick.reason.find("no active capture endpoint names a headset"), std::string::npos) << pick.reason;
+}
+
+TEST(MicDeviceChoice, NoActiveEndpointsIsTheOsDefault) {
+  const auto pick = nevr_mic_device::Choose(false, kHeadset.id, 0, {});
+  EXPECT_EQ(pick.choice, Choice::OsDefault);
+}
+
+TEST(MicDeviceChoice, WineKeepsTheOsDefaultWhateverLibOvrOrTheNamesSay) {
+  const auto pick = nevr_mic_device::Choose(true, kHeadset.id, 0, {kChromium, kHeadset});
+  EXPECT_EQ(pick.choice, Choice::OsDefault);
+  EXPECT_TRUE(pick.endpoint.id.empty());
+  EXPECT_FALSE(nevr_mic_device::ShouldChooseHeadsetDevice(true));
+  EXPECT_TRUE(nevr_mic_device::ShouldChooseHeadsetDevice(false));
+}
+
+TEST(MicDeviceChoice, OnlyAnEndpointIdShapedAnswerIsAccepted) {
+  const wchar_t* id = L"{0.0.1.00000000}.{bbbb}";
+  EXPECT_TRUE(nevr_mic_device::LooksLikeEndpointId(0, id, wcslen(id), 256));
+  EXPECT_FALSE(nevr_mic_device::LooksLikeEndpointId(-5, id, wcslen(id), 256));      // an error code
+  EXPECT_FALSE(nevr_mic_device::LooksLikeEndpointId(0, L"", 0, 256));               // empty
+  EXPECT_FALSE(nevr_mic_device::LooksLikeEndpointId(0, L"Headset", 7, 256));        // not GetId-shaped
+  EXPECT_FALSE(nevr_mic_device::LooksLikeEndpointId(0, id, 256, 256));              // not terminated inside the cap
+  EXPECT_FALSE(nevr_mic_device::LooksLikeEndpointId(0, nullptr, 3, 256));
+}
+
+TEST(MicDeviceChoice, HeadsetNamesMatchCaseInsensitivelyAndBareMetaDoesNot) {
+  EXPECT_TRUE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Rift S)"));
+  EXPECT_TRUE(nevr_mic_device::NameLooksLikeHeadset(L"Headset Microphone (OCULUS VIRTUAL AUDIO DEVICE)"));
+  EXPECT_TRUE(nevr_mic_device::NameLooksLikeHeadset(L"Meta Quest 3 microphone"));
+  EXPECT_TRUE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Meta Link)"));
+  EXPECT_FALSE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Metallic Studio USB)"));
+  EXPECT_FALSE(nevr_mic_device::NameLooksLikeHeadset(L"Microphone (Chromium Capture Device)"));
 }
 
 // The results that mean the capture endpoint is lost (#399): the device was invalidated, or the stream's
