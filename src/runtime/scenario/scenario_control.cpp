@@ -318,7 +318,13 @@ std::string FireEarlyQuit(void* netGame, const nevr_scenario_protocol::Command& 
     const bool isOn = nevr::ValidatePrologue(store, kCountdownActiveOn.data(), kCountdownActiveOn.size());
     if (!isOff && !isOn) return "the countdown-active store at 0x140d96319 is not MOV byte ptr [RBX], 0/1";
     auto want = cmd.flag ? kCountdownActiveOn : kCountdownActiveOff;
-    ProcessMemcpy(store, want.data(), want.size());
+    DWORD error = ERROR_SUCCESS;
+    if (!ProcessMemcpy(store, want.data(), want.size(), &error)) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.SCENARIO] patch failed name=early_quit_countdown_active va=0x%llX error=%lu",
+          static_cast<unsigned long long>(kCountdownActiveStoreVA), static_cast<unsigned long>(error));
+      return "the countdown-active store patch failed at 0x140d96319 (error " + std::to_string(error) + ")";
+    }
     Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: lockoutcountdownactive store 0x140d96319 was %d, now %d",
         isOn ? 1 : 0, cmd.flag ? 1 : 0);
   } else if (cmd.action == "dispatch_event") {

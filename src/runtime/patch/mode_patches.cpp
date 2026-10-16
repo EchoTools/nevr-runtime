@@ -41,10 +41,17 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
   const BYTE* site = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + offset);
   if (*site == expectedOpcode) {
     const BYTE jmp = 0xEB;
-    ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(&jmp), 1);
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
-        what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
+    DWORD error = ERROR_SUCCESS;
+    if (ProcessMemcpy(const_cast<BYTE*>(site), &jmp, 1, &error)) {
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
+          what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.HEADLESS] patch failed name=%s va=0x%llX error=%lu",
+          what, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)),
+          static_cast<unsigned long>(error));
+    }
   } else {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.HEADLESS] %s — prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
@@ -185,10 +192,17 @@ VOID PatchEnableHeadless(PVOID pGame) {
     const BYTE* gate = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT);
     if (*gate == HEADLESS_DX12_INIT_EXPECT) {
       const BYTE jmp = HEADLESS_DX12_INIT_PATCH;
-      ProcessMemcpy(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT, const_cast<BYTE*>(&jmp), 1);
-      Log(EchoVR::LogLevel::Debug,
-          "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
-          static_cast<unsigned long>(HEADLESS_DX12_INIT));
+      DWORD error = ERROR_SUCCESS;
+      if (ProcessMemcpy(const_cast<BYTE*>(gate), &jmp, 1, &error)) {
+        Log(EchoVR::LogLevel::Debug,
+            "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
+            static_cast<unsigned long>(HEADLESS_DX12_INIT));
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.HEADLESS] patch failed name=D3D12-device-init va=0x%llX error=%lu",
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(gate)),
+            static_cast<unsigned long>(error));
+      }
     } else {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.HEADLESS] D3D12-skip prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
