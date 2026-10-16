@@ -2,11 +2,13 @@
 # Right-click this file and choose "Run with PowerShell", or run:
 # powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\quest-install.ps1 -Apk .\game.apk
 # -Yes permits uninstalling an app with an incompatible signature (and deleting its app data).
+# The window waits for Enter before it closes so a right-click run can be read; -NoPause skips that.
 param(
     [string]$Apk,
     [string]$ApkSha256,
     [string]$Adb,
     [switch]$Yes,
+    [switch]$NoPause,
     [string]$DataUrl = 'https://mia.cdn.echo.taxi/_data.zip',
     [string]$DataSha256 = 'fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c'
 )
@@ -69,14 +71,15 @@ function Find-Adb {
         if (-not $root) { $looked.Add('(unset LOCALAPPDATA or APPDATA)'); continue }
         $looked.Add("$root (SideQuest folders, then platform-tools\adb.exe)")
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
-        $folders = @(Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction Stop |
+        # SilentlyContinue: one folder this user cannot read must not stop the search of the others.
+        $folders = @(Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match 'sidequest' })
         if ((Split-Path -Path $root -Leaf) -match 'sidequest') {
             $folders += Get-Item -LiteralPath $root
         }
         foreach ($folder in $folders) {
             $looked.Add("$($folder.FullName)\**\platform-tools\adb.exe")
-            Get-ChildItem -LiteralPath $folder.FullName -File -Filter adb.exe -Recurse -ErrorAction Stop |
+            Get-ChildItem -LiteralPath $folder.FullName -File -Filter adb.exe -Recurse -ErrorAction SilentlyContinue |
                 Where-Object { $_.Directory.Name -ieq 'platform-tools' } |
                 ForEach-Object { if (-not $found.Contains($_.FullName)) { $found.Add($_.FullName) } }
         }
@@ -98,14 +101,14 @@ function Get-ApkHash([string]$path) {
     $sums = Join-Path (Split-Path -Parent $path) 'SHA256SUMS'
     if (Test-Path -LiteralPath $sums -PathType Leaf) {
         $name = Split-Path -Leaf $path
-        $matches = @(Get-Content -LiteralPath $sums | Where-Object {
+        $entries = @(Get-Content -LiteralPath $sums | Where-Object {
             $_ -match '^([0-9a-fA-F]{64})  \*?(.+)$' -and $Matches[2] -ceq $name
         } | ForEach-Object { ($_ -split '  ', 2)[0].ToLowerInvariant() })
-        if ($matches.Count -ne 1) { throw "SHA256SUMS must contain exactly one entry for $name ($sums)" }
-        if ($expected -and $expected.ToLowerInvariant() -ne $matches[0]) {
+        if ($entries.Count -ne 1) { throw "SHA256SUMS must contain exactly one entry for $name ($sums)" }
+        if ($expected -and $expected.ToLowerInvariant() -ne $entries[0]) {
             throw "-ApkSha256 disagrees with $sums for $name"
         }
-        $expected = $matches[0]
+        $expected = $entries[0]
     }
     if (-not $expected) { $expected = Read-Host 'Enter the APK SHA-256 (no SHA256SUMS entry found)' }
     if ($expected -cnotmatch '^[0-9a-fA-F]{64}$') { throw 'APK SHA-256 must be 64 hex characters' }
@@ -204,16 +207,19 @@ try {
     })
     if ($rows.Count -eq 0) { throw 'No adb device attached. Connect the headset by USB, enable USB debugging, and retry.' }
     if ($rows.Count -ne 1) { throw "$($rows.Count) adb devices attached; disconnect extras and retry: $($rows -join ', ')" }
-    $fields = $rows[0] -split '\s+', 3
+    $fields = $rows[0] -split '\s+', 2
     $serial = $fields[0]
-    $state = $fields[1]
+    $state = $fields[1].Trim()
+    if ($state -like 'no permissions*') { throw "Device ${serial}: $state (usually missing udev rules for the headset, or your user is not in the plugdev group)" }
     if ($state -eq 'unauthorized') { throw "Device $serial is unauthorized. Accept the USB debugging prompt in the headset and retry." }
     if ($state -ne 'device') { throw "Device $serial is in state '$state'; reconnect it and retry." }
     Invoke-CheckedAdb 30 @('-s', $serial, 'wait-for-device') | Out-Null
 
-    $installed = Invoke-CheckedAdb 30 @('-s', $serial, 'shell', 'pm', 'path', $package)
-    if ($installed) { Write-Host "$package is installed on $serial" }
-    else { Write-Host "$package is not installed on $serial" }
+    # `pm path` exits 1 with no output when the package is absent: that is a first install, not a failure.
+    $pm = Invoke-Adb 30 @('-s', $serial, 'shell', 'pm', 'path', $package)
+    if ($pm.Code -eq 0) { Write-Host "$package is installed on $serial" }
+    elseif (-not $pm.Output) { Write-Host "$package is not installed on $serial" }
+    else { throw "package check failed (exit $($pm.Code)): $($pm.Output)" }
     foreach ($path in @('/sdcard', '/data/local/tmp')) {
         $df = Invoke-CheckedAdb 30 @('-s', $serial, 'shell', "df -Pk $path")
         $lines = @($df -split "`r?`n")
@@ -261,5 +267,7 @@ try {
     Write-Host 'Done.'
 } catch {
     [Console]::Error.WriteLine("error: $($_.Exception.Message)")
-    exit 1
+    $failed = $true
 }
+if (-not $NoPause) { Read-Host 'Press Enter to close' | Out-Null }
+if ($failed) { exit 1 }
