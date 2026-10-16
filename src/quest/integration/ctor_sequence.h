@@ -7,7 +7,7 @@
 //
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
-//   2  ResolveConfig                 InitActivation: embedded defaults + nevr-quest.json, every state logged
+//   2  ResolveConfig                 InitActivation: embedded defaults + config.yaml, every state logged
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)

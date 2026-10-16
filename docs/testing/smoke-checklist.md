@@ -11,7 +11,7 @@ One row per feature a tester can check on a PC game client, a Quest game client 
 5. "Log-only" means no player action reaches the row; the cell says how to trigger or read it. "Absent" means the game has no UI for it.
 6. Platform: PC means the Windows or Wine game client; Quest means the Android sentinel; both means the same row applies to each (test it on each).
 
-`TP#n` is row n of [`docs/design/2026-10-01-social-features-test-plan.md`](../design/2026-10-01-social-features-test-plan.md), the social test plan. Config keys live in `config.yaml` (PC, [`docs/reference/example-config.yaml`](../reference/example-config.yaml)) or `nevr-quest.json` (Quest, `src/quest/sentinel/quest_config.cpp`). Open problems with a feature are tracked in the [issue tracker](https://github.com/EchoTools/nevr-runtime/issues).
+`TP#n` is row n of [`docs/design/2026-10-01-social-features-test-plan.md`](../design/2026-10-01-social-features-test-plan.md), the social test plan. Config keys live in `config.yaml` (PC, [`docs/reference/example-config.yaml`](../reference/example-config.yaml)) or in the same `config.yaml` on the Quest (the app's files folder, `src/quest/sentinel/quest_config.cpp`). Open problems with a feature are tracked in the [issue tracker](https://github.com/EchoTools/nevr-runtime/issues).
 
 ## Boot & install
 
@@ -214,7 +214,7 @@ Merged from the social test plan: TP#2 to 5, 9 to 19. Party features need two re
 
 Operator rows: run on a dedicated game server (`echovr_server.exe` or `echovr.exe -server -headless -noconsole`). Nothing here is reachable by a player in the UI, so each row says how to trigger it.
 
-The dedicated game server does not reach bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)), so the rows from SV07 on cannot pass until that is fixed.
+A dedicated game server begins multiplayer after its login ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): its log shows `[NEVR.PATCH] server logged in — beginning multiplayer`, then `Beginning multiplayer` and the bring-up the rows from SV07 on check.
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
@@ -246,18 +246,18 @@ The dedicated game server does not reach bring-up today ([#45](https://github.co
 
 ## Quest-only
 
-Quest rows read logcat tag `NEVR-Sentinel` / `nevr-sentinel.log`; each stage is one JSON line with `event`, `status` and `class`. Features are switched in `nevr-quest.json` under `features`; the sentinel prints `feature=<name> requested=on|off effective=on|off` for each.
+Quest rows read logcat tag `NEVR-Sentinel` / `nevr-sentinel.log`; each stage is one JSON line with `event`, `status` and `class`. The redirect, bridge and login follow from the embedded endpoints and keys; the façade, the presence and the hardware dump are switched by `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml`; the sentinel prints `feature=<name> requested=on|off effective=on|off` for each.
 
 | [ ] | ID | Feature | Platform | Smoke test | Proof (log line, source file) |
 | --- | --- | --- | --- | --- | --- |
 | [ ] | Q01 | The sentinel loads with the game and runs its start-up steps | Quest | Start the game on the headset; no crash | `event sentinel_ctor action=begin` (src/quest/sentinel/entry.cpp)<br>`event sentinel_ctor action=done steps_ok=... steps_failed=... steps_skipped=...` (src/quest/integration/production_steps.cpp) |
-| [ ] | Q02 | Config file `nevr-quest.json` is read (key sources and feature switches reported) | Quest | Push a `nevr-quest.json`, start; log lists each feature | `feature=<name> requested=<on/off> effective=<on/off>` (src/quest/sentinel/quest_config.cpp)<br>`event config_loaded` (src/quest/integration/production_steps.cpp) |
-| [ ] | Q03 | Feature `redirect`: the game's service addresses are redirected | Quest | Start with redirect on | `redirect_installed` (src/quest/integration/stage_log.h) |
-| [ ] | Q04 | Feature `bridge`: a loopback proxy carries the game's WebSocket traffic | Quest | Start with bridge on | `router_listening` (src/quest/integration/stage_log.h)<br>`router_remote_connected` (src/quest/integration/stage_log.h) |
-| [ ] | Q05 | Feature `login`: the game's login is rewritten into the NEVR login and accepted | Quest | Start with login on; the game reaches the lobby | `login_rewritten` (src/quest/integration/stage_log.h)<br>`login_accepted` (src/quest/integration/stage_log.h) |
-| [ ] | Q06 | Feature `social`: the social facade on Quest (friends, party, invites) | Quest | Start with social on; open the social lobby | `social_hook_installed` (src/quest/integration/stage_log.h)<br>`"social_install", {{"status", "ok"` (src/quest/social/social_install.cpp)=>event social_install status=ok}} |
+| [ ] | Q02 | Config file `config.yaml` is read (the file named, key sources and feature switches reported) | Quest | Push a `config.yaml`, start; log names the file (`config file=<path> loaded`) and lists each feature | `feature=<name> requested=<on/off> effective=<on/off>` (src/quest/sentinel/quest_config.cpp)<br>`event config_loaded` (src/quest/integration/production_steps.cpp) |
+| [ ] | Q03 | Feature `redirect`: the game's service addresses are redirected | Quest | Start with the embedded endpoints (no file) | `redirect_installed` (src/quest/integration/stage_log.h) |
+| [ ] | Q04 | Feature `bridge`: a loopback proxy carries the game's WebSocket traffic | Quest | Start with a socket URI resolved | `router_listening` (src/quest/integration/stage_log.h)<br>`router_remote_connected` (src/quest/integration/stage_log.h) |
+| [ ] | Q05 | Feature `login`: the game's login is rewritten into the NEVR login and accepted | Quest | Start with a server key resolved; the game reaches the lobby | `login_rewritten` (src/quest/integration/stage_log.h)<br>`login_accepted` (src/quest/integration/stage_log.h) |
+| [ ] | Q06 | Feature `social`: the social facade on Quest (friends, party, invites) | Quest | Start with `social.facade` not false; open the social lobby | `social_hook_installed` (src/quest/integration/stage_log.h)<br>`"social_install", {{"status", "ok"` (src/quest/social/social_install.cpp)=>event social_install status=ok}} |
 | [ ] | Q07 | OBB-mount skip (every launch): no 30 second "Echo VR is not responding" wait at launch | Quest | Start the game; it opens without the wait | `event obb_skip_install result=installed` (src/quest/sentinel/obb_skip_hook.cpp)<br>`game line: OBB loading complete (took %llu ms)` (docs/adr/0007-quest-obb-mount-skip.md) |
-| [ ] | Q08 | Feature `hwdump`: a hardware and environment dump file is written once | Quest | Start with hwdump on; `nevr-hwdump.json` appears in the files folder | `hwdump written stage=... path=... fields=... failed=...` (src/quest/diag/hwdump_report.cpp)<br>`hwdump trigger reason=after_vrapi_initialize` (src/quest/diag/hwdump_run.cpp) |
+| [ ] | Q08 | Feature `hwdump`: a hardware and environment dump file is written once | Quest | Start with `diagnostics.hardware_dump: true`; `nevr-hwdump.json` appears in the files folder | `hwdump written stage=... path=... fields=... failed=...` (src/quest/diag/hwdump_report.cpp)<br>`hwdump trigger reason=after_vrapi_initialize` (src/quest/diag/hwdump_run.cpp) |
 | [ ] | Q09 | Sign-in on the headset: the game's login-error screen shows a code and page (4 characters wanted, #394) | Quest | A game client with no saved sign-in; the screen shows the page and code; sign in on `echovrce.com/login/device`, press RETRY | `login_prompt_hook_installed` (src/quest/integration/stage_log.h)<br>`file device_login.txt in the files folder` (src/quest/auth/file_store.h)<br>`Signed in to EchoVRCE. Select RETRY to finish.` (docs/quest/SIGN-IN.md) |
 | [ ] | Q10 | Token session state: launched, signed in, refreshed, expired | Quest | Log-only | `event token_auth_state status=...` (src/quest/integration/production_steps.cpp) |
 | [ ] | Q11 | The saved Quest sign-in is reused on the next start | Quest | Restart the game after Q09; no code is asked | `[NEVR.AUTH] using cached access token` (src/quest/auth/session.cpp) |

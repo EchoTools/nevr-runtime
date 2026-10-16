@@ -1,7 +1,10 @@
-// Host and Android test for the Quest configuration and activation logic (quest_config.cpp).
+// Host and Android test for the Quest configuration and activation logic (quest_config.cpp). The file is
+// config.yaml, parsed by the PC's nevr_config (src/core/nevr_config.cpp).
 #include "quest/sentinel/quest_config.h"
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace {
@@ -39,6 +42,17 @@ bool EventsContain(const LoadResult& r, const std::string& needle) {
   return false;
 }
 
+// True when at least one event contains `needle` and every one that does has `level`.
+bool EventsWithAreAtLevel(const LoadResult& r, const std::string& needle, LogLevel level) {
+  bool any = false;
+  for (const auto& e : r.events) {
+    if (e.message.find(needle) == std::string::npos) continue;
+    if (e.level != level) return false;
+    any = true;
+  }
+  return any;
+}
+
 bool HasLevel(const LoadResult& r, LogLevel level) {
   for (const auto& e : r.events) {
     if (e.level == level) return true;
@@ -46,8 +60,16 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
   return false;
 }
 
-bool AllOff(const nevr_quest::Features& f) {
-  return !f.redirect && !f.bridge && !f.login && !f.social && !f.hwdump && !f.presenceNames && !f.presenceLocal;
+std::size_t CountLevel(const LoadResult& r, LogLevel level) {
+  std::size_t n = 0;
+  for (const auto& e : r.events) n += e.level == level ? 1 : 0;
+  return n;
+}
+
+// Everything the file does not switch: redirect, bridge, login, social and the names on, the diagnostics and the
+// local presence off.
+bool DefaultsOnly(const nevr_quest::Features& f) {
+  return f.redirect && f.bridge && f.login && f.social && f.presenceNames && !f.hwdump && !f.presenceLocal;
 }
 
 // Index of the first event whose message contains `needle`, or -1.
@@ -65,25 +87,41 @@ void DefaultsWithoutFile() {
   CHECK(r.config.httpUri.text == kEmbHttp && r.config.httpUri.source == Source::kEmbedded);
   CHECK(r.config.httpKey.text == kEmbApiKey);
   CHECK(r.config.serverKey.text == kEmbServerKey);
-  CHECK(AllOff(r.config.requested) && AllOff(r.config.effective));
-  CHECK(EventsContain(r, "feature=login requested=off effective=off"));
-  CHECK(EventsContain(r, "feature=social requested=off effective=off"));
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
-  // The hardware dump (#335) is a diagnostic: off unless a file turns it on.
+  // No key switches redirect, bridge or login: the embedded service endpoints and key turn them on, and the
+  // social facade is on by default, with the status names that ride in it.
+  CHECK(DefaultsOnly(r.config.requested) && DefaultsOnly(r.config.effective));
+  CHECK(EventsContain(r, "feature=redirect requested=on effective=on"));
+  CHECK(EventsContain(r, "feature=bridge requested=on effective=on"));
+  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
+  CHECK(EventsContain(r, "feature=social requested=on effective=on"));
+  CHECK(EventsContain(r, "feature=presence_names requested=on effective=on"));
+  CHECK(EventsContain(r, "feature=presence_local requested=off effective=off"));
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  // The hardware dump (#335) is a diagnostic: off unless the file turns it on.
   CHECK(!r.config.requested.hwdump && !r.config.effective.hwdump);
   CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
   CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
   // The OBB-mount skip (#319) is not a feature (#572): the feature report does not name it.
   CHECK(!EventsContain(r, "obb_skip"));
-  CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
-  CHECK(!HasLevel(r, LogLevel::kError));
+  // The keys are named by their config.yaml path, and the file's absence is logged with the file name.
+  CHECK(EventsContain(r, "config key=services.socket_uri source=embedded"));
+  CHECK(EventsContain(r, "config key=auth.http_uri source=embedded"));
+  CHECK(EventsContain(r, "config key=auth.http_key source=embedded"));
+  CHECK(EventsContain(r, "config key=auth.server_key source=embedded"));
+  CHECK(EventsContain(r, "config file=config.yaml absent, using embedded defaults"));
+  CHECK(!HasLevel(r, LogLevel::kError) && !HasLevel(r, LogLevel::kWarn));
 }
 
-void EmptyEmbeddedIsAbsent() {
+void NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff() {
   const LoadResult r = nevr_quest::ResolveConfig(EmbeddedDefaults(), nullptr);
   CHECK(r.config.socketUri.source == Source::kAbsent && r.config.socketUri.text.empty());
-  CHECK(EventsContain(r, "config key=nevr_http_key source=absent"));
-  CHECK(AllOff(r.config.effective));
+  CHECK(EventsContain(r, "config key=auth.http_key source=absent"));
+  CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
+        !r.config.effective.social && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=redirect forced off reason=no_target_configured"));
+  CHECK(EventsContain(r, "feature=bridge forced off reason=redirect_not_enabled"));
+  CHECK(EventsContain(r, "feature=login forced off reason=bridge_not_enabled"));
+  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
 }
 
 void InvalidEmbeddedIsRejectedWithoutValue() {
@@ -91,135 +129,323 @@ void InvalidEmbeddedIsRejectedWithoutValue() {
   d.socketUri = "http://SECRETHOST-9931/not-a-socket-scheme";
   const LoadResult r = nevr_quest::ResolveConfig(d, nullptr);
   CHECK(r.config.socketUri.source == Source::kAbsent);
-  CHECK(EventsContain(r, "embedded default rejected key=nevr_socket_uri"));
+  CHECK(EventsContain(r, "embedded default rejected key=services.socket_uri"));
   CHECK(!EventsContain(r, "SECRETHOST-9931"));
 }
 
 void FileOverridesPerKey() {
-  const LoadResult r = Load(Full(), R"({"nevr_socket_uri":"ws://file.example/nevr","nevr_http_key":"FILE-KEY-1"})");
+  const LoadResult r = Load(Full(),
+                            "services:\n  socket_uri: \"ws://file.example/nevr\"\n"
+                            "auth:\n  http_key: \"FILE-KEY-1\"\n");
   CHECK(!r.fileRejected);
   CHECK(r.config.socketUri.text == "ws://file.example/nevr" && r.config.socketUri.source == Source::kFile);
   CHECK(r.config.httpKey.text == "FILE-KEY-1" && r.config.httpKey.source == Source::kFile);
   CHECK(r.config.httpUri.text == kEmbHttp && r.config.httpUri.source == Source::kEmbedded);
   CHECK(r.config.serverKey.text == kEmbServerKey);
-  CHECK(AllOff(r.config.effective));
+  CHECK(DefaultsOnly(r.config.effective));
+  CHECK(EventsContain(r, "config key=services.socket_uri source=file"));
+  CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  CHECK(!EventsContain(r, "absent"));
 }
 
-void FeaturesEnableWhenPrerequisitesHold() {
-  const LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
-  CHECK(r.config.requested.redirect && r.config.requested.bridge && r.config.requested.login &&
-        r.config.requested.social);
-  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login &&
-        r.config.effective.social);
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
-  CHECK(EventsContain(r, "feature=social requested=on effective=on"));
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
-  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
+void AnEmptyDocumentIsAFileThatChangesNothing() {
+  for (const char* text : {"", "# only a comment\n", "---\n", "version: \"1\"\n", "x-notes:\n  anything: goes\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.fileRejected);
+    CHECK(r.config.socketUri.source == Source::kEmbedded);
+    CHECK(DefaultsOnly(r.config.effective));
+    CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  }
+}
+
+void ASocketUriAloneTurnsRedirectAndBridgeOnAndLoginNeedsTheServerKey() {
+  // No embedded value at all: the file's services.socket_uri is the only target.
+  LoadResult r = Load(EmbeddedDefaults(), "services:\n  socket_uri: \"wss://file.example/nevr\"\n");
+  CHECK(r.config.effective.redirect && r.config.effective.bridge);
+  CHECK(!r.config.effective.login && !r.config.effective.social && !r.config.effective.presenceNames);
+  CHECK(EventsContain(r, "feature=login forced off reason=no_server_key"));
+  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
+  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
+
+  // With auth.server_key in the file as well, login and social follow.
+  r = Load(EmbeddedDefaults(),
+           "services:\n  socket_uri: \"wss://file.example/nevr\"\nauth:\n  server_key: \"FILE-SERVER-KEY-3\"\n");
+  CHECK(DefaultsOnly(r.config.effective));
   CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // The embedded server key with the file's socket URI is enough too.
+  EmbeddedDefaults keyOnly;
+  keyOnly.serverKey = kEmbServerKey;
+  r = Load(keyOnly, "services:\n  socket_uri: \"wss://file.example/nevr\"\n");
+  CHECK(DefaultsOnly(r.config.effective));
 }
 
 void FeatureDependenciesForceOff() {
-  LoadResult r = Load(Full(), R"({"features":{"bridge":true,"login":true}})");
-  CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login);
-  CHECK(r.config.requested.bridge && r.config.requested.login);
-  CHECK(EventsContain(r, "feature=bridge forced off reason=redirect_not_enabled"));
-  CHECK(EventsContain(r, "feature=login forced off reason=bridge_not_enabled"));
-
-  r = Load(Full(), R"({"features":{"redirect":true,"login":true}})");
-  CHECK(r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login);
-
-  EmbeddedDefaults noKey = Full();
-  noKey.serverKey = "";
-  r = Load(noKey, R"({"features":{"redirect":true,"bridge":true,"login":true}})");
-  CHECK(r.config.effective.bridge && !r.config.effective.login);
-  CHECK(EventsContain(r, "feature=login forced off reason=no_server_key"));
-
-  r = Load(EmbeddedDefaults(), R"({"features":{"redirect":true,"bridge":true}})");
-  CHECK(!r.config.effective.redirect && !r.config.effective.bridge);
-  CHECK(EventsContain(r, "feature=redirect forced off reason=no_target_configured"));
-
+  // An HTTP target alone: redirect is on, the bridge needs a socket URI.
   EmbeddedDefaults httpOnly;
   httpOnly.httpUri = kEmbHttp;
-  r = Load(httpOnly, R"({"features":{"redirect":true,"bridge":true}})");
-  CHECK(r.config.effective.redirect && !r.config.effective.bridge);
+  LoadResult r = nevr_quest::ResolveConfig(httpOnly, nullptr);
+  CHECK(r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login);
   CHECK(EventsContain(r, "feature=bridge forced off reason=no_socket_uri"));
+  CHECK(EventsContain(r, "feature=login forced off reason=bridge_not_enabled"));
+
+  // No server key: the bridge stays, login and what rides on it do not.
+  EmbeddedDefaults noKey = Full();
+  noKey.serverKey = "";
+  r = nevr_quest::ResolveConfig(noKey, nullptr);
+  CHECK(r.config.effective.redirect && r.config.effective.bridge && !r.config.effective.login);
+  CHECK(EventsContain(r, "feature=login forced off reason=no_server_key"));
+  CHECK(!r.config.effective.social && !r.config.effective.presenceNames);
 }
 
 void SocialNeedsLoginAndResolvesLast() {
-  // Social alone: login is not enabled, so social is forced off, with that one reason.
-  LoadResult r = Load(Full(), R"({"features":{"social":true}})");
-  CHECK(r.config.requested.social && !r.config.effective.social);
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
-  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
-  CHECK(EventsContain(r, "feature=social requested=on effective=off"));
-
-  // The chain: login loses its bridge, and social loses login, in that order in the log.
-  r = Load(Full(), R"({"features":{"redirect":true,"login":true,"social":true}})");
-  CHECK(r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
-        !r.config.effective.social);
-  const int loginOff = EventIndex(r, "feature=login forced off reason=bridge_not_enabled");
-  const int socialOff = EventIndex(r, "feature=social forced off reason=login_not_enabled");
-  CHECK(loginOff >= 0 && socialOff > loginOff);
-
-  // Login that loses the server key takes social with it.
+  // The chain: login loses its key, and social and the names lose login, in that order in the log.
   EmbeddedDefaults noKey = Full();
   noKey.serverKey = "";
-  r = Load(noKey, R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
-  CHECK(r.config.effective.bridge && !r.config.effective.login && !r.config.effective.social);
-  CHECK(EventsContain(r, "feature=login forced off reason=no_server_key"));
-  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
-
-  // Login without social stays on.
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
-  CHECK(r.config.effective.login && !r.config.effective.social);
-  CHECK(!EventsContain(r, "feature=social forced off"));
-
-  // A malformed value stays off and is rejected by name, whatever login does.
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":"yes"}})");
-  CHECK(r.config.effective.login && !r.config.requested.social && !r.config.effective.social);
-  CHECK(EventsContain(r, "feature=social rejected reason=not_a_boolean"));
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":1}})");
-  CHECK(!r.config.requested.social);
-
+  const LoadResult r = nevr_quest::ResolveConfig(noKey, nullptr);
+  const int loginOff = EventIndex(r, "feature=login forced off reason=no_server_key");
+  const int socialOff = EventIndex(r, "feature=social forced off reason=login_not_enabled");
+  const int namesOff = EventIndex(r, "feature=presence_names forced off reason=social_not_enabled");
+  CHECK(loginOff >= 0 && socialOff > loginOff && namesOff > socialOff);
   // The name is the file key and the log name.
   CHECK(std::string(nevr_quest::FeatureName(Feature::kSocial)) == "social");
 }
 
-void MalformedFileFallsBackToDefaultsWithFeaturesOff() {
-  const char* bad[] = {"{", "", "not json", R"({"nevr_socket_uri":)", "[1,2,3]", "\"str\"", "42", "null"};
-  for (const char* text : bad) {
-    const LoadResult r = Load(Full(), text);
-    CHECK(r.fileRejected);
-    CHECK(r.config.socketUri.source == Source::kEmbedded);
-    CHECK(r.config.serverKey.text == kEmbServerKey);
-    CHECK(AllOff(r.config.requested) && AllOff(r.config.effective));
-    CHECK(HasLevel(r, LogLevel::kError));
+void SocialFacadeFalseTurnsSocialAndItsNamesOffAndLeavesThePresenceObjectAlone() {
+  LoadResult r = Load(Full(), "social:\n  facade: false\n");
+  CHECK(!r.fileRejected);
+  CHECK(r.config.effective.login && !r.config.requested.social && !r.config.effective.social);
+  CHECK(!r.config.effective.presenceNames && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=social requested=off effective=off"));
+  CHECK(EventsContain(r, "feature=presence_names requested=off effective=off"));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kPresenceNames));
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // The local presence answers ride in the facade too: asked for with the facade off, it is forced off by name.
+  r = Load(Full(), "social:\n  facade: false\n  send_presence_to_meta: false\n");
+  CHECK(r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local forced off reason=social_not_enabled"));
+
+  // YAML's own boolean spellings count, like on the PC.
+  for (const char* spelling : {"no", "off", "False", "0"}) {
+    r = Load(Full(), std::string("social:\n  facade: ") + spelling + "\n");
+    CHECK(!r.config.effective.social);
+  }
+  for (const char* spelling : {"true", "yes", "on", "1"}) {
+    r = Load(Full(), std::string("social:\n  facade: ") + spelling + "\n");
+    CHECK(r.config.effective.social);
   }
 }
 
+void ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName() {
+  LoadResult r = Load(Full(), "social:\n  facade: maybe\n");
+  CHECK(!r.fileRejected && r.config.effective.social);
+  CHECK(EventsContain(r, "config file key=social.facade rejected reason=not_a_boolean"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=social.facade rejected reason=not_a_boolean", LogLevel::kWarn));
+  CHECK(!EventsContain(r, "maybe"));
+  r = Load(Full(), "diagnostics:\n  hardware_dump: sure\n");
+  CHECK(!r.config.effective.hwdump);
+  CHECK(EventsContain(r, "config file key=diagnostics.hardware_dump rejected reason=not_a_boolean"));
+  r = Load(Full(), "social:\n  send_presence_to_meta: [1, 2]\n");
+  CHECK(!r.config.requested.presenceLocal);
+  CHECK(!r.fileRejected);
+}
+
+void SendPresenceToMetaFalseIsTheLocalPresencePath() {
+  LoadResult r = Load(Full(), "social:\n  send_presence_to_meta: false\n");
+  CHECK(r.config.requested.presenceLocal && r.config.effective.presenceLocal);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceLocal));
+  CHECK(EventsContain(r, "feature=presence_local requested=on effective=on"));
+  CHECK(r.config.effective.presenceNames);  // independent of the local-presence path
+  CHECK(!HasLevel(r, LogLevel::kWarn));
+
+  // true is the default: the presence goes to Meta's platform service as before.
+  r = Load(Full(), "social:\n  send_presence_to_meta: true\n");
+  CHECK(!r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
+  CHECK(EventsContain(r, "feature=presence_local requested=off effective=off"));
+}
+
+void HardwareDumpIsOnlyEverOnByTheDiagnosticsKey() {
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  hardware_dump: true\n");
+    CHECK(r.config.requested.hwdump && r.config.effective.hwdump);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
+    CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login &&
+          r.config.effective.social);
+    CHECK(EventsContain(r, "feature=hwdump requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  // It needs nothing else: with no service target at all it is still on.
+  {
+    const LoadResult r = Load(EmbeddedDefaults(), "diagnostics:\n  hardware_dump: true\n");
+    CHECK(r.config.effective.hwdump && !r.config.effective.redirect);
+  }
+  // The spellings that turn it on (nevr_config's ParseBool, then yaml-cpp's boolean spellings), and some that do not.
+  for (const char* word : {"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON", "1", "y", "Y", "tRuE"}) {
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  hardware_dump: ") + word + "\n");
+    CHECK(r.config.effective.hwdump);
+  }
+  for (const char* word : {"false", "no", "n", "off", "0", "2", "t", "enable", "maybe", "\"${NEVR_QUEST_TEST_UNSET_HW_ZXQ}\""}) {
+    ::unsetenv("NEVR_QUEST_TEST_UNSET_HW_ZXQ");
+    const LoadResult r = Load(Full(), std::string("diagnostics:\n  hardware_dump: ") + word + "\n");
+    CHECK(!r.config.effective.hwdump);
+  }
+  // Anywhere but diagnostics.hardware_dump leaves it off; so does false and the old feature name.
+  for (const char* text : {"diagnostics:\n  hardware_dump: false\n", "diagnostics:\n  hwdump: true\n",
+                           "social:\n  hardware_dump: true\n", "hardware_dump: true\n", "x-hardware_dump: true\n",
+                           "diagnostics: {}\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.hwdump);
+    CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
+  }
+}
+
+void MalformedFileFallsBackToDefaults() {
+  struct Case {
+    const char* text;
+    const char* reason;
+  };
+  const Case bad[] = {
+      {"services: [unterminated\n", "yaml_syntax"},
+      {"auth: {http_key: x\n", "yaml_syntax"},
+      {"- a\n- b\n", "not_a_mapping"},
+      {"\"str\"\n", "not_a_mapping"},
+      {"42\n", "not_a_mapping"},
+      {"bogus_section:\n  x: 1\n", "unknown_top_level_key"},
+      {"services:\n  socket_uri: \"ws://file.example/x\"\nbogus: 1\n", "unknown_top_level_key"},
+      {"plugins: 3\n", "bad_plugins"},
+  };
+  for (const Case& c : bad) {
+    const LoadResult r = Load(Full(), c.text);
+    CHECK(r.fileRejected);
+    // A rejected file contributes nothing: the embedded defaults stay.
+    CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.socketUri.text == kEmbSocket);
+    CHECK(r.config.serverKey.text == kEmbServerKey);
+    CHECK(DefaultsOnly(r.config.effective));
+    // One Error line, which names the file and the reason, and says what stays.
+    CHECK(CountLevel(r, LogLevel::kError) == 1);
+    const std::string line = std::string("config file=config.yaml rejected reason=") + c.reason + " (embedded defaults stay)";
+    CHECK(EventsContain(r, line));
+    CHECK(!EventsContain(r, "loaded"));
+  }
+}
+
+void ARejectedFileNeverEchoesWhatItHeld() {
+  // A value pasted as a top-level key, a secret in a line the parser chokes on: none of it is in any event.
+  for (const char* text : {"5f4dcc3b5aa765d61d8327deb882cf99: x\n", "SECRETPW-77: x\n",
+                           "auth:\n  http_key: SECRETPW-77\n  bad: [\n", "SECRETPW-77\n- x\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(r.fileRejected);
+    CHECK(!EventsContain(r, "SECRETPW-77"));
+    CHECK(!EventsContain(r, "5f4dcc3b5aa765d61d8327deb882cf99"));
+  }
+}
+
+void AnUnknownKeyInsideAKnownSectionIsNotAnError() {
+  const LoadResult r = Load(Full(), "auth:\n  http_kee: \"TYPO-VALUE-1\"\nservices:\n  somthing: 1\n");
+  CHECK(!r.fileRejected && !HasLevel(r, LogLevel::kError));
+  CHECK(r.config.httpKey.source == Source::kEmbedded);
+  CHECK(!EventsContain(r, "TYPO-VALUE-1"));
+}
+
 void OversizedFileIsRejected() {
-  std::string big = R"({"features":{"redirect":true},"pad":")";
+  std::string big = "services:\n  socket_uri: \"ws://file.example/x\"\nx-pad: \"";
   big.append(nevr_quest::kMaxConfigBytes, 'x');
-  big += "\"}";
+  big += "\"\n";
   const LoadResult r = Load(Full(), big);
   CHECK(r.fileRejected);
-  CHECK(AllOff(r.config.effective));
-  CHECK(EventsContain(r, "reason=too_large"));
+  CHECK(DefaultsOnly(r.config.effective) && r.config.socketUri.source == Source::kEmbedded);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_large limit_bytes=65536 (embedded defaults stay)"));
+}
+
+// A file of exactly kMaxConfigBytes is read; one byte more is rejected (ApplyFile: `>`, not `>=`).
+void TheSizeCapIsInclusive() {
+  const std::string head = "services:\n  socket_uri: \"ws://file.example/x\"\nx-pad: \"";
+  const std::string tail = "\"\n";
+  std::string atCap = head;
+  atCap.append(nevr_quest::kMaxConfigBytes - head.size() - tail.size(), 'x');
+  atCap += tail;
+  CHECK(atCap.size() == nevr_quest::kMaxConfigBytes);
+  LoadResult r = Load(Full(), atCap);
+  CHECK(!r.fileRejected);
+  CHECK(r.config.socketUri.source == Source::kFile && r.config.socketUri.text == "ws://file.example/x");
+  CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  std::string overCap = atCap;
+  overCap.insert(head.size(), "x");
+  CHECK(overCap.size() == nevr_quest::kMaxConfigBytes + 1);
+  r = Load(Full(), overCap);
+  CHECK(r.fileRejected && r.config.socketUri.source == Source::kEmbedded);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_large limit_bytes=65536 (embedded defaults stay)"));
+}
+
+// An alias can make the tree a cycle or expand it exponentially. The walks over it are bounded, so the file is
+// rejected by name; unbounded, the cycles end the process and the nested aliases run for seconds.
+std::string NestedAliases(int levels) {
+  std::string s = "x-a0: &a0 [\"lol\"]\n";
+  for (int i = 1; i <= levels; ++i) {
+    s += "x-a" + std::to_string(i) + ": &a" + std::to_string(i) + " [";
+    for (int j = 0; j < 10; ++j) s += (j ? ",*a" : "*a") + std::to_string(i - 1);
+    s += "]\n";
+  }
+  return s;
+}
+
+// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s.
+constexpr std::chrono::milliseconds kRejectionBudget{100};
+
+LoadResult TimedLoad(const std::string& file, bool& withinBudget) {
+  const auto start = std::chrono::steady_clock::now();
+  LoadResult r = Load(Full(), file);
+  withinBudget = std::chrono::steady_clock::now() - start < kRejectionBudget;
+  return r;
+}
+
+void AliasesThatLoopOrExplodeAreRejectedNotWalkedForever() {
+  const char* const nesting =
+      "config file=config.yaml rejected reason=nesting_too_deep (embedded defaults stay)";
+  bool fast = false;
+  LoadResult r = TimedLoad("x-a: &a [*a]\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
+  CHECK(DefaultsOnly(r.config.effective) && r.config.socketUri.source == Source::kEmbedded);
+  r = TimedLoad("x-a: &a {k: *a}\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
+  r = TimedLoad("plugins:\n  - name: p\n    args: &a {k: *a}\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
+  r = TimedLoad(NestedAliases(8), fast);
+  CHECK(r.fileRejected && fast);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_many_nodes (embedded defaults stay)"));
+  CHECK(!EventsContain(r, "lol"));
+}
+
+void ADeepButLegalNestingStillLoads() {
+  const std::string deep = "services:\n  socket_uri: \"ws://file.example/x\"\nx-d: " + std::string(32, '[') + "s" +
+                           std::string(32, ']') + "\n";
+  const LoadResult r = Load(Full(), deep);
+  CHECK(!r.fileRejected && r.config.socketUri.source == Source::kFile);
+  CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  // Far deeper than any cap: the parser's own limit or ours rejects it, never a crash.
+  const std::string tooDeep = std::string(30000, '[') + std::string(30000, ']') + "\n";
+  CHECK(Load(Full(), tooDeep).fileRejected);
 }
 
 void BadKeyValuesKeepTheDefault() {
-  const LoadResult r = Load(Full(), R"({
-    "nevr_socket_uri":"https://SECRETHOST-1/wrong-scheme",
-    "nevr_http_uri":"ftp://SECRETHOST-2/",
-    "nevr_http_key":"has a space SECRETKEY-3",
-    "nevr_server_key":12345})");
+  const LoadResult r = Load(Full(),
+                            "services:\n  socket_uri: \"https://SECRETHOST-1/wrong-scheme\"\n"
+                            "auth:\n  http_uri: \"ftp://SECRETHOST-2/\"\n"
+                            "  http_key: \"has a space SECRETKEY-3\"\n"
+                            "  server_key: \"\"\n");
   CHECK(!r.fileRejected);
   CHECK(r.config.socketUri.source == Source::kEmbedded);
   CHECK(r.config.httpUri.source == Source::kEmbedded);
   CHECK(r.config.httpKey.text == kEmbApiKey);
   CHECK(r.config.serverKey.text == kEmbServerKey);
-  CHECK(EventsContain(r, "key=nevr_socket_uri rejected"));
-  CHECK(EventsContain(r, "key=nevr_server_key rejected reason=not_a_string"));
+  CHECK(EventsContain(r, "config file key=services.socket_uri rejected reason=scheme must be ws:// or wss://"));
+  CHECK(EventsContain(r, "config file key=auth.http_uri rejected"));
+  CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=contains whitespace or a control character"));
+  CHECK(EventsContain(r, "config file key=auth.server_key rejected reason=empty"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=auth.server_key rejected reason=empty", LogLevel::kWarn));
+  CHECK(EventsWithAreAtLevel(r, "config file key=services.socket_uri rejected reason=", LogLevel::kWarn));
   CHECK(!EventsContain(r, "SECRETHOST"));
   CHECK(!EventsContain(r, "SECRETKEY"));
 }
@@ -228,324 +454,145 @@ void UriShapeValidation() {
   const char* bad[] = {"wss://", "wss:///path", "ws://?q=1", "wss://host name/x", "WSS://host/x", "ws:/host",
                        "host.example", ""};
   for (const char* uri : bad) {
-    const std::string file = std::string(R"({"nevr_socket_uri":")") + uri + "\"}";
+    const std::string file = std::string("services:\n  socket_uri: \"") + uri + "\"\n";
     const LoadResult r = Load(Full(), file);
     CHECK(r.config.socketUri.source == Source::kEmbedded);
   }
-  const LoadResult ok = Load(Full(), R"({"nevr_socket_uri":"wss://h.example:443/nevr?format=evr"})");
+  const LoadResult ok = Load(Full(), "services:\n  socket_uri: \"wss://h.example:443/nevr?format=evr\"\n");
   CHECK(ok.config.socketUri.source == Source::kFile);
 }
 
-void WrongFeatureTypesStayOff() {
-  LoadResult r = Load(Full(), R"({"features":{"redirect":"yes","bridge":1,"login":null}})");
-  CHECK(AllOff(r.config.requested));
-  CHECK(EventsContain(r, "feature=redirect rejected reason=not_a_boolean"));
-
-  r = Load(Full(), R"({"features":[true]})");
-  CHECK(AllOff(r.config.requested));
-  CHECK(EventsContain(r, "features rejected reason=not_an_object"));
-
-  r = Load(Full(), R"({"features":{"redirect":true,"turbo":true}})");
-  CHECK(r.config.effective.redirect);
-  CHECK(EventsContain(r, "unknown feature #1 ignored"));
+void AScalarOfAnyYamlTypeIsAValueLikeOnThePc() {
+  // PC reads every scalar as its text; so does the Quest. A number is a (valid) key.
+  const LoadResult r = Load(Full(), "auth:\n  server_key: 12345\n");
+  CHECK(r.config.serverKey.text == "12345" && r.config.serverKey.source == Source::kFile);
 }
 
-void UnknownKeysWarnWithoutLeakingValues() {
-  const LoadResult r = Load(Full(), R"({"nevr_pasword":"SECRETPW-77","bad\u0001key":"x"})");
+void AnUnsetVariableInAKeyIsRejectedByKeyNotByName() {
+  ::unsetenv("NEVR_QUEST_TEST_UNSET_VAR_ZXQ");
+  ::setenv("NEVR_QUEST_TEST_SET_VAR_ZXQ", "FROM-THE-ENVIRONMENT-5", 1);
+  LoadResult r = Load(Full(),
+                      "auth:\n  http_key: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
+                      "  server_key: \"${NEVR_QUEST_TEST_SET_VAR_ZXQ}\"\n");
   CHECK(!r.fileRejected);
-  CHECK(EventsContain(r, "unknown key #1 ignored"));
-  CHECK(EventsContain(r, "unknown key #2 ignored"));
-  CHECK(!EventsContain(r, "SECRETPW-77"));
+  // The unset reference does not become a credential: the key counts as unset and the default stays.
+  CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.httpKey.text == kEmbApiKey);
+  CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=unset_variable"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=auth.http_key rejected reason=unset_variable", LogLevel::kWarn));
+  CHECK(EventsContain(r, "unset_variable_references=1"));
+  CHECK(EventsWithAreAtLevel(r, "unset_variable_references=1", LogLevel::kWarn));
+  CHECK(!EventsContain(r, "NEVR_QUEST_TEST_UNSET_VAR_ZXQ"));
+  // A boolean key that holds an unset reference keeps its default and is rejected by key.
+  r = Load(Full(), "social:\n  facade: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
+                   "diagnostics:\n  hardware_dump: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n");
+  CHECK(r.config.effective.social && !r.config.effective.hwdump);
+  CHECK(EventsContain(r, "config file key=social.facade rejected reason=unset_variable (default stays)"));
+  CHECK(EventsWithAreAtLevel(r, "key=social.facade rejected reason=unset_variable (default stays)", LogLevel::kWarn));
+  CHECK(EventsContain(r, "config file key=diagnostics.hardware_dump rejected reason=unset_variable (default stays)"));
+  CHECK(EventsContain(r, "unset_variable_references=1"));
+  r = Load(Full(),
+           "auth:\n  http_key: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
+           "  server_key: \"${NEVR_QUEST_TEST_SET_VAR_ZXQ}\"\n");
+  // A set variable resolves, and the value is not logged.
+  CHECK(r.config.serverKey.text == "FROM-THE-ENVIRONMENT-5" && r.config.serverKey.source == Source::kFile);
+  CHECK(!EventsContain(r, "FROM-THE-ENVIRONMENT-5") && !EventsContain(r, "NEVR_QUEST_TEST_SET_VAR_ZXQ"));
 
-  // Names shaped like identifiers, hex digests or words are not echoed either.
-  const LoadResult shaped = Load(Full(), R"({"5f4dcc3b5aa765d61d8327deb882cf99":"x","defaultkey":1,"defaultkey":2,)"
-                                        R"("features":{"s3cr3tlowercase":true}})");
-  CHECK(!shaped.fileRejected);
-  for (const char* name : {"5f4dcc3b5aa765d61d8327deb882cf99", "defaultkey", "s3cr3tlowercase"}) {
-    CHECK(!EventsContain(shaped, name));
-  }
-  CHECK(EventsContain(shaped, "unknown key #1 ignored") && EventsContain(shaped, "unknown feature #1 ignored"));
-  CHECK(EventsContain(shaped, "duplicate key=<unknown> extra=1"));
+  // ${VAR:?} that is unset rejects the whole file, as on the PC.
+  r = Load(Full(), "auth:\n  http_key: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ:?must be set}\"\n");
+  CHECK(r.fileRejected);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=unset_required_variable (embedded defaults stay)"));
+  CHECK(!EventsContain(r, "must be set") && !EventsContain(r, "NEVR_QUEST_TEST_UNSET_VAR_ZXQ"));
+  ::unsetenv("NEVR_QUEST_TEST_SET_VAR_ZXQ");
 }
 
 void NoEventEverCarriesAConfiguredValue() {
-  const LoadResult r = Load(Full(), R"({"nevr_http_key":"FILE-SECRET-5","features":{"redirect":true,"bridge":true,"login":true}})");
+  const LoadResult r = Load(Full(),
+                            "auth:\n  http_key: \"FILE-SECRET-5\"\nservices:\n  socket_uri: \"wss://file.example/x\"\n"
+                            "diagnostics:\n  hardware_dump: true\n");
   for (const char* secret : {kEmbSocket, kEmbHttp, kEmbApiKey, kEmbServerKey, "FILE-SECRET-5", "file.example"}) {
     CHECK(!EventsContain(r, secret));
   }
 }
 
-void DuplicateKeysWarnAndTheLastValueWins() {
-  const LoadResult r = Load(Full(), R"({"nevr_http_key":"FIRST-1","nevr_http_key":"LAST-2",)"
-                                    R"("features":{"redirect":false,"redirect":true}})");
-  CHECK(!r.fileRejected);
-  CHECK(r.config.httpKey.text == "LAST-2");
-  CHECK(r.config.effective.redirect);
-  CHECK(EventsContain(r, "duplicate key=nevr_http_key extra=1 last value wins"));
-  CHECK(EventsContain(r, "duplicate key=redirect extra=1 last value wins"));
-  CHECK(!EventsContain(r, "FIRST-1") && !EventsContain(r, "LAST-2"));
-  // The same key in two different objects is not a duplicate.
-  const LoadResult ok = Load(Full(), R"({"features":{"redirect":true},"other":{"redirect":1}})");
-  CHECK(!EventsContain(ok, "duplicate"));
-}
-
-void ManyBadKeysProduceBoundedLogging() {
-  // 6000 copies of one key collapse to one warning.
-  std::string dup = "{";
-  for (int i = 0; i < 6000; ++i) dup += "\"a\":1,";
-  dup += "\"nevr_http_uri\":\"https://h.example\"}";
-  LoadResult r = Load(Full(), dup);
-  CHECK(!r.fileRejected && r.config.httpUri.text == "https://h.example");
-  CHECK(EventsContain(r, "duplicate key=<unknown> extra=5999 last value wins"));
-  CHECK(r.events.size() < 40);
-
-  // 5000 distinct unknown keys are capped, with one line saying how many were dropped.
-  std::string many = "{";
-  for (int i = 0; i < 5000; ++i) many += "\"u" + std::to_string(i) + "\":1,";
-  many += "\"nevr_http_uri\":\"https://h.example\"}";
-  r = Load(Full(), many);
-  CHECK(!r.fileRejected);
-  CHECK(r.events.size() < 60);
-  CHECK(EventsContain(r, "further warnings suppressed count=4968"));
-}
-
 void AnEmptyFileValueCannotClearAnEmbeddedDefault() {
-  const LoadResult r = Load(Full(), R"({"nevr_http_key":"","nevr_socket_uri":""})");
+  const LoadResult r = Load(Full(), "auth:\n  http_key: \"\"\nservices:\n  socket_uri: \"\"\n");
   CHECK(r.config.httpKey.text == kEmbApiKey && r.config.httpKey.source == Source::kEmbedded);
   CHECK(r.config.socketUri.text == kEmbSocket);
-  CHECK(EventsContain(r, "key=nevr_http_key rejected reason=empty"));
+  CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=empty"));
 }
 
-void ConfigPathIsNeverGameConfigJson() {
+void ConfigPathIsConfigYamlAndNeverGameConfigJson() {
   const std::string a = nevr_quest::ConfigFilePath("/sdcard/x/files");
   const std::string b = nevr_quest::ConfigFilePath("/sdcard/x/files/");
-  CHECK(a == "/sdcard/x/files/nevr-quest.json");
+  CHECK(a == "/sdcard/x/files/config.yaml");
   CHECK(b == a);
   CHECK(a.find("config.json") == std::string::npos);
-  CHECK(nevr_quest::ConfigFilePath("") == "nevr-quest.json");
+  CHECK(a.find("nevr-quest.json") == std::string::npos);
+  CHECK(nevr_quest::ConfigFilePath("") == "config.yaml");
 }
 
 void RedirectIsGatedByActivation() {
   const std::string wsUrl = "wss://login.readyatdawn.com/rad/rad15_live";
   const std::string httpUrl = "https://config.readyatdawn.com/rad/rad15_live";
 
-  LoadResult off = Load(Full(), "{}");
+  // Nothing to redirect to: redirect is forced off and the game's own value stays.
+  LoadResult off = nevr_quest::ResolveConfig(EmbeddedDefaults(), nullptr);
   CHECK(!nevr_quest::ResolveQuestRedirect(off.config, wsUrl, true, 5000).has_value());
 
-  LoadResult redirectOnly = Load(Full(), R"({"features":{"redirect":true}})");
-  const auto ws = nevr_quest::ResolveQuestRedirect(redirectOnly.config, wsUrl, true, 5000);
-  CHECK(ws.has_value() && *ws == kEmbSocket);
+  // An HTTP target only: redirect is on, the bridge is not.
+  EmbeddedDefaults httpOnly;
+  httpOnly.httpUri = kEmbHttp;
+  LoadResult redirectOnly = nevr_quest::ResolveConfig(httpOnly, nullptr);
+  CHECK(!nevr_quest::ResolveQuestRedirect(redirectOnly.config, wsUrl, true, 5000).has_value());
   const auto http = nevr_quest::ResolveQuestRedirect(redirectOnly.config, httpUrl, false, 0);
   CHECK(http.has_value() && *http == kEmbHttp);
   CHECK(!nevr_quest::ResolveQuestRedirect(redirectOnly.config, "https://other.example/x", false, 0).has_value());
 
-  LoadResult bridged = Load(Full(), R"({"features":{"redirect":true,"bridge":true}})");
+  // The embedded endpoints with no file: redirect and bridge are on without any key saying so.
+  LoadResult bridged = nevr_quest::ResolveConfig(Full(), nullptr);
   const auto loop = nevr_quest::ResolveQuestRedirect(bridged.config, wsUrl, true, 5000);
   CHECK(loop.has_value() && *loop == "ws://127.0.0.1:5000");
   const auto notReady = nevr_quest::ResolveQuestRedirect(bridged.config, wsUrl, false, 0);
   CHECK(notReady.has_value() && *notReady == kEmbSocket);
   const auto httpBridged = nevr_quest::ResolveQuestRedirect(bridged.config, httpUrl, true, 5000);
   CHECK(httpBridged.has_value() && *httpBridged == kEmbHttp);
+
+  // A socket URI from the file replaces the embedded one.
+  LoadResult fromFile = Load(Full(), "services:\n  socket_uri: \"wss://file.example/nevr\"\n");
+  const auto fileWs = nevr_quest::ResolveQuestRedirect(fromFile.config, wsUrl, false, 0);
+  CHECK(fileWs.has_value() && *fileWs == "wss://file.example/nevr");
 }
 
 }  // namespace
 
-// The hardware dump (#335) needs nothing else: the file's boolean alone turns it on, and anything but a
-// JSON true leaves it off.
-void HwDumpIsOnlyEverOnByAFileBoolean() {
-  {
-    const LoadResult r = Load(Full(), R"({"features":{"hwdump":true}})");
-    CHECK(r.config.requested.hwdump && r.config.effective.hwdump);
-    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));
-    CHECK(!r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
-          !r.config.effective.social);
-    CHECK(EventsContain(r, "feature=hwdump requested=on effective=on"));
-    CHECK(!HasLevel(r, LogLevel::kWarn));
-  }
-  for (const char* text : {R"({"features":{"hwdump":"true"}})", R"({"features":{"hwdump":1}})",
-                           R"({"hwdump":true})", R"({"features":{}})"}) {
-    const LoadResult r = Load(Full(), text);
-    CHECK(!r.config.effective.hwdump);
-    CHECK(EventsContain(r, "feature=hwdump requested=off effective=off"));
-  }
-}
-
-// The no-config gate (the release packages): a build that turns the login features on by default logs in with no
-// nevr-quest.json at all. Every key comes from the embedded defaults and the four features are effective.
-constexpr const char* kLoginFeatures = "redirect,bridge,login,social";
-
-EmbeddedDefaults FullWithFeatures(const char* features) {
-  EmbeddedDefaults d = Full();
-  d.features = features;
-  return d;
-}
-
-void NoConfigFileLogsInFromTheEmbeddedDefaultsAlone() {
-  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(kLoginFeatures), nullptr);
-  CHECK(r.config.socketUri.source == Source::kEmbedded && r.config.httpUri.source == Source::kEmbedded);
-  CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.serverKey.source == Source::kEmbedded);
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kRedirect));
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kBridge));
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kHwDump));  // diagnostics stay off
-  CHECK(EventsContain(r, "feature=login requested=on effective=on"));
-}
-
-void DefaultFeaturesAreOffWhenTheBuildNamesNone() {
-  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures(""), nullptr);
-  CHECK(AllOff(r.config.effective));
-}
-
-void AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults() {
-  const LoadResult off = Load(FullWithFeatures(kLoginFeatures), R"({"features":{"social":false}})");
-  CHECK(nevr_quest::FeatureEnabled(off.config, Feature::kLogin));
-  CHECK(!nevr_quest::FeatureEnabled(off.config, Feature::kSocial));
-  const LoadResult rejected = Load(FullWithFeatures(kLoginFeatures), "{not json");
-  CHECK(rejected.fileRejected);
-  CHECK(nevr_quest::FeatureEnabled(rejected.config, Feature::kLogin));
-  CHECK(rejected.config.socketUri.source == Source::kEmbedded);
-}
-
-void ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne() {
-  EmbeddedDefaults noKey = FullWithFeatures(kLoginFeatures);
-  noKey.serverKey = "";
-  const LoadResult r = nevr_quest::ResolveConfig(noKey, nullptr);
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
-  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
-  CHECK(EventsContain(r, "forced off"));
-}
-
-void AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything() {
-  const LoadResult r = nevr_quest::ResolveConfig(FullWithFeatures("login,nonsense"), nullptr);
-  CHECK(EventsContain(r, "embedded default feature ignored reason=unknown_name"));
-  CHECK(!EventsContain(r, "nonsense"));
-}
-
-// Presence names (#393) ride in the social facade's member data: off unless the file asks, forced off without
-// social (so without login), and only a JSON true counts.
-void PresenceNamesNeedSocialAndAreOffByDefault() {
-  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_names":true}})";
-  LoadResult r = Load(Full(), all);
-  CHECK(r.config.requested.presenceNames && r.config.effective.presenceNames);
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceNames));
-  CHECK(EventsContain(r, "feature=presence_names requested=on effective=on"));
-  CHECK(!HasLevel(r, LogLevel::kWarn));
-
-  // Without social it is forced off, with that one reason, and after social's own rules ran.
-  r = Load(Full(), R"({"features":{"presence_names":true}})");
-  CHECK(r.config.requested.presenceNames && !r.config.effective.presenceNames);
-  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"presence_names":true}})");
-  CHECK(r.config.effective.login && !r.config.effective.social && !r.config.effective.presenceNames);
-  r = Load(Full(), R"({"features":{"social":true,"presence_names":true}})");  // social loses login, so it loses this too
-  CHECK(!r.config.effective.social && !r.config.effective.presenceNames);
-  CHECK(EventsContain(r, "feature=presence_names forced off reason=social_not_enabled"));
-
-  // Off by default, and a non-boolean leaves it off.
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
-  CHECK(r.config.effective.social && !r.config.requested.presenceNames && !r.config.effective.presenceNames);
-  CHECK(EventsContain(r, "feature=presence_names requested=off effective=off"));
-  for (const char* text : {R"({"features":{"presence_names":"true"}})", R"({"features":{"presence_names":1}})",
-                           R"({"presence_names":true})"}) {
-    r = Load(Full(), text);
-    CHECK(!r.config.effective.presenceNames);
-  }
-}
-
-// Presence local (#396) needs the social facade like presence_names, is off unless the file asks, and only a
-// JSON true counts.
-void PresenceLocalNeedsSocialAndIsOffByDefault() {
-  const char* all = R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true,"presence_local":true}})";
-  LoadResult r = Load(Full(), all);
-  CHECK(r.config.requested.presenceLocal && r.config.effective.presenceLocal);
-  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kPresenceLocal));
-  CHECK(EventsContain(r, "feature=presence_local requested=on effective=on"));
-  CHECK(!r.config.effective.presenceNames);  // independent of the names feature
-  CHECK(!HasLevel(r, LogLevel::kWarn));
-
-  r = Load(Full(), R"({"features":{"presence_local":true}})");
-  CHECK(r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
-  CHECK(EventsContain(r, "feature=presence_local forced off reason=social_not_enabled"));
-
-  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
-  CHECK(r.config.effective.social && !r.config.requested.presenceLocal && !r.config.effective.presenceLocal);
-  CHECK(EventsContain(r, "feature=presence_local requested=off effective=off"));
-  for (const char* text : {R"({"features":{"presence_local":"true"}})", R"({"features":{"presence_local":1}})",
-                           R"({"presence_local":true})"}) {
-    r = Load(Full(), text);
-    CHECK(!r.config.effective.presenceLocal);
-  }
-}
-
-// `self_check` (#451: self-checks are on in every build) and `obb_skip` (#572) are retired feature names: no build
-// reads them. A file that names one is not an error: it is told the feature is retired, by name and why (the name is
-// one of ours, so nothing a file supplies reaches the log), nothing else about it counts as an unknown feature, and
-// startup carries on. Only the exact name is retired; a longer name that starts with it is an unknown feature.
-void ARetiredFeatureNamedInAFileIsIgnoredByName() {
-  LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
-  CHECK(EventsContain(r, "feature=self_check retired ignored"));
-  CHECK(!EventsContain(r, "unknown feature #"));
-  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
-  CHECK(!AllOff(r.config.effective));
-  // `obb_skip` is retired too (#572: the OBB mount is skipped on every launch). Whatever value the file gives it,
-  // it is named with why, it is not counted as unknown, and it turns nothing on or off.
-  for (const char* text : {R"({"features":{"obb_skip":true}})", R"({"features":{"obb_skip":false}})",
-                           R"({"features":{"obb_skip":"yes"}})"}) {
-    r = Load(Full(), text);
-    CHECK(EventsContain(r, "feature=obb_skip retired ignored (the OBB mount is skipped on every launch)"));
-    CHECK(!EventsContain(r, "unknown feature #"));
-    CHECK(!EventsContain(r, "obb_skip requested="));
-    CHECK(!r.fileRejected && AllOff(r.config.effective));
-  }
-  r = Load(Full(), R"({"features":{"self_check":true,"obb_skip":true}})");
-  CHECK(EventsContain(r, "feature=self_check retired ignored (self-checks are on in every build)"));
-  CHECK(EventsContain(r, "feature=obb_skip retired ignored (the OBB mount is skipped on every launch)"));
-  // a retired name given twice is named in the duplicate line, like every name of ours
-  r = Load(Full(), R"({"features":{"obb_skip":true,"obb_skip":false}})");
-  CHECK(EventsContain(r, "duplicate key=obb_skip extra=1"));
-  // an unrelated unknown name is still only counted, never named
-  r = Load(Full(), R"({"features":{"made_up_name":true}})");
-  CHECK(EventsContain(r, "unknown feature #1 ignored"));
-  CHECK(!EventsContain(r, "made_up_name"));
-  CHECK(!EventsContain(r, "retired"));
-  // a name that only starts with a retired one is unknown, not retired
-  for (const char* text : {R"({"features":{"obb_skipping":true}})", R"({"features":{"self_checks":true}})"}) {
-    r = Load(Full(), text);
-    CHECK(EventsContain(r, "unknown feature #1 ignored"));
-    CHECK(!EventsContain(r, "retired"));
-  }
-}
-
 int main() {
   DefaultsWithoutFile();
-  NoConfigFileLogsInFromTheEmbeddedDefaultsAlone();
-  DefaultFeaturesAreOffWhenTheBuildNamesNone();
-  AFileCanTurnADefaultFeatureOffAndARejectedFileKeepsTheDefaults();
-  ADefaultFeatureNeedsItsPrerequisitesLikeAFileOne();
-  AnUnknownDefaultFeatureIsIgnoredWithoutLeakingAnything();
-  EmptyEmbeddedIsAbsent();
+  NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
   InvalidEmbeddedIsRejectedWithoutValue();
   FileOverridesPerKey();
-  FeaturesEnableWhenPrerequisitesHold();
+  AnEmptyDocumentIsAFileThatChangesNothing();
+  ASocketUriAloneTurnsRedirectAndBridgeOnAndLoginNeedsTheServerKey();
   FeatureDependenciesForceOff();
-  ARetiredFeatureNamedInAFileIsIgnoredByName();
   SocialNeedsLoginAndResolvesLast();
-  MalformedFileFallsBackToDefaultsWithFeaturesOff();
+  SocialFacadeFalseTurnsSocialAndItsNamesOffAndLeavesThePresenceObjectAlone();
+  ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName();
+  SendPresenceToMetaFalseIsTheLocalPresencePath();
+  HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
+  MalformedFileFallsBackToDefaults();
+  ARejectedFileNeverEchoesWhatItHeld();
+  AnUnknownKeyInsideAKnownSectionIsNotAnError();
   OversizedFileIsRejected();
+  TheSizeCapIsInclusive();
+  AliasesThatLoopOrExplodeAreRejectedNotWalkedForever();
+  ADeepButLegalNestingStillLoads();
   BadKeyValuesKeepTheDefault();
   UriShapeValidation();
-  WrongFeatureTypesStayOff();
-  UnknownKeysWarnWithoutLeakingValues();
+  AScalarOfAnyYamlTypeIsAValueLikeOnThePc();
+  AnUnsetVariableInAKeyIsRejectedByKeyNotByName();
   NoEventEverCarriesAConfiguredValue();
-  DuplicateKeysWarnAndTheLastValueWins();
-  ManyBadKeysProduceBoundedLogging();
   AnEmptyFileValueCannotClearAnEmbeddedDefault();
-  ConfigPathIsNeverGameConfigJson();
+  ConfigPathIsConfigYamlAndNeverGameConfigJson();
   RedirectIsGatedByActivation();
-  HwDumpIsOnlyEverOnByAFileBoolean();
-  PresenceNamesNeedSocialAndAreOffByDefault();
-  PresenceLocalNeedsSocialAndIsOffByDefault();
   if (g_failures != 0) {
     std::fprintf(stderr, "quest_config_test: %d check(s) failed\n", g_failures);
     return 1;

@@ -1,12 +1,31 @@
 # nEVR Runtime Configuration
 #
-# This file lives at: echovr/_local/config.yaml
-# It is parsed once at boot by the game's internal JSON parser via nEVR's
-# LoadLocalConfigHook — the game natively loads a JSON config; nEVR intercepts
-# the load and provides the YAML contents through a yaml-cpp → Json bridge.
+# One file, one parser: nEVR's own config reader (src/core/nevr_config.cpp, yaml-cpp). It is not the game's JSON
+# config; the game's JSON parser never sees this file.
 #
-# Config keys are read by the nEVR runtime (`BugSplat64.dll`), which runs
-# in-process with echovr.exe.
+#   PC     the first of these that exists: config.yaml in the directory of -config-path (when given);
+#          <exe dir>\_local\config.yaml; <exe dir>\..\_local\config.yaml; <exe dir>\..\..\_local\config.yaml
+#          (<exe dir> is the directory of echovr.exe). Read by src/runtime/lifecycle/service_config.cpp.
+#   Quest  /sdcard/Android/data/com.readyatdawn.r15/files/config.yaml. Read by src/quest/sentinel/activation.cpp
+#          and src/quest/sentinel/quest_config.cpp. A nevr-quest.json in that directory is not read; the sentinel
+#          logs once that it is present and ignored.
+#
+# Both builds work with no file at all: the service endpoints and the public client keys are embedded at build
+# time (config/public-defaults.env), and a key in this file replaces the embedded value. Each key below says which
+# builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
+#
+# The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
+# social.facade, social.send_presence_to_meta and diagnostics.hardware_dump. Every other key below is PC only: the
+# Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
+#
+# A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
+# mapping, a malformed plugins list, a ${VAR:?} that is unset, nesting deeper than 64 levels, or more than 100,000
+# nodes once aliases are expanded) is rejected: the PC server exits (N4); the PC client and the Quest log it and
+# run on the embedded defaults. The Quest also rejects a file over 64 KiB. Top-level keys are the sections below
+# plus x-* extensions.
+#
+# Config keys are read by the nEVR runtime (`BugSplat64.dll` on PC, the sentinel `libovrplatformloader.so` on Quest),
+# which runs in-process with the game.
 #
 # Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable
 # substitution in production. The literal form is for local dev only and MUST
@@ -32,11 +51,35 @@ version: 1
 # pnsrad exports no Social object, so the game's friends and parties would be
 # disabled. The façade stands in for it (friends from the server's friend list,
 # parties over the server's party messages). It is on by default and only ever
-# replaces a missing Social object; set `facade: false` to turn it off.
+# replaces a missing Social object.
+#
+# Reader: src/runtime/lifecycle/service_map.cpp (SocialFacadeEnabled, PC),
+#         src/quest/sentinel/quest_config.cpp (Quest)
 # ---------------------------------------------------------------------------
 
 social:
+  # Turn the façade off with `false`. Both builds.
+  # Default (absent): true. On the Quest it also needs login: with no usable socket URI and server key the
+  # façade is off whatever this says (the sentinel log names the missing prerequisite). The status names under
+  # a friend's entry (the rich-presence destinations) ride with the façade and have no key of their own.
   # facade: false
+
+  # Quest only (the PC reads nothing here). Send the rich presence to Meta's platform service, as the game does.
+  # `false` answers it locally (no group_presence request leaves the headset, which fails for this APK's identity
+  # anyway); friends' status then comes from the game service. Needs the façade.
+  # Default (absent): true.
+  # send_presence_to_meta: false
+
+# ---------------------------------------------------------------------------
+# diagnostics — build diagnostics
+#
+# Reader: src/quest/sentinel/quest_config.cpp (Quest). The PC accepts the section and reads nothing from it.
+# ---------------------------------------------------------------------------
+
+diagnostics:
+  # Quest only. Write the hardware/environment dump (docs/adr/0006-quest-hardware-dump.md) at start-up.
+  # Default (absent): false.
+  # hardware_dump: true
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -55,6 +98,17 @@ social:
 # ---------------------------------------------------------------------------
 
 services:
+  # WebSocket endpoint for all game services (login, matchmaking, config, serverdb). Both builds. The runtime
+  # rewrites the game's hardcoded wss://*.readyatdawn.com URLs to it; the in-process WebSocket bridge connects to it
+  # outbound, and the game's own connections go through the bridge (ws://127.0.0.1:<port>).
+  # Default (absent): the value embedded in the build (config/public-defaults.env); on a dedicated server, none
+  # (a server is configured explicitly and exits without it unless allow_offline_server is set).
+  # On the Quest this one key (or auth.http_uri) is what turns the redirect on, and with it the bridge: there is no
+  # key for either. Login then needs auth.server_key.
+  # Not a secret.
+  # Reader: src/runtime/lifecycle/service_map.cpp (flat key nevr_socket_uri), src/quest/sentinel/quest_config.cpp
+  # socket_uri: "wss://g.echovrce.com/ws"
+
   # Dedicated server only: boot without services.socket_uri (no login bridge). Without this a server
   # that has no socket_uri exits at start-up, because it could never log in. Set it only for offline
   # boots (test rigs); such a server never logs in or registers.
@@ -175,40 +229,41 @@ identity:
 # auth — authentication and API endpoint configuration
 #
 # Used for server authentication with Nakama (device-auth flow) and for HTTP
-# API calls. The ws_bridge module also reads socket_uri to establish its
-# outbound WebSocket connection to the community relay.
+# API calls. The socket URI the in-process WebSocket bridge connects to is
+# services.socket_uri, above.
 #
-# Reader: src/runtime/lifecycle/config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
-#         src/runtime/server/gameserver_serverdb.cpp (AuthenticateServer),
-#         src/runtime/compat/ws_bridge.cpp
+# http_uri, http_key and server_key are read by both builds. A value in this file replaces the embedded one, and
+# the file cannot blank an embedded value, but the builds differ in what they reject:
+#   PC     the lookup falls back to the embedded value only for an empty value or a bare ${VAR} that is unset
+#          (src/runtime/lifecycle/service_map.cpp, LookupFlatWithDefaults); it does not check whitespace or the scheme.
+#   Quest  an empty value, whitespace or a control character, a wrong scheme or a missing host, a value over the
+#          length cap, or a bare ${VAR} that is unset is rejected by key (logged without the value) and the embedded
+#          value stays (src/quest/sentinel/quest_config.cpp, ValidateValue).
+#
+# Reader: src/runtime/lifecycle/service_map.cpp, src/runtime/server/gameserver_serverdb.cpp (AuthenticateServer),
+#         src/runtime/compat/ws_bridge.cpp (PC); src/quest/sentinel/quest_config.cpp (Quest)
 # ---------------------------------------------------------------------------
 
 auth:
-  # WebSocket endpoint for all game services (login, matchmaking, config,
-  # serverdb). Used by the JsonValueAsStringHook to rewrite hardcoded
-  # wss://*.readyatdawn.com URLs. Also read by the ws_bridge module as its
-  # outbound target.
-  # When the ws_bridge is active, game WebSocket connections are proxied
-  # through ws://127.0.0.1:<bridge_port> instead of connecting directly.
-  # Absent: game hardcoded defaults remain (readyatdawn.com — dead).
-  # Not a secret.
-  # socket_uri: "wss://g.echovrce.com/ws"
-
   # HTTP endpoint for REST API calls (Nakama device auth, account operations).
   # Used to rewrite hardcoded https://*.readyatdawn.com URLs and by
-  # AuthenticateServer for the Nakama device-auth flow.
-  # Absent: game hardcoded defaults remain (readyatdawn.com — dead).
+  # AuthenticateServer for the Nakama device-auth flow. Both builds; on the Quest it also turns the redirect on.
+  # Should start with http:// or https:// and name a host; the Quest rejects a value that does not, the PC does not check.
+  # Default (absent): the embedded value.
   # Not a secret.
   # http_uri: "https://api.echovrce.com"
 
   # HTTP API key. Sent as Bearer auth on REST calls when the game's internal
-  # token cache is empty. Read by token_auth.cpp during device-auth flow.
+  # token cache is empty. Both builds.
+  # Default (absent): the embedded public key.
   # SECRET — use env-var substitution in production.
   # http_key: "${NEVR_API_KEY:?http_key is required}"
 
   # Server authentication key. Used as the Basic-auth username when
   # authenticating a server with Nakama (POST /v2/account/authenticate/device).
-  # Required for dedicated server operation.
+  # Required for dedicated server operation. Both builds; on the Quest, login (and so the façade) is on only when
+  # this resolves.
+  # Default (absent): the embedded public key (client mode only; a dedicated server has none).
   # SECRET — use env-var substitution in production.
   # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 

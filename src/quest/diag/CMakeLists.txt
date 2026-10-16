@@ -1,4 +1,4 @@
-# The hardware/environment dump (#335): a diagnostic, off unless nevr-quest.json sets features.hwdump.
+# The hardware/environment dump (#335): a diagnostic, off unless config.yaml sets diagnostics.hardware_dump.
 #
 # nevr_quest_hwdump_hooks holds every frame that is live while libr15 runs under a hook (the handlers, the
 # record table they write, the thunk wiring), so it is built without exception support (the contract in

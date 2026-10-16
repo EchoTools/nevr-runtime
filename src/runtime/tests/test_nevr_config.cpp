@@ -6,6 +6,7 @@
 // and malformed-YAML failure. Built under -DBUILD_TESTING=ON and run under
 // Wine by `just test-auth-unit` (which `just verify` invokes).
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
@@ -234,7 +235,7 @@ TEST(NevrConfig, BareVarUnsetKeepsLiteralText) {
   EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "pre-${NEVR_TEST_BARE}-post");
 }
 
-// One name per unset variable however often it is referenced: the load logs one warning per entry.
+// One name per unset variable however often it is referenced: the load reports one entry per name, and the PC caller logs one warning per entry.
 TEST(NevrConfig, UnsetBareVarIsReportedOncePerName) {
   UnsetEnv("NEVR_TEST_BARE_ONCE");
   UnsetEnv("NEVR_TEST_BARE_TWICE");
@@ -388,6 +389,179 @@ TEST(NevrConfig, AcceptsSocialFacadeSection) {
   const auto cfg = nevr::NevrConfig::LoadFromString("social:\n  facade: true\n");
   ASSERT_TRUE(cfg.GetBool("social.facade").has_value());
   EXPECT_TRUE(*cfg.GetBool("social.facade"));
+}
+
+// `diagnostics` is a top-level section (the Quest's hardware dump is `diagnostics.hardware_dump`, #573). The PC
+// accepts it and reads nothing from it.
+TEST(NevrConfig, AcceptsDiagnosticsSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("diagnostics:\n  hardware_dump: true\n");
+  ASSERT_TRUE(cfg.GetBool("diagnostics.hardware_dump").has_value());
+  EXPECT_TRUE(*cfg.GetBool("diagnostics.hardware_dump"));
+  EXPECT_FALSE(cfg.Empty());
+}
+
+// A rejection carries a stable reason token, never the parser's text: that text echoes the file's own words
+// (a key, a value), which the Quest's sentinel log must not repeat.
+TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
+  const auto reasonOf = [](const std::string& yaml) {
+    try {
+      nevr::NevrConfig::LoadFromString(yaml);
+    } catch (const nevr::NevrConfigError& e) {
+      return std::string(nevr::ReasonToken(e.Kind()));
+    }
+    return std::string("no error");
+  };
+  UnsetEnv("NEVR_TEST_REASON_REQUIRED");
+  EXPECT_EQ(reasonOf("services: [unterminated\n"), "yaml_syntax");
+  EXPECT_EQ(reasonOf("- a\n- b\n"), "not_a_mapping");
+  EXPECT_EQ(reasonOf("bogus_section:\n  x: 1\n"), "unknown_top_level_key");
+  EXPECT_EQ(reasonOf("plugins: 3\n"), "bad_plugins");
+  EXPECT_EQ(reasonOf("plugins:\n  - 3\n"), "bad_plugins");
+  EXPECT_EQ(reasonOf("plugins:\n  - args: {}\n"), "bad_plugins");  // an entry with no name
+  EXPECT_EQ(reasonOf("auth:\n  http_key: \"${NEVR_TEST_REASON_REQUIRED:?must be set}\"\n"), "unset_required_variable");
+  EXPECT_EQ(reasonOf("x-a: &a [*a]\n"), "nesting_too_deep");
+  EXPECT_EQ(reasonOf("services:\n  serverdb: \"x\"\n"), "no error");
+  EXPECT_STREQ(nevr::ReasonToken(nevr::NevrConfigErrorKind::kOther), "invalid_config");
+  try {
+    nevr::NevrConfig::LoadFromFile(ScratchConfigPath("no-such-file"));
+    FAIL() << "an unreadable file must throw";
+  } catch (const nevr::NevrConfigError& e) {
+    EXPECT_STREQ(nevr::ReasonToken(e.Kind()), "unreadable");
+  }
+}
+
+// An alias can make the tree a cycle or expand it exponentially. The walks over it are bounded (kMaxConfigDepth,
+// kMaxConfigNodes) and a file that exceeds a bound is rejected with its own token. Unbounded, the cycles below end
+// the process (stack overflow in ValidateInterpolation) and the nested aliases run for seconds.
+namespace {
+
+std::string ReasonOf(const std::string& yaml) {
+  try {
+    nevr::NevrConfig::LoadFromString(yaml);
+  } catch (const nevr::NevrConfigError& e) {
+    return std::string(nevr::ReasonToken(e.Kind()));
+  }
+  return std::string("no error");
+}
+
+// `levels` mappings of ten references each to the level below: 10^levels visits when walked as a tree.
+std::string NestedAliases(int levels) {
+  std::string s = "x-a0: &a0 [\"lol\"]\n";
+  for (int i = 1; i <= levels; ++i) {
+    s += "x-a" + std::to_string(i) + ": &a" + std::to_string(i) + " [";
+    for (int j = 0; j < 10; ++j) s += (j ? ",*a" : "*a") + std::to_string(i - 1);
+    s += "]\n";
+  }
+  return s;
+}
+
+// `x-d: [[...[s]...]]` with `brackets` sequences: the scalar sits at depth brackets + 1.
+std::string NestedSequences(std::size_t brackets) {
+  return "x-d: " + std::string(brackets, '[') + "s" + std::string(brackets, ']') + "\n";
+}
+
+// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s.
+constexpr std::chrono::milliseconds kRejectionBudget{100};
+
+std::chrono::milliseconds RejectionTime(const std::string& yaml) {
+  const auto start = std::chrono::steady_clock::now();
+  ReasonOf(yaml);
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+}
+
+}  // namespace
+
+TEST(NevrConfig, ASelfReferencingSequenceIsRejectedNotWalkedForever) {
+  EXPECT_EQ(ReasonOf("x-a: &a [*a]\n"), "nesting_too_deep");
+  EXPECT_LT(RejectionTime("x-a: &a [*a]\n"), kRejectionBudget);
+}
+
+TEST(NevrConfig, ASelfReferencingMapIsRejectedNotWalkedForever) {
+  EXPECT_EQ(ReasonOf("x-a: &a {k: *a}\n"), "nesting_too_deep");
+  EXPECT_LT(RejectionTime("x-a: &a {k: *a}\n"), kRejectionBudget);
+}
+
+TEST(NevrConfig, ASelfReferencingPluginArgsMapIsRejected) {
+  EXPECT_EQ(ReasonOf("plugins:\n  - name: p\n    args: &a {k: *a}\n"), "nesting_too_deep");
+}
+
+TEST(NevrConfig, NestedAliasesThatExpandExponentiallyAreRejectedByTheNodeBudget) {
+  EXPECT_EQ(ReasonOf(NestedAliases(8)), "too_many_nodes");
+  EXPECT_LT(RejectionTime(NestedAliases(8)), kRejectionBudget);
+}
+
+TEST(NevrConfig, NestingAtTheDepthCapLoadsAndOneDeeperIsRejected) {
+  EXPECT_EQ(ReasonOf(NestedSequences(nevr::kMaxConfigDepth - 1)), "no error");
+  EXPECT_EQ(ReasonOf(NestedSequences(nevr::kMaxConfigDepth)), "nesting_too_deep");
+}
+
+TEST(NevrConfig, ADeepButLegalNestingStillLoads) {
+  EXPECT_EQ(ReasonOf(NestedSequences(32)), "no error");
+}
+
+TEST(NevrConfig, AMuchDeeperNestingIsRejectedByTheParserOrTheCap) {
+  const std::string reason = ReasonOf(NestedSequences(30000));
+  EXPECT_TRUE(reason == "yaml_syntax" || reason == "nesting_too_deep") << reason;
+}
+
+TEST(NevrConfig, TheNodeBudgetIsExactlyKMaxConfigNodes) {
+  // The root mapping and the sequence are two visits; each scalar is one.
+  const auto sequenceOf = [](std::size_t scalars) {
+    std::string s = "x-n: [";
+    for (std::size_t i = 0; i < scalars; ++i) s += i == 0 ? "0" : ",0";
+    return s + "]\n";
+  };
+  EXPECT_EQ(ReasonOf(sequenceOf(nevr::kMaxConfigNodes - 2)), "no error");
+  EXPECT_EQ(ReasonOf(sequenceOf(nevr::kMaxConfigNodes - 1)), "too_many_nodes");
+}
+
+// The parser logs nothing (the Quest builds it without the PC logger); the PC's callers log the unset-variable
+// warning, once per name, through LogUnsetBareVars.
+TEST(NevrConfig, LoadingLogsNothingAndTheCallerLogsEachUnsetVariableOnce) {
+  UnsetEnv("NEVR_TEST_BARE_LOG_A");
+  UnsetEnv("NEVR_TEST_BARE_LOG_B");
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_A}\"\n  loginservice: \"${NEVR_TEST_BARE_LOG_A}/${NEVR_TEST_BARE_LOG_B}\"\n");
+  const std::string duringLoad = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(duringLoad, "");
+
+  testing::internal::CaptureStderr();
+  nevr::LogUnsetBareVars(cfg);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  const auto occurrences = [&logged](const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t at = logged.find(needle); at != std::string::npos; at = logged.find(needle, at + 1)) ++n;
+    return n;
+  };
+  EXPECT_EQ(occurrences("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_A is not set"), 1u) << logged;
+  EXPECT_EQ(occurrences("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_B is not set"), 1u) << logged;
+  EXPECT_NE(logged.find("kept as written"), std::string::npos) << logged;
+
+  // Nothing unset, nothing logged.
+  SetEnv("NEVR_TEST_BARE_LOG_A", "x");
+  const nevr::NevrConfig set = nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_A}\"\n");
+  testing::internal::CaptureStderr();
+  nevr::LogUnsetBareVars(set);
+  EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
+  UnsetEnv("NEVR_TEST_BARE_LOG_A");
+}
+
+// The policy wrapper keeps logging the same warning when it loads a file (it is the PC caller).
+TEST(NevrConfig, LoadFromFileOrFailLogsTheUnsetVariableWarning) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("unset-var-config"));
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << "services:\n  serverdb: \"${NEVR_TEST_BARE_LOG_C}\"\n";
+  }
+  UnsetEnv("NEVR_TEST_BARE_LOG_C");
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_NE(logged.find("[NEVR.CONFIG] environment variable NEVR_TEST_BARE_LOG_C is not set"), std::string::npos) << logged;
 }
 
 }  // namespace
