@@ -45,6 +45,7 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/hook/addresses.h"
+#include <MinHook.h>  // XpidPrefixDetourBoot initialises the hooking engine for one test
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -2653,5 +2654,64 @@ TEST(XpidPatchBoot, TheRefusalCauseNamesTheFirstMismatchedSite) {
         EXPECT_STREQ(g_bootHookFailedCause, expected)
             << "boot.cpp's ServerFatal prints this: it must name the failing site";
     }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+// ============================================================================
+// #532 — a failed GetProviderPrefix (OVR-ORG) detour refuses to start a server, the same as a
+// failed five-site byte patch. A server that kept running would build 17 callers' xpids with the
+// game's own PSN- prefixes while the bridge logs in as OVR-ORG.
+// ============================================================================
+
+namespace {
+
+// Real x86-64 prologue (mov [rsp+8],rbx; mov [rsp+10h],rsi; ret) at GetProviderPrefix, in memory
+// that can be executed, so MinHook can really detour it.
+constexpr unsigned char kStandInPrefixFunction[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0xC3};
+
+}  // namespace
+
+TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself) {
+    // MinHook is not initialised in this process, so MH_CreateHook refuses: the detour fails for real.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";
+        EXPECT_EQ(std::string(g_bootHookFailedCause).rfind("XPID GetProviderPrefix detour failed", 0), 0u)
+            << "boot.cpp's ServerFatal prints this: it must name the detour, was '" << g_bootHookFailedCause << "'";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+        written = tee.Output();
+    }
+    EXPECT_NE(written.find("[NEVR.XPID] warn; GetProviderPrefix detour FAILED"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_NE(written.find("a server will refuse to start"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinues) {
+    ASSERT_EQ(MH_Initialize(), MH_OK);
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    memcpy(base + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG, "OVR-ORG", 8);
+    {
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_FALSE(g_bootHookFailed) << "a working detour must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "");
+        using PrefixFn = const char* (*)(uint32_t*);
+        uint32_t provider = 2;  // PSN: the detour answers OVR-ORG whatever the game asked for
+        const char* prefix = reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider);
+        EXPECT_STREQ(prefix, "OVR-ORG");
+    }
+    MH_Uninitialize();
     VirtualFree(base, 0, MEM_RELEASE);
 }
