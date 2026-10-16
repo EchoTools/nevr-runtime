@@ -56,6 +56,24 @@ class BootPhaseLogging(unittest.TestCase):
         self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("b"))
         self.assertNotRegex(match.group("b"), r"\bLog\(", "the cleanup failure calls Log() under the loader lock")
 
+    def test_log_filter_init_hook_outcomes_use_only_the_boot_tee(self):
+        source = (ROOT / "src/runtime/log/builtin_filter.cpp").read_text()
+        body = extract_braced_function(source, "void nevr_builtin_log_filter::Init(")
+        self.assertEqual(
+            2,
+            len(re.findall(
+                r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] warn; hook failed name=CLog::PrintfImpl',
+                body,
+            )),
+            "both failed hook stages must report through the boot tee",
+        )
+        self.assertEqual(2, body.count('"current=%02x%02x%02x%02x status=%s\\n"'))
+        self.assertRegex(
+            body,
+            r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] debug; hooked name=CLog::PrintfImpl va=0x%llX\\n"',
+        )
+        self.assertNotRegex(body, r"\bLog\s*\(", "Init calls Log() under the loader lock")
+
     def test_xpid_boot_path_reports_through_the_tee_and_never_log_or_serverfatal(self):
         # PatchDscProvider and PatchProviderPrefixOvrOrg run from Initialize() under the loader lock,
         # before the CLI is parsed: Log() is not allowed and ServerFatal would only warn.
