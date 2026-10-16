@@ -282,11 +282,17 @@ const char* LevelName(LogLevel level) {
 }
 
 std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message) {
-  nlohmann::json line;
+  nlohmann::json line = nlohmann::json::parse(message, nullptr, false);
+  if (line.is_object()) {
+    line.erase("ts_ms");
+    if (!line.contains("level")) line["level"] = LevelName(level);
+  } else {
+    line = nlohmann::json::object();
+    line["level"] = LevelName(level);
+    line["msg"] = message;
+  }
   line["ts_unix_ms"] = unixMs;
-  line["level"] = LevelName(level);
   line["tag"] = "NEVR-Sentinel";
-  line["msg"] = message;
   return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 

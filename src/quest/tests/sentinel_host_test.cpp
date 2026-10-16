@@ -241,6 +241,21 @@ void FormatEscapesHostileMessages() {
   CHECK(back.find("quote\" backslash\\ newline\n esc\x1b[31m tab\t ") == 0);
 }
 
+void StructuredDiskLogIsFlat() {
+  const std::string line = nevr_quest::FormatDiskLogLine(
+      nevr_quest::LogLevel::kInfo, 1234567890123LL,
+      R"({"ts_ms":1234567890000,"level":"info","event":"obb_skip_install","result":"installed"})");
+  const nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
+  CHECK(j.is_object());
+  if (!j.is_object()) return;
+  CHECK(j.value("event", "") == "obb_skip_install");
+  CHECK(j.value("result", "") == "installed");
+  CHECK(j.value("level", "") == "info");
+  CHECK(j.value("tag", "") == "NEVR-Sentinel");
+  CHECK(j.value("ts_unix_ms", 0LL) == 1234567890123LL);
+  CHECK(!j.contains("ts_ms") && !j.contains("msg"));
+}
+
 void ReadConfigFileNeverBlocksOnNonRegularFiles() {
   std::string out;
   int err = 0;
@@ -693,6 +708,7 @@ int main() {
   NoLogLineCarriesAValue();
   DiskLogIsOneJsonObjectPerLine();
   FormatEscapesHostileMessages();
+  StructuredDiskLogIsFlat();
   ReadConfigFileNeverBlocksOnNonRegularFiles();
   WriteAllRetriesAndReportsFailure();
   sentinel::SetClockForTest(FakeNow);
