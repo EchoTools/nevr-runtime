@@ -189,7 +189,7 @@ struct Rig {
     }
     return false;
   }
-  // Opens game 1 (config) and 2 (login) and waits for the login remote's connection.
+  // Opens game 1 (config) and 2 (login): one session remote, opened by game 1 (connIdx 0).
   void OpenLoginGame() {
     router->OnGameOpen(1);
     router->OnGameOpen(2);
@@ -254,9 +254,9 @@ void TestTlsVerificationFailureHasNoFallback() {
   Rig rig;
   rig.connector.nextStatus = ConnectStatus::TlsVerificationFailed;
   rig.OpenLoginGame();
-  QCHECK(rig.games.WaitFor([&] { return rig.games.closes.size() == 2; }));  // config and login each failed once
+  QCHECK(rig.games.WaitFor([&] { return rig.games.closes.size() == 2; }));  // config and login share the one session that failed once
   std::this_thread::sleep_for(std::chrono::milliseconds(300));  // a retry would show up by now
-  QCHECK(rig.connector.calls == 2);
+  QCHECK(rig.connector.calls == 1);
   for (const auto& url : rig.connector.urls) QCHECK(url.rfind("wss://", 0) == 0);
   QCHECK(rig.LogHas("tls verification failed"));
   QCHECK(rig.LogHas("no retry, no downgrade"));
@@ -273,9 +273,9 @@ void TestSessionLifecycle() {
   Rig rig;
   rig.OpenLoginGame();
   rig.router->OnGameFrame(2, nevr_evr_codec::BuildMessage(0x77, "first"), true);
-  QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
-  FakeConnection* login = rig.connector.Conn("1");
+  QCHECK(WaitUntil([&] { return rig.connector.calls == 1; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0") != nullptr; }));
+  FakeConnection* login = rig.connector.Conn("0");
   QCHECK(WaitUntil([&] { return !login->Sent().empty(); }));
   const auto sent = login->Sent();
   QCHECK(sent.size() >= 1);
@@ -294,8 +294,8 @@ void TestSessionLifecycle() {
   closed.status = RecvStatus::Closed;
   closed.closeCode = 1006;
   login->Push(closed);
-  QCHECK(rig.games.WaitFor([&] { return !rig.games.closes.empty(); }));
-  QCHECK(rig.games.closes[0].first == 2);
+  QCHECK(rig.games.WaitFor([&] { return rig.games.closes.size() == 2; }));  // config and login share the session
+  QCHECK(rig.games.closes[0].first == 1 && rig.games.closes[1].first == 2);
   QCHECK(rig.router->GetStats().nextConnIdx == 1);
 }
 
@@ -304,9 +304,9 @@ void TestSessionLifecycle() {
 void TestOutboundBackpressure() {
   Rig rig(/*maxQueued=*/300);
   rig.OpenLoginGame();
-  QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr && rig.connector.Conn("1")->Sent().size() == 1; }));
-  FakeConnection* login = rig.connector.Conn("1");
+  QCHECK(WaitUntil([&] { return rig.connector.calls == 1; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0") != nullptr && rig.connector.Conn("0")->Sent().size() == 1; }));
+  FakeConnection* login = rig.connector.Conn("0");
   login->SetGate(true);  // the TLS layer stops taking writes
   std::vector<std::string> frames;
   for (int i = 0; i < 12; ++i) {
@@ -326,10 +326,10 @@ void TestOutboundBackpressure() {
 void TestSendFailureEndsTheSession() {
   Rig rig;
   rig.OpenLoginGame();
-  QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1")->Sent().size() == 1; }));
-  rig.connector.Conn("1")->failSends = true;
+  QCHECK(WaitUntil([&] { return rig.connector.calls == 1; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0") != nullptr; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0")->Sent().size() == 1; }));
+  rig.connector.Conn("0")->failSends = true;
   rig.router->OnGameFrame(2, nevr_evr_codec::BuildMessage(0x99, "x"), true);
   QCHECK(rig.games.WaitFor([&] { return !rig.games.closes.empty(); }));
 }
@@ -338,11 +338,11 @@ void TestSendFailureEndsTheSession() {
 void TestStop() {
   Rig rig;
   rig.OpenLoginGame();
-  QCHECK(WaitUntil([&] { return rig.connector.calls == 2; }));
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1") != nullptr; }));
+  QCHECK(WaitUntil([&] { return rig.connector.calls == 1; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0") != nullptr; }));
   // The connection object exists before the open has completed. Wait for the login frame to have been sent
   // (as the other tests do), or Stop can land first: the worker's send then fails and the game is closed.
-  QCHECK(WaitUntil([&] { return rig.connector.Conn("1")->Sent().size() == 1; }));
+  QCHECK(WaitUntil([&] { return rig.connector.Conn("0")->Sent().size() == 1; }));
   rig.transport->Stop();
   QCHECK(rig.games.closes.empty());  // Stop reports nothing to the router
 }
