@@ -297,7 +297,15 @@ TEST(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled
 
   UseFakeHooks();
   g_fakeHooks.createResult = MH_ERROR_ALREADY_CREATED;
+  testing::internal::CaptureStderr();
   nevr_dll_load_hook::Install();
+  const std::string err = testing::internal::GetCapturedStderr();
+  // #630: the hook from the first install is live, so the line must not say its loads lose the filters.
+  EXPECT_NE(err.find("hook FAILED name=LoadLibraryA reason=MH_ERROR_ALREADY_CREATED — a hook created earlier stays in "
+                     "place"),
+            std::string::npos)
+      << err;
+  EXPECT_EQ(err.find("run no load filter"), std::string::npos) << err;
 
   EXPECT_EQ(g_fakeHooks.createCalls, 4);
   EXPECT_EQ(g_fakeHooks.removeCalls, 0) << "nothing was created, so there is nothing to remove";
@@ -335,7 +343,7 @@ TEST(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampolin
 }
 
 // #630: the failure line says what an unhooked variant loses (its loads run no filter, observer or callback)
-// and claims no search-path hardening, which these hooks never did.
+// and claims no search-path hardening.
 TEST(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;

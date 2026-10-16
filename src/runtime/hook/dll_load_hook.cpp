@@ -2,7 +2,7 @@
  *
  * DLL Load Interceptor
  *
- * Hooks LoadLibraryA/W to intercept DLL loads at runtime. Components
+ * Hooks LoadLibraryA/W/ExA/ExW to intercept DLL loads at runtime. Components
  * register interest in specific DLL names via OnLoad(). When a matching
  * DLL loads, the registered callback fires with the HMODULE — allowing
  * post-load patching before the game uses the DLL.
@@ -326,14 +326,14 @@ void AddPostLoadObserver(PostLoadObserver observer) {
 
 void Install() {
 #ifdef _WIN32
-    // N129. These four hooks run, for every load through them, the load filters
-    // (AddLoadFilter), post-load observers (AddPostLoadObserver) and DLL-load
-    // callbacks (OnLoad) the runtime registers. They restrict no search path (N75's
-    // is the plugin loader's own load flags). A single "OK"/"PARTIAL" across all four
-    // variants would hide WHICH variant failed and WHY: loads through an unhooked
-    // variant run no filter, observer or callback. Report each variant and its
-    // MH_STATUS, mirroring N126/N128 for the PatchDetour path. (This path does not go
-    // through PatchDetour, so it needs its own reporting.)
+    // N129. These four hooks run the load filters (AddLoadFilter), post-load
+    // observers (AddPostLoadObserver) and DLL-load callbacks (OnLoad) the runtime
+    // registers, each under its own condition (the Hooked* functions above). They
+    // restrict no search path (N75's is the plugin loader's own load flags). A single
+    // "OK"/"PARTIAL" across all four variants would hide WHICH variant failed and WHY:
+    // loads through an unhooked variant run no filter, observer or callback. Report
+    // each variant and its MH_STATUS, mirroring N126/N128 for the PatchDetour path.
+    // (This path does not go through PatchDetour, so it needs its own reporting.)
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
@@ -364,10 +364,12 @@ void Install() {
                 }
                 *s.original = nullptr;
             }
-            fprintf(stderr,
-                    "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — loads through this "
-                    "variant run no load filter, observer or callback\n",
-                    s.name, MH_StatusToString(st));
+            // A create that failed because the hook already exists leaves that hook live.
+            const char* effect = created == MH_ERROR_ALREADY_CREATED
+                                     ? "a hook created earlier stays in place"
+                                     : "loads through this variant run no load filter, observer or callback";
+            fprintf(stderr, "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — %s\n", s.name,
+                    MH_StatusToString(st), effect);
         }
     }
 
