@@ -308,6 +308,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
 
+    # The host <-> runtime descriptor (core/runtime_abi.h): header-only validators that BugSplat64.dll
+    # runs on nevr.dll's descriptor, and nevr.dll on the host's context.
+    add_executable(test_runtime_abi tests/test_runtime_abi.cpp)
+    set_source_files_properties(tests/test_runtime_abi.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
+
     # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
     # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
     add_executable(test_export_trace
