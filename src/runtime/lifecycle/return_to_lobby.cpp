@@ -26,7 +26,7 @@ uint64_t NowMs() { return GetTickCount64(); }
 
 uint64_t LiveEntrants() { return g_counter != nullptr ? g_counter() : 0; }
 
-bool ShutdownPending() { return g_shutdownRequested != 0 || ConsoleShutdownPending(); }
+bool ShutdownPending() { return ConsoleShutdownPending(); }
 
 // After PatchDetour the pointer holds the trampoline to the game's function, so this calls the
 // original and never re-enters the hook.

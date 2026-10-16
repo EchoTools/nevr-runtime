@@ -6,6 +6,7 @@ that fails the test if it is ever run stands on PATH."""
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -27,11 +28,16 @@ def release(draft, assets=()):
     return {"draft": draft, "assets": list(assets)}
 
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
 
 
 class ReleaseDraftTest(unittest.TestCase):
     def setUp(self):
+        # release_draft.sh and the `drafts` step read JSON with jq, which the builder image does not carry; they
+        # run on ubuntu-latest, which does. A skip here names why, never a pass.
+        if shutil.which("jq") is None:
+            self.skipTest("jq is not on PATH (the CI builder image has none; the script runs on ubuntu-latest)")
         self.tmp = Path(tempfile.mkdtemp(prefix="release-draft-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
         bindir = self.tmp / "bin"
@@ -120,9 +126,9 @@ class ReleaseDraftTest(unittest.TestCase):
             self.assertIn("refusing to decide", result.stderr)
 
     def test_the_decision_line_names_the_counts_and_the_outcome(self):
-        cases = [([release(True)], "1 draft(s), 0 published, 0 of 4 built names on the draft(s): draft"),
-                 ([release(True, FOUR[:2])], "1 draft(s), 0 published, 2 of 4 built names on the draft(s): refused"),
-                 ([], "0 draft(s), 0 published, 0 of 4 built names on the draft(s): none")]
+        cases = [([release(True)], "1 draft(s), 0 published, 0 of 5 built names on the draft(s): draft"),
+                 ([release(True, FOUR[:2])], "1 draft(s), 0 published, 2 of 5 built names on the draft(s): refused"),
+                 ([], "0 draft(s), 0 published, 0 of 5 built names on the draft(s): none")]
         for releases, line in cases:
             self.assertIn(line, self.run_script(releases).stderr)
 

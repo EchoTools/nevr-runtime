@@ -109,7 +109,6 @@ CHAR   g_regionOverride[64]   = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
-volatile sig_atomic_t g_shutdownRequested = 0;
 
 // --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
 std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
@@ -284,6 +283,49 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
   EXPECT_TRUE(TestLogContains("plugin_that_does_not_exist.dll"));
   EXPECT_TRUE(TestLogContains("LoadLibrary failed: error"));
   EXPECT_TRUE(TestLogContains("optional, continuing"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
+  char exePath[MAX_PATH] = {};
+  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+  std::string directory(exePath);
+  directory.resize(directory.find_last_of("\\/") + 1);
+  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
+  const std::string escaped = directory + "test_plugin_escape.dll";
+  ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
+  ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
+
+  g_testPluginLoadPlan.push_back({"escape", "..\\test_plugin_escape.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_escape.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  UnloadPlugins();
+  EXPECT_TRUE(DeleteFileA(escaped.c_str()));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) {
+  constexpr char kEventName[] = "Local\\NEVRTestPartialInitShutdownObserved";
+  HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kEventName);
+  ASSERT_NE(shutdownObserved, nullptr);
+
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_partial_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0), WAIT_OBJECT_0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_partial_init_fail.dll"), nullptr);
+  CloseHandle(shutdownObserved);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitWithoutShutdownRetainsModule) {
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_NE(GetModuleHandleA("test_plugin_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("retained until process exit"));
 }
 
 TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
@@ -806,6 +848,32 @@ class N61_WsBridgeTest : public ::testing::Test {
     TestHook_N61_ResetState();
   }
 };
+
+TEST(WsBridgeListener, GracefulStopReleasesBothListeningPorts) {
+  SetWebSocketBridgeTarget("wss://127.0.0.1:9/ws");
+  InstallWebSocketBridge();
+  const uint16_t proxyPort = GetWebSocketBridgePort();
+  const uint16_t matchPort = GetMatchmakerBridgePort();
+  ASSERT_NE(proxyPort, 0);
+  ASSERT_NE(matchPort, 0);
+  ASSERT_NE(proxyPort, matchPort);
+
+  StopWebSocketBridgeListener();
+  SetWebSocketBridgeTarget("");
+
+  for (const uint16_t port : {proxyPort, matchPort}) {
+    SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_NE(probe, INVALID_SOCKET);
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+    const int result = bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    const int error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+    EXPECT_NE(result, SOCKET_ERROR) << "port " << port << " stayed bound after stop: WSA " << error;
+    closesocket(probe);
+  }
+}
 
 // #70: when the shared remote session ends, every game socket on it (login and matchmaker) is closed so
 // the game reconnects; a socket on another remote, or one the game already closed, is left alone.

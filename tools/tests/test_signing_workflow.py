@@ -20,7 +20,8 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip"]
+FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; FOUR predates the Quest library
 
 
 def load():
@@ -116,7 +117,7 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_the_job_graph_is_drafts_guard_build_sign_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
         # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
-        self.assertEqual(list(jobs), ["drafts", "guard", "build", "sign", "seal", "repack", "publish"])
+        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "sign", "seal", "repack", "publish"])
         self.assertEqual(jobs["guard"]["needs"], "drafts")
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
@@ -124,10 +125,72 @@ class WorkflowStructureTest(unittest.TestCase):
         # repack and publish also need build: they read build's `draft` output (a dispatch on a draft's tag, see
         # test_release_draft_path.py); `needs` outputs are only visible from a direct dependency.
         self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "repack", "seal", "sign"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "quest", "repack", "seal", "sign"])
+        # the Quest library is its own job off the guard, built for a release event or a dispatch on a tag, and
+        # never when the release already carries its assets
+        self.assertEqual(jobs["quest"]["needs"], "guard")
+        self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
+        self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
+        self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["sign"]["needs"], "build")
         for name in ("sign", "seal", "repack", "publish"):
             self.assertNotIn("rc", name)
+
+    def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
+        # A name written inline in build.yml can drift from tools/release_asset_names.sh, and then the guard
+        # never sees all five names and a published, signed release is rebuilt over. The quest job must take
+        # its output name from release_quest_asset_name, and that name must be one the list yields.
+        jobs = load()[0]["jobs"]
+        naming = [s for s in jobs["quest"]["steps"] if s.get("id") == "asset"]
+        self.assertEqual(len(naming), 1)
+        run = naming[0]["run"]
+        self.assertIn("source tools/release_asset_names.sh", run)
+        self.assertIn('$(release_quest_asset_name "$version")', run)
+        self.assertNotIn("-quest-", run, "the release name must not be written inline")
+        names = REPO / "tools" / "release_asset_names.sh"
+        quest = subprocess.run(["bash", "-c", f'source "{names}"; release_quest_asset_name 9.8.7'],
+                               capture_output=True, text=True, check=True).stdout.strip()
+        listed = subprocess.run(["bash", "-c", f'source "{names}"; release_asset_names 9.8.7'],
+                                capture_output=True, text=True, check=True).stdout.split()
+        self.assertIn(quest, listed)
+
+    def test_no_job_below_a_skippable_ancestor_relies_on_the_implicit_success(self):
+        # GitHub prepends success() to an `if:` with no status function, and success() is false when ANY
+        # ancestor job (not only a direct `needs`) was skipped. `drafts` is skipped on a release event, so a
+        # job under it with a bare condition is skipped there and the run is green and builds nothing
+        # (v5.1.0, run 38409770193). A dispatch on a tag runs `drafts`, so the dry run cannot see this: it
+        # is only visible as a rule over the graph.
+        jobs = load()[0]["jobs"]
+
+        def needs(name):
+            n = jobs[name].get("needs", [])
+            return [n] if isinstance(n, str) else list(n)
+
+        def ancestors(name):
+            seen = set()
+            todo = needs(name)
+            while todo:
+                j = todo.pop()
+                if j not in seen:
+                    seen.add(j)
+                    todo.extend(needs(j))
+            return seen
+
+        # `!cancelled()` or `always()` only: a bare success() IS the implicit condition, and cancelled() or
+        # failure() alone mean something else.
+        status = re.compile(r"!cancelled\(\)|\balways\(\)")
+        skippable = {n for n, j in jobs.items() if "if" in j}
+        self.assertIn("drafts", skippable)
+        for name, job in jobs.items():
+            if ancestors(name) & skippable:
+                self.assertRegex(str(job.get("if", "")), status, f"{name} has a skippable ancestor and no status function")
+        # and each names the result of what it needs, so a failed or skipped need still stops it
+        self.assertIn("needs.guard.result == 'success'", jobs["build"]["if"])
+        self.assertIn("needs.build.result == 'success'", jobs["sign"]["if"])
+        self.assertIn("needs.sign.result == 'success'", jobs["seal"]["if"])
+        for name in ("build", "sign", "seal", "repack", "publish"):
+            self.assertIn("!cancelled()", jobs[name]["if"])
+            self.assertNotRegex(jobs[name]["if"], r"(?<![!\w])success\(\)", name)
 
     def test_nothing_is_published_without_a_release_event_or_a_draft_of_the_dispatched_tag(self):
         data, _ = load()
@@ -151,7 +214,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
         self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
                          ["actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
-                          "actions/attest-build-provenance", "softprops/action-gh-release",
+                          "actions/download-artifact", "actions/attest-build-provenance", "softprops/action-gh-release",
                           "softprops/action-gh-release"])
         text = steps_text(publish)
         for word in ("pip", "apt-get", "cmake", "tools/"):
@@ -189,7 +252,7 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertEqual(sorted(s for s in subjects if not s.startswith("symbols/")), sorted(uploaded))
         self.assertEqual(sorted(subjects), sorted([
             "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md",
-            "symbols/*/*.dbg"]))
+            "quest-asset/*.so", "symbols/*/*.dbg"]))
         self.assertNotIn("symbols", " ".join(uploaded), "the symbol files are not release assets")
         self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
         repack_steps = load()[0]["jobs"]["repack"]["steps"]
@@ -328,7 +391,7 @@ class WorkflowStructureTest(unittest.TestCase):
                                                  EVENT=event, TAG=tag, **env)
             return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
 
-    def test_a_release_with_all_four_assets_is_not_rebuilt(self):
+    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
         rc, built, calls = self.guard()
         self.assertEqual((rc, built), (0, "true"))
         self.assertEqual(len(calls), 1)

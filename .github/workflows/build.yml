@@ -18,7 +18,7 @@ name: Build
 # release keeps whatever the human set. The whole workflow runs on
 # ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run and publishes nothing, unless the tag's release is a DRAFT carrying none of the
-# built files: then the four files are attached to that draft, which stays a draft (see `drafts`).
+# built files: then the five files are attached to that draft, which stays a draft (see `drafts`).
 on:
   workflow_dispatch:
   release:
@@ -64,13 +64,14 @@ jobs:
 
   # A release whose draft was already built, signed and filled with the attested assets fires `published`
   # when it is published. That must not rebuild or re-upload anything: the signal is the release's asset
-  # NAMES (tools/release_already_built.sh: all four files of this version are there), never the
+  # NAMES (tools/release_already_built.sh: all five files of this version are there), never the
   # pre-release flag. Every job below hangs off `build`, so when the assets are there the run is green
   # and does nothing. A listing that fails fails the job (a check that cannot run does not decide).
   guard:
     needs: drafts
-    # `drafts` is skipped for a release event. A failed listing fails the run, and with `guard` skipped every
-    # job below (their implied success() is false) is skipped too: nothing is built or uploaded.
+    # `drafts` is skipped for a release event. A failed listing fails the run, and with `guard` skipped
+    # `build` stops on `needs.guard.result == 'success'`, and every job below it with it: nothing is built or
+    # uploaded.
     if: ${{ always() && needs.drafts.result != 'failure' && needs.drafts.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
@@ -99,7 +100,7 @@ jobs:
           echo "release $TAG already carries its attested assets: nothing is rebuilt and nothing is re-uploaded"
         fi
 
-    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's four files, attests
+    # A workflow_dispatch started on the tag ref of a DRAFT release builds the release's five files, attests
     # them and attaches them to that draft (GitHub: `release` created/edited/deleted are not triggered for
     # draft releases, and a draft fires no `published` until it is published, so a draft is reached by
     # dispatching on the tag). draft=true only when the tag has exactly one draft and no published release and
@@ -119,7 +120,11 @@ jobs:
 
   build:
     needs: guard
-    if: needs.guard.outputs.built != 'true'
+    # An `if:` with no status function gets an implicit success(), and success() is false when ANY ancestor
+    # job was skipped, not only the direct `needs`. `drafts` is skipped on a release event, so without
+    # `!cancelled()` here the whole chain below is skipped and a release run is green and does nothing
+    # (v5.1.0, run 38409770193). Every job below `drafts` therefore names its own status function.
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,7 +138,7 @@ jobs:
     # model), plus osslsigncode, buf and the libCrypt32.a link. The tag is the Dockerfile's hash; the
     # "Toolchain versions" step records what built each run.
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:42010dd4ba8e
+      image: ghcr.io/echotools/nevr-runtime-builder:7185b0b03ae6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -194,11 +199,6 @@ jobs:
         echo "version=$version" >> "$GITHUB_OUTPUT"
         echo "release version: '${version}' (empty: a branch build, which stamps a development version)"
 
-    - name: Setup pinned just
-      uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-      with:
-        just-version: '1.58.0'
-
     - name: Toolchain versions
       run: |
         set -euo pipefail
@@ -207,6 +207,9 @@ jobs:
         x86_64-w64-mingw32-g++ -v 2>&1 | grep "Thread model"
         cmake --version
         just --version
+        # The image's own just is the one the release was built with. An action that installs one adds a
+        # directory to PATH, and PATH is part of every mingw package ABI (see the vcpkg install below).
+        test "$(just --version)" = "just 1.58.0"
         osslsigncode --version
         buf --version
 
@@ -237,10 +240,10 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
         restore-keys: |
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
-          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
+          vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
+          vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-
 
     - name: Install vcpkg dependencies
       run: |
@@ -250,7 +253,12 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
         export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
-        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # The x64-mingw-static triplet lists PATH in VCPKG_ENV_PASSTHROUGH, so the value of PATH is part of
+        # every mingw package ABI hash. A PATH that differs between jobs gives every archive a different name and the restore
+        # finds none; `just verify` runs vcpkg again under the job PATH, so nothing in this job may change PATH.
+        # The key does not encode this pin: change the pin and bump the vcpkg-binN prefix in the same commit.
+        env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+          "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
         count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
@@ -263,7 +271,7 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Generate pinned protobuf sources
       run: |
@@ -405,6 +413,149 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
+  # The Quest library: libovrplatformloader.so built from the same tag with the Android NDK (the same steps as
+  # android.yml: `just test-android` is build, the static-initializer gate, the embedded-defaults check and the
+  # ELF ground-truth tests). A loose release asset, attested and uploaded by `publish` under a name that carries
+  # the tag. It is not Authenticode and not in SHA256SUMS; the signer declares it as a file in its
+  # config/sources.yml (rule 3.3). Built for a dry run on a tag too, so the asset set is the same for both.
+  quest:
+    needs: guard
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' && (github.event_name == 'release' || github.ref_type == 'tag') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Write the public client defaults
+      uses: ./.github/actions/write-public-defaults
+      with:
+        socket-uri: ${{ vars.NEVR_SOCKET_URI }}
+        http-uri: ${{ vars.NEVR_HTTP_URI }}
+        public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
+        public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
+
+    # just 1.58.0 from its release tarball, checked against the digest measured when this pin was written.
+    # Not an action that edits PATH (that is what build.yml's other job must never do, #551).
+    - name: Install pinned just
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/just.tgz" https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
+        echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  $RUNNER_TEMP/just.tgz" | sha256sum -c -
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$RUNNER_TEMP/just.tgz" -C "$HOME/.local/bin" just
+        test "$("$HOME/.local/bin/just" --version)" = "just 1.58.0"
+
+    - name: Locate the NDK
+      id: ndk
+      run: |
+        set -euo pipefail
+        dir="/usr/local/lib/android/sdk/ndk/$NDK_REVISION"
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        if [ -f "$dir/source.properties" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+    - name: Restore the downloaded NDK
+      if: steps.ndk.outputs.present != 'true'
+      id: ndk_cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ runner.temp }}/android-ndk-r26d
+        key: android-ndk-r26d-linux
+
+    - name: Download NDK r26d
+      if: steps.ndk.outputs.present != 'true' && steps.ndk_cache.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+        unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+        test -d "$RUNNER_TEMP/android-ndk-r26d"
+
+    - name: Select the NDK and check its revision
+      run: |
+        set -euo pipefail
+        if [ "${{ steps.ndk.outputs.present }}" = "true" ]; then ndk="${{ steps.ndk.outputs.dir }}"; else ndk="$RUNNER_TEMP/android-ndk-r26d"; fi
+        grep -q "^Pkg.Revision = $NDK_REVISION" "$ndk/source.properties"
+        echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+        # The Quest tests run llvm-objdump from PATH and the hosted runner has none (v5.2.0 failed here). Link the
+        # NDK's into /usr/local/bin rather than editing PATH: PATH is hashed into the vcpkg ABI (test_vcpkg_pin).
+        bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        test -x "$bin/llvm-objdump" || { echo "no llvm-objdump in $bin"; exit 1; }
+        sudo ln -sf "$bin/llvm-objdump" /usr/local/bin/llvm-objdump
+        llvm-objdump --version
+
+    - name: Bootstrap vcpkg
+      id: vcpkg
+      run: |
+        set -euo pipefail
+        git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
+        "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "VCPKG_ROOT=$HOME/.vcpkg" >> "$GITHUB_ENV"
+
+    - name: Restore the vcpkg binary cache
+      id: vcpkg_cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        restore-keys: |
+          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-
+
+    # The version the library carries is the tag's, through the same GITHUB_REF_* variables the PC build
+    # reads (a release event or a dispatch started on the tag ref). The asset name takes it from the ref.
+    - name: Build and test the Quest library
+      env:
+        CMAKE_BUILD_PARALLEL_LEVEL: 4
+      run: |
+        set -euo pipefail
+        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
+        "$HOME/.local/bin/just" test-android
+
+    - name: Name and check the release asset
+      id: asset
+      shell: bash
+      env:
+        TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+      run: |
+        set -euo pipefail
+        [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "not a vX.Y.Z tag: $TAG" >&2; exit 1; }
+        version=${BASH_REMATCH[1]}
+        so=build/android-arm64/sentinel/libovrplatformloader.so
+        test -s "$so"
+        # The same two facts package_release.py checks of a tester APK's library: it carries this version and
+        # this commit.
+        grep -aq -- "$version" "$so"
+        grep -aq -- "${GITHUB_SHA:0:7}" "$so"
+        # The name has one source, shared with the published guard and the draft attach.
+        source tools/release_asset_names.sh
+        out="quest-asset/$(release_quest_asset_name "$version")"
+        mkdir -p quest-asset
+        cp "$so" "$out"
+        ls -l "$out"
+        sha256sum "$out"
+
+    - name: Upload the Quest library
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: quest-library
+        path: quest-asset/
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Save the vcpkg binary cache
+      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+
   # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
   # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
   # ubuntu-latest and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
@@ -413,7 +564,7 @@ jobs:
   sign:
     name: "sign: stubbed, policy signer not built yet"
     needs: build
-    if: github.event_name == 'release' || needs.build.outputs.version != ''
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -457,7 +608,7 @@ jobs:
   # ends here: the sealed files are a workflow artifact.
   seal:
     needs: [build, sign]
-    if: needs.build.outputs.version != ''
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && needs.build.outputs.version != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -491,7 +642,7 @@ jobs:
   # code and installs nothing. Signing is stubbed above: the files are repacked exactly as built.
   repack:
     needs: [build, sign, seal]
-    if: ${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -556,8 +707,8 @@ jobs:
   # Attest the provenance of the release files and publish them: the zips repacked above, and the sealed
   # release files. Nothing is built, installed or run from the repository here.
   publish:
-    needs: [build, sign, seal, repack]
-    if: ${{ always() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    needs: [build, quest, sign, seal, repack]
+    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && needs.quest.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
@@ -583,6 +734,11 @@ jobs:
         name: symbols
         path: symbols
 
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: quest-library
+        path: quest-asset
+
     - name: Attest build provenance of the release files
       uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
       with:
@@ -591,6 +747,7 @@ jobs:
           release-assets/*.zip
           release-assets/SHA256SUMS
           release-assets/RELEASE-NOTES.md
+          quest-asset/*.so
           symbols/*/*.dbg
 
     # The upload never sets the pre-release flag: the `prerelease` input is left unset, and the action
@@ -620,5 +777,6 @@ jobs:
           release-assets/*.zip
           release-assets/SHA256SUMS
           release-assets/RELEASE-NOTES.md
+          quest-asset/*.so
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

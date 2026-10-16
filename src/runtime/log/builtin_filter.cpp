@@ -19,6 +19,11 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/log/boot_replay.h"
+#include "runtime/log/game_line_format.h"
+#include "runtime/log/gpu_hung_notice.h"
+#include "core/globals.h"
+#include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/crash_recovery.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -919,12 +924,13 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     }
 
     /* File output */
-    if (g_config.file_enabled && g_log_file) {
+    if (g_config.file_enabled) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-        WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
-
-        std::fflush(g_log_file);
-        RotateIfNeeded();
+        if (g_log_file) {
+            WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
+            std::fflush(g_log_file);
+            RotateIfNeeded();
+        }
     }
 
     g_emitted_count++;
@@ -1043,6 +1049,48 @@ typedef void(__fastcall* CLogPrintfImpl_t)(uint32_t level, int64_t category,
                                             const char* fmt, int64_t* varargs);
 static CLogPrintfImpl_t orig_PrintfImpl = nullptr;
 
+/* #553: recognise the game's DXGI_ERROR_DEVICE_HUNG crash and say what it is. The record (nevr log and
+ * crash record) comes first; the dialog is a courtesy, once per run, and never on a server or headless run
+ * (policy in gpu_hung_notice.h). */
+static std::mutex g_gpuHungMutex;
+static nevr_gpu_hung::Tracker g_gpuHung;
+
+#ifdef _WIN32
+static DWORD WINAPI GpuHungDialogThread(LPVOID text) {
+    MessageBoxA(nullptr, static_cast<const char*>(text), "Echo VR - graphics driver problem",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+    return 0;
+}
+#endif
+
+static void ObserveGpuHung(const char* line) {
+    /* Cheap pre-filter: every game line passes through here. */
+    if (std::strstr(line, "DXGI_ERROR_DEVICE_HUNG") == nullptr && std::strstr(line, "Video Card:") == nullptr &&
+        std::strstr(line, "Driver Version:") == nullptr) {
+        return;
+    }
+    nevr_gpu_hung::Result result;
+    {
+        std::lock_guard<std::mutex> lock(g_gpuHungMutex);
+        result = g_gpuHung.Observe(line, g_isServer != FALSE, g_isHeadless != FALSE);
+    }
+    if (result.action == nevr_gpu_hung::Action::None) return;
+
+    EmitLine(LOG_LEVEL_WARNING, result.log_line.c_str(), static_cast<int>(result.log_line.size()));
+    WriteCrashRecordLine(result.log_line.c_str());
+#ifdef _WIN32
+    if (result.action == nevr_gpu_hung::Action::LogAndNotify) {
+        /* The text must outlive this call: the dialog runs on its own thread so the game thread (which is
+         * about to crash anyway) is never held by a modal box. Leaked once per process on purpose. */
+        char* text = _strdup(result.dialog_text.c_str());
+        if (text != nullptr) {
+            HANDLE thread = CreateThread(nullptr, 0, GpuHungDialogThread, text, 0, nullptr);
+            if (thread != nullptr) CloseHandle(thread);
+        }
+    }
+#endif
+}
+
 static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
                                         const char* fmt, int64_t* varargs) {
     if (!g_config.valid || fmt == nullptr) {
@@ -1053,21 +1101,11 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     char buf[0x2000];
     int len;
 
-    if (std::strchr(fmt, '%') == nullptr) {
-        len = static_cast<int>(std::strlen(fmt));
-        if (len >= static_cast<int>(sizeof(buf))) len = sizeof(buf) - 1;
-        std::memcpy(buf, fmt, len);
-        buf[len] = '\0';
-    } else {
-        len = vsnprintf(buf, sizeof(buf), fmt, reinterpret_cast<va_list>(varargs));
-        if (len < 0) len = 0;
-        if (len >= static_cast<int>(sizeof(buf))) len = sizeof(buf) - 1;
-        buf[len] = '\0';
-    }
+    len = nevr_game_line_format::Capture(buf, sizeof(buf), fmt, varargs);
 
     if (len == 0) {
         g_suppressed_count++;
-        if (g_config.passthrough_to_engine && orig_PrintfImpl)
+        if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr)
             orig_PrintfImpl(level, category, fmt, varargs);
         return;
     }
@@ -1090,6 +1128,8 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     MaybeEmitHealth();  /* N79 */
 
+    ObserveGpuHung(buf);
+
     if (ShouldSuppress(buf, level)) {
         g_suppressed_count++;
         return;
@@ -1111,7 +1151,7 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     EmitLine(level, buf, emit_len);
 
-    if (g_config.passthrough_to_engine && orig_PrintfImpl) {
+    if (g_config.passthrough_to_engine && orig_PrintfImpl && varargs != nullptr) {
         /* N89: max_line_length must apply to the console too, not ONLY to our
          * JSONL file. Re-sending the ORIGINAL fmt+varargs would make the game
          * reformat the FULL line to console — which is what

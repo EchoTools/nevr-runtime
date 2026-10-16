@@ -25,6 +25,7 @@
 
 #include "quest/login/login_prerequisite_targets.h"
 #include "quest/login/login_prerequisites.h"
+#include "quest/login/login_rewrite.h"
 #include "quest/login/login_standin.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
@@ -142,8 +143,33 @@ struct GameState {
   std::string nonce;
   bool login_failed = false;
   bool sent = false;
+  std::string failure_text;  // what the game's UpdateInternal failed the login with, "" while it has not
 };
 GameState g_game;
+
+// #581: what the game does on its own path while the prerequisites are missing. UpdateInternal (libpnsovr
+// 0x1ed9e8) sends the login failure "One or more prerequisites are missing" when the org id is -1 (0x1eda08-
+// 0x1eda14) or the token is "?" (0x1edb4c); it has no timer, so it acts on whatever the globals hold.
+void FakeUpdateInternal() {
+  if (g_game.org_global == ~std::uint64_t{0} || g_game.token == "?") {
+    g_game.failure_text = nevr_quest_login::kPrerequisitesMissingText;
+  }
+}
+
+// ResetHeldStandIns on the fake game's globals (login_hook.cpp's LoginResetHeldStandIns does it on the real
+// ones): the org id back to the -1 marker if it is the stand-in, the user name back to "?" if it is the stand-in.
+int g_reset_runs = 0;
+void FakeResetHeldStandIns() noexcept {
+  ++g_reset_runs;
+  if (g_game.org_global == nevr_quest_login::StandIn::OrgId()) g_game.org_global = ~std::uint64_t{0};
+  if (g_game.name == nevr_quest_login::StandIn::OculusId()) g_game.name = "?";
+}
+
+// The identity source's two answers, as the pump asks them.
+bool g_ready_now = false;
+bool g_hold_now = false;
+bool ReadyNow() noexcept { return g_ready_now; }
+bool HoldNow() noexcept { return g_hold_now; }
 
 void OrgCallback(void*, void* message) {
   if (GameIsError(message)) {
@@ -237,7 +263,21 @@ void Fresh(bool configure, bool substitute, bool ready = true, const nevr_quest_
   g_game = GameState{};
   g_lines.clear();
   g_violations = 0;
-  if (configure) nevr_quest_login::ConfigurePrerequisites(api, substitute, ready ? &ReadyTrue : nullptr, nullptr);
+  g_reset_runs = 0;
+  g_ready_now = false;
+  g_hold_now = false;
+  if (configure) {
+    nevr_quest_login::ConfigurePrerequisites(api, substitute, ready ? &ReadyTrue : nullptr, nullptr, nullptr);
+  }
+}
+
+// The production wiring: ready, reset and hold all come from the identity source (login_hook.cpp), local answers on.
+void FreshWired(bool ready, bool hold) {
+  Fresh(false, true);
+  g_ready_now = ready;
+  g_hold_now = hold;
+  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, &ReadyNow, &FakeResetHeldStandIns, &HoldNow);
+  nevr_quest_login::local::SetEnabled(true);
 }
 
 FakeMessage Ok(std::uint64_t org, const char* oculus_id, const char* token, const char* nonce) {
@@ -683,18 +723,18 @@ void TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally() {
   QCHECK(!T::IsLoginOrgRequestCaller(at(0x1ec9a0), 0));
 }
 
-void TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder() {
+void TestPopHoldsWhileTheHoldIsSetAndDeliversInOrderOtherwise() {
   using namespace nevr_quest_login;
-  Fresh(true, true, /*ready=*/false);
-  local::SetEnabled(true);
+  FreshWired(/*ready=*/false, /*hold=*/true);
   const std::uint64_t first = local::Request(Prerequisite::OrgScopedId);
   const std::uint64_t second = local::Request(Prerequisite::UserProof);
   g_pop_original_called = false;
-  // Not ready: held. The real pop answers (the game's other messages keep flowing).
+  // Held: the real pop answers (the game's other messages keep flowing).
   QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);
   QCHECK(local::Delivered() == 0);
-  // Ready: the queued handles come first, oldest request first, then the real queue.
-  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, &ReadyTrue, nullptr);
+  // The hold is lifted while the identity is still not ready: the queued handles come first, oldest request
+  // first, then the real queue. Delivery follows the hold and no longer reads the readiness.
+  g_hold_now = false;
   g_pop_original_called = false;
   const void* one = local::OnPopMessage(&FakePop);
   const void* two = local::OnPopMessage(&FakePop);
@@ -798,19 +838,103 @@ void TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk() {
   // (login_rewrite.h), so what goes on the wire is the NEVR identity, not these.
 }
 
-void TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady() {
+void TestASyntheticHandleIsSafeWhenNoCallbackHasClaimedIt() {
   using namespace nevr_quest_login;
-  Fresh(true, true, /*ready=*/false);
+  FreshWired(/*ready=*/false, /*hold=*/false);
   g_violations = 0;
-  local::SetEnabled(true);
   QCHECK(local::Request(Prerequisite::AccessToken) != 0);
-  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, &ReadyTrue, nullptr);
   void* handle = const_cast<void*>(local::OnPopMessage(&FakePop));
+  QCHECK(handle != nullptr && local::IsSynthetic(handle));  // delivered although the identity is not ready
   // Accessors answer by address with no callback active at all (a caller outside the four callbacks).
   QCHECK(!GameIsError(handle));
   QCHECK(GameGetString(handle) == StandIn::AccessToken());
   QCHECK(GameGetOrgScopedId(handle) != nullptr && GameGetUser(handle) != nullptr && GameGetUserProof(handle) != nullptr);
   QCHECK(g_violations == 0);
+}
+
+// Queues the org id, user and token requests and runs them through the pump the way the game's mailbox does:
+// pop, the registered callback on the synthetic handle, free.
+void PumpThreeAnswers() {
+  using namespace nevr_quest_login;
+  const Prerequisite order[] = {Prerequisite::OrgScopedId, Prerequisite::LoggedInUser, Prerequisite::AccessToken};
+  for (Prerequisite which : order) QCHECK(local::Request(which) != 0);
+  for (Prerequisite which : order) {
+    void* handle = const_cast<void*>(local::OnPopMessage(&FakePop));
+    if (handle == nullptr || !local::IsSynthetic(handle)) {
+      QCHECK(false);  // the answer was not delivered
+      return;
+    }
+    nevr_quest_login::OnPrerequisiteCallback(which, CallbackFor(which), nullptr, handle);
+    local::OnFreeMessage(&FakeFree, handle);
+  }
+}
+
+// #581 (a): no saved credentials, token auth awaiting the player: the identity is not ready and does not hold.
+// The three answers are delivered on synthetic handles (no SDK call), the not-ready reset withdraws the stand-ins
+// the game wrote, and the game's own UpdateInternal then fails the login with the text IsLocalLoginFailure accepts,
+// which is the screen the sign-in code is written onto.
+void TestNotReadyAndNotHeldDeliversThenTheGameFailsLocally() {
+  using namespace nevr_quest_login;
+  FreshWired(/*ready=*/false, /*hold=*/false);
+  g_pop_original_called = false;
+  PumpThreeAnswers();
+  QCHECK(local::Delivered() == 3 && local::Pending() == 0);
+  QCHECK(!g_pop_original_called);  // no real pop for them
+  QCHECK(g_violations == 0);       // no real SDK function saw a synthetic handle
+  QCHECK(g_reset_runs == 3);       // not ready: the reset ran after each synthetic callback
+  QCHECK(g_game.org_global == ~std::uint64_t{0} && g_game.name == "?");
+  QCHECK(!PrerequisitesMet());
+  QCHECK(g_game.failure_text.empty());
+  FakeUpdateInternal();
+  QCHECK(g_game.failure_text == kPrerequisitesMissingText);
+  QCHECK(std::strcmp(g_game.failure_text.c_str(), "Log in request failed: One or more prerequisites are missing") == 0);
+  const auto records = Records("quest_login_prerequisite");
+  QCHECK(records.size() == 3);
+  for (const nlohmann::json& record : records) {
+    QCHECK(record.value("reason", "") == "local" && record.value("ready", -1) == 0);  // #581 (d)
+  }
+}
+
+// #581 (b): token auth is producing a token on its own (starting, refreshing, a failure it retries): hold.
+void TestNotReadyAndHeldDeliversNothing() {
+  using namespace nevr_quest_login;
+  FreshWired(/*ready=*/false, /*hold=*/true);
+  const Prerequisite order[] = {Prerequisite::OrgScopedId, Prerequisite::LoggedInUser, Prerequisite::AccessToken};
+  for (Prerequisite which : order) QCHECK(local::Request(which) != 0);
+  for (int pump = 0; pump < 5; ++pump) {
+    g_pop_original_called = false;
+    QCHECK(local::OnPopMessage(&FakePop) == &g_real_message && g_pop_original_called);  // the real pop answers
+  }
+  QCHECK(local::Delivered() == 0 && local::Pending() == 3);
+  QCHECK(g_reset_runs == 0 && g_game.failure_text.empty());
+  QCHECK(Records("quest_login_prerequisite").empty());
+}
+
+// #581 (c): the identity is ready: delivered, the stand-ins stay for the login rewrite, the prerequisites are met.
+void TestReadyDeliversAndKeepsTheStandIns() {
+  using namespace nevr_quest_login;
+  FreshWired(/*ready=*/true, /*hold=*/false);
+  PumpThreeAnswers();
+  QCHECK(local::Delivered() == 3 && g_violations == 0);
+  QCHECK(g_reset_runs == 0);
+  QCHECK(g_game.org_global == StandIn::OrgId() && g_game.name == StandIn::OculusId());
+  QCHECK(PrerequisitesMet());
+  FakeUpdateInternal();
+  QCHECK(g_game.failure_text.empty());  // the game goes on to send the login, which the rewrite then carries
+  const auto records = Records("quest_login_prerequisite");
+  QCHECK(records.size() == 3);
+  for (const nlohmann::json& record : records) QCHECK(record.value("ready", -1) == 1);  // #581 (d)
+}
+
+// Without a hold function (nullptr) the pop never holds.
+void TestWithoutAHoldFunctionTheAnswersAreAlwaysDelivered() {
+  using namespace nevr_quest_login;
+  Fresh(false, true);
+  nevr_quest_login::ConfigurePrerequisites(kRealApi, true, nullptr, nullptr, nullptr);
+  local::SetEnabled(true);
+  QCHECK(local::Request(Prerequisite::AccessToken) != 0);
+  QCHECK(local::IsSynthetic(local::OnPopMessage(&FakePop)));
+  QCHECK(local::Delivered() == 1);
 }
 
 }  // namespace
@@ -819,10 +943,14 @@ int main() {
   sentinel::SetLogSink(&Capture);
   TestLocalRequestsGetIdsTheSdkNeverProduces();
   TestOnlyTheLoginsOwnOrgRequestSitesAreAnsweredLocally();
-  TestPopDeliversSyntheticMessagesOnlyWhenReadyAndInOrder();
+  TestPopHoldsWhileTheHoldIsSetAndDeliversInOrderOtherwise();
   TestAnswersPastTheHandleCountAreNeverLostOrForwarded();
   TestSyntheticMessagesDriveTheGamesCallbacksWithoutTheSdk();
-  TestASyntheticHandleIsSafeEvenWhenNotClaimedOrNotReady();
+  TestASyntheticHandleIsSafeWhenNoCallbackHasClaimedIt();
+  TestNotReadyAndNotHeldDeliversThenTheGameFailsLocally();
+  TestNotReadyAndHeldDeliversNothing();
+  TestReadyDeliversAndKeepsTheStandIns();
+  TestWithoutAHoldFunctionTheAnswersAreAlwaysDelivered();
   TestRealAnswersPassThroughUnchanged();
   TestAccessTokenErrorIsSynthesized();
   TestAllFourErrorsAreSynthesized();
