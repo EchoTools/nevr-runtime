@@ -6,20 +6,28 @@
 # build.yml's `guard` job calls this on every release event. A release whose draft was already built,
 # signed and filled with the attested assets fires `published` when it is published; rebuilding it would
 # replace the signed files. The signal is the release's asset NAMES: all five files this workflow
-# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md and the two dist
-# zips). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
+# publishes for version X.Y.Z are listed (the sealed zip, SHA256SUMS, RELEASE-NOTES.md, the dist
+# zip and the Quest library). The release's pre-release flag is never read. A listing that fails (auth, the network, a bad
 # tag) is an error (exit 1), not "false": a check that cannot run must not decide to rebuild.
 set -euo pipefail
 tag=${1:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
 repo=${2:?usage: release_already_built.sh <vX.Y.Z> <owner/repo>}
-if [[ ! "$tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
+# The tag shape and the five names come from the one file tools/release_draft.sh also reads.
+source "$(dirname "${BASH_SOURCE[0]}")/release_asset_names.sh"
+if [[ ! "$tag" =~ $release_tag_regex ]]; then
   echo "release_already_built: tag '$tag' is not vX.Y.Z" >&2
   exit 1
 fi
 version=${BASH_REMATCH[1]}
+# A failing name list must stop the script: a process substitution would swallow its exit status and an
+# empty list would read as "every required file is present".
+want_out=$(release_asset_names "$version") || { echo "release_already_built: the asset name list failed" >&2; exit 1; }
+mapfile -t want <<<"$want_out"
+if [ "${#want[@]}" -eq 0 ] || [ -z "${want[0]}" ]; then
+  echo "release_already_built: the asset name list is empty; refusing to decide" >&2
+  exit 1
+fi
 names=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')
-want=("nevr-runtime-v$version-windows.zip" SHA256SUMS RELEASE-NOTES.md
-      "nevr-runtime-v$version.zip" "nevr-runtime-v$version-lite.zip")
 missing=()
 for name in "${want[@]}"; do
   grep -qxF -- "$name" <<<"$names" || missing+=("$name")

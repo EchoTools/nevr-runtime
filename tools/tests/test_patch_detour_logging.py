@@ -44,6 +44,36 @@ class BootPhaseLogging(unittest.TestCase):
         self.assertNotRegex(before_else, r"\bLog\(", "InstallGameMainHook logs before the InBootPhase branch ends")
         self.assertIn("nevr_boot_log_tee::TeeFprintf(", before_else)
 
+    def test_log_filter_init_cleanup_failure_goes_through_the_tee(self):
+        # nevr_builtin_log_filter::Init runs from InitializeAfterGameImageGuard under the loader
+        # lock, so the failed-hook cleanup record must use the boot tee. The N36 census reads only
+        # that function's own body and would not see a Log() here.
+        source = (ROOT / "src/runtime/log/builtin_filter.cpp").read_text()
+        body = extract_braced_function(source, "void nevr_builtin_log_filter::Init(")
+        self.assertIn("MH_RemoveHook(g_hook_target)", body, "subject vanished: no failed-hook cleanup")
+        match = re.search(r"if\s*\(\s*cleanup\s*!=\s*MH_OK\s*\)\s*\{(?P<b>[^{}]*)\}", body)
+        self.assertIsNotNone(match, "the cleanup failure must be reported")
+        self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("b"))
+        self.assertNotRegex(match.group("b"), r"\bLog\(", "the cleanup failure calls Log() under the loader lock")
+
+    def test_xpid_boot_path_reports_through_the_tee_and_never_log_or_serverfatal(self):
+        # PatchDscProvider and PatchProviderPrefixOvrOrg run from Initialize() under the loader lock,
+        # before the CLI is parsed: Log() is not allowed and ServerFatal would only warn.
+        source = strip_comments((ROOT / "src/runtime/patch/xpid_patch.cpp").read_text())
+        self.assertGreater(source.count("nevr_boot_log_tee::TeeFprintf("), 4, "subject vanished: no tee records")
+        self.assertNotRegex(source, r"\bLog\(", "xpid_patch.cpp calls Log() on the boot path")
+        self.assertNotIn("ServerFatal(", source, "xpid_patch.cpp calls ServerFatal before g_isServer is known")
+
+    def test_every_boot_failure_records_a_cause_and_the_server_refusal_names_it(self):
+        for path in ("src/runtime/lifecycle/initialize.cpp", "src/runtime/patch/xpid_patch.cpp"):
+            source = strip_comments((ROOT / path).read_text())
+            flags = len(re.findall(r"g_bootHookFailed\s*=\s*true", source))
+            causes = len(re.findall(r"\bNoteBootHookFailureCause\(", source))
+            self.assertGreater(flags, 0, f"subject vanished: no g_bootHookFailed writes in {path}")
+            self.assertGreaterEqual(causes, flags, f"{path} sets g_bootHookFailed without recording a cause")
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        self.assertRegex(boot, r"if\s*\(\s*g_bootHookFailed\s*\)\s*\{\s*ServerFatal\([^;]*g_bootHookFailedCause")
+
     def test_every_boot_return_ends_the_boot_phase(self):
         # An early return that skips nevr_boot_log_tee::Close() leaves InBootPhase() true for the whole run.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()

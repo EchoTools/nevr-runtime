@@ -28,6 +28,7 @@ struct Pending {
   uint64_t seq = 0;
   int suppressedAfter = -1;  // >= 0 on the "capped" result
   int dropped = -1;          // >= 0 on the note that the queue lost results
+  int sessionDropped = -1;   // >= 0 on the note that a session ended with results unsent
   bool hasUser = false;      // the user the result belongs to, when it was known as it happened
   nevr_evr_codec::UserId user;
 };
@@ -44,6 +45,7 @@ struct State {
   std::deque<Pending> queue;      // oldest first
   std::vector<SessionReset> resets;  // functions that clear a check's per-session state
   std::size_t dropped = 0;        // results the bounded queue lost since the last frame
+  std::size_t sessionDropped = 0;  // results unsent when a session ended: dropped, never stored
   uint64_t seq = 0;
 };
 
@@ -81,6 +83,7 @@ std::string BuildResult(const Pending& p, bool loggedIn, const nevr_evr_codec::U
   if (!build.empty()) j["build"] = build;
   if (p.suppressedAfter >= 0) j["suppressed_after"] = p.suppressedAfter;
   if (p.dropped >= 0) j["dropped"] = p.dropped;
+  if (p.sessionDropped >= 0) j["dropped_at_session_end"] = p.sessionDropped;
   return Dump(j);
 }
 
@@ -130,17 +133,36 @@ void RegisterSessionReset(SessionReset reset) {
 void SetLoggedIn(bool loggedIn, const nevr_evr_codec::UserId& user) {
   State& s = S();
   std::vector<SessionReset> resets;
+  bool endingSession = false;
   {
     std::lock_guard<std::mutex> lock(s.mutex);
     resets = s.resets;
+    endingSession = s.loggedIn;
   }
   // The ending session's own state is reported (and attributed) before the boundary moves.
   for (SessionReset reset : resets) reset();
-  std::lock_guard<std::mutex> lock(s.mutex);
+  // One delivery attempt while the session still stands; what it cannot send is dropped below.
+  if (endingSession) Flush();
+  LogSink sink = nullptr;
+  LogRecord record;
+  std::unique_lock<std::mutex> lock(s.mutex);
+  // A session that ends with results unsent drops them and counts them: nothing is stored for a later
+  // session. Results queued before the first login belong to no session yet and stay.
+  if (s.loggedIn && !s.queue.empty()) {
+    s.sessionDropped += s.queue.size();
+    record.name = "self_check";
+    record.expected = "no results unsent when a session ends";
+    record.observed = std::to_string(s.queue.size()) + " dropped";
+    record.pass = false;
+    sink = s.logSink;
+    s.queue.clear();
+  }
   s.loggedIn = loggedIn;
   if (loggedIn) s.user = user;
-  // A new session starts the per-check caps over; what is already queued stays queued.
+  // A new session starts the per-check caps over.
   for (Check& c : s.checks) c.reported = 0;
+  lock.unlock();
+  if (sink != nullptr) sink(record);
 }
 
 CheckId Register(const CheckSpec& spec) {
@@ -219,22 +241,24 @@ void Flush() {
     Sender sender = nullptr;
     {
       std::lock_guard<std::mutex> lock(s.mutex);
-      if (!s.loggedIn || s.sender == nullptr || (s.queue.empty() && s.dropped == 0)) return;
+      if (!s.loggedIn || s.sender == nullptr || (s.queue.empty() && s.dropped == 0 && s.sessionDropped == 0)) return;
       sender = s.sender;
       user = s.user;
       while (!s.queue.empty() && taken.size() < kMaxStringsPerFrame) {
         taken.push_back(std::move(s.queue.front()));
         s.queue.pop_front();
       }
-      if (s.dropped != 0 && taken.size() < kMaxStringsPerFrame) {
+      if ((s.dropped != 0 || s.sessionDropped != 0) && taken.size() < kMaxStringsPerFrame) {
         Pending note;
         note.check = "self_check";
-        note.expected = "no results lost before login";
-        note.observed = "queue full";
+        note.expected = "no results lost";
+        note.observed = s.sessionDropped != 0 ? "unsent when a session ended" : "queue full";
         note.pass = true;
         note.seq = ++s.seq;
-        note.dropped = static_cast<int>(s.dropped);
+        if (s.dropped != 0) note.dropped = static_cast<int>(s.dropped);
+        if (s.sessionDropped != 0) note.sessionDropped = static_cast<int>(s.sessionDropped);
         s.dropped = 0;
+        s.sessionDropped = 0;
         taken.push_back(std::move(note));
       }
       for (const Pending& p : taken) batch.push_back(BuildResult(p, true, user, s.build));
@@ -269,6 +293,7 @@ void ResetForTest() {
   s.checks.clear();
   s.queue.clear();
   s.dropped = 0;
+  s.sessionDropped = 0;
   s.seq = 0;
 }
 

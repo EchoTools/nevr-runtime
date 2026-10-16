@@ -11,6 +11,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/veh_policy.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/patch/mic_policy.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
@@ -47,6 +48,7 @@
 
 static BOOL g_initialized = FALSE;
 bool g_bootHookFailed = false;
+char g_bootHookFailedCause[96] = {};
 
 HWND g_hWindow = NULL;
 
@@ -272,6 +274,9 @@ static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequire
   if (installed) return;
   if (requirement == BootHookRequirement::kRequired) {
     g_bootHookFailed = true;
+    char cause[sizeof(g_bootHookFailedCause)];
+    snprintf(cause, sizeof(cause), "required hook %s not installed", name);
+    NoteBootHookFailureCause(cause);
     nevr_boot_log_tee::TeeFprintf(
         "[NEVR.PATCH] required boot hook not installed name=%s; a server will refuse to start, a client "
         "continues without it\n",
@@ -311,6 +316,7 @@ static VOID InitializeAfterGameImageGuard() {
   if (!Hooking::Initialize()) {
     nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
+    NoteBootHookFailureCause("hooking engine init failed");
     nevr_boot_log_tee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
@@ -362,13 +368,29 @@ static VOID InitializeAfterGameImageGuard() {
         nevr_boot_log_tee::TeeFprintf(
             "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
         g_bootHookFailed = true;
-      } else if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-                     reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-                 MH_EnableHook(sym_target) == MH_OK) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
+        NoteBootHookFailureCause("CSysDLL_GetSymbol prologue mismatch");
       } else {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol\n");
-        g_bootHookFailed = true;
+        const MH_STATUS created = MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+                                                 reinterpret_cast<void**>(&g_original_GetSymbol));
+        const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(sym_target) : created;
+        if (enabled == MH_OK) {
+          nevr_hook_guard::Record(sym_target, "CSysDLL_GetSymbol");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
+        } else {
+          if (created == MH_OK) {
+            const MH_STATUS cleanup = MH_RemoveHook(sym_target);
+            if (cleanup != MH_OK) {
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_GetSymbol reason=%s\n",
+                                            MH_StatusToString(cleanup));
+            }
+            // The trampoline is written only when creation returned MH_OK.
+            g_original_GetSymbol = nullptr;
+          }
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol stage=%s reason=%s\n",
+                                        created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
+          g_bootHookFailed = true;
+          NoteBootHookFailureCause("CSysDLL_GetSymbol hook install failed");
+        }
       }
   }
 
@@ -378,13 +400,28 @@ static VOID InitializeAfterGameImageGuard() {
       static const unsigned char kLoadModulePrologue[8] = {0x40, 0x53, 0x48, 0x81, 0xEC, 0x20, 0x04, 0x00};
       if (memcmp(load_target, kLoadModulePrologue, sizeof(kLoadModulePrologue)) != 0) {
         nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook skipped name=CSysDLL_Load va=0x14105aa70 reason=prologue_mismatch\n");
-      } else if (MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
-                     reinterpret_cast<void**>(&g_original_LoadModule)) == MH_OK &&
-                 MH_EnableHook(load_target) == MH_OK) {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
       } else {
-        nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load\n");
-        g_bootHookFailed = true;
+        const MH_STATUS created = MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
+                                                 reinterpret_cast<void**>(&g_original_LoadModule));
+        const MH_STATUS enabled = created == MH_OK ? MH_EnableHook(load_target) : created;
+        if (enabled == MH_OK) {
+          nevr_hook_guard::Record(load_target, "CSysDLL_Load");
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib\n");
+        } else {
+          if (created == MH_OK) {
+            const MH_STATUS cleanup = MH_RemoveHook(load_target);
+            if (cleanup != MH_OK) {
+              nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook cleanup failed name=CSysDLL_Load reason=%s\n",
+                                            MH_StatusToString(cleanup));
+            }
+            // The trampoline is written only when creation returned MH_OK.
+            g_original_LoadModule = nullptr;
+          }
+          nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_Load stage=%s reason=%s\n",
+                                        created == MH_OK ? "enable" : "create", MH_StatusToString(enabled));
+          g_bootHookFailed = true;
+          NoteBootHookFailureCause("CSysDLL_Load hook install failed");
+        }
       }
   }
 
@@ -402,6 +439,13 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] initializing log filter...\n");
   nevr_builtin_log_filter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] log filter installed\n");
+
+  // DLL load callbacks held during boot: a DLL already loaded when its callback registered (an
+  // injector such as Revive's loads dxgi/d3d12 before the runtime starts). They log, and before the log
+  // filter Log() goes through the game's CLog, not set up yet (#495).
+  nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] firing held DLL load callbacks...\n");
+  nevr_dll_load_hook::FireHeldCallbacks();
+  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] held DLL load callbacks fired\n");
 
   // --- Game function hooks ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing game function hooks...\n");
@@ -462,9 +506,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
-  const bool vehInstalled = InstallVEH();
+  const nevr_veh_policy::InstallResult vehResult = InstallVEH();
   InstallCrashFilterInstrumentation();
-  nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehInstalled));
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_veh_policy::BootLine(vehResult));
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");

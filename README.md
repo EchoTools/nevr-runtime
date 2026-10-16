@@ -19,7 +19,7 @@ means each. Every feature below is on `main`; [`docs/testing/smoke-checklist.md`
 says how to check each one and which log line proves it.
 
 ### Get in
-- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml` and no `nevr-quest.json`. `config.yaml` (PC) and `nevr-quest.json` (Quest) override them. (both)
+- **Nothing to configure.** The service endpoints and the public client keys are built in, so a game client with a build-embedded configuration signs in with no `config.yaml`. A `config.yaml` overrides them, on the PC next to the game and on the Quest in the app's files folder ([`docs/reference/example-config.yaml`](docs/reference/example-config.yaml) lists every key and which builds read it). (both)
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
@@ -67,7 +67,7 @@ The dedicated game server does not complete bring-up today ([#45](https://github
 - **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
 
 ### Quest
-- **A sentinel loaded with the game.** Four switchable features in `nevr-quest.json`: `redirect`, `bridge`, `login`, `social`; `obb_skip` and `hwdump` are separate and off by default. (Quest)
+- **A sentinel loaded with the game.** The redirect, the bridge, the login and the social façade follow from the embedded service endpoints and keys, with no switch of their own; `social.facade`, `social.send_presence_to_meta` and `diagnostics.hardware_dump` in `config.yaml` change the façade, the rich presence and the hardware dump (off by default). On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); that the game then starts without the ~30 s wait is predicted and not yet shown on a headset ([#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps
@@ -189,8 +189,7 @@ just verify         # THE GATE — build + tests under Wine + invariant sensors
 just test-system-short        # quick Go system tests (needs the game binary)
 just test-plugins-groundtruth # plugin tests without the game binary
 just test-android              # Quest binary-shape checks
-just dist           # distribution packages
-just dist-lite      # stripped, no debug symbols
+just dist           # the stripped release package (symbols split to dist/symbols/); a build with symbols is build/<preset>/bin/
 ```
 
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`

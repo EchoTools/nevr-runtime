@@ -39,10 +39,9 @@ def defaults_header(values):
         f'inline constexpr const char* {NAMES[k]} = "{v}";\n' for k, v in values.items()) + "}\n"
 
 
-def build_info(version, features):
+def build_info(version):
     return (f'inline constexpr const char* kVersion = "{version}";\n'
-            f'inline constexpr const char* kCommit = "{COMMIT[:8]}";\n'
-            f'inline constexpr const char* kDefaultFeatures = "{features}";\n')
+            f'inline constexpr const char* kCommit = "{COMMIT[:8]}";\n')
 
 
 def identity(version, commit=COMMIT):
@@ -70,7 +69,7 @@ class PackageFixture(unittest.TestCase):
         self.quest_header = self.tmp / "quest.h"
         self.quest_header.write_text(defaults_header(VALUES))
         self.info = self.tmp / "info.h"
-        self.info.write_text(build_info(self.version, "redirect,bridge,login,social"))
+        self.info.write_text(build_info(self.version))
         self.dll = self.tmp / "BugSplat64.dll"
         self.dll.write_bytes(binary(self.version))
         self.apk = self.tmp / "signed.apk"
@@ -169,11 +168,16 @@ class LocalDevPackageTest(PackageFixture):
         self.assertFalse(self.out.exists())
 
     def test_a_quest_build_that_needs_a_config_file_to_log_in_is_refused(self):
-        self.info.write_text(build_info(self.version, ""))
-        result = self.run_tool()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("quest: feature login is not on by default", result.stderr)
-        self.assertFalse(self.out.exists())
+        # No config.yaml key turns the login on: it follows from the embedded socket URI and server key.
+        for key, name, what in (("NEVR_SOCKET_URI", "kSocketUri", "socket URI"),
+                                ("NEVR_PUBLIC_SOCKET_KEY", "kPublicSocketKey", "server key")):
+            with self.subTest(missing=what):
+                emptied = dict(VALUES, **{key: ""})
+                self.quest_header.write_text(defaults_header(emptied))
+                result = self.run_tool()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"quest: no embedded {what}: the APK would need a config.yaml to log in", result.stderr)
+                self.assertFalse(self.out.exists())
 
     def test_the_apk_sentinel_must_embed_the_values_too(self):
         with zipfile.ZipFile(self.apk, "w") as z:
@@ -291,12 +295,12 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("may sign", texts["SIGNING.txt"])
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
-        self.assertIn("Three zips", texts["RELEASE-NOTES.md"])
-        for name in ("nevr-runtime-v5.0.0.zip", "nevr-runtime-v5.0.0-lite.zip"):
-            self.assertIn(name, texts["RELEASE-NOTES.md"])
+        self.assertIn("Two zips", texts["RELEASE-NOTES.md"])
+        self.assertIn("nevr-runtime-v5.0.0.zip", texts["RELEASE-NOTES.md"])
+        self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
-        # README.md is copied into nevr-runtime-vX.Y.Z.zip and -lite.zip, which are attested and never
+        # README.md is copied into nevr-runtime-vX.Y.Z.zip, which is attested and never
         # change: it must be true whether or not the Windows zip has been signed.
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         self.assertNotRegex(readme, r"(?i)\bunsigned\b|is not signed")

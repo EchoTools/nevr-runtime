@@ -133,6 +133,7 @@ const nevr::NevrConfig& NevrCfg() {
     }
     try {
       nevr::NevrConfig c = nevr::NevrConfig::LoadFromFile(path);
+      nevr::LogUnsetBareVars(c);  // the parser logs nothing (it is shared with the Quest); the PC caller reports
       Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
       return c;
     } catch (const nevr::NevrConfigError& e) {
@@ -299,6 +300,15 @@ void ResetAccessorInputs() {
 #endif
 
 // --- C accessors -----------------------------------------------------------
+
+const char* NevrCfgDirectory() {
+  static const std::string dir = []() {
+    const std::string path = FindNevrConfigYamlPath();
+    const std::size_t slash = path.find_last_of("\\/");
+    return slash == std::string::npos ? std::string() : path.substr(0, slash);
+  }();
+  return dir.empty() ? nullptr : dir.c_str();
+}
 
 const char* NevrCfgGetFlat(const char* flatKey) {
   return AccessorBoundary("NevrCfgGetFlat", [&]() -> const char* {

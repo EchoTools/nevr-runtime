@@ -10,6 +10,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "verify_self_check_wiring.py"
 COPY = ["src/runtime/compat/ws_bridge.cpp", "src/quest/integration/production_steps.cpp",
+        "src/runtime/lifecycle/config.cpp", "src/quest/redirect/service_redirector.cpp",
         "src/quest/integration/self_check_wiring.cpp", "src/quest/sentinel/quest_config.h",
         "src/runtime/compat/self_check.h", "CMakeLists.txt"]
 
@@ -98,6 +99,20 @@ class SelfCheckWiringGateTest(unittest.TestCase):
         self.edit(root, "src/quest/integration/production_steps.cpp",
                   "ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());", "")
         self.assertEqual(run(root).returncode, 1)
+
+    def test_a_status_redirect_check_that_is_not_fed_or_registered_fails(self):
+        for rel, old, new in (
+            ("src/runtime/lifecycle/config.cpp", "nevr_status_redirect_check::NoteConnect(gameUri, uri);", ""),
+            ("src/runtime/compat/ws_bridge.cpp",
+             "nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);", ""),
+            ("src/quest/redirect/service_redirector.cpp", "nevr_status_redirect_check::NoteConnect(url, url);", ""),
+            ("src/quest/redirect/service_redirector.cpp", "nevr_status_redirect_check::NoteConnect(url, chosen);", ""),
+            ("src/quest/integration/production_steps.cpp",
+             "nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);", ""),
+        ):
+            root = self.tree()
+            self.edit(root, rel, old, new)
+            self.assertEqual(run(root).returncode, 1, (rel, old))
 
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()

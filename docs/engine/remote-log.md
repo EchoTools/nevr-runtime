@@ -246,6 +246,11 @@ differently because of how it was stamped.
   one with `"observed":"capped"`; at most 16 strings per frame.
   The same result is written to the build's own log at Info: PC `[NEVR.SELFCHECK] check=... pass=...`, Quest
   `self_check {check, pass, expected, observed}`.
+- **A session that ends with results unsent drops them and counts them; nothing is stored.** When a logged-in
+  session ends (`SetLoggedIn`), one delivery attempt runs, the rest of the queue is discarded, and the next
+  session's first frame carries one `self_check` note with `"dropped_at_session_end":N`. The drop is also
+  logged at Info as `check=self_check ... observed="N dropped"`. Results queued before the first login are not
+  a session's and stay queued.
 - **Adding a check** is one registration and one call at the event:
 
   ```cpp
@@ -261,6 +266,7 @@ differently because of how it was stamped.
 | Check | PC | Quest |
 | --- | --- | --- |
 | `party_data_share` (#398) | `ws_bridge.cpp` `ObserveSocialFrames` hands every symbol of both directions to `nevr_party_share_check` (`OnServerMessage` / `OnClientMessage`; the runtime's own requests come back through it from `SendFrameToServer`) | `production_steps.cpp` `ObserveForSelfChecks`: the tap's observer (both directions) and `SendSocialFrame` (the facade's own requests, which the tap does not show) | `PartyUpdateSuccess`/`Failure` also answer a set-join-policy request and a party metadata update, so an answer is read together with the request behind it: the service answers a session's requests in order, so each family (party scope, member scope) keeps a FIFO of what was sent and only an answer to a share counts. The first success of a session is reported once, every failure is reported, and `party_data_share_totals` carries `answers/ok/failed/other/unmatched` at 1, 2, 4, 8 ... answers and when a session ends. An answer with no request behind it counts as `unmatched` and reports nothing; no answer produces no result (no timeout) |
+| `status_redirect` (#408) | `lifecycle/config.cpp` `HttpConnectHook` calls `nevr_status_redirect_check::NoteConnect(gameUri, uri)` for every connect (atomics only); `ws_bridge.cpp` `WireSelfChecks` registers the probe | `redirect/service_redirector.cpp` `ApplyUrl` counts every `CreateConnection` URL, the left-alone ones included; `production_steps.cpp` registers the probe | every game connect is counted by class: `api` (the API base, redirected or `passthrough`), `graph`, `uncovered` (a host of the game's own service domain, `readyatdawn.com`, that is not an API or graph base and was left alone, named by host only) and `external`. Pass when a redirect has been seen and there is no passthrough and no uncovered host; failures are said at 1, 2, 4, 8 ... with the running counts. The check cannot see the HTTP response: whether the status request succeeded, and the game's own `Service status request failed`, are invisible to the runtime |
 | `matchmaking_reload_patch` / `matchmaking_reload_redirect` (#18) | `pnsrad_enabler.cpp` `OnDllLoaded` feeds `nevr_matchmaker_host_patch::ReloadLedger`; passes when every load of `pnsradmatchmaking.dll` was patched | `post_load.cpp` `MatchmakingImages` (distinct handles the game's `dlopen` returned) against the redirect installs in `production_steps.cpp`; passes when installs >= images. A reload mapped at the same address returns the same handle and is not seen |
 
 Run-card checks not registered yet are listed in issue #451.

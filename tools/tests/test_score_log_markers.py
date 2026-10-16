@@ -36,6 +36,12 @@ def row(output: str, row_id: str) -> str:
 
 
 class CurrentSmokeMarkerTest(unittest.TestCase):
+    def test_shutdown_marker_requires_the_console_handler(self):
+        old_signal = score("[NEVR.PATCH] POSIX signal handlers installed\n")
+        self.assertNotIn("PASS", row(old_signal.stdout, "S31"))
+        console = score("[NEVR.PATCH] console ctrl handler installed\n")
+        self.assertIn("PASS", row(console.stdout, "S31"))
+
     def test_current_boot_redirect_and_login_success_markers_score(self):
         log = (
             "[NEVR.PATCH] boot hooks installed ok=TrUe\n"

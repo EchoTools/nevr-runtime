@@ -109,7 +109,8 @@ sentinel::GotStatus InstallPresenceTrace();
 const char* PresenceDisplayName(const char* gameType) noexcept;
 
 // Whether the wrappers answer the destination lookup from the table when the game's own list has no match
-// (config feature presence_names; off by default). Pass-through logging is unconditional.
+// (config feature presence_names, which follows the social facade: on whenever the facade is on, which is the default; the
+// flag itself starts false until the sentinel sets it). Pass-through logging is unconditional.
 void SetPresenceNames(bool enabled) noexcept;
 
 // Whether rich presence stops going to Meta (#396, config feature presence_local; off by default): the object's

@@ -1,5 +1,5 @@
 // Process-wide Quest configuration and feature activation, resolved once from the embedded
-// defaults and the optional `nevr-quest.json`. Every resolved state is logged.
+// defaults and the optional `config.yaml`. Every resolved state is logged.
 #pragma once
 
 #include "quest/sentinel/quest_config.h"

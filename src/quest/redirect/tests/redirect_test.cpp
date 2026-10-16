@@ -27,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/compat/status_redirect_check.h"
 #include "got_hook.h"
 #include "hook_log.h"
 #include "quest/redirect/hook_adapter.h"
@@ -77,15 +78,28 @@ constexpr const char* kDefaultMatchmaker = "wss://matchmaker.readyatdawn.com/rad
 constexpr const char* kSocketTarget = "wss://nevr.example/ws";
 constexpr const char* kHttpTarget = "https://api.nevr.example:7350";
 
+// config.yaml texts. The redirect and the bridge have no key: they follow from the targets, so these two
+// differ only in what the test then does with the bridge probe.
 constexpr const char* kRedirectOn =
-    R"({"nevr_socket_uri":"wss://nevr.example/ws","nevr_http_uri":"https://api.nevr.example:7350",)"
-    R"("features":{"redirect":true}})";
-constexpr const char* kRedirectAndBridgeOn =
-    R"({"nevr_socket_uri":"wss://nevr.example/ws","nevr_http_uri":"https://api.nevr.example:7350",)"
-    R"("features":{"redirect":true,"bridge":true}})";
+    "services:\n  socket_uri: \"wss://nevr.example/ws\"\nauth:\n  http_uri: \"https://api.nevr.example:7350\"\n";
+constexpr const char* kRedirectAndBridgeOn = kRedirectOn;
+constexpr const char* kSocketOnly = "services:\n  socket_uri: \"wss://nevr.example/ws\"\n";
 
 ResolvedConfig Config(const std::string& fileText, const EmbeddedDefaults& defaults = EmbeddedDefaults()) {
   return nevr_quest::ResolveConfig(defaults, &fileText).config;
+}
+
+// The effective state the redirector sees when a feature is off. No config.yaml key turns the redirect or the
+// bridge off (they follow from the targets), so the off states are made from a resolved config by hand: the
+// redirector and the policy still gate on them.
+ResolvedConfig WithBridgeOff(ResolvedConfig config) {
+  config.effective.bridge = false;
+  return config;
+}
+ResolvedConfig WithRedirectOff(ResolvedConfig config) {
+  config.effective.redirect = false;
+  config.effective.bridge = false;
+  return config;
 }
 
 // ---- the pool, with fault injection -----------------------------------------
@@ -318,40 +332,38 @@ void UnrelatedValuesAreUntouched() {
 }
 
 void FeatureOffLeavesEverythingUntouched() {
-  // No file: every feature is off.
-  EmbeddedDefaults embedded;
-  embedded.socketUri = "wss://emb.example/nevr";
-  embedded.httpUri = "https://emb.example:7350";
-  Scenario s(nevr_quest::ResolveConfig(embedded, nullptr).config);
+  // Nothing to redirect to (no file, nothing embedded): the redirect is forced off.
+  Scenario s(nevr_quest::ResolveConfig(EmbeddedDefaults(), nullptr).config);
   QCHECK(!s.redirector->active());
   QCHECK(s.R15("login_host", kDefaultLogin) == kDefaultLogin);
   QCHECK(s.Mm("matchmaker_host", kDefaultMatchmaker) == kDefaultMatchmaker);
   QCHECK(s.redirector->counters().calls == 0);
-  // Explicitly off in the file.
-  Scenario off(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":false}})"));
+  // A target present but the feature off.
+  Scenario off(WithRedirectOff(Config(kSocketOnly)));
   QCHECK(off.R15("login_host", kDefaultLogin) == kDefaultLogin);
 }
 
-void MalformedConfigLeavesEverythingUntouched() {
+void AnUnusableConfigFileFallsBackToTheEmbeddedTargets() {
   EmbeddedDefaults embedded;
   embedded.socketUri = "wss://emb.example/nevr";
   embedded.httpUri = "https://emb.example:7350";
-  const char* const bad[] = {"{not json", "[1,2,3]", "", R"({"features":{"redirect":"yes"}})"};
+  const char* const bad[] = {"services: [unterminated\n", "- a\n- b\n", "bogus_section: 1\n", "plugins: 3\n"};
   for (const char* text : bad) {
     const std::string fileText = text;
     const nevr_quest::LoadResult loaded = nevr_quest::ResolveConfig(embedded, &fileText);
+    QCHECK(loaded.fileRejected);
     Scenario s(loaded.config);
-    QCHECK(!s.redirector->active());
-    QCHECK(s.R15("login_host", kDefaultLogin) == kDefaultLogin);
+    QCHECK(s.redirector->active());
+    QCHECK(std::strcmp(s.R15("login_host", kDefaultLogin), "wss://emb.example/nevr") == 0);
   }
-  // A file too large to accept is rejected whole.
-  std::string big = R"({"features":{"redirect":true},"pad":")";
+  // A file too large to accept is rejected whole: the embedded targets stay.
+  std::string big = "services:\n  socket_uri: \"wss://file.example/x\"\nx-pad: \"";
   big.append(nevr_quest::kMaxConfigBytes, 'x');
-  big += "\"}";
+  big += "\"\n";
   Scenario s(nevr_quest::ResolveConfig(embedded, &big).config);
-  QCHECK(s.R15("login_host", kDefaultLogin) == kDefaultLogin);
-  // Redirect requested but no target: forced off.
-  Scenario noTarget(Config(R"({"features":{"redirect":true}})"));
+  QCHECK(std::strcmp(s.R15("login_host", kDefaultLogin), "wss://emb.example/nevr") == 0);
+  // Redirect with no target at all: forced off.
+  Scenario noTarget(Config(""));
   QCHECK(noTarget.R15("login_host", kDefaultLogin) == kDefaultLogin);
 }
 
@@ -393,7 +405,7 @@ void BridgeStateSelectsTheTarget() {
   g_bridge = {false, 0};
   QCHECK(s.R15("login_host", kDefaultLogin) == direct);
   // With the bridge feature off the probe is ignored.
-  Scenario noBridge(Config(kRedirectOn), &InternReal, &BridgeProbeFn);
+  Scenario noBridge(WithBridgeOff(Config(kRedirectOn)), &InternReal, &BridgeProbeFn);
   g_bridge = {true, 53748};
   QCHECK(std::strcmp(noBridge.R15("login_host", kDefaultLogin), kSocketTarget) == 0);
   g_bridge = {false, 0};
@@ -602,14 +614,14 @@ void TheMatchmakerQueuesGraphHostIsRedirectedToTheHttpService() {
 }
 
 void TheGraphHostIsLeftAloneWithoutAnHttpTargetOrTheFeature() {
-  Scenario noHttp(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));
+  Scenario noHttp(Config(kSocketOnly));
   unsigned long handle = 0;
   const char* graph = "https://graph.oculus.com";
   ConnectEntry()(&handle, graph);
   QCHECK(g_connectUrl == graph);
   EmbeddedDefaults embedded;
   embedded.httpUri = "https://emb.example:7350";
-  Scenario off(nevr_quest::ResolveConfig(embedded, nullptr).config);  // every feature off
+  Scenario off(WithRedirectOff(nevr_quest::ResolveConfig(embedded, nullptr).config));  // the feature off
   g_connectUrl = nullptr;
   ConnectEntry()(&handle, graph);
   QCHECK(g_connectUrl == graph);
@@ -619,13 +631,13 @@ void ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists() {
   EmbeddedDefaults embedded;
   embedded.socketUri = "wss://emb.example/nevr";
   embedded.httpUri = "https://emb.example:7350";
-  Scenario off(nevr_quest::ResolveConfig(embedded, nullptr).config);  // every feature off
+  Scenario off(WithRedirectOff(nevr_quest::ResolveConfig(embedded, nullptr).config));  // the feature off
   unsigned long handle = 0;
   const char* api = "https://api.readyatdawn.com";
   ConnectEntry()(&handle, api);
   QCHECK(g_connectUrl == api);
 
-  Scenario noHttp(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));
+  Scenario noHttp(Config(kSocketOnly));
   g_connectUrl = nullptr;
   ConnectEntry()(&handle, api);
   QCHECK(g_connectUrl == api);  // no nevr_http_uri: the policy declines
@@ -665,7 +677,7 @@ void UrlDecisionsHaveTheirOwnCounters() {
     QCHECK(Lines().empty());
   }
   {
-    Scenario s(Config(R"({"nevr_socket_uri":"wss://nevr.example/ws","features":{"redirect":true}})"));  // no http target
+    Scenario s(Config(kSocketOnly));  // no http target
     ResetCountersForTest();
     unsigned long handle = 0;
     ConnectEntry()(&handle, "https://api.readyatdawn.com");
@@ -673,6 +685,37 @@ void UrlDecisionsHaveTheirOwnCounters() {
     QCHECK(GlobalCounters().urlPassThrough.load() == 1);
   }
   ResetCountersForTest();
+}
+
+// #408 self-check: every CreateConnection URL is counted by class for the status_redirect check, including the
+// ones the redirector leaves alone. A service-domain host that is not an API or graph base (the failing shape of
+// #408, "Couldn't resolve host name") lands in `uncovered`, not nowhere.
+void EveryConnectIsCountedByClassForTheStatusRedirectCheck() {
+  Scenario s(Config(kRedirectOn));
+  nevr_status_redirect_check::ResetForTest();
+  unsigned long handle = 0;
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");
+  ConnectEntry()(&handle, "https://api-live.readyatdawn.com");
+  ConnectEntry()(&handle, "https://status.readyatdawn.com/status/services,news?env=live&projectid=rad14");
+  ConnectEntry()(&handle, "https://graph.oculus.com");
+  ConnectEntry()(&handle, "https://cdn.example.com/asset");
+  const nevr_status_redirect_check::Snapshot c = nevr_status_redirect_check::Process().Counts();
+  QCHECK(c.apiRedirected == 2);
+  QCHECK(c.apiPassthrough == 0);
+  QCHECK(c.uncovered == 1);
+  QCHECK(c.graph == 1);
+  QCHECK(c.external == 1);
+  nevr_self_check::Observation o;
+  QCHECK(nevr_status_redirect_check::Process().Take(&o));
+  QCHECK(!o.pass);
+  QCHECK(o.observed.find("hosts=status.readyatdawn.com") != std::string::npos);
+  QCHECK(o.observed.find("projectid") == std::string::npos);
+
+  Scenario noTarget(Config(kSocketOnly));
+  nevr_status_redirect_check::ResetForTest();
+  ConnectEntry()(&handle, "https://api.readyatdawn.com");  // no http target: the connect is left alone
+  QCHECK(nevr_status_redirect_check::Process().Counts().apiPassthrough == 1);
+  nevr_status_redirect_check::ResetForTest();
 }
 
 // All 16 slots computed under the current bridge state: a further value is not remembered. A change
@@ -779,7 +822,7 @@ void RealHookEndToEnd(const std::string& dir) {
   // Feature off: nothing installs.
   EmbeddedDefaults embedded;
   embedded.socketUri = "wss://emb.example/nevr";
-  const InstallReport off = InstallRedirectHooksWith(nevr_quest::ResolveConfig(embedded, nullptr).config, FixtureOptions(&InternReal));
+  const InstallReport off = InstallRedirectHooksWith(WithRedirectOff(nevr_quest::ResolveConfig(embedded, nullptr).config), FixtureOptions(&InternReal));
   QCHECK(!off.featureEnabled);
   QCHECK_STATUS(off.libr15, GotStatus::kNotInstalled);
 
@@ -946,7 +989,7 @@ int main(int argc, char** argv) {
   HttpsReadyAtDawnUsesTheHttpTarget();
   UnrelatedValuesAreUntouched();
   FeatureOffLeavesEverythingUntouched();
-  MalformedConfigLeavesEverythingUntouched();
+  AnUnusableConfigFileFallsBackToTheEmbeddedTargets();
   PointerStableAcrossCallsAndPoolChurn();
   BridgeStateSelectsTheTarget();
   PoolRefusalFallsBackToTheOriginal();
@@ -965,6 +1008,7 @@ int main(int argc, char** argv) {
   ConnectUrlIsLeftAloneWhenTheFeatureIsOffOrNoHttpTargetExists();
   ConnectUrlRedirectIsStableAndCountedWithoutLogging();
   UrlDecisionsHaveTheirOwnCounters();
+  EveryConnectIsCountedByClassForTheStatusRedirectCheck();
   CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();

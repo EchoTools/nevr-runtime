@@ -52,17 +52,13 @@ launcher: configure
 verbose-build: configure
     cmake --build --preset {{ preset }}
 
-# Create distribution packages
+# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/
 dist: build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
-
-# Build stripped binaries without debug symbols
-dist-lite: build
-    cmake --build --preset {{ preset }} --target dist-lite
 
 # Create legacy distribution package (v1 DLLs only)
 dist-legacy: build
@@ -208,11 +204,12 @@ release-preflight base="main":
 # .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
 # otherwise, and refuses a binary whose identity literal is not this commit's development version.
 # `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
-# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK. `features` are
-# the Quest features on by default (what a tester needs to log in with no nevr-quest.json).
+# a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK.
+# Neither build needs a config file: the Quest redirects, bridges, logs in and runs the social facade from the
+# embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="redirect,bridge,login,social":
+package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
@@ -230,9 +227,8 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
         cmake --preset mingw-dev
         cmake --build --preset mingw-dev
     )
-    # Quest sentinel: its own build tree (build/android-dev), the default features.
-    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev \
-        -DNEVR_QUEST_DEFAULT_FEATURES="{{ features }}")
+    # Quest sentinel: its own build tree (build/android-dev).
+    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
@@ -253,8 +249,10 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
 # fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
-# be mounted by a debug-signed sideload, so it is never used.
+# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
+# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
+# APK's signer, so it is never used (the sentinel answers the game's mount itself:
+# docs/adr/0007-quest-obb-mount-skip.md).
 # The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
 # different data_sha256 gets its own _data-<hash prefix>.zip),
 # written as .part and renamed only after the hash matches. data_sha256
@@ -364,7 +362,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -488,7 +486,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -507,16 +505,35 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# yaml-cpp for the Quest host tests: installed from the tools/quest-host-deps manifest for the x64-linux triplet into
+# build/quest-host-vcpkg (never a system package), with this checkout's own vcpkg root like _vcpkg-mingw. The
+# sentinel parses config.yaml with the PC's nevr_config, so the host tests that compile quest_config.cpp link it.
+_vcpkg-quest-host:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
+    cd "$root"
+    unset VCPKG_ROOT
+    ./vcpkg install --triplet=x64-linux --host-triplet=x64-linux \
+        --x-manifest-root="{{ justfile_directory() }}/tools/quest-host-deps" \
+        --x-install-root="{{ justfile_directory() }}/build/quest-host-vcpkg"
+
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
 # compiles the same test, the same vectors (service_redirect_vectors.h) and the same
 # shared source (src/runtime/lifecycle/service_redirect.cpp) with the host g++ and runs
 # it. No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
-test-quest-shared:
+test-quest-shared: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-shared-host"
     mkdir -p "$out"
+    # config.yaml is parsed by src/core/nevr_config.cpp with yaml-cpp (the PC's parser, shared). yaml-cpp comes
+    # from the tools/quest-host-deps manifest for the x64-linux triplet, never a system package.
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-shared: FAIL — $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    yaml_inc=(-isystem "$yaml_host/include")
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/tests/service_redirect_test.cpp \
@@ -540,10 +557,10 @@ test-quest-shared:
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     timeout -k 5 120 "$out/evr_codec_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" \
         src/runtime/lifecycle/service_redirect.cpp \
-        src/quest/sentinel/quest_config.cpp \
-        src/quest/tests/quest_config_test.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
+        src/quest/tests/quest_config_test.cpp "$yaml_lib" \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
     # The hardware dump (#335): field schema, procfs/sysfs readers against a fake root, the os section's
@@ -565,13 +582,13 @@ test-quest-shared:
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
     rm -rf "$files"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" "${yaml_inc[@]}" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
         src/quest/sentinel/sentinel_log.cpp \
-        src/quest/sentinel/quest_config.cpp \
-        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp "$yaml_lib" \
         -o "$out/sentinel_host_test"
     "$out/sentinel_host_test"
     # The platform-neutral token-auth core and the Quest session, under a fake HTTP
@@ -732,14 +749,17 @@ test-quest-tls:
     trap cleanup EXIT
     server=../../src/quest/tests/tls_ws_server.py
     python3 -I "$server" tls server.pem server.key good.port & pids+=($!)
+    python3 -I "$server" tls-delay server.pem server.key delay.port & pids+=($!)
+    python3 -I "$server" tls-stall server.pem server.key stall.port & pids+=($!)
+    python3 -I "$server" tls-trickle server.pem server.key trickle.port & pids+=($!)
     python3 -I "$server" tls selfsigned.pem selfsigned.key selfsigned.port & pids+=($!)
     python3 -I "$server" plain plain.stats plain.port & pids+=($!)
-    for f in good.port selfsigned.port plain.port; do
+    for f in good.port delay.port stall.port trickle.port selfsigned.port plain.port; do
         for _ in $(seq 1 100); do [ -s "$f" ] && break; sleep 0.1; done
         [ -s "$f" ] || { echo "test-quest-tls: server for $f did not start" >&2; exit 1; }
     done
     ./curl_ws_tls_test trust-good trust-other "$(cat good.port)" "$(cat selfsigned.port)" \
-        "$(cat plain.port)" plain.stats
+        "$(cat plain.port)" plain.stats "$(cat stall.port)" "$(cat delay.port)" "$(cat trickle.port)"
     echo "test-quest-tls: verified-TLS connector tests pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -800,6 +820,18 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
+    # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_prerequisites.cpp -o "$out/chain_login_prerequisites.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
+    "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_signin_code_chain_test" -ldl
+    timeout 120 "$out/login_signin_code_chain_test"
     # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
     # game's callback and wait loop.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
@@ -812,12 +844,25 @@ test-quest-hooks:
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
 # redirect_test, which drives the production ServiceRedirector, the typed thunks and GotHook
 # against them with a fake game config. No NDK, no Android. Fail-close.
-test-quest-redirect:
+test-quest-redirect: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-redirect-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-redirect: FAIL - $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-redirect: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -839,16 +884,16 @@ test-quest-redirect:
     fi
     grep -q '"zR"' "$frames" || { echo "test-quest-redirect: FAIL - tstring_thunks.o has no zR frames to check" >&2; exit 1; }
     srcs=("$fx/redirect_test.cpp" src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
-        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp
         src/runtime/lifecycle/stable_string_pool.cpp)
     objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o")
-    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test" -ldl -pthread
+    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" "$yaml_lib" -o "$out/redirect_test" -ldl -pthread
     "$out/redirect_test" "$out"
     # The same test under ThreadSanitizer at -O1: the cache lock is only observable as a data race, and
     # -O1 also exercises the warnings that -O0 hides. The thunk TU and backend stay uninstrumented
     # objects (they hold no shared state beyond atomics).
     tsan=(-fsanitize=thread -O1 -g)
-    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test_tsan" -ldl -pthread
+    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" "$yaml_lib" -o "$out/redirect_test_tsan" -ldl -pthread
     TSAN_OPTIONS="halt_on_error=1 exitcode=66" "$out/redirect_test_tsan" "$out"
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so /
@@ -892,7 +937,17 @@ test-quest-social:
     set -euo pipefail
     out="build/quest-social-host"
     mkdir -p "$out"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-social: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     off=("${on[@]}" -fno-exceptions)
     "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
@@ -962,11 +1017,14 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
 # source, the social switch, the frame tap, the counter budget over the real hook libraries, and the
 # bridge end to end through the real loopback server and router with a fake connector. The hook
 # translation units are built -fno-exceptions as on the device. No NDK, no Android. Fail-close.
-test-quest-integration:
+test-quest-integration: _vcpkg-quest-host
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-integration-host"
     mkdir -p "$out"
+    yaml_host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    yaml_lib="$yaml_host/lib/libyaml-cpp.a"
+    [[ -f "$yaml_lib" ]] || { echo "test-quest-integration: FAIL - $yaml_lib not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
     if [[ ! -f "$json_src/json.hpp" ]]; then
         echo "test-quest-integration: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
@@ -975,7 +1033,7 @@ test-quest-integration:
     json_inc="$out/json_inc"
     mkdir -p "$json_inc"
     ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc" -isystem "$yaml_host/include")
     off=("${on[@]}" -fno-exceptions)
     # 1. sequence, post-load policy, identity, social switch, frame tap
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
@@ -1014,13 +1072,13 @@ test-quest-integration:
     grep -q '"zR"' "$out/dlopen_hook.frames.txt" || { echo "test-quest-integration: FAIL - dlopen_hook.o has no zR frames to check" >&2; exit 1; }
     "${on[@]}" src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp \
         src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
-        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp src/core/nevr_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         "$out/login_prompt_hook.o" "$out/obb_skip_hook.o" "$out/prompt_board.o" "$out/login_counters.o" \
         "$out/login_prerequisites.o" "$out/login_standin.o" \
-        -o "$out/integration_hooks_test" -ldl -pthread -lzstd
+        "$yaml_lib" -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end, with a fake connector (SessionBridge still links the libcurl connector it
     # builds when none is injected)
@@ -1066,6 +1124,9 @@ verify:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
+    # The log names what it tested, so a pass is never re-run to prove it.
+    echo "verify: HEAD $(git rev-parse HEAD)"
+    echo "verify: tree $( [ -z "$(git status --porcelain)" ] && echo clean || echo DIRTY)"
     just build
     # `just build` filters its output through grep and always exits 0, so its exit
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
@@ -1081,7 +1142,6 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1163,7 +1223,7 @@ verify:
     QTLS_LITERAL=$(grep -ciE 'curl_easy_setopt\(curl,[[:space:]]*CURLOPT_[A-Z0-9_]+,' <<<"$QTLS_CODE" || true)
     [ "$QTLS_CALLS" = "$QTLS_LITERAL" ] || qtls_fail "$QTLS_CALLS curl_easy_setopt line(s) but only $QTLS_LITERAL name their option with a direct CURLOPT_ literal"
     if grep -qiE 'curl_easy_option|curl_easy_setopt[^(]' <<<"$QTLS_CODE"; then qtls_fail "curl_easy_option_* or an indirect curl_easy_setopt reference"; fi
-    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
+    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_TIMEOUT CURLOPT_XFERINFODATA CURLOPT_XFERINFOFUNCTION CURLOPT_NOPROGRESS CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
     QTLS_NAMES=$(grep -oiE 'CURLOPT_[A-Z0-9_]+' <<<"$QTLS_CODE" || true)
     while IFS= read -r qtls_name; do
         [ -n "$qtls_name" ] || continue
@@ -1259,8 +1319,8 @@ verify:
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
         exit 1
     fi
-    # The graceful signal path must release it too, and must not reintroduce a
-    # runtime symbol lookup on a path that cannot take the loader lock (N62).
+    # The graceful console-control path must release it too, without a
+    # runtime symbol lookup during shutdown (N62).
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
         exit 1
@@ -1724,9 +1784,20 @@ verify:
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
     fi
-    if ! grep -q 'ServerFatal' <<<"$N120_XPID"; then
+    # ServerFatal is not callable here: the patch runs before the CLI is parsed, so g_isServer is
+    # still false and ServerFatal would only warn. The failure goes through g_bootHookFailed, which
+    # boot.cpp checks once the mode is known (src/runtime/tests/test_behavioral.cpp XpidPatchBoot).
+    if ! grep -q 'g_bootHookFailed = true' <<<"$N120_XPID"; then
         echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
+        exit 1
+    fi
+    # The flag alone is satisfied by one `g_bootHookFailed = true`, so a ServerFatal() restored on the
+    # validation path would pass the check above. It must stay out of this file altogether: it runs
+    # before the CLI is parsed, where ServerFatal only warns and the boot would go on.
+    if grep -q 'ServerFatal(' <<<"$N120_XPID"; then
+        echo "verify: FAIL — N120 xpid_patch.cpp calls ServerFatal()." >&2
+        echo "The patch runs before the CLI is parsed, so g_isServer is still false and ServerFatal only warns; report through g_bootHookFailed (boot.cpp refuses to start a server)." >&2
         exit 1
     fi
 
@@ -1901,7 +1972,7 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
-    python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    timeout -k 10 600 python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
@@ -1949,10 +2020,12 @@ verify:
         exit 1
     fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
-    # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
-    # generic branch still exists, and the attribution table is still populated
+    # generic null-ptr branch, NOT by per-site hooks. The VEH must call the
+    # policy that enforces the low-address and game-loop-thread conditions, and
+    # the attribution table must remain populated
     # (without it a fire reports a bare RVA and the class is unrecognisable).
-    if ! grep -q 'target < 0x10000' src/runtime/lifecycle/crash_recovery.cpp; then
+    if ! grep -q 'if (nevr_veh_policy::ShouldRecoverNullPointerAv(' src/runtime/lifecycle/crash_recovery.cpp \
+       || ! grep -q 'return isServer && target < 0x10000 && jumpBufferValid && gameLoopThreadId != 0 &&' src/runtime/lifecycle/veh_policy.h; then
         echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
         echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
         exit 1
@@ -1980,9 +2053,7 @@ verify:
             exit 1
         fi
     done
-    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources are kept out —
-    # the stderr FILE lock (Log -> vfprintf) and the loader lock
-    # (GetModuleHandleA/GetProcAddress). Both must stay out of PerformGracefulShutdown.
+    # N62: graceful shutdown must not resolve symbols through the loader lock.
     # Strip comment lines first: the function's own comment says "NO
     # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
     # violation of itself. Same false positive the N81 and N85 sensors hit.
@@ -1992,18 +2063,12 @@ verify:
     N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
     if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
-        echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
-        echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
+        echo "both take the loader lock and may deadlock shutdown." >&2
+        echo "Call StopWebSocketBridgeListener() directly." >&2
         exit 1
     fi
     if ! grep -q 'ResolveShutdownDependencies();' src/runtime/lifecycle/boot.cpp; then
-        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing; the cached" >&2
-        echo "WsBridge_Shutdown pointer stays null and the listener leaks on every shutdown." >&2
-        exit 1
-    fi
-    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/runtime/lifecycle/crash_recovery.cpp; then
-        echo "verify: FAIL — N62 signal-context flag is not volatile sig_atomic_t (the only type" >&2
-        echo "a signal handler may portably touch)." >&2
+        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing." >&2
         exit 1
     fi
     # N86: the per-frame tick MUST be dispatched from a site that runs in server
@@ -2460,6 +2525,55 @@ verify:
         echo "The tracked example is the source copied into a server's local config." >&2
         exit 1
     fi
+    # #573 — the Quest reads config.yaml through the PC's nevr_config, so the shared parser and its Quest wiring are
+    # part of the source. The behaviour is proved by quest_config_test (test-quest-shared) and, on the device
+    # image, by check-android-static-init and tests/quest; this sensor is the tripwire for the shapes they rely on:
+    #   (a) src/core/nevr_config.cpp is built into the Quest sentinel, which has no PC logger, no windows.h and no
+    #       thread-local state (TestNoEmulatedTLSInHookPath): no core/logging.h, no <windows.h>, no Log( or
+    #       FatalError( call, no thread_local. The PC-only half is src/core/nevr_config_policy.cpp.
+    #   (b) src/quest/sentinel/quest_config.cpp parses through nevr_config (LoadFromString) and holds no JSON parser.
+    #   (c) src/quest/CMakeLists.txt compiles ../core/nevr_config.cpp into nevr_quest_config and never the policy file.
+    #   (d) yaml-cpp reaches the Quest only through the overlay port whose patch removes its static initializers
+    #       (the sentinel allows one load-time initializer: tools/check_quest_static_init.sh).
+    Q573A_RC=0; Q573A_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/core/nevr_config.cpp) || Q573A_RC=$?
+    sensor_stage1 "#573 shared parser" "src/core/nevr_config.cpp" "$Q573A_RC"
+    sensor_nonempty "#573 shared parser" "non-comment lines of src/core/nevr_config.cpp" "$Q573A_CODE"
+    if grep -qE 'core/logging\.h|<windows\.h>|\bthread_local\b|\bLog\(|\bFatalError\(' <<<"$Q573A_CODE"; then
+        echo "verify: FAIL — #573: src/core/nevr_config.cpp includes the PC logger or windows.h, calls Log/FatalError, or declares a" >&2
+        echo "thread_local. It is built into the Quest sentinel, which has none of them. Put PC-only behaviour in src/core/nevr_config_policy.cpp." >&2
+        exit 1
+    fi
+    Q573B_RC=0; Q573B_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/sentinel/quest_config.cpp) || Q573B_RC=$?
+    sensor_stage1 "#573 quest config" "src/quest/sentinel/quest_config.cpp" "$Q573B_RC"
+    sensor_nonempty "#573 quest config" "non-comment lines of src/quest/sentinel/quest_config.cpp" "$Q573B_CODE"
+    if ! grep -qF 'NevrConfig::LoadFromString' <<<"$Q573B_CODE" || grep -qE 'json::parse' <<<"$Q573B_CODE"; then
+        echo "verify: FAIL — #573: src/quest/sentinel/quest_config.cpp must parse config.yaml through nevr::NevrConfig::LoadFromString and hold no JSON parser." >&2
+        exit 1
+    fi
+    Q573C_RC=0; Q573C_CODE=$(grep -vE '^[[:space:]]*#' src/quest/CMakeLists.txt) || Q573C_RC=$?
+    sensor_stage1 "#573 quest cmake" "src/quest/CMakeLists.txt" "$Q573C_RC"
+    sensor_nonempty "#573 quest cmake" "non-comment lines of src/quest/CMakeLists.txt" "$Q573C_CODE"
+    if ! grep -qF '../core/nevr_config.cpp' <<<"$Q573C_CODE" || grep -qF 'nevr_config_policy' <<<"$Q573C_CODE"; then
+        echo "verify: FAIL — #573: nevr_quest_config must compile ../core/nevr_config.cpp and must not compile nevr_config_policy.cpp (src/quest/CMakeLists.txt)." >&2
+        exit 1
+    fi
+    if ! grep -qF 'yaml-cpp-no-static-init.patch' src/quest/vcpkg-overlay-ports/yaml-cpp/portfile.cmake \
+        || [ ! -s src/quest/vcpkg-overlay-ports/yaml-cpp/yaml-cpp-no-static-init.patch ] \
+        || ! grep -qF 'vcpkg-overlay-ports' src/quest/vcpkg-configuration.json; then
+        echo "verify: FAIL — #573: the Quest build must take yaml-cpp from src/quest/vcpkg-overlay-ports (portfile lists yaml-cpp-no-static-init.patch," >&2
+        echo "the patch exists, src/quest/vcpkg-configuration.json names the overlay). Stock yaml-cpp adds six load-time initializers to the sentinel." >&2
+        exit 1
+    fi
+    # (e) the parser no longer logs the unset-variable warning, so the PC caller must (service_config.cpp's NevrCfg is
+    #     impure and is not linked by a unit test; LogUnsetBareVars itself is tested in test_nevr_config).
+    Q573E_RC=0; Q573E_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/service_config.cpp) || Q573E_RC=$?
+    sensor_stage1 "#573 PC unset-variable warning" "src/runtime/lifecycle/service_config.cpp" "$Q573E_RC"
+    sensor_nonempty "#573 PC unset-variable warning" "non-comment lines of src/runtime/lifecycle/service_config.cpp" "$Q573E_CODE"
+    if ! grep -qE 'nevr::LogUnsetBareVars\(c\)' <<<"$Q573E_CODE"; then
+        echo "verify: FAIL — #573: NevrCfg() in src/runtime/lifecycle/service_config.cpp no longer calls nevr::LogUnsetBareVars(c) after the load;" >&2
+        echo "the parser does not log the unset-variable warning any more, so without that call the PC never says a \${VAR} was unset." >&2
+        exit 1
+    fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
     # config.json outlived N133 (which moved every NEVR key to config.yaml) and
     # killed config.yaml-only servers at boot; the `g_earlyConfigPtr == NULL`
@@ -2569,7 +2683,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 872
+    python3 tools/verify_gtest_floor.py --floor 974
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
@@ -2595,7 +2709,7 @@ generate-certs:
 renew-certs:
     ./certs/generate-ca.sh --renew
 
-# Build normal and lite archives with required local Authenticode signing.
+# Build the stripped archives with required local Authenticode signing.
 sign:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2612,7 +2726,7 @@ sign:
     export CODESIGN_TSURL="http://timestamp.digicert.com"
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=ON
     build_status=0
-    cmake --build --preset {{ preset }} --target dist dist-lite || build_status=$?
+    cmake --build --preset {{ preset }} --target dist || build_status=$?
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=OFF > /dev/null
     exit "$build_status"
 
@@ -2656,7 +2770,9 @@ _vcpkg-mingw:
         root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
         cd "$root"
         unset VCPKG_ROOT
-        ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # Fixed PATH: the triplet passes PATH through (VCPKG_ENV_PASSTHROUGH), so the caller's PATH
+        # would be hashed into every package ABI and miss the shared binary cache.
+        env PATH=/usr/local/bin:/usr/bin ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
             --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
     fi

@@ -33,6 +33,7 @@
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/hook/dll_load_hook.h"
+#include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
 
@@ -508,10 +509,8 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
     FARPROC fn1 = GetProcAddress(module, "CreateDXGIFactory1");
     if (fn1) {
         g_origCreateDXGIFactory1 = (CreateDXGIFactory1_t)fn1;
-        MH_STATUS cst1 = MH_CreateHook((void*)fn1, (void*)&CreateDXGIFactory1_Hook,
-                                        (void**)&g_origCreateDXGIFactory1);
-        MH_STATUS est1 = (cst1 == MH_OK) ? MH_EnableHook((void*)fn1) : cst1;
-        if (est1 == MH_OK) {
+        if (PatchDetour(&g_origCreateDXGIFactory1,
+                        reinterpret_cast<PVOID>(&CreateDXGIFactory1_Hook), "CreateDXGIFactory1")) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=CreateDXGIFactory1 va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn1));
@@ -521,7 +520,7 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory1 va=0x%llX "
                 "status=%s actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn1), MH_StatusToString(est1),
+                reinterpret_cast<unsigned long long>(fn1), Hooking::LastAttachError(),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -530,17 +529,10 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
     FARPROC fn0 = GetProcAddress(module, "CreateDXGIFactory");
     if (fn0) {
         g_origCreateDXGIFactory = (CreateDXGIFactory_t)fn0;
-        // NOT RESOLVED (PC1, MASTER-SPEC review pass 2): whether this legacy
-        // entry point is ever actually called by echovr.exe is an open
-        // question pending ReVault confirmation — the install-success line
-        // below and CreateDXGIFactory_Hook's own invocation line are left
-        // exactly as they were, unchanged, pending that answer. Only the
-        // failure branch's missing MH_STATUS (a plain Category G/M gap,
-        // unrelated to the reachability question) is fixed here.
-        MH_STATUS cst0 = MH_CreateHook((void*)fn0, (void*)&CreateDXGIFactory_Hook,
-                                        (void**)&g_origCreateDXGIFactory);
-        MH_STATUS est0 = (cst0 == MH_OK) ? MH_EnableHook((void*)fn0) : cst0;
-        if (est0 == MH_OK) {
+        // Reachability of this legacy fallback entry point is unverified;
+        // keep the hook available and report its installation result.
+        if (PatchDetour(&g_origCreateDXGIFactory,
+                        reinterpret_cast<PVOID>(&CreateDXGIFactory_Hook), "CreateDXGIFactory")) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=CreateDXGIFactory va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn0));
@@ -550,7 +542,7 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory va=0x%llX "
                 "status=%s actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn0), MH_StatusToString(est0),
+                reinterpret_cast<unsigned long long>(fn0), Hooking::LastAttachError(),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -560,17 +552,10 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
     FARPROC fn = GetProcAddress(module, "D3D11CreateDevice");
     if (fn) {
         g_origD3D11CreateDevice = (D3D11CreateDevice_t)fn;
-        // NOT RESOLVED (PC2, MASTER-SPEC review pass 2): whether this fallback
-        // path is ever actually reached in headless mode is an open question
-        // pending ReVault confirmation — the install-success line below and
-        // D3D11CreateDevice_Hook's own invocation line are left exactly as
-        // they were, unchanged, pending that answer. Only the failure
-        // branch's missing MH_STATUS (a plain Category G/M gap, unrelated to
-        // the reachability question) is fixed here.
-        MH_STATUS cst = MH_CreateHook((void*)fn, (void*)&D3D11CreateDevice_Hook,
-                                       (void**)&g_origD3D11CreateDevice);
-        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook((void*)fn) : cst;
-        if (est == MH_OK) {
+        // Reachability of this fallback in headless mode is unverified;
+        // keep the hook available and report its installation result.
+        if (PatchDetour(&g_origD3D11CreateDevice,
+                        reinterpret_cast<PVOID>(&D3D11CreateDevice_Hook), "D3D11CreateDevice")) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=D3D11CreateDevice va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn));
@@ -580,7 +565,7 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=D3D11CreateDevice va=0x%llX "
                 "status=%s actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn), MH_StatusToString(est),
+                reinterpret_cast<unsigned long long>(fn), Hooking::LastAttachError(),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -617,10 +602,8 @@ static void OnD3d12Load(const char* dll_name, HMODULE module) {
     FARPROC fn = GetProcAddress(module, "D3D12CreateDevice");
     if (fn) {
         g_origD3D12CreateDevice = (D3D12CreateDevice_t)fn;
-        MH_STATUS cst = MH_CreateHook((void*)fn, (void*)&D3D12CreateDevice_Hook,
-                                       (void**)&g_origD3D12CreateDevice);
-        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook((void*)fn) : cst;
-        if (est == MH_OK) {
+        if (PatchDetour(&g_origD3D12CreateDevice,
+                        reinterpret_cast<PVOID>(&D3D12CreateDevice_Hook), "D3D12CreateDevice")) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=D3D12CreateDevice va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn));
@@ -636,7 +619,7 @@ static void OnD3d12Load(const char* dll_name, HMODULE module) {
                 "[NEVR.HEADLESS] hook failed name=D3D12CreateDevice va=0x%llX status=%s "
                 "actual=%02x%02x%02x%02x — headless server will call the real D3D12CreateDevice "
                 "with no GPU present",
-                reinterpret_cast<unsigned long long>(fn), MH_StatusToString(est),
+                reinterpret_cast<unsigned long long>(fn), Hooking::LastAttachError(),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -654,6 +637,8 @@ void InstallHeadlessGraphicsHooks() {
     nevr_dll_load_hook::OnLoad("d3d11.dll", OnD3d11Load);
     nevr_dll_load_hook::OnLoad("d3d12.dll", OnD3d12Load);
     // Intent logged in initialize.cpp before calling this function;
-    // the callbacks (OnDxgiLoad etc.) fire post-WinMain when Log() is safe.
+    // the callbacks (OnDxgiLoad etc.) log, so they fire once Log() is safe: post-WinMain, or,
+    // for a DLL already loaded now (an injector such as Revive's loads dxgi/d3d12 early), when
+    // initialize.cpp fires the held ones after the log filter is in.
 #endif
 }
