@@ -1251,9 +1251,9 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
     if (status != MH_OK) {
         uint8_t actual[4] = {0};
         memcpy(actual, g_hook_target, 4);
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
-            "current=%02x%02x%02x%02x status=%s",
+        nevr_boot_log_tee::TeeFprintf(
+            "[NEVR.PATCH] warn; hook failed name=CLog::PrintfImpl va=0x%llX "
+            "current=%02x%02x%02x%02x status=%s\n",
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
             MH_StatusToString(status));
@@ -1265,9 +1265,9 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
     if (status != MH_OK) {
         uint8_t actual[4] = {0};
         memcpy(actual, g_hook_target, 4);
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
-            "current=%02x%02x%02x%02x status=%s",
+        nevr_boot_log_tee::TeeFprintf(
+            "[NEVR.PATCH] warn; hook failed name=CLog::PrintfImpl va=0x%llX "
+            "current=%02x%02x%02x%02x status=%s\n",
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
             MH_StatusToString(status));
@@ -1284,8 +1284,8 @@ void nevr_builtin_log_filter::Init(uintptr_t base_addr, bool is_server) {
         return;
     }
 
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x%llX",
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.PATCH] debug; hooked name=CLog::PrintfImpl va=0x%llX\n",
         static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
 
     // This hook is installed with raw MinHook calls above, not PatchDetour, so

@@ -54,6 +54,24 @@ class BootPhaseLogging(unittest.TestCase):
         self.assertIsNotNone(match, "the cleanup failure must be reported")
         self.assertRegex(match.group("b"), r"nevr_boot_log_tee::TeeFprintf\(|\bLog\(")
 
+    def test_log_filter_init_hook_outcomes_use_only_the_boot_tee(self):
+        source = (ROOT / "src/runtime/log/builtin_filter.cpp").read_text()
+        body = extract_braced_function(source, "void nevr_builtin_log_filter::Init(")
+        self.assertEqual(
+            2,
+            len(re.findall(
+                r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] warn; hook failed name=CLog::PrintfImpl',
+                body,
+            )),
+            "both failed hook stages must report through the boot tee",
+        )
+        self.assertEqual(2, body.count('"current=%02x%02x%02x%02x status=%s\\n"'))
+        self.assertRegex(
+            body,
+            r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] debug; hooked name=CLog::PrintfImpl va=0x%llX\\n"',
+        )
+        self.assertNotRegex(body, r"\bLog\s*\(", "Init() runs in the boot phase (N36): its records go to the boot tee, not Log()")
+
     def test_xpid_boot_path_reports_through_the_tee_and_never_serverfatal(self):
         # PatchDscProvider and PatchProviderPrefixOvrOrg run from Initialize(), before the CLI is
         # parsed: ServerFatal would only warn.
