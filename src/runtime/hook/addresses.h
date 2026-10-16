@@ -282,8 +282,10 @@ constexpr uintptr_t CENGINE_CONFIG_COPY = 0x1547360;
 /// Called from fcn.140157fb0 (multiplayer init orchestrator) to verify
 /// internet connectivity before loading server support and setting service hosts.
 /// Uses CoCreateInstance(INetworkListManager) + InternetGetConnectedState.
-/// In headless/server mode under Wine, this fails → NoNetwork transition →
-/// BeginMultiplayer never completes. Hook to always return TRUE.
+/// In headless/server mode under Wine, this reports no internet and the net game switches to
+/// NoNetwork. The server hooks it to always return TRUE so that switch does not happen. It does
+/// not begin multiplayer: on a server nothing did until the state machine queued
+/// BeginMultiplayerLobby after the login (lifecycle/server_bringup.h).
 /// Return type: int64_t (1 = connected, 0 = not connected)
 /// Prologue: 48 89 5c 24 08 57 48 83 ec 20 (MinHook-safe: 10 bytes)
 constexpr uintptr_t SYSNET_CHECK = 0x1F6FA0;
@@ -529,6 +531,20 @@ constexpr uintptr_t GAME_WINDOWED_FLAGS_OFFSET = 31456;
 
 /// Offset within game instance structure for local config JSON
 constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
+
+// ============================================================================
+// Net game and game object layout (server bring-up, lifecycle/server_bringup.h)
+// ============================================================================
+
+/// Offset within the net game of its state (an EchoVR::NetGameState, 32 bits): its first field.
+constexpr uintptr_t NETGAME_STATE_OFFSET = 0;
+
+/// Offset within the net game of the game object: its second field.
+constexpr uintptr_t NETGAME_GAME_OFFSET = 8;
+
+/// Offset within the game object of the game thread's call queue, what QueueGameThreadCall takes as
+/// its first argument (NetGameScheduleReturnToLobby queues its callback on the same one).
+constexpr uintptr_t GAME_CALL_QUEUE_OFFSET = 8;
 
 // ============================================================================
 // Arena Rules Override (CJson_GetFloat hook)
