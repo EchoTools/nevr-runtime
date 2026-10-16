@@ -2694,7 +2694,9 @@ _vcpkg-mingw:
         root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
         cd "$root"
         unset VCPKG_ROOT
-        ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # Fixed PATH: the triplet passes PATH through (VCPKG_ENV_PASSTHROUGH), so the caller's PATH
+        # would be hashed into every package ABI and miss the shared binary cache.
+        env PATH=/usr/local/bin:/usr/bin ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
             --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
     fi
