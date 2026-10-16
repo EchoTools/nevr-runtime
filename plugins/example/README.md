@@ -57,6 +57,9 @@ DLL load
      Called ONCE, after game modules load, before the first tick.
      The host prefers InitEx when both are exported; it does NOT
      call both. Return 0 for success, non-zero to abort load.
+     On non-zero, the host immediately calls NvrPluginShutdown if exported,
+     then releases the DLL. Without that export, the host keeps the failed
+     DLL mapped until process exit because init may have installed hooks.
      A `required: true` plugin returning non-zero is FATAL on a
      server -- the process aborts.
 

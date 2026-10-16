@@ -1,6 +1,7 @@
 #include "runtime/ext/plugin_loader.h"
 
 #include <algorithm>
+#include <cstring>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -100,11 +101,17 @@ static void FailPluginLoad(const PluginLoadItem& item, const std::string& reason
 
 namespace {
 
-// `file` names a DLL inside plugins/. The legacy `.\name.dll` spelling is
-// accepted, but no other path component belongs in a configured filename.
-bool PluginFileStaysInDirectory(const std::string& file) {
+// The legacy `.\name.dll` spelling names the same file as `name.dll`.
+std::string_view PluginFilename(const std::string& file) {
   std::string_view name(file);
   if (name.substr(0, 2) == ".\\") name.remove_prefix(2);
+  return name;
+}
+
+// `file` names a DLL inside plugins/. No other path component belongs in a
+// configured filename.
+bool PluginFileStaysInDirectory(const std::string& file) {
+  const std::string_view name = PluginFilename(file);
   if (name.empty() || name == "." || name == "..") return false;
   return name.find_first_of("\\/:") == std::string_view::npos &&
          name.find('\0') == std::string_view::npos;
@@ -255,6 +262,7 @@ class PluginLoadRun {
   // True when the entry is skipped.
   bool SkipSuperseded(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
     const char* filename = item.file.c_str();
+    const std::string_view name = PluginFilename(item.file);
   // N89: refuse plugins whose function is now BUILT IN to gamepatches. Loading
   // one makes two MinHook instances (gamepatches links extern/minhook, plugins
   // link the vcpkg port — separate static copies, separate hook tables) fight
@@ -267,7 +275,10 @@ class PluginLoadRun {
     static const char* kSupersededByBuiltin[] = {"log_filter.dll", "log-filter.dll"};
     bool superseded = false;
     for (const char* s : kSupersededByBuiltin) {
-      if (_stricmp(filename, s) == 0) { superseded = true; break; }
+      if (name.size() == strlen(s) && _strnicmp(name.data(), s, name.size()) == 0) {
+        superseded = true;
+        break;
+      }
     }
     if (superseded) {
       Log(EchoVR::LogLevel::Warning,
@@ -505,20 +516,20 @@ class PluginLoadRun {
     }
     if (result != 0) {
       // An unsuccessful init may already have installed detours or acquired
-      // resources. Give the plugin its documented cleanup call before unmapping
+      // resources. Give the plugin its shutdown callback before unmapping
       // its code. Without that export there is no safe way to prove cleanup;
       // retain the module reference until process exit.
       if (s.shutdownFn) {
         s.shutdownFn();
         FreeLibrary(s.hModule);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] %s: shutdown after failed init code=%d completed; module released",
+            s.item.file.c_str(), result);
       } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PLUGIN] %s: init failed without shutdown export — module retained until process exit",
             s.item.file.c_str());
       }
-      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
-                     report[s.planIndex]);
-      continue;
     }
 
     // N84: re-verify hooked addresses after this plugin's init may have installed its own detours.
@@ -531,6 +542,12 @@ class PluginLoadRun {
                     "— our patches at those addresses are no longer applied",
                     s.item.file.c_str(), collisions);
       }
+    }
+
+    if (result != 0) {
+      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
+                     report[s.planIndex]);
+      continue;
     }
 
     const NvrLoadedPluginInfo loadedInfo = {

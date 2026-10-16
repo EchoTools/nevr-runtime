@@ -308,6 +308,31 @@ TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirect
   EXPECT_TRUE(DeleteFileA(escaped.c_str()));
 }
 
+TEST_F(PluginLoaderDiagnosticTest, RejectsEveryUnsafePluginFilename) {
+  const std::vector<std::string> invalid = {
+      "", ".", "..", ".\\", ".\\.", ".\\..", "sub/plugin.dll",
+      "sub\\plugin.dll", "C:plugin.dll", std::string("plugin.dll\0extra", 16)};
+  for (const std::string& file : invalid) {
+    SCOPED_TRACE(file);
+    g_testPluginLoadPlan = {{"unsafe", file, false, "", "{}"}};
+    ClearTestLogs();
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  }
+}
+
+TEST_F(PluginLoaderDiagnosticTest, DottedSupersededPluginIsSkippedBeforeLoad) {
+  for (const char* file : {".\\log_filter.dll", ".\\LOG-FILTER.DLL"}) {
+    SCOPED_TRACE(file);
+    g_testPluginLoadPlan = {{"old-filter", file, true, "", "{}"}};
+    ClearTestLogs();
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_TRUE(TestLogContains("superseded by the built-in log filter"));
+  }
+}
+
 TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) {
   constexpr char kEventName[] = "Local\\NEVRTestPartialInitShutdownObserved";
   HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kEventName);
@@ -319,6 +344,7 @@ TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) 
   EXPECT_EQ(GetLoadedPluginCount(), 0);
   EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0), WAIT_OBJECT_0);
   EXPECT_EQ(GetModuleHandleA("test_plugin_partial_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("test_plugin_partial_init_fail.dll: shutdown after failed init"));
   CloseHandle(shutdownObserved);
 }
 
@@ -329,6 +355,22 @@ TEST_F(PluginLoaderDiagnosticTest, FailedInitWithoutShutdownRetainsModule) {
   EXPECT_EQ(GetLoadedPluginCount(), 0);
   EXPECT_NE(GetModuleHandleA("test_plugin_init_fail.dll"), nullptr);
   EXPECT_TRUE(TestLogContains("retained until process exit"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitStillVerifiesHookedAddresses) {
+  nevr_hook_guard::ResetForTest();
+  std::array<unsigned char, 16> target{};
+  nevr_hook_guard::Record(target.data(), "failed-init-target");
+  target[0] = 0xE9;
+  const int fatalCallsBefore = g_serverFatalCalls;
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(g_serverFatalCalls, fatalCallsBefore + 1);
+  EXPECT_TRUE(TestLogContains("failed-init-target"));
+  nevr_hook_guard::ResetForTest();
 }
 
 TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
