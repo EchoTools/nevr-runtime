@@ -31,6 +31,13 @@ void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uin
 int  GetLoadedPluginCount(void);
 const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
 
+// #598: ctx->log. The host writes a plugin's line through Log() as
+// "[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ..." (see plugin_log.h). Every context the loader
+// passes a plugin (init, per-frame, state change) carries the plugin's id and this function, so the
+// caller's own context needs neither.
+void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
+                   const NevrLogField* fields, uint32_t fieldCount);
+
 // N134 S8: caps-based load-order priority. Lower loads first. This is the
 // sort key consumed by the loader's stable_sort in LoadPlugins. Defined
 // inline so both the loader and the test share one truth.

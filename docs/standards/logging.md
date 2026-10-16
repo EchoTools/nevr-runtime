@@ -45,6 +45,8 @@ how an agent triangulates a correct log line.
 - You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
   no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
+  A plugin is a separate DLL and cannot call `Log()`; its single entry point is the host's
+  log function in its context, reached through `plugin_logger.h` (Rule 15).
 - You **shall** include a subsystem tag on EVERY log line. The tag identifies which
   nEVR component produced the line. See the Subsystem Tags table below.
 - You **shall** log the outcome. A log line that says "connecting" without a
@@ -98,7 +100,7 @@ subsystems that nEVR annotates.
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
 | `[NEVR.MODULE]`       | Module registry and static modules            |
-| `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle)          |
+| `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle) and the lines plugins log through the host (`plugin=<id>`, Rule 15) |
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
 | `[NEVR.CONFIG]`       | Config loading, service redirects             |
@@ -513,6 +515,37 @@ If you change a log level and a sensor blocks it, update the sensor in
 the same commit. The sensor exists to prevent *drift*, not to prevent
 *deliberate revision*.
 
+### Rule 15: Plugins log through the host
+
+A plugin's lines go to the host's `Log()` through `ctx->log` (`NevrLogFn` in
+`src/extension/plugin_interface.h`, API v6), so they reach the same file, the same filter and the
+same level control as the host's own lines. A plugin does not write to stderr, which the host does not
+collect, and does not open its own log file. `plugins/common/include/plugin_logger.h` is the way to
+call it (`PluginLogBind(ctx)` in init, then `PluginLog`, `PluginLogWarning`, `PluginLogError`,
+`PluginLogDebug` or `PluginLogFields`).
+
+- **Tag and identity.** The host writes `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...`. `<id>`
+  is the host's name for the plugin (the `name` of its `config.yaml` entry), not text the plugin
+  chooses, so one plugin cannot write as another and an operator can filter on `plugin=`.
+- **Level.** The plugin names one of `NEVR_LOG_DEBUG`, `NEVR_LOG_INFO`, `NEVR_LOG_WARNING`,
+  `NEVR_LOG_ERROR`; the Level Guidelines apply to a plugin as they do to the host. A level outside the
+  range is logged as a warning that says so (`level_invalid=<n>`).
+- **Fields.** Identifiers and outcomes go in key/value fields (Rule 1), not in the message text. A
+  value with a space, `=` or a quote is quoted; a key is `[A-Za-z0-9_.-]`.
+- **Message is text.** It is never a format string on the host side. Control characters become
+  spaces, so a plugin cannot start a second line, and message, keys and values are capped so a line
+  fits the 2048-byte buffer `Log()` uses before the game logger exists; fields past the cap are counted
+  in `fields_dropped=<n>`.
+- **When.** A plugin has a host log from its init callback (`NvrPluginInit` or `NvrPluginInitEx`)
+  on, from any thread, including from `NvrPluginShutdown` with the id and function it kept. There is
+  none before init (no context exists) and none from `DllMain`, which runs under the loader lock. A
+  host older than v6 passes a context that does not cover `ctx->log`; the plugin logger then falls back
+  to stderr (`<prefix> <LEVEL> <message>`), which that host does not collect.
+- **Not provided.** A per-plugin log file, and rate limiting or log-once helpers. A plugin that logs
+  per frame keeps its own cap (Rule 5, Rule 13).
+
+**Where:** `src/runtime/ext/plugin_loader.cpp` (`HostPluginLog`), `src/runtime/ext/plugin_log.h`.
+
 ---
 
 ## BEFORE / AFTER Reference
@@ -532,6 +565,7 @@ form.
 | Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
+| Plugin line | `fprintf(stderr, "[my_plugin] hook failed %d", rc)` | `PluginLogFields(NEVR_LOG_WARNING, "hook failed", {{"error", "5"}})` -> `"[NEVR.PLUGIN] plugin=my_plugin hook failed error=5"` |
 | Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
 | State transition | `"[NETGAME] Logging in..."` | `"[NEVR.PATCH] netgame state from=%s to=%s"` |
 | Crash dump | `"=== CRASH DUMP ==="` | `"[NEVR.CRASH] exception code=0x%08lX name=%s rip=0x%llX"` |

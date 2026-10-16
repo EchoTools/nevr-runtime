@@ -322,6 +322,24 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         for level in ("INFO", "WARNING", "ERROR"):
             self.assertIn(f'"{level}"', header)
 
+    def test_plugins_log_through_the_host_log(self):
+        # Issue #598: a plugin had no way into the host's structured Log(). The context carries the
+        # plugin's id and the host's log function, the loader fills both into every context it passes a
+        # plugin (init, per-frame, state change), and the shared plugin logger binds to them at init.
+        iface = strip_comments((ROOT / "src/extension/plugin_interface.h").read_text())
+        self.assertRegex(iface, r"const char\*\s+plugin_id;")
+        self.assertRegex(iface, r"NevrLogFn\s+log;")
+        loader = strip_comments((ROOT / "src/runtime/ext/plugin_loader.cpp").read_text())
+        self.assertRegex(loader, r"ctx\.log\s*=\s*HostPluginLog\s*;")
+        self.assertRegex(loader, r"ctx\.plugin_id\s*=")
+        self.assertEqual(len(re.findall(r"\bContextFor\(\s*\*?\w+\s*,", loader)), 3,
+                         "init, TickPlugins and NotifyPluginsStateChange each pass the plugin its own context")
+        logger = strip_comments((ROOT / "plugins/common/include/plugin_logger.h").read_text())
+        self.assertRegex(logger, r"binding\.log\s*\(\s*binding\.id\s*,")
+        for rel in ("plugins/example/src/plugin.cpp", "plugins/debug-lockout/src/plugin.cpp"):
+            text = strip_comments((ROOT / rel).read_text())
+            self.assertRegex(text, r"\bPluginLogBind\s*\(\s*ctx\s*\)", f"{rel} never binds to the host log")
+
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
         # duplicated nevr_hook_liveness::Report for the same two hooks. HookLiveness is the one instrument.
