@@ -478,10 +478,10 @@ void PresenceLocalNeedsSocialAndIsOffByDefault() {
   }
 }
 
-// The Quest `self_check` (#451: self-checks are on in every build) and `obb_skip` (#572) features are gone. A file
-// that still names one is not an error: it is told the feature is retired, by name and why (the name is one of ours,
-// so nothing a file supplies reaches the log), nothing else about it counts as an unknown feature, and startup
-// carries on.
+// `self_check` (#451: self-checks are on in every build) and `obb_skip` (#572) are retired feature names: no build
+// reads them. A file that names one is not an error: it is told the feature is retired, by name and why (the name is
+// one of ours, so nothing a file supplies reaches the log), nothing else about it counts as an unknown feature, and
+// startup carries on. Only the exact name is retired; a longer name that starts with it is an unknown feature.
 void ARetiredFeatureNamedInAFileIsIgnoredByName() {
   LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"self_check":true}})");
   CHECK(EventsContain(r, "feature=self_check retired ignored"));
@@ -501,11 +501,20 @@ void ARetiredFeatureNamedInAFileIsIgnoredByName() {
   r = Load(Full(), R"({"features":{"self_check":true,"obb_skip":true}})");
   CHECK(EventsContain(r, "feature=self_check retired ignored (self-checks are on in every build)"));
   CHECK(EventsContain(r, "feature=obb_skip retired ignored (the OBB mount is skipped on every launch)"));
+  // a retired name given twice is named in the duplicate line, like every name of ours
+  r = Load(Full(), R"({"features":{"obb_skip":true,"obb_skip":false}})");
+  CHECK(EventsContain(r, "duplicate key=obb_skip extra=1"));
   // an unrelated unknown name is still only counted, never named
   r = Load(Full(), R"({"features":{"made_up_name":true}})");
   CHECK(EventsContain(r, "unknown feature #1 ignored"));
   CHECK(!EventsContain(r, "made_up_name"));
   CHECK(!EventsContain(r, "retired"));
+  // a name that only starts with a retired one is unknown, not retired
+  for (const char* text : {R"({"features":{"obb_skipping":true}})", R"({"features":{"self_checks":true}})"}) {
+    r = Load(Full(), text);
+    CHECK(EventsContain(r, "unknown feature #1 ignored"));
+    CHECK(!EventsContain(r, "retired"));
+  }
 }
 
 int main() {

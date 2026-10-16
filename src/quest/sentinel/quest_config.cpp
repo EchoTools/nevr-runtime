@@ -40,8 +40,8 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-// Feature names that existed and are gone. A file that still names one is told so, by name and why: the name is
-// one of ours, so logging it leaks nothing a file could supply. Anything else unknown is only counted.
+// Retired feature names: no build reads them. A file that names one is told so, by name and why: the name is one of
+// ours, so logging it leaks nothing a file could supply. Anything else unknown is only counted.
 struct RetiredFeature {
   const char* name;
   const char* why;
@@ -104,6 +104,9 @@ const char* KnownName(const std::string& name) {
   }
   for (const FeatureSpec& f : kFeatures) {
     if (name == f.name) return f.name;
+  }
+  for (const RetiredFeature& gone : kRetiredFeatures) {
+    if (name == gone.name) return gone.name;
   }
   return "<unknown>";
 }

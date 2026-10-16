@@ -67,7 +67,7 @@ The dedicated game server does not complete bring-up today ([#45](https://github
 - **Network.** UPnP port mapping, internal and external address overrides, match telemetry streaming. (PC)
 
 ### Quest
-- **A sentinel loaded with the game.** Four switchable features in `nevr-quest.json`: `redirect`, `bridge`, `login`, `social`; `hwdump` is separate and off by default. The encrypted-OBB mount is skipped on every launch, so the game starts without the ~30 s wait. (Quest)
+- **A sentinel loaded with the game.** Switchable features in `nevr-quest.json`: `redirect`, `bridge`, `login`, `social`, `presence_names` and `presence_local`; `hwdump` is a diagnostic and off by default. On every launch the sentinel answers the game's encrypted-OBB mount itself ([`docs/adr/0007-quest-obb-mount-skip.md`](docs/adr/0007-quest-obb-mount-skip.md)); that the game then starts without the ~30 s wait is predicted and not yet shown on a headset ([#572](https://github.com/EchoTools/nevr-runtime/issues/572)). (Quest)
 - **Login and social on the headset.** The game's login is rewritten into the NEVR login, and the social facade decodes friends, presence, recently-met and party frames from the game service. (Quest)
 
 ### Known gaps

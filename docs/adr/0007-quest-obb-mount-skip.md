@@ -1,7 +1,7 @@
 # ADR 0007: Quest OBB mount skip
 
 Status: accepted, implemented (`src/quest/sentinel/obb_skip_hook.{h,cpp}`, #319). On in every Quest build, with no feature
-flag (#572).
+flag (#572). Not yet observed on a headset: the "Prediction" section is what the first run must show.
 
 ## Context
 

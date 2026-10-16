@@ -203,6 +203,17 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     QCHECK(r.at(StepId::kInstallObbSkip).state != StepState::kOk);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
   }
+  // The clock counters, the reporter start and the clock hook are steps beside the skip, not its prerequisites: any
+  // of them failing or throwing still leaves the skip installed with its counters.
+  for (const char* other : {"reg_clock", "reporter", "clock"}) {
+    for (const char* mode : {"fail", "throw"}) {
+      FakeSteps s = FakeSteps::With(false, false, false, false);
+      if (std::strcmp(mode, "fail") == 0) s.failing = {other}; else s.throwing = {other};
+      const ConstructorReport r = RunConstructorSequence(s);
+      QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
+      QCHECK(s.Ran("obb") && !s.Ran("obb_uncounted"));
+    }
+  }
   {  // before the reporter is up nothing installs, and the skip is in before token auth starts
     FakeSteps s = FakeSteps::With(true, true, true, true);
     RunConstructorSequence(s);
@@ -271,7 +282,7 @@ void TestClockHookFailureLeavesTheRest() {
   s.failing = {"clock"};
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kInstallClockHook).state == StepState::kFailed);
-  for (const char* ran : {"token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
+  for (const char* ran : {"obb", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
 }
 
 void TestTokenAuthFailureTurnsOffTheBridgeAndWhatNeedsIt() {
@@ -361,7 +372,8 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reporter", "clock", "token", "prompt", "bridge", "redirect", "social", "dlopen"}) {
+                           "reg_obb", "reporter", "clock", "obb", "token", "prompt", "bridge", "redirect", "social",
+                           "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
     const ConstructorReport r = RunConstructorSequence(s);  // must return, not terminate
