@@ -9,7 +9,8 @@
 // Precedence per key: file value, else the value embedded at build time, else absent. A value in the file that
 // is invalid (including the empty string) is rejected and the embedded default stays: the file cannot clear a
 // default. A file that is unusable as a whole (a YAML error, an unknown top-level key, a top level that is not a
-// mapping, too large) contributes nothing: the embedded defaults stay and one Error line names the file and why.
+// mapping, a malformed `plugins` list, an unset `${VAR:?}`, nesting or alias expansion past nevr_config's bounds,
+// too large) contributes nothing: the embedded defaults stay and one Error line names the file and why.
 //
 // Features have no switch of their own except where the PC has a key. Redirect is on when a target resolves
 // (`services.socket_uri` or `auth.http_uri`), the bridge when the redirect is on and `services.socket_uri`
@@ -27,8 +28,7 @@
 namespace nevr_quest {
 
 inline constexpr const char* kConfigFileName = "config.yaml";
-// The file the sentinel read before config.yaml. It is not read any more; a copy left in the files directory is
-// reported once and ignored.
+// A file of this name in the files directory is not read; the sentinel reports once that it is present and ignored.
 inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 

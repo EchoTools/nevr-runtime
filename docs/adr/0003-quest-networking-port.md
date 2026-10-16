@@ -436,15 +436,16 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    login when the bridge is on and a server key resolves, and social (default on, the status names with it) needs
    login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it
    down with it, and each logs `forced off reason=<name>`. A YAML error, an unknown top-level key, a top level that
-   is not a mapping, an unset `${VAR:?}` or a file over 64 KiB rejects the file whole: embedded values, the default
+   is not a mapping, a malformed `plugins` list, an unset `${VAR:?}`, nesting deeper than 64 levels, more than
+   100,000 nodes once aliases are expanded, or a file over 64 KiB rejects the file whole: embedded values, the default
    features, one Error line `config file=<path> rejected reason=<token> (embedded defaults stay)` where the token is
    `nevr_config`'s class of failure (`ReasonToken`), never the parser's text.
    Every key source, requested and effective feature state, and rejection is logged by key or
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
    same directory, as one JSON object per line, and the log names the file it read
    (`config file=<path> loaded`, or `absent, using embedded defaults`). A value the file gives as the empty
-   string is rejected and cannot clear an embedded default. A copy of the old `nevr-quest.json` in the
-   same directory is not read; the log says so once. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
+   string is rejected and cannot clear an embedded default. A `nevr-quest.json` in the
+   same directory is not read; the log says once that it is present and ignored. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
    limits). `sentinel_host_test` runs
    the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
    host; the read has not been run on a headset.

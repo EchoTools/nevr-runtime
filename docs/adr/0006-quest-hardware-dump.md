@@ -171,7 +171,7 @@ Every failure path has its own line:
 
 | Test | What it covers |
 |---|---|
-| `quest_config_test` | the flag defaults off; only `diagnostics.hardware_dump: true` turns it on |
+| `quest_config_test` | the flag defaults off; only `diagnostics.hardware_dump` set to a true spelling (`true`, `yes`, `on` or `1` in any case, or `y`/`Y`) turns it on; `false`, `no`, `off`, `0`, `n`, an unknown word and an unset `${VAR}` leave it off |
 | `integration_sequence_test` | skipped by default with `hwdump_off`; runs alone; a failing or throwing dump step leaves the other steps unchanged |
 | `hwdump_core_test`, also under ThreadSanitizer | the field schema; readers against a fake root; the os section's fixed fields against an empty and a populated root; record dedupe, overflow and concurrency; trigger timing; a log line without values; the queries section |
 | `hwdump_handlers_test`, `-fno-exceptions` | every handler passes its arguments bit-exactly (including `s0` floats), returns the original's result, and stays inside the game's buffers |

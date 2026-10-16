@@ -33,9 +33,8 @@ target_link_libraries(nevr_core PUBLIC nevr_abi PRIVATE nlohmann_json::nlohmann_
 # off yaml-cpp's own headers.
 target_include_directories(nevr_core SYSTEM PRIVATE
   $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>)
-# nevr_config.cpp includes <windows.h> with NOMINMAX before yaml-cpp; the core PCH
-# includes windows.h WITHOUT NOMINMAX, whose min/max macros break yaml-cpp/<limits>.
-# Compile this one file without the PCH.
+# nevr_config.cpp includes no <windows.h> and defines NOMINMAX before its headers; the core PCH includes
+# windows.h WITHOUT NOMINMAX, whose min/max macros break yaml-cpp/<limits>. Compile this one file without the PCH.
 set_source_files_properties(nevr_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # nevr_config_policy.cpp is the PC-only half (the N4 fail-loud wrapper and the unset-variable warning): it logs, so
 # the Quest, which builds nevr_config.cpp without the PC logger, does not build it. Same PCH reason as above.

@@ -70,7 +70,7 @@ ReadStatus ReadConfigFile(const std::string& path, std::string* out, int* err) {
 
 namespace {
 
-// `<dir of path>/nevr-quest.json`: a copy of the file the sentinel read before config.yaml.
+// `<dir of path>/nevr-quest.json`: the path of a file that is reported when present and never read.
 std::string LegacyPathBeside(const std::string& configPath) {
   const std::size_t slash = configPath.find_last_of('/');
   return nevr_quest::LegacyConfigFilePath(slash == std::string::npos ? std::string() : configPath.substr(0, slash));
