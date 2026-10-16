@@ -503,9 +503,9 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
         restore-keys: |
-          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-
+          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-
 
     # The version the library carries is the tag's, through the same GITHUB_REF_* variables the PC build
     # reads (a release event or a dispatch started on the tag ref). The asset name takes it from the ref.
@@ -554,7 +554,7 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
 
   # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
   # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
