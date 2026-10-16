@@ -166,7 +166,6 @@ void TestCounterBudget() {
   RealCounterSteps steps;
   steps.config.effective.redirect = steps.config.effective.bridge = true;
   steps.config.effective.login = steps.config.effective.social = true;
-  steps.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,

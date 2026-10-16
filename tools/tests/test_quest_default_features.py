@@ -1,7 +1,8 @@
-"""cmake/nevr_build_info.cmake: NEVR_QUEST_DEFAULT_FEATURES names only features the sentinel has (#451).
+"""cmake/nevr_build_info.cmake: NEVR_QUEST_DEFAULT_FEATURES names only features the sentinel has (#451, #572).
 
-`self_check` was a Quest feature and is gone (self-checks are on in every build): a build that still passes it in
-NEVR_QUEST_DEFAULT_FEATURES must fail the configure loudly rather than be silently ignored.
+`self_check` (self-checks are on in every build) and `obb_skip` (the OBB mount is skipped on every launch) are not
+Quest features: a build that still passes one in NEVR_QUEST_DEFAULT_FEATURES must fail the configure loudly rather
+than be silently ignored.
 """
 
 import subprocess
@@ -27,7 +28,7 @@ def validate(features: str) -> subprocess.CompletedProcess:
 
 class QuestDefaultFeaturesTest(unittest.TestCase):
     def test_the_features_the_sentinel_has_are_accepted(self):
-        for features in ("", "redirect,bridge,login,social", "hwdump,obb_skip"):
+        for features in ("", "redirect,bridge,login,social", "hwdump"):
             done = validate(features)
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertIn("VALID", done.stdout + done.stderr)
@@ -36,6 +37,11 @@ class QuestDefaultFeaturesTest(unittest.TestCase):
         done = validate("redirect,bridge,login,social,self_check")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("unknown feature 'self_check'", done.stderr)
+
+    def test_the_retired_obb_skip_feature_fails_the_configure(self):
+        done = validate("redirect,bridge,login,social,obb_skip")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("unknown feature 'obb_skip'", done.stderr)
 
     def test_any_unknown_name_fails_the_configure(self):
         done = validate("redirect,nothing_like_it")

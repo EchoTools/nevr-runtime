@@ -1222,7 +1222,7 @@ void TestEndToEndFlow() {
   // reads those exact stand-ins. The rewrite then replaces the wire with the NEVR identity and the
   // login is SENT; OfflineID and the name are rewritten to the NEVR values.
   nevr_quest_login::ResetPrerequisitesForTest();
-  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyTrue, nullptr);
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyTrue, nullptr, nullptr);
   game.errored = true;
   Deliver(nevr_quest_login::Prerequisite::OrgScopedId, &OrgCb);
   Deliver(nevr_quest_login::Prerequisite::LoggedInUser, &UserCb);
@@ -1265,7 +1265,7 @@ void TestEndToEndFlow() {
     *s_reset = true;
   };
   nevr_quest_login::ResetPrerequisitesForTest();
-  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyFalse, Reset);
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/true, ReadyFalse, Reset, nullptr);
   game2.errored = true;
   Deliver(nevr_quest_login::Prerequisite::OrgScopedId, &OrgCb);  // not ready -> game's own error path + reset
   QCHECK(reset_ran);

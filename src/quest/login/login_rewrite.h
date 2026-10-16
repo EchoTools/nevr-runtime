@@ -276,6 +276,16 @@ class IdentitySource {
   // The default answers false, so a source that does not implement it fails closed: nothing is
   // synthesized and the game's own Oculus login failure runs.
   virtual bool Ready() const noexcept { return false; }
+
+  // True while the four local login answers (login_prerequisites.h, "local answers") must wait because token auth
+  // has a token coming without the player (#581). While it is false the answers are delivered, and an identity
+  // that is not ready (Ready() false) makes the game fail the login on its own path with
+  // kPrerequisitesMissingText, the screen the sign-in code is written onto.
+  //
+  // CONTRACT: the same as Ready() (it runs on the same pump thread): exactly one lock-free atomic load (the
+  // attempt gate's HoldsAnswers()), no allocation, no lock, no I/O, no logging, never throws.
+  // The default answers false: a source that does not implement it never holds, so its answers are delivered.
+  virtual bool HoldsAnswers() const noexcept { return false; }
 };
 
 // The readiness summary an IdentitySource keeps for Ready(). Lock-free (static_assert below),
