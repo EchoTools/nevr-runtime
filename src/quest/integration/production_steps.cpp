@@ -36,6 +36,7 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
@@ -297,6 +298,7 @@ void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size
     if (serverToGame) {
       nevr_party_share_check::OnServerMessage(message.symbol);
       nevr_party_leave_check::OnServerMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+      nevr_friend_request_check::OnServerMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
     } else {
       nevr_party_share_check::OnClientMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
     }
