@@ -15,8 +15,8 @@ Commit `@COMMIT@`.
 @IF_NOAPK@| `SHA256SUMS` | SHA-256 of `@ZIP@` |
 
 @IF_APK@Neither build needs a config file. The service endpoints and the public client keys are built in; the
-@IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK turns its login and social features on
-@IF_APK@with no `nevr-quest.json`.
+@IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK logs in and runs its social features
+@IF_APK@with no `config.yaml` either.
 @IF_NOAPK@The Windows DLL needs no config file: the service endpoints and the public client keys are built in, so
 @IF_NOAPK@it logs in with no `config.yaml`.
 
