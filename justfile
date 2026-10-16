@@ -1739,9 +1739,9 @@ verify:
         exit 1
     fi
     # N2: the helper's std::string and report must be gone before GameMain, which the VEH longjmps out of.
-    S515_REPORT_LINE=$(grep -nF 'TimestepStripReport report;' <<<"$S515_CR" | cut -d: -f1)
+    S515_REPORT_LINE=$(grep -nE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR" | cut -d: -f1 | sed -n 1p)
     S515_HOOK_LINE=$(grep -nF 'static INT64 GameMainWrapperHook(INT64 arg1) {' <<<"$S515_CR" | cut -d: -f1)
-    if [ -z "$S515_REPORT_LINE" ] || [ -z "$S515_HOOK_LINE" ] || [ "$S515_REPORT_LINE" -ge "$S515_HOOK_LINE" ] || [ "$(grep -cF 'TimestepStripReport report;' <<<"$S515_CR")" -ne 1 ]; then
+    if [ -z "$S515_REPORT_LINE" ] || [ -z "$S515_HOOK_LINE" ] || [ "$S515_REPORT_LINE" -ge "$S515_HOOK_LINE" ] || [ "$(grep -cE '^[[:space:]]+TimestepStripReport [A-Za-z_]+;' <<<"$S515_CR")" -ne 1 ]; then
         echo "verify: FAIL — #515 sensor: a TimestepStripReport local is alive in GameMainWrapperHook (or the helper moved)." >&2
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
         exit 1
