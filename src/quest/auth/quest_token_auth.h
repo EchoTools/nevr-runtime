@@ -16,7 +16,7 @@
 
 namespace nevr::quest_auth {
 
-inline constexpr char kDefaultLoginUrl[] = "https://echovrce.com/login/device";
+inline constexpr char kDefaultLoginUrl[] = "https://echovrce.com/device";
 
 struct QuestAuthConfig {
   std::string base_url;  // public nakama HTTP endpoint

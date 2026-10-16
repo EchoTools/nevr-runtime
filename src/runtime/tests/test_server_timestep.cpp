@@ -9,6 +9,10 @@
 
 namespace {
 
+using nevr_server_timestep::ApplyFlag;
+using nevr_server_timestep::ApplyStep;
+using nevr_server_timestep::FlagOutcome;
+using nevr_server_timestep::StepOutcome;
 using nevr_server_timestep::kFixedTimestepFlag;
 using nevr_server_timestep::StepMicroseconds;
 using nevr_server_timestep::WithFixedTimestep;
@@ -119,6 +123,214 @@ TEST(ServerTimestep, TheReadBackMustBeTheStepWritten) {
   EXPECT_TRUE(ReadBackMatches(8333, 8333));
   EXPECT_FALSE(ReadBackMatches(8333, 33333));
   EXPECT_FALSE(ReadBackMatches(8333, 0));
+}
+
+
+// --- #515: the two writes the server makes, with the client left alone ---
+
+TEST(ServerTimestep, AServerGetsTheFlagAndKeepsTheOtherBits) {
+  uint64_t flags = 0x8000000000000001ULL | 0x100000ULL;
+  const uint64_t before = flags;
+  EXPECT_EQ(ApplyFlag(true, &flags), FlagOutcome::kSet);
+  EXPECT_EQ(flags, before | 0x2000000ULL);
+}
+
+TEST(ServerTimestep, AClientsFlagIsUntouched) {
+  uint64_t flags = 0x100000ULL;
+  EXPECT_EQ(ApplyFlag(false, &flags), FlagOutcome::kNotServer);
+  EXPECT_EQ(flags, 0x100000ULL);
+}
+
+TEST(ServerTimestep, ANullFlagFieldIsNotWritten) {
+  EXPECT_EQ(ApplyFlag(true, nullptr), FlagOutcome::kFieldMissing) << "a missing field is reported, not silent";
+}
+
+TEST(ServerTimestep, AServerGetsTheStepAndTheOldValueIsReported) {
+  uint64_t field = 33333;  // the game's own step
+  const auto w = ApplyStep(true, 120, &field);
+  EXPECT_EQ(w.outcome, StepOutcome::kSet);
+  EXPECT_EQ(w.stepUs, 8333u);
+  EXPECT_EQ(w.was, 33333u);
+  EXPECT_EQ(w.after, 8333u);
+  EXPECT_EQ(field, 8333u);
+}
+
+TEST(ServerTimestep, TheSlotIsReadAsAQwordSoDataInItsUpperHalfIsNoStep) {
+  // The game stores the step as a qword (echovr.exe 0x140127a04). A slot with anything above bit 31 is not a
+  // step, even when its low half looks like one.
+  uint64_t field = (1ULL << 40) | 33333ULL;
+  const auto w = ApplyStep(true, 120, &field);
+  EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue);
+  EXPECT_EQ(field, (1ULL << 40) | 33333ULL) << "nothing is written";
+}
+
+TEST(ServerTimestep, AClientsStepIsUntouched) {
+  uint64_t field = 33333;
+  const auto w = ApplyStep(false, 120, &field);
+  EXPECT_EQ(w.outcome, StepOutcome::kNotServer);
+  EXPECT_EQ(field, 33333u);
+}
+
+TEST(ServerTimestep, ARateOfZeroOrMissingStateWritesNothingAndSaysSo) {
+  uint64_t field = 33333;
+  EXPECT_EQ(ApplyStep(true, 0, &field).outcome, StepOutcome::kKeepGameStep);
+  EXPECT_EQ(ApplyStep(true, 9, &field).outcome, StepOutcome::kRateRefused);
+  EXPECT_EQ(field, 33333u);
+  EXPECT_EQ(ApplyStep(true, 120, nullptr).outcome, StepOutcome::kStateMissing);
+}
+
+TEST(ServerTimestep, AFieldHoldingNoStepIsNotWritten) {
+  // N31 (main's PlanStepWrite): a value no step can have means the address is not the step slot.
+  for (const uint64_t other : {0ULL, 999ULL, 100001ULL}) {
+    uint64_t field = other;
+    const auto w = ApplyStep(true, 120, &field);
+    EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue) << other;
+    EXPECT_EQ(w.was, other);
+    EXPECT_EQ(w.stepUs, 0u);
+    EXPECT_EQ(field, other) << "nothing is written";
+    EXPECT_TRUE(nevr_server_timestep::StepFailed(w.outcome));
+  }
+  uint64_t ours = 8333;  // a second run over our own value is still a set
+  EXPECT_EQ(ApplyStep(true, 120, &ours).outcome, StepOutcome::kSet);
+  EXPECT_EQ(ours, 8333u);
+}
+
+TEST(ServerTimestep, FieldAtIsTheBasePlusTheOffsetAndNullForNoBase) {
+  alignas(8) unsigned char block[0x100] = {};
+  EXPECT_EQ(nevr_server_timestep::FieldAt(block, 0x90), reinterpret_cast<uint64_t*>(block + 0x90));
+  EXPECT_EQ(nevr_server_timestep::FieldAt(nullptr, 0x90), nullptr);
+}
+
+TEST(ServerTimestep, TheClockReadBackReportsStepAndModeBits) {
+  alignas(8) unsigned char clock[0x100] = {};
+  *reinterpret_cast<uint64_t*>(clock + nevr_server_timestep::kClockStepOffset) = 8333;
+  *reinterpret_cast<uint64_t*>(clock + nevr_server_timestep::kClockModeOffset) = 0xFFFFFFFFFFFFFF18ULL;
+  const auto rb = nevr_server_timestep::ReadClock(clock);
+  EXPECT_TRUE(rb.present);
+  EXPECT_EQ(rb.stepUs, 8333u);
+  EXPECT_EQ(rb.modeBits, 0x18u) << "only the fixed and paced bits";
+  EXPECT_TRUE(nevr_server_timestep::ReadBackIsLive(rb, 8333));
+  EXPECT_FALSE(nevr_server_timestep::ReadBackIsLive(rb, 33333));
+  EXPECT_FALSE(nevr_server_timestep::ReadClock(nullptr).present);
+  EXPECT_FALSE(nevr_server_timestep::ReadBackIsLive(nevr_server_timestep::ReadClock(nullptr), 8333));
+}
+
+TEST(ServerTimestep, TheReadBackLineSaysWhetherTheStepIsLive) {
+  alignas(8) unsigned char clock[0x100] = {};
+  *reinterpret_cast<uint64_t*>(clock + nevr_server_timestep::kClockStepOffset) = 33333;
+  const auto reset = nevr_server_timestep::ReadClock(clock);
+  const std::string line = nevr_server_timestep::ReadBackLine(reset, 8333, StepOutcome::kSet, 125);
+  EXPECT_NE(line.find("step_us=33333"), std::string::npos) << line;
+  EXPECT_NE(line.find("expected_step_us=8333"), std::string::npos) << line;
+  EXPECT_NE(line.find("live=false"), std::string::npos) << "a clock that was reset is not live: " << line;
+  EXPECT_NE(line.find("step_state=set"), std::string::npos) << line;
+  *reinterpret_cast<uint64_t*>(clock + nevr_server_timestep::kClockStepOffset) = 8333;
+  const std::string live =
+      nevr_server_timestep::ReadBackLine(nevr_server_timestep::ReadClock(clock), 8333, StepOutcome::kSet, 125);
+  EXPECT_NE(live.find("live=true"), std::string::npos) << live;
+  EXPECT_NE(nevr_server_timestep::ReadBackLine(nevr_server_timestep::ReadClock(nullptr), 8333,
+                                               StepOutcome::kSet, 125).find("clock=absent"),
+            std::string::npos);
+}
+
+TEST(ServerTimestep, TheReadBackHappensOnceOnAServerOnTheOneTick) {
+  using nevr_server_timestep::kReadBackTick;
+  using nevr_server_timestep::ShouldReadBack;
+  EXPECT_TRUE(ShouldReadBack(true, kReadBackTick));
+  EXPECT_FALSE(ShouldReadBack(false, kReadBackTick)) << "a client never reads back";
+  EXPECT_FALSE(ShouldReadBack(true, kReadBackTick - 1));
+  EXPECT_FALSE(ShouldReadBack(true, kReadBackTick + 1)) << "one shot, not every tick after";
+}
+
+TEST(ServerTimestep, EachOutcomeHasAName) {
+  EXPECT_STREQ(nevr_server_timestep::OutcomeName(StepOutcome::kSet), "set");
+  EXPECT_STREQ(nevr_server_timestep::OutcomeName(StepOutcome::kStateMissing), "state_missing");
+  EXPECT_STREQ(nevr_server_timestep::OutcomeName(StepOutcome::kNotApplied), "pending");
+  EXPECT_STREQ(nevr_server_timestep::OutcomeName(StepOutcome::kUnexpectedOldValue), "unexpected_old_value");
+  EXPECT_STREQ(nevr_server_timestep::FlagOutcomeName(FlagOutcome::kFieldMissing), "field_missing");
+}
+
+
+
+// --- #626 review: the read-back decision, the readable guard and the outcome records ---
+
+namespace {
+nevr_server_timestep::ClockReadBack ClockHolding(uint64_t step) {
+  nevr_server_timestep::ClockReadBack rb;
+  rb.present = true;
+  rb.stepUs = step;
+  return rb;
+}
+}  // namespace
+
+TEST(ServerTimestep, AfterAWriteTheClockShouldHoldTheStepWrittenAndAResetIsNotLive) {
+  nevr_server_timestep::StepWrite w;
+  w.outcome = StepOutcome::kSet;
+  w.stepUs = 8333;
+  w.was = 33333;
+  const auto live = nevr_server_timestep::DecideReadBack(w, 120, ClockHolding(8333), 125);
+  EXPECT_TRUE(live.live);
+  EXPECT_EQ(live.expectedStepUs, 8333u);
+  const auto reset = nevr_server_timestep::DecideReadBack(w, 120, ClockHolding(33333), 125);
+  EXPECT_FALSE(reset.live) << "the clock was reset to the game's step after the write";
+  EXPECT_NE(reset.line.find("live=false"), std::string::npos) << reset.line;
+}
+
+TEST(ServerTimestep, ARateOfZeroExpectsTheGamesOwnStepAndIsLiveWhenTheClockHoldsIt) {
+  // network.tick_rate_hz: 0 keeps the game's step on purpose; the read-back must not call that a failure.
+  nevr_server_timestep::StepWrite w;
+  w.outcome = StepOutcome::kKeepGameStep;
+  w.was = 33333;
+  const auto d = nevr_server_timestep::DecideReadBack(w, 0, ClockHolding(33333), 125);
+  EXPECT_EQ(d.expectedStepUs, 33333u);
+  EXPECT_TRUE(d.live);
+  EXPECT_NE(d.line.find("expected_step_us=33333"), std::string::npos) << d.line;
+  EXPECT_NE(d.line.find("step_state=keep_game_step"), std::string::npos) << d.line;
+  EXPECT_FALSE(nevr_server_timestep::DecideReadBack(w, 0, ClockHolding(8333), 125).live)
+      << "a clock holding some other step is still not live";
+}
+
+TEST(ServerTimestep, AFailedOrPendingStepExpectsTheConfiguredRateAndIsNotLiveUnlessTheClockHoldsIt) {
+  for (const StepOutcome o : {StepOutcome::kStateMissing, StepOutcome::kRateRefused, StepOutcome::kUnexpectedOldValue,
+                              StepOutcome::kWriteDidNotHold, StepOutcome::kNotApplied}) {
+    nevr_server_timestep::StepWrite w;
+    w.outcome = o;
+    const auto d = nevr_server_timestep::DecideReadBack(w, 120, ClockHolding(33333), 125);
+    EXPECT_EQ(d.expectedStepUs, 8333u) << nevr_server_timestep::OutcomeName(o);
+    EXPECT_FALSE(d.live) << nevr_server_timestep::OutcomeName(o);
+  }
+  nevr_server_timestep::StepWrite w;
+  w.outcome = StepOutcome::kNotApplied;
+  EXPECT_FALSE(nevr_server_timestep::DecideReadBack(w, 120, nevr_server_timestep::ReadClock(nullptr), 125).live)
+      << "an absent clock is never live";
+}
+
+TEST(ServerTimestep, AnUnreadableClockIsReportedAbsentAndNeverDereferenced) {
+  alignas(8) unsigned char clock[0x100] = {};
+  *reinterpret_cast<uint64_t*>(clock + nevr_server_timestep::kClockStepOffset) = 8333;
+  EXPECT_TRUE(nevr_server_timestep::ReadClockIf(true, clock).present);
+  EXPECT_FALSE(nevr_server_timestep::ReadClockIf(false, clock).present) << "the guard result decides";
+  EXPECT_FALSE(nevr_server_timestep::ReadClockIf(true, nullptr).present);
+}
+
+TEST(ServerTimestep, TheRecordsKeepWhatWasStoredForTheOtherThread) {
+  nevr_server_timestep::StepRecord record;
+  EXPECT_EQ(record.Load().outcome, StepOutcome::kNotApplied) << "nothing recorded yet is pending";
+  nevr_server_timestep::StepWrite w;
+  w.outcome = StepOutcome::kUnexpectedOldValue;
+  w.stepUs = 7;
+  w.was = 123456789012ULL;
+  w.after = 9;
+  record.Store(w);
+  const auto r = record.Load();
+  EXPECT_EQ(r.outcome, StepOutcome::kUnexpectedOldValue);
+  EXPECT_EQ(r.stepUs, 7u);
+  EXPECT_EQ(r.was, 123456789012ULL);
+  EXPECT_EQ(r.after, 9u);
+  nevr_server_timestep::FlagRecord flag;
+  EXPECT_EQ(flag.Load(), FlagOutcome::kNotApplied);
+  flag.Store(FlagOutcome::kFieldMissing);
+  EXPECT_EQ(flag.Load(), FlagOutcome::kFieldMissing);
 }
 
 }  // namespace

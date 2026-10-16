@@ -1,6 +1,9 @@
 #pragma once
 
+#include <string>
+
 #include "core/pch.h"
+#include "runtime/lifecycle/timestep_log.h"
 #include "runtime/lifecycle/veh_policy.h"
 
 /// Writes one line to stderr and, when armed, the crash record, with raw WriteFile only (no allocation, no
@@ -16,6 +19,12 @@ void InstallCrashRecoveryHooks();
 /// process alive instead of terminating. It sits with its longjmp counterpart
 /// (N125). Called from Initialize.
 void InstallGameMainHook();
+
+/// #515: what GameMainWrapperHook did to the game's command line (lifecycle/timestep_log.h).
+using nevr_timestep_log::TimestepStripReport;
+
+/// The report GameMainWrapperHook recorded (all zero before it ran).
+TimestepStripReport GetTimestepStripReport();
 
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
 /// and null-pointer AV recovery via longjmp in server mode.

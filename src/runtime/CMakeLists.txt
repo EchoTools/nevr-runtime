@@ -100,6 +100,8 @@ set(PATCHES_HEADERS
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
     "lifecycle/server_timestep.h"
+    "lifecycle/cmdline_strip.h"
+    "lifecycle/timestep_log.h"
     "lifecycle/server_bringup.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
@@ -747,6 +749,13 @@ if(BUILD_TESTING)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
+
+    # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
+    add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
+    set_source_files_properties(tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_strip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
     set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

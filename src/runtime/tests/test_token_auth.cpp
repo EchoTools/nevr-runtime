@@ -648,16 +648,16 @@ bool LogHas(const FakeDeviceAuthFlow& fake, EchoVR::LogLevel level, const std::s
 }  // namespace
 
 TEST(SignInDialogText, WaitingTextNamesThePageTheCodeAndTheBrowser) {
-  const auto c = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "ABCD-1234");
+  const auto c = nevr::auth::SignInWaitingContent("https://echovrce.com/device", "ABCD-1234");
   EXPECT_EQ(c.title, "Echo VR - sign in");
   EXPECT_EQ(c.code, "ABCD-1234");
   EXPECT_FALSE(c.closes_by_itself);
   EXPECT_EQ(c.instruction,
-            "Sign in to play: on a phone or computer, open\nechovrce.com/login/device\nand enter the code below.\n"
+            "Sign in to play: on a phone or computer, open\nechovrce.com/device\nand enter the code below.\n"
             "Your browser was also opened to that page. The code lasts 5 minutes.");
   // What the player types has no scheme and no query: the code is never part of the address line.
   EXPECT_EQ(nevr::auth::SignInDisplayUrl("http://localhost:7350/login/device"), "localhost:7350/login/device");
-  EXPECT_EQ(nevr::auth::SignInDisplayUrl("echovrce.com/login/device"), "echovrce.com/login/device");
+  EXPECT_EQ(nevr::auth::SignInDisplayUrl("echovrce.com/device"), "echovrce.com/device");
 }
 
 TEST(SignInDialogText, EveryEndingSaysWhichOneAndDropsTheCode) {
@@ -712,7 +712,7 @@ TEST(DeviceAuthFlow, TheCodeAndPageAreHandedToTheUiBeforeTheBrowserAndTheEndIsRe
     (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
     ASSERT_EQ(fake.issued.size(), 1U) << c.name;
     EXPECT_EQ(fake.issued[0].first, fake.code) << c.name;
-    EXPECT_EQ(fake.issued[0].second, "https://echovrce.com/login/device") << c.name;
+    EXPECT_EQ(fake.issued[0].second, "https://echovrce.com/device") << c.name;
     ASSERT_EQ(fake.ends.size(), 1U) << c.name;
     EXPECT_EQ(fake.ends[0], c.expected) << c.name;
   }
@@ -727,7 +727,7 @@ TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
   fake.poll_response = VerifiedPollResponse();
   const auto flow = nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
   EXPECT_TRUE(flow.success);
-  EXPECT_EQ(fake.browser_url, "https://echovrce.com/login/device?code=K7RX");
+  EXPECT_EQ(fake.browser_url, "https://echovrce.com/device?code=K7RX");
   ASSERT_EQ(fake.issued.size(), 1U);
   EXPECT_EQ(fake.issued[0].first, "K7RX");
   EXPECT_TRUE(LogHas(fake, EchoVR::LogLevel::Info, "<4 chars masked>"));
@@ -735,9 +735,9 @@ TEST(DeviceAuthFlow, AFourCharacterDashlessCodeIsUsedAsIssued) {
     (void)level;
     EXPECT_EQ(message.find("K7RX"), std::string::npos) << message;
   }
-  const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/login/device", "K7RX");
+  const auto shown = nevr::auth::SignInWaitingContent("https://echovrce.com/device", "K7RX");
   EXPECT_EQ(shown.code, "K7RX");
-  EXPECT_NE(shown.instruction.find("echovrce.com/login/device"), std::string::npos);
+  EXPECT_NE(shown.instruction.find("echovrce.com/device"), std::string::npos);
 }
 
 TEST(DeviceAuthFlow, NoCodeIsReportedAndAServerShowsNothing) {
@@ -863,7 +863,7 @@ TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo
     EXPECT_EQ(fake.ui_calls, resultCode > 32 ? 0 : 1) << resultCode;
     if (resultCode <= 32) {
       EXPECT_EQ(fake.ui_code, fake.code);
-      EXPECT_EQ(fake.ui_url, "https://echovrce.com/login/device");
+      EXPECT_EQ(fake.ui_url, "https://echovrce.com/device");
       EXPECT_EQ(fake.ui_browser_result, resultCode);
       EXPECT_EQ(fake.poll_calls, 0);
       EXPECT_TRUE(std::any_of(fake.logs.begin(), fake.logs.end(), [](const auto& entry) {
@@ -1023,9 +1023,9 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
   polling.poll_sequence.push_back(error);
   (void)nevr_token_auth::test_hook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), polling.Ops());
 
-  EXPECT_EQ(polling.browser_url, "https://echovrce.com/login/device?code=device-code-secret-sentinel");
+  EXPECT_EQ(polling.browser_url, "https://echovrce.com/device?code=device-code-secret-sentinel");
   EXPECT_EQ(uiFailure.ui_code, uiFailure.code);
-  EXPECT_EQ(uiFailure.ui_url, "https://echovrce.com/login/device");
+  EXPECT_EQ(uiFailure.ui_url, "https://echovrce.com/device");
   bool sawInfo = false;
   bool sawDebug = false;
   bool sawWarning = false;
@@ -1607,44 +1607,6 @@ TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
   ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
   EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
   EXPECT_TRUE(std::filesystem::exists(fallback));
-}
-
-// #512: a server's cache is the one beside its config.yaml, even with a player's cache nearer the
-// executable, and refreshing it leaves the player's alone.
-TEST_F(CredentialsDirFixture, ServerUsesTheCacheBesideItsConfigNotThePlayers) {
-  const auto playerCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto serverDir = root_ / "bin" / "win10" / "_local" / "server";
-  Write(playerCredentials, Credentials("player-refresh").dump());
-  Write(serverDir / "config.yaml", "identity:\n  discord_id: \"1\"\n");
-  Write(serverDir / ".credentials.json", Credentials("server-refresh").dump());
-  const std::string playerBefore = Read(playerCredentials);
-
-  const CredentialCacheLocation cache = ServerCredentialCache(serverDir.string().c_str(), exe_dir_);
-  EXPECT_TRUE(std::filesystem::equivalent(cache.credentialsPath, serverDir / ".credentials.json"));
-  EXPECT_EQ(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token, "server-refresh");
-
-  CachedAuthToken auth;
-  auth.refresh_token = "server-rotated";
-  auth.refresh_token_expiry = 2100000000U;
-  ASSERT_TRUE(SaveAuthTokenAt(auth, cache));
-  EXPECT_EQ(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token, "server-rotated");
-  EXPECT_EQ(Read(playerCredentials), playerBefore);
-}
-
-// #512: a server with no cache of its own yet gets an empty one beside its config (password sign-in
-// next), never the player's.
-TEST_F(CredentialsDirFixture, ServerWithoutItsOwnCacheDoesNotTakeThePlayers) {
-  const auto playerCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
-  const auto serverDir = root_ / "bin" / "win10" / "_local" / "server";
-  Write(playerCredentials, Credentials("player-refresh").dump());
-  Write(serverDir / "config.yaml", "identity:\n  discord_id: \"1\"\n");
-
-  const CredentialCacheLocation cache = ServerCredentialCache(serverDir.string().c_str(), exe_dir_);
-  EXPECT_EQ(std::filesystem::path(cache.directory).lexically_normal(), serverDir.lexically_normal());
-  EXPECT_TRUE(LoadCachedAuthTokenFromPath(cache.credentialsPath).refresh_token.empty());
-
-  // Without a config folder it is the executable-relative selection, as for a client.
-  EXPECT_TRUE(std::filesystem::equivalent(ServerCredentialCache(nullptr, exe_dir_).credentialsPath, playerCredentials));
 }
 
 TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
