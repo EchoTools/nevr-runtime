@@ -53,7 +53,7 @@ def make_fake_bin(directory: pathlib.Path) -> None:
     (directory / "pgrep").write_text(
         '#!/bin/bash\n'
         'for a in "$@"; do\n'
-        '  if [[ "$a" == *" :101" ]]; then exit 0; fi\n'
+        '  if [[ "$a" == "([X]vfb|[X]ephyr) :101" ]]; then exit 0; fi\n'
         'done\n'
         'matches_cmdline=0\n'
         'for a in "$@"; do [[ "$a" == "-f" ]] && matches_cmdline=1; done\n'
