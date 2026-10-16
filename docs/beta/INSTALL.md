@@ -46,7 +46,6 @@ Close Echo VR, delete `bin\win10\BugSplat64.dll`, and rename `BugSplat64.dll.ori
 
 You do not need to report these:
 
-- No in-game voice chat yet ([#15](https://github.com/EchoTools/nevr-runtime/issues/15)).
 - A friend's status (in a menu, a lobby or a match) is not live: it is what it was when your friends list
   last refreshed ([nakama#663](https://github.com/EchoTools/nakama/issues/663)).
 - A friend added on the website only appears after you restart the game
