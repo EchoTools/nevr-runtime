@@ -1087,6 +1087,9 @@ verify:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
+    # The log names what it tested, so a pass is never re-run to prove it.
+    echo "verify: HEAD $(git rev-parse HEAD)"
+    echo "verify: tree $( [ -z "$(git status --porcelain)" ] && echo clean || echo DIRTY)"
     just build
     # `just build` filters its output through grep and always exits 0, so its exit
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
