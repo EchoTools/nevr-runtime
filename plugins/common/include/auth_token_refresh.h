@@ -28,7 +28,8 @@ inline EchoVR::LogLevel ToEchoLogLevel(LogLevel level) {
 // Refresh an expired access token using the refresh token.
 // Calls the custom device/auth/refresh RPC (not the standard Nakama session
 // refresh, which uses a different signing key and requires session cache).
-// On success, updates auth in-place and saves to disk. Returns true on success.
+// On success, updates auth in-place and saves it to disk: to `cache` when given, else to the
+// executable-relative cache SaveAuthToken picks. Returns true on success.
 //
 // The request body, the response interpretation and the "failure leaves `auth`
 // untouched" contract are the platform-neutral nevr::auth core (core/auth_refresh.h),
@@ -36,7 +37,8 @@ inline EchoVR::LogLevel ToEchoLogLevel(LogLevel level) {
 // Windows-side.
 inline bool RefreshAuthToken(CachedAuthToken& auth,
                              const std::string& nakama_url,
-                             const std::string& http_key) {
+                             const std::string& http_key,
+                             const CredentialCacheLocation* cache = nullptr) {
     if (auth.refresh_token.empty()) return false;
 
     CURL* curl = curl_easy_init();
@@ -87,7 +89,11 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
         return false;
     }
 
-    SaveAuthToken(auth);
+    if (cache != nullptr) {
+        SaveAuthTokenAt(auth, *cache);
+    } else {
+        SaveAuthToken(auth);
+    }
     // No success log here: the callers (token_auth.cpp, gameserver.cpp) log the
     // success at Info with their own detail, so a line here would duplicate it.
     return true;
