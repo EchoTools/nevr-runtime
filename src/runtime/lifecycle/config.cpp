@@ -89,27 +89,62 @@ VOID LoadEarlyConfig() {
   }
 }
 
-/// <summary>
 // #511: a server's fixed time step, 1,000,000 / g_headlessTickRateHz microseconds. The step's state
-// (echovr.exe + FIXED_TIMESTEP_PTR) is there once the local config loads; the flag that makes the game
-// use it is set before PreprocessCommandLine (boot.cpp).
-static void ApplyServerTimestep() {
-  if (!g_isServer) return;
-  const uint32_t step = nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz);
-  if (step == 0) return;
-  CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
-  if (state == nullptr) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] server tick rate not set: the game's time step state is not there when the local config loads");
-    return;
-  }
-  auto* stepUs = reinterpret_cast<UINT32*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-  const UINT32 was = *stepUs;
-  *stepUs = step;
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %u us)",
-      static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(step), static_cast<unsigned>(was));
+// (echovr.exe + FIXED_TIMESTEP_PTR, the global at RVA 0x20A00E8) is there once the local config loads; the
+// flag that makes the game use it is set before PreprocessCommandLine (boot.cpp). The step is a 64-bit
+// field at state+0x90 (ConfigureClocks, echovr.exe 0x140127a04: MOV qword ptr [RBX + 0x90], RAX). The
+// second clock ConfigureClocks writes the same way, at [pGame+0x7B00] (0x140127a0f-0x140127a34), is left
+// alone, as the legacy patch did. The outcome is recorded for boot.cpp's log line (ServerStepWrite).
+static std::atomic<uint32_t> g_serverStepUs{0};
+static std::atomic<uint64_t> g_serverStepWas{0};
+static std::atomic<uint8_t> g_serverStepOutcome{static_cast<uint8_t>(nevr_server_timestep::StepOutcome::kNotApplied)};
+
+nevr_server_timestep::StepWrite ServerStepWrite() {
+  nevr_server_timestep::StepWrite w;
+  w.outcome = static_cast<nevr_server_timestep::StepOutcome>(g_serverStepOutcome.load(std::memory_order_acquire));
+  w.stepUs = g_serverStepUs.load(std::memory_order_relaxed);
+  w.was = g_serverStepWas.load(std::memory_order_relaxed);
+  return w;
 }
 
+static void ApplyServerTimestep() {
+  using nevr_server_timestep::StepOutcome;
+  uint64_t* stepField = nullptr;
+  if (g_isServer) {
+    CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    if (state != nullptr) {
+      stepField = reinterpret_cast<uint64_t*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+    }
+  }
+  const nevr_server_timestep::StepWrite w =
+      nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
+  g_serverStepUs.store(w.stepUs, std::memory_order_relaxed);
+  g_serverStepWas.store(w.was, std::memory_order_relaxed);
+  g_serverStepOutcome.store(static_cast<uint8_t>(w.outcome), std::memory_order_release);
+  switch (w.outcome) {
+    case StepOutcome::kSet:
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] server time step set to %u us for %u Hz; the game had %llu us",
+          static_cast<unsigned>(w.stepUs), static_cast<unsigned>(g_headlessTickRateHz),
+          static_cast<unsigned long long>(w.was));
+      break;
+    case StepOutcome::kStateMissing:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server time step not set: the game's time step state is not there when the local "
+          "config loads, so the server keeps the game's own step (outcome=state_missing)");
+      break;
+    case StepOutcome::kRateZero:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server time step not set: the configured rate is 0 Hz, so the server keeps the "
+          "game's own step (outcome=rate_zero)");
+      break;
+    case StepOutcome::kNotServer:
+    case StepOutcome::kNotApplied:
+      break;  // a client: nothing was written, nothing to say
+  }
+}
+
+/// <summary>
 /// A detour hook for the game's function to load the local config.json for the game instance.
 /// If a custom config path was provided via -config-path, it loads that file directly using
 /// the game's internal JSON loading function, bypassing the default _local/config.json.
