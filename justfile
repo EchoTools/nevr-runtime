@@ -1759,6 +1759,15 @@ verify:
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
         exit 1
     fi
+    # The allowlist reads one-line declarations only (a type split over lines, or with spaces inside its template
+    # arguments, would pass it), so the hook's whole text up to GameMain(gameArg); is also pinned: any edit
+    # there fails here until a reviewer has checked it adds no non-trivial local and updates the pin.
+    S515_PRE_SHA=$(sha256sum <<<"$S515_PRE_GAMEMAIN" | cut -c1-64)
+    if [ "$S515_PRE_SHA" != "2fb1f115631d585fa27c1eefc7ec2b14f0e1f42d97344a667c1ea35e79a12bb3" ]; then
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook's text before GameMain(gameArg); changed (sha256 $S515_PRE_SHA)." >&2
+        echo "Check that the edit leaves no local with a destructor alive across GameMain, then set the pin to that hash." >&2
+        exit 1
+    fi
     if grep -qF 'catch (...)' <<<"$S515_CR"; then
         echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
         exit 1
