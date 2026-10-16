@@ -28,7 +28,19 @@ extern const char* GetLogLevelString(EchoVR::LogLevel level);
 // Helper function to format JSON log entry
 extern std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, const char* caller = nullptr);
 
+/// The single log entry point. It routes by boot phase: while a boot sink is set it reports through
+/// that sink, otherwise through the game's CLog (EchoVR::WriteLog), or stderr before that is resolved.
+/// No caller branches on the phase.
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
+
+/// Where Log() reports during the runtime's boot. The boot runs under the DllMain loader lock, where
+/// the game's CLog is not usable (#495), so nevr_boot_log_tee::Init() sets the sink to the boot tee
+/// and nevr_boot_log_tee::Close() clears it: the boot phase is exactly the window a sink is set. The
+/// sink lives here, not in src/runtime/, because src/core/ does not depend on the runtime. It gets
+/// the formatted message.
+typedef VOID (*BootLogSink)(EchoVR::LogLevel level, const CHAR* message);
+/// Sets the boot sink; nullptr clears it and returns Log() to the game's CLog.
+void SetBootLogSink(BootLogSink sink);
 
 extern VOID FatalError(const CHAR* msg, const CHAR* title);
 

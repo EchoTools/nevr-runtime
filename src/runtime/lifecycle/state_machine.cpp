@@ -2,10 +2,10 @@
 
 #include <windows.h>
 #include <cstdio>
-#include <cstring>
 
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/server_bringup.h"
 #include "runtime/ext/module_loader.h"
@@ -19,52 +19,60 @@
 /// Used to detect session completion when the state returns to Lobby.
 static BOOL g_serverWasInGame = FALSE;
 
-static_assert(nevr_server_bringup::kLoggingIn == static_cast<uint32_t>(EchoVR::NetGameState::LoggingIn),
-              "server_bringup.h state values");
-static_assert(nevr_server_bringup::kLoggedIn == static_cast<uint32_t>(EchoVR::NetGameState::LoggedIn),
-              "server_bringup.h state values");
-
 namespace {
 
-// Prologues (echovr.exe 631547) of the two game functions the server bring-up calls (#45).
-// 0x140104e70, the call queue: push rbp; sub rsp,0x100.
-constexpr unsigned char kQueueGameThreadCallPrologue[9] = {0x40, 0x55, 0x48, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00};
-// 0x1400fddd0, begin multiplayer: sub rsp,0x78; xor eax,eax; mov dword [rsp+0x20],...
-constexpr unsigned char kBeginMultiplayerLobbyPrologue[8] = {0x48, 0x83, 0xEC, 0x78, 0x33, 0xC0, 0xC7, 0x44};
-
 // The net game's first field is its state, its second the game object.
-PVOID GameOf(PVOID netGame) { return *reinterpret_cast<PVOID*>(static_cast<CHAR*>(netGame) + 8); }
+EchoVR::NetGameState StateOf(PVOID netGame) {
+  return *reinterpret_cast<const EchoVR::NetGameState*>(static_cast<const CHAR*>(netGame) +
+                                                        nevr_patch_addresses::NETGAME_STATE_OFFSET);
+}
 
-// From the game's call queue, on its thread, once the switch to LoggedIn is done.
+PVOID GameOf(PVOID netGame) {
+  return *reinterpret_cast<PVOID*>(static_cast<CHAR*>(netGame) + nevr_patch_addresses::NETGAME_GAME_OFFSET);
+}
+
+// From the game's call queue, on its thread, once the switch to LoggedIn is done. A net game in any
+// other state means the bring-up cannot proceed and nothing else will begin multiplayer: the server
+// exits with that cause (N102, N120) rather than idling logged out.
 VOID BeginMultiplayerAfterLogin(PVOID netGame) {
-  const int32_t state = *static_cast<const int32_t*>(netGame);
-  if (state != static_cast<int32_t>(EchoVR::NetGameState::LoggedIn)) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] server bring-up: not beginning multiplayer, the net game is in state %d, not logged in", state);
-    return;
-  }
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] server logged in — beginning multiplayer (no menu runs on a server to begin it)");
-  EchoVR::BeginMultiplayerLobby(GameOf(netGame));
+  nevr_server_bringup::RunQueuedBegin(
+      StateOf(netGame),
+      [netGame] {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] server logged in — beginning multiplayer (no menu runs on a server to begin it)");
+        EchoVR::BeginMultiplayerLobby(GameOf(netGame));
+      },
+      [](EchoVR::NetGameState state) {
+        ServerFatal("server bring-up: not beginning multiplayer, the net game is in state %d, not logged in — "
+                    "nothing else begins it, so the server would idle",
+                    static_cast<int>(state));
+      });
 }
 
 // The switch hook runs before the game applies the switch, so the begin goes through the game's
-// call queue, as NetGameScheduleReturnToLobby's callback does, and runs after it.
+// call queue, as NetGameScheduleReturnToLobby's callback does, and runs after it. The prologues
+// of the queue and of the begin were checked once at boot (ValidateServerBringup).
 void QueueBeginMultiplayer(PVOID netGame) {
-  if (std::memcmp(reinterpret_cast<const void*>(EchoVR::QueueGameThreadCall), kQueueGameThreadCallPrologue,
-                  sizeof(kQueueGameThreadCallPrologue)) != 0 ||
-      std::memcmp(reinterpret_cast<const void*>(EchoVR::BeginMultiplayerLobby), kBeginMultiplayerLobbyPrologue,
-                  sizeof(kBeginMultiplayerLobbyPrologue)) != 0) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] server bring-up skipped reason=prologue_mismatch — the server stays logged in and never "
-        "begins multiplayer");
-    return;
-  }
   EchoVR::GameThreadCall call = {netGame, &BeginMultiplayerAfterLogin};
-  EchoVR::QueueGameThreadCall(static_cast<CHAR*>(GameOf(netGame)) + 8, &call);
+  EchoVR::QueueGameThreadCall(
+      static_cast<CHAR*>(GameOf(netGame)) + nevr_patch_addresses::GAME_CALL_QUEUE_OFFSET, &call);
 }
 
 }  // namespace
+
+void ValidateServerBringup() {
+  const bool valid = nevr_server_bringup::ValidatePrologues(
+      reinterpret_cast<const void*>(EchoVR::QueueGameThreadCall),
+      reinterpret_cast<const void*>(EchoVR::BeginMultiplayerLobby),
+      [](const char* cause) {
+        ServerFatal("%s — the server would stay logged in and never begin multiplayer", cause);
+      });
+  if (valid) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] server bring-up prologues validated queue_game_thread_call=ok begin_multiplayer_lobby=ok "
+        "— the server will begin multiplayer once its login completes");
+  }
+}
 
 /// <summary>
 /// A detour hook for the game's method it uses to transition from one net game state to another.
@@ -100,7 +108,8 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     s_prevState = static_cast<uint32_t>(state);
   }
 
-  if (nevr_server_bringup::BeginsMultiplayer(g_isServer != FALSE, fromState, static_cast<uint32_t>(state))) {
+  if (nevr_server_bringup::BeginsMultiplayer(g_isServer != FALSE, static_cast<EchoVR::NetGameState>(fromState),
+                                             state)) {
     QueueBeginMultiplayer(pGame);
   }
 

@@ -1,5 +1,4 @@
 #include "runtime/lifecycle/crash_recovery.h"
-#include "runtime/log/boot_log_tee.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -116,13 +115,9 @@ void InstallGameMainHook() {
   GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
   OriginalGameMainWrapper =
       reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
-  // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
+  // Runs in the boot phase, where Log() reports through the boot tee.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
-                                  : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
-                                    "longjmp is NOT armed\n");
-  } else if (hooked) {
+  if (hooked) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
         "null-deref AV in server mode will longjmp back here instead of terminating the process)");
