@@ -356,6 +356,14 @@ class VerifyServerTest(unittest.TestCase):
         self.assertFalse((self.win10 / "plugins/extra.dll").exists(), "a deployed plugin was left behind")
         self.assertIn("deployed files restored and verified", (self.tmp / "server-runs/run1/server.log").read_text())
 
+    def test_the_timestep_flag_set_passes_the_options_a_server_strips(self):
+        # #515: the run that shows GameMainWrapperHook removing -fixedtimestep and -timestep <value>.
+        result = subprocess.run([str(self.checkout / "verify-server.sh"), "run-ts", "timestep", "1"], env=self.env,
+                                cwd=self.checkout, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("args=-server -headless -noconsole -fixedtimestep -timestep 120",
+                      (self.tmp / "server-runs/run-ts/context.txt").read_text().splitlines())
+
     def test_an_interrupted_run_still_restores(self):
         env = dict(self.env, FAKE_WINE_SLEEP="30")
         process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.PIPE,
