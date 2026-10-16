@@ -33,6 +33,9 @@ struct NevrConfig::Impl {
 
 namespace {
 
+int SourceLine(const YAML::Mark& mark) { return mark.is_null() ? 0 : mark.line + 1; }
+int SourceColumn(const YAML::Mark& mark) { return mark.is_null() ? 0 : mark.column + 1; }
+
 // --- environment / interpolation -------------------------------------------
 
 // Empty is treated as unset — an empty secret is worse than a loud failure (N115).
@@ -53,7 +56,7 @@ using UnsetSink = std::set<std::string>*;
 //   ${VAR}        optional in effect — stays literal "${VAR}" if unset (warned at load)
 //   ${VAR:?msg}   required — throws with `msg` (or a default) if unset
 //   ${VAR:-def}   optional — `def` if unset
-std::string ResolveVar(const std::string& inner, UnsetSink unset) {
+std::string ResolveVar(const std::string& inner, UnsetSink unset, const YAML::Mark& mark) {
   std::string var = inner;
   char mode = 0;  // 0 bare, '?' required-with-msg, '-' default
   std::string rest;
@@ -72,7 +75,7 @@ std::string ResolveVar(const std::string& inner, UnsetSink unset) {
     throw NevrConfigError(rest.empty()
                               ? ("config: required environment variable " + var + " is not set")
                               : ("config: " + rest),
-                          NevrConfigErrorKind::kUnsetRequiredVariable);
+                          NevrConfigErrorKind::kUnsetRequiredVariable, SourceLine(mark), SourceColumn(mark));
   }
   // Bare ${VAR}, unset: the text stays as written. Failing here would cost a client
   // its whole config (every plugin) over one value; secrets use ${VAR:?msg}, which
@@ -87,7 +90,8 @@ std::string ResolveVar(const std::string& inner, UnsetSink unset) {
 // otherwise be read as a variable reference). No other `$` is special: $$ not followed by
 // { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
 // variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
-std::string InterpolateString(const std::string& in, UnsetSink unset = nullptr) {
+std::string InterpolateString(const std::string& in, UnsetSink unset = nullptr,
+                              const YAML::Mark& mark = YAML::Mark::null_mark()) {
   std::string out;
   std::size_t i = 0;
   while (i < in.size()) {
@@ -100,7 +104,7 @@ std::string InterpolateString(const std::string& in, UnsetSink unset = nullptr) 
         out += in.substr(i);
         break;
       }
-      out += ResolveVar(in.substr(i + 2, close - (i + 2)), unset);
+      out += ResolveVar(in.substr(i + 2, close - (i + 2)), unset, mark);
       i = close + 1;
     } else {
       out += in[i++];
@@ -111,7 +115,7 @@ std::string InterpolateString(const std::string& in, UnsetSink unset = nullptr) 
 
 // If `n` is a scalar, return its interpolated value; otherwise nullopt.
 std::optional<std::string> InterpolateScalar(const YAML::Node& n, UnsetSink unset = nullptr) {
-  if (n.IsScalar()) return InterpolateString(n.Scalar(), unset);
+  if (n.IsScalar()) return InterpolateString(n.Scalar(), unset, n.Mark());
   return std::nullopt;
 }
 
@@ -123,14 +127,14 @@ struct WalkBudget {
 
 // Count one visit of a node at `depth`; throws when the walk has gone too deep or too far. An alias makes the
 // tree a cycle or a DAG that expands to exponentially many visits, so both are checked on every visit.
-void EnterNode(WalkBudget& budget, std::size_t depth) {
+void EnterNode(WalkBudget& budget, std::size_t depth, const YAML::Mark& mark) {
   if (depth > kMaxConfigDepth) {
     throw NevrConfigError("config: nesting is deeper than " + std::to_string(kMaxConfigDepth) + " levels",
-                          NevrConfigErrorKind::kNestingTooDeep);
+                          NevrConfigErrorKind::kNestingTooDeep, SourceLine(mark), SourceColumn(mark));
   }
   if (++budget.visited > kMaxConfigNodes) {
     throw NevrConfigError("config: more than " + std::to_string(kMaxConfigNodes) + " nodes",
-                          NevrConfigErrorKind::kTooManyNodes);
+                          NevrConfigErrorKind::kTooManyNodes, SourceLine(mark), SourceColumn(mark));
   }
 }
 
@@ -142,10 +146,10 @@ void EnterNode(WalkBudget& budget, std::size_t depth) {
 // the one section whose values actually changed). So interpolation is applied
 // lazily at read time (GetString etc.); this walk only validates. Bounded by `budget`.
 void ValidateInterpolation(const YAML::Node& node, UnsetSink unset, WalkBudget& budget, std::size_t depth) {
-  EnterNode(budget, depth);
+  EnterNode(budget, depth, node.Mark());
   switch (node.Type()) {
     case YAML::NodeType::Scalar:
-      (void)InterpolateString(node.Scalar(), unset);  // may throw
+      (void)InterpolateString(node.Scalar(), unset, node.Mark());  // may throw
       break;
     case YAML::NodeType::Sequence:
       for (const auto& child : node) ValidateInterpolation(child, unset, budget, depth + 1);
@@ -204,7 +208,7 @@ void ValidateTopLevel(const YAML::Node& root) {
           "config: unknown top-level key '" + key +
           "' (allowed: version, identity, auth, services, network, assets, arena, "
           "guilds, telemetry, plugins, profiles, social, diagnostics; use x-* for extensions)",
-          NevrConfigErrorKind::kUnknownTopLevelKey);
+          NevrConfigErrorKind::kUnknownTopLevelKey, SourceLine(kv.first.Mark()), SourceColumn(kv.first.Mark()));
     }
   }
 }
@@ -212,7 +216,7 @@ void ValidateTopLevel(const YAML::Node& root) {
 // Bounded by `budget` like ValidateInterpolation; `depth` is the depth of `node` in the file's tree.
 void FlattenArgs(const YAML::Node& node, const std::string& prefix, std::map<std::string, std::string>& out,
                  WalkBudget& budget, std::size_t depth) {
-  EnterNode(budget, depth);
+  EnterNode(budget, depth, node.Mark());
   for (const auto& kv : node) {
     const std::string key =
         prefix.empty() ? kv.first.Scalar() : (prefix + "." + kv.first.Scalar());
@@ -225,12 +229,12 @@ void FlattenArgs(const YAML::Node& node, const std::string& prefix, std::map<std
       for (const auto& item : value) {
         if (!item.IsScalar()) continue;
         if (!first) joined += ",";
-        joined += InterpolateString(item.Scalar());
+        joined += InterpolateString(item.Scalar(), nullptr, item.Mark());
         first = false;
       }
       out[key] = joined;
     } else if (value.IsScalar()) {
-      out[key] = InterpolateString(value.Scalar());
+      out[key] = InterpolateString(value.Scalar(), nullptr, value.Mark());
     }
   }
 }
@@ -238,22 +242,27 @@ void FlattenArgs(const YAML::Node& node, const std::string& prefix, std::map<std
 void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out, WalkBudget& budget) {
   const YAML::Node plugins = ChildByKey(root, "plugins");
   if (!plugins.IsDefined() || plugins.IsNull()) return;
-  if (!plugins.IsSequence()) throw NevrConfigError("config: 'plugins' must be a list", NevrConfigErrorKind::kBadPlugins);
+  if (!plugins.IsSequence()) {
+    throw NevrConfigError("config: 'plugins' must be a list", NevrConfigErrorKind::kBadPlugins,
+                          SourceLine(plugins.Mark()), SourceColumn(plugins.Mark()));
+  }
 
   for (const auto& entry : plugins) {
     if (!entry.IsMap()) {
-      throw NevrConfigError("config: each plugin entry must be a mapping", NevrConfigErrorKind::kBadPlugins);
+      throw NevrConfigError("config: each plugin entry must be a mapping", NevrConfigErrorKind::kBadPlugins,
+                            SourceLine(entry.Mark()), SourceColumn(entry.Mark()));
     }
 
     PluginSpec spec;
     const YAML::Node nameN = ChildByKey(entry, "name");
     if (!nameN.IsScalar() || nameN.Scalar().empty()) {
-      throw NevrConfigError("config: a plugin entry is missing a non-empty 'name'", NevrConfigErrorKind::kBadPlugins);
+      throw NevrConfigError("config: a plugin entry is missing a non-empty 'name'", NevrConfigErrorKind::kBadPlugins,
+                            SourceLine(entry.Mark()), SourceColumn(entry.Mark()));
     }
-    spec.name = InterpolateString(nameN.Scalar());
+    spec.name = InterpolateString(nameN.Scalar(), nullptr, nameN.Mark());
 
     const YAML::Node fileN = ChildByKey(entry, "file");
-    spec.file = fileN.IsScalar() ? InterpolateString(fileN.Scalar()) : (spec.name + ".dll");
+    spec.file = fileN.IsScalar() ? InterpolateString(fileN.Scalar(), nullptr, fileN.Mark()) : (spec.name + ".dll");
 
     const YAML::Node enabledN = ChildByKey(entry, "enabled");
     if (enabledN.IsScalar()) spec.enabled = ParseBool(enabledN.Scalar()).value_or(true);
@@ -262,7 +271,7 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out, WalkBudg
     if (requiredN.IsScalar()) spec.required = ParseBool(requiredN.Scalar()).value_or(false);
 
     const YAML::Node targetN = ChildByKey(entry, "target");
-    if (targetN.IsScalar()) spec.target = InterpolateString(targetN.Scalar());
+    if (targetN.IsScalar()) spec.target = InterpolateString(targetN.Scalar(), nullptr, targetN.Mark());
 
     const YAML::Node argsN = ChildByKey(entry, "args");
     // root map 0, `plugins` list 1, the entry 2, `args` 3.
@@ -310,7 +319,8 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   try {
     raw = YAML::Load(yaml);
   } catch (const YAML::Exception& e) {
-    throw NevrConfigError(std::string("config: YAML parse error: ") + e.what(), NevrConfigErrorKind::kYamlSyntax);
+    throw NevrConfigError(std::string("config: YAML parse error: ") + e.what(), NevrConfigErrorKind::kYamlSyntax,
+                          SourceLine(e.mark), SourceColumn(e.mark));
   }
 
   NevrConfig cfg;
@@ -322,7 +332,8 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
     return cfg;
   }
   if (!raw.IsMap()) {
-    throw NevrConfigError("config: the top level must be a mapping", NevrConfigErrorKind::kNotAMapping);
+    throw NevrConfigError("config: the top level must be a mapping", NevrConfigErrorKind::kNotAMapping,
+                          SourceLine(raw.Mark()), SourceColumn(raw.Mark()));
   }
 
   ValidateTopLevel(raw);

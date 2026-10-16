@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 
 #include "core/nevr_config.h"
+#include "core/logging.h"
 
 namespace {
 
@@ -61,6 +62,10 @@ class ScopedScratchFile {
  private:
   std::string path_;
 };
+
+std::string g_configFatalMessage;
+
+void CaptureConfigFatal(const CHAR* message, const CHAR*) { g_configFatalMessage = message; }
 
 // A representative config touching every schema section the getters read.
 const char* kSampleYaml = R"YAML(
@@ -383,6 +388,34 @@ TEST(NevrConfig, LoadFromFileOrFailMissingScratchFileClientReturnsEmpty) {
   // Client mode on a missing file: warns (not fatal) and returns an empty config.
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
   EXPECT_TRUE(cfg.Empty());
+}
+
+TEST(NevrConfig, RejectedFileDoesNotLogItsUnknownKey) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("rejected-config"));
+  constexpr const char* kSecret = "secret-canary-584";
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << kSecret << ": value\n";
+    ASSERT_TRUE(output.good());
+  }
+
+  testing::internal::CaptureStderr();
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  const std::string logged = testing::internal::GetCapturedStderr();
+  EXPECT_TRUE(cfg.Empty());
+  EXPECT_NE(logged.find("reason=unknown_top_level_key line=1 column=1"), std::string::npos) << logged;
+  EXPECT_EQ(logged.find(kSecret), std::string::npos) << logged;
+
+  g_configFatalMessage.clear();
+  SetFatalErrorHandler(CaptureConfigFatal);
+  const nevr::NevrConfig serverCfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/true);
+  SetFatalErrorHandler(nullptr);
+  EXPECT_TRUE(serverCfg.Empty());
+  EXPECT_NE(g_configFatalMessage.find("reason=unknown_top_level_key line=1 column=1"), std::string::npos)
+      << g_configFatalMessage;
+  EXPECT_EQ(g_configFatalMessage.find(kSecret), std::string::npos) << g_configFatalMessage;
 }
 
 TEST(NevrConfig, AcceptsSocialFacadeSection) {

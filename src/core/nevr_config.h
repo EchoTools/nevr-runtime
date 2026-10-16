@@ -60,13 +60,21 @@ const char* ReasonToken(NevrConfigErrorKind kind);
 /// at the consumer call sites and never crosses a DLL export boundary.
 class NevrConfigError : public std::runtime_error {
  public:
-  explicit NevrConfigError(const std::string& what, NevrConfigErrorKind kind = NevrConfigErrorKind::kOther)
-      : std::runtime_error(what), kind_(kind) {}
+  explicit NevrConfigError(const std::string& what, NevrConfigErrorKind kind = NevrConfigErrorKind::kOther,
+                           int line = 0, int column = 0)
+      : std::runtime_error(what), kind_(kind), line_(line), column_(column) {}
   NevrConfigErrorKind Kind() const noexcept { return kind_; }
+  int Line() const noexcept { return line_; }
+  int Column() const noexcept { return column_; }
 
  private:
   NevrConfigErrorKind kind_;
+  int line_;
+  int column_;
 };
+
+/// PC-only diagnostic fields for a rejected file; excludes the parser's text.
+std::string ConfigRejectionDetail(const NevrConfigError& error);
 
 /// One entry of the ordered `plugins:` list. `args` is flattened to dotted keys
 /// (e.g. `foo.bar` for a nested map) with interpolated scalar string values, so
