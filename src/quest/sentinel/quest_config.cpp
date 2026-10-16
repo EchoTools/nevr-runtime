@@ -3,8 +3,6 @@
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_redirect.h"
 
-#include <nlohmann/json.hpp>
-
 #include <array>
 #include <exception>
 #include <optional>
@@ -270,24 +268,6 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
   Derive(r);
   ReportState(r);
   return r;
-}
-
-const char* LevelName(LogLevel level) {
-  switch (level) {
-    case LogLevel::kInfo: return "INFO";
-    case LogLevel::kWarn: return "WARN";
-    case LogLevel::kError: break;
-  }
-  return "ERROR";
-}
-
-std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message) {
-  nlohmann::json line;
-  line["ts_unix_ms"] = unixMs;
-  line["level"] = LevelName(level);
-  line["tag"] = "NEVR-Sentinel";
-  line["msg"] = message;
-  return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 
 namespace {
