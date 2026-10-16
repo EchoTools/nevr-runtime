@@ -462,8 +462,8 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
  * the flags byte at entry, so a live -server run shows whether bit1 is set;
  * static analysis could not find the setter (indirect dispatch, and
  * revault_search_code returns reconstruction-node noise for generic offset
- * patterns).  In a hung -server run the hook installs and is never invoked,
- * so the block is upstream of this function.
+ * patterns).  A -server run reaches this function once multiplayer begins, which
+ * the state machine starts after the login (state_machine.cpp).
  *
  * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
  * through unmodified. Server mode only (client mode calls this constantly

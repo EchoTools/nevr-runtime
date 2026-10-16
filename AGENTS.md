@@ -141,7 +141,7 @@ comment (for example N41, N48) is not a rule.
 
 | Rule | Statement | Guards | Checked by |
 | --- | --- | --- | --- |
-| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
+| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
 | N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock: after `InitializeFunctionPointers()` it logs only through `nevr_boot_log_tee::TeeFprintf`, with at most one `Log()`, the final line. | `src/runtime/lifecycle/initialize.cpp` | verify; `tools/tests/test_patch_detour_logging.py` for the callees |
 | (unnamed) | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | verify (sensor "Plugin detach teardown boundary", which names no rule) |
 | N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization under the loader lock, through kernel32 calls only (no CRT locks); it is the one documented exception to the addendum's no-file-I/O-from-DllMain rule. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |

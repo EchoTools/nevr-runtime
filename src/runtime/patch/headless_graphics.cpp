@@ -637,6 +637,8 @@ void InstallHeadlessGraphicsHooks() {
     nevr_dll_load_hook::OnLoad("d3d11.dll", OnD3d11Load);
     nevr_dll_load_hook::OnLoad("d3d12.dll", OnD3d12Load);
     // Intent logged in initialize.cpp before calling this function;
-    // the callbacks (OnDxgiLoad etc.) fire post-WinMain when Log() is safe.
+    // the callbacks (OnDxgiLoad etc.) log, so they fire once Log() is safe: post-WinMain, or,
+    // for a DLL already loaded now (an injector such as Revive's loads dxgi/d3d12 early), when
+    // initialize.cpp fires the held ones after the log filter is in.
 #endif
 }

@@ -92,10 +92,9 @@ void PreflightRuntimeBootstrap() {
   // reaches the main menu normally.
   //
   // The bit is keyed on -windowed, not on -server: it is a client flag.  A
-  // -server run does not reach BeginMultiplayer (issue #45), and leaving the bit
-  // off does not change that.  Other client-only handling in the same family
-  // (windowed, no-VR, spectator-stream flags) has not been ruled out as a
-  // collision with server mode.
+  // -server run begins multiplayer after its login through the state machine
+  // (state_machine.cpp, issue #45: no menu runs on a server to begin it); this
+  // bit plays no part in that.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
