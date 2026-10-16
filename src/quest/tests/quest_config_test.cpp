@@ -385,6 +385,16 @@ void AnUnsetVariableInAKeyIsRejectedByKeyNotByName() {
   CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=unset_variable"));
   CHECK(EventsContain(r, "unset_variable_references=1"));
   CHECK(!EventsContain(r, "NEVR_QUEST_TEST_UNSET_VAR_ZXQ"));
+  // A boolean key that holds an unset reference keeps its default and is rejected by key.
+  r = Load(Full(), "social:\n  facade: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
+                   "diagnostics:\n  hardware_dump: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n");
+  CHECK(r.config.effective.social && !r.config.effective.hwdump);
+  CHECK(EventsContain(r, "config file key=social.facade rejected reason=unset_variable (default stays)"));
+  CHECK(EventsContain(r, "config file key=diagnostics.hardware_dump rejected reason=unset_variable (default stays)"));
+  CHECK(EventsContain(r, "unset_variable_references=1"));
+  r = Load(Full(),
+           "auth:\n  http_key: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
+           "  server_key: \"${NEVR_QUEST_TEST_SET_VAR_ZXQ}\"\n");
   // A set variable resolves, and the value is not logged.
   CHECK(r.config.serverKey.text == "FROM-THE-ENVIRONMENT-5" && r.config.serverKey.source == Source::kFile);
   CHECK(!EventsContain(r, "FROM-THE-ENVIRONMENT-5") && !EventsContain(r, "NEVR_QUEST_TEST_SET_VAR_ZXQ"));

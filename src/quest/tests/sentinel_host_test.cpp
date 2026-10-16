@@ -121,7 +121,7 @@ __attribute__((constructor(101))) void ArmAlarm() {
 __attribute__((constructor(102))) void HostCtor() {
   ::mkdir(Dir().c_str(), 0755);
   // Stale leftovers from an interrupted earlier run.
-  for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.yaml", "/bad.yaml", "/absent-dir/config.yaml"}) {
+  for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.yaml", "/bad.yaml", "/locked.yaml", "/absent-dir/config.yaml"}) {
     ::unlink((Dir() + stale).c_str());
   }
   WriteFile(Dir() + "/config.yaml",
@@ -265,6 +265,19 @@ void ReadConfigFileNeverBlocksOnNonRegularFiles() {
   CHECK(absent.socketUri.source == nevr_quest::Source::kEmbedded && absent.effective.login);
   CHECK(Count("config file=" + none + " absent, using embedded defaults") == 1);
   CHECK(Count("nevr-quest.json present") == 0);
+
+  // A file that exists but cannot be read: reported with its errno, the embedded defaults used, nothing of it read.
+  if (::geteuid() != 0) {  // root reads a mode-0000 file
+    const std::string locked = Dir() + "/locked.yaml";
+    WriteFile(locked, "social:\n  facade: false\n");
+    CHECK(::chmod(locked.c_str(), 0000) == 0);
+    Captured().clear();
+    const nevr_quest::ResolvedConfig unreadable = sentinel::ResolveFromDisk(locked);
+    CHECK(unreadable.effective.social);  // the facade: false inside was not read
+    CHECK(Count("config file=" + locked + " unreadable errno=13 (Permission denied), using embedded defaults") == 1);
+    ::chmod(locked.c_str(), 0600);
+    ::unlink(locked.c_str());
+  }
 
   const std::string big = Dir() + "/big.yaml";
   WriteFile(big, std::string(nevr_quest::kMaxConfigBytes * 3, 'x'));

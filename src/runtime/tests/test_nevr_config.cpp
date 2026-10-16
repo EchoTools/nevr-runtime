@@ -416,8 +416,10 @@ TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
   EXPECT_EQ(reasonOf("bogus_section:\n  x: 1\n"), "unknown_top_level_key");
   EXPECT_EQ(reasonOf("plugins: 3\n"), "bad_plugins");
   EXPECT_EQ(reasonOf("plugins:\n  - 3\n"), "bad_plugins");
+  EXPECT_EQ(reasonOf("plugins:\n  - args: {}\n"), "bad_plugins");  // an entry with no name
   EXPECT_EQ(reasonOf("auth:\n  http_key: \"${NEVR_TEST_REASON_REQUIRED:?must be set}\"\n"), "unset_required_variable");
   EXPECT_EQ(reasonOf("services:\n  serverdb: \"x\"\n"), "no error");
+  EXPECT_STREQ(nevr::ReasonToken(nevr::NevrConfigErrorKind::kOther), "invalid_config");
   try {
     nevr::NevrConfig::LoadFromFile(ScratchConfigPath("no-such-file"));
     FAIL() << "an unreadable file must throw";

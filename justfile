@@ -2550,6 +2550,16 @@ verify:
         echo "the patch exists, src/quest/vcpkg-configuration.json names the overlay). Stock yaml-cpp adds six load-time initializers to the sentinel." >&2
         exit 1
     fi
+    # (e) the parser no longer logs the unset-variable warning, so the PC caller must (service_config.cpp's NevrCfg is
+    #     impure and is not linked by a unit test; LogUnsetBareVars itself is tested in test_nevr_config).
+    Q573E_RC=0; Q573E_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/service_config.cpp) || Q573E_RC=$?
+    sensor_stage1 "#573 PC unset-variable warning" "src/runtime/lifecycle/service_config.cpp" "$Q573E_RC"
+    sensor_nonempty "#573 PC unset-variable warning" "non-comment lines of src/runtime/lifecycle/service_config.cpp" "$Q573E_CODE"
+    if ! grep -qE 'nevr::LogUnsetBareVars\(c\)' <<<"$Q573E_CODE"; then
+        echo "verify: FAIL — #573: NevrCfg() in src/runtime/lifecycle/service_config.cpp no longer calls nevr::LogUnsetBareVars(c) after the load;" >&2
+        echo "the parser does not log the unset-variable warning any more, so without that call the PC never says a \${VAR} was unset." >&2
+        exit 1
+    fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
     # config.json outlived N133 (which moved every NEVR key to config.yaml) and
     # killed config.yaml-only servers at boot; the `g_earlyConfigPtr == NULL`
