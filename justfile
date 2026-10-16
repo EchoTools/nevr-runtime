@@ -365,6 +365,7 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
+    cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_crash
     cmake --build --preset {{ preset }} --target test_export_trace
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
@@ -400,6 +401,26 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
+    # The stable BugSplat64.dll host (src/runtime/host/): the fixed-buffer JSON writer, the
+    # diagnostic recorder, the minidump capture, the runtime load state machine and the minidump
+    # parser the crash harness trusts.
+    for name in test_host_json test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump; do
+        bin="build/{{ preset }}/bin/$name.exe"
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
+    # The child-process crash harness (its own PASS/FAIL lines are the evidence): a deliberate
+    # fault through the real createReport export for ten destination and runtime scenarios.
+    for bin in "build/{{ preset }}/bin/host-crash/test_host_crash.exe"; do
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: host harness not found: $bin" >&2
+            exit 1
+        fi
+        run_test "$bin"
+    done
     bin="build/{{ preset }}/bin/test_export_trace.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -2620,7 +2641,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 973
+    python3 tools/verify_gtest_floor.py --floor 1021
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

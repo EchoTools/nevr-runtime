@@ -405,6 +405,102 @@ if(BUILD_TESTING)
       test_bootstrap_attach_runtime_missing_entry
       test_bootstrap_attach_bad_image)
 
+    # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
+    # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
+    # recorder, the minidump capture and the runtime load/validate state machine.
+    # It is a static library of its own so the tests
+    # drive the objects the host links and not a copy. Built only for the tests until the
+    # target split links it into BugSplat64.dll.
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_library(nevr_host_core STATIC
+      host/bootstrap_diagnostics.cpp
+      host/crash_capture.cpp
+      host/runtime_load.cpp)
+    target_compile_options(nevr_host_core PRIVATE -Werror)
+    target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(nevr_host_core PUBLIC nlohmann_json::nlohmann_json)
+
+    add_executable(test_host_json tests/test_host_json.cpp)
+    set_source_files_properties(tests/test_host_json.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_json PRIVATE -Werror)
+    target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
+    target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)
+    target_link_libraries(test_bootstrap_diagnostics PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_bootstrap_diagnostics DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_crash_capture tests/test_host_crash_capture.cpp)
+    target_compile_options(test_host_crash_capture PRIVATE -Werror)
+    target_link_libraries(test_host_crash_capture PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_crash_capture DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_runtime_load tests/test_host_runtime_load.cpp)
+    target_compile_options(test_host_runtime_load PRIVATE -Werror)
+    target_link_libraries(test_host_runtime_load PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_runtime_load DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_minidump tests/test_host_minidump.cpp)
+    target_compile_options(test_host_minidump PRIVATE -Werror)
+    target_include_directories(test_host_minidump PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_host_minidump PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_minidump DISCOVERY_MODE PRE_TEST)
+
+    # Crash harness: a BugSplat64.dll shim (the production host objects behind the real
+    # mangled createReport export, plus runtime-load test seams) and child scenarios that
+    # fault through it.
+    set(HOST_CRASH_DIR "${CMAKE_BINARY_DIR}/bin/host-crash")
+    set(HOST_CRASH_FIXTURE_DIR "${HOST_CRASH_DIR}/fixtures")
+
+    function(host_crash_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_host_crash_shim SHARED
+      tests/host_crash/shim.cpp
+      "tests/host_crash/shim.def")
+    target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
+
+    function(add_host_crash_fixture target fixture_dir)
+      add_library(${target} SHARED tests/host_crash/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      host_crash_output(${target} "${HOST_CRASH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_host_crash_fixture(test_host_crash_runtime_good good)
+    add_host_crash_fixture(test_host_crash_runtime_bad_version bad-version
+      HOST_CRASH_BAD_VERSION)
+    add_host_crash_fixture(test_host_crash_runtime_init_failure init-failure
+      HOST_CRASH_INIT_FAILURE)
+
+    add_library(test_host_crash_runtime_missing_entry SHARED
+      tests/host_crash/runtime_missing_entry.cpp)
+    set_target_properties(test_host_crash_runtime_missing_entry PROPERTIES
+      PREFIX "" OUTPUT_NAME "nevr")
+    host_crash_output(test_host_crash_runtime_missing_entry
+      "${HOST_CRASH_FIXTURE_DIR}/missing-entry")
+
+    add_executable(test_host_crash tests/host_crash/host_crash_test.cpp)
+    target_link_libraries(test_host_crash PRIVATE nlohmann_json::nlohmann_json)
+    host_crash_output(test_host_crash "${HOST_CRASH_DIR}")
+    add_dependencies(test_host_crash
+      test_host_crash_shim
+      test_host_crash_runtime_good
+      test_host_crash_runtime_bad_version
+      test_host_crash_runtime_init_failure
+      test_host_crash_runtime_missing_entry)
+
     # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
     # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
     add_executable(test_export_trace
