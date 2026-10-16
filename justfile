@@ -364,6 +364,7 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
+    cmake --build --preset {{ preset }} --target test_bootstrap_attach
     cmake --build --preset {{ preset }} --target test_export_trace
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
@@ -387,6 +388,15 @@ test-auth-unit:
     bin="build/{{ preset }}/bin/test_runtime_abi.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    # The attach-time MinHook proof gate (not a GTest: its own PASS/FAIL lines are the evidence). The
+    # suite runs each scenario in a child process and fails on a hang, a loader-lock inversion or a
+    # partially installed detour.
+    bin="build/{{ preset }}/bin/bootstrap-attach/test_bootstrap_attach.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: bootstrap attach harness not found: $bin" >&2
         exit 1
     fi
     run_test "$bin"
