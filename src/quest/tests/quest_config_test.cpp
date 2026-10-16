@@ -41,6 +41,17 @@ bool EventsContain(const LoadResult& r, const std::string& needle) {
   return false;
 }
 
+// True when at least one event contains `needle` and every one that does has `level`.
+bool EventsWithAreAtLevel(const LoadResult& r, const std::string& needle, LogLevel level) {
+  bool any = false;
+  for (const auto& e : r.events) {
+    if (e.message.find(needle) == std::string::npos) continue;
+    if (e.level != level) return false;
+    any = true;
+  }
+  return any;
+}
+
 bool HasLevel(const LoadResult& r, LogLevel level) {
   for (const auto& e : r.events) {
     if (e.level == level) return true;
@@ -230,6 +241,7 @@ void ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName() {
   LoadResult r = Load(Full(), "social:\n  facade: maybe\n");
   CHECK(!r.fileRejected && r.config.effective.social);
   CHECK(EventsContain(r, "config file key=social.facade rejected reason=not_a_boolean"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=social.facade rejected reason=not_a_boolean", LogLevel::kWarn));
   CHECK(!EventsContain(r, "maybe"));
   r = Load(Full(), "diagnostics:\n  hardware_dump: sure\n");
   CHECK(!r.config.effective.hwdump);
@@ -336,6 +348,26 @@ void OversizedFileIsRejected() {
   CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_large limit_bytes=65536 (embedded defaults stay)"));
 }
 
+// A file of exactly kMaxConfigBytes is read; one byte more is rejected (ApplyFile: `>`, not `>=`).
+void TheSizeCapIsInclusive() {
+  const std::string head = "services:\n  socket_uri: \"ws://file.example/x\"\nx-pad: \"";
+  const std::string tail = "\"\n";
+  std::string atCap = head;
+  atCap.append(nevr_quest::kMaxConfigBytes - head.size() - tail.size(), 'x');
+  atCap += tail;
+  CHECK(atCap.size() == nevr_quest::kMaxConfigBytes);
+  LoadResult r = Load(Full(), atCap);
+  CHECK(!r.fileRejected);
+  CHECK(r.config.socketUri.source == Source::kFile && r.config.socketUri.text == "ws://file.example/x");
+  CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  std::string overCap = atCap;
+  overCap.insert(head.size(), "x");
+  CHECK(overCap.size() == nevr_quest::kMaxConfigBytes + 1);
+  r = Load(Full(), overCap);
+  CHECK(r.fileRejected && r.config.socketUri.source == Source::kEmbedded);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_large limit_bytes=65536 (embedded defaults stay)"));
+}
+
 void BadKeyValuesKeepTheDefault() {
   const LoadResult r = Load(Full(),
                             "services:\n  socket_uri: \"https://SECRETHOST-1/wrong-scheme\"\n"
@@ -351,6 +383,8 @@ void BadKeyValuesKeepTheDefault() {
   CHECK(EventsContain(r, "config file key=auth.http_uri rejected"));
   CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=contains whitespace or a control character"));
   CHECK(EventsContain(r, "config file key=auth.server_key rejected reason=empty"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=auth.server_key rejected reason=empty", LogLevel::kWarn));
+  CHECK(EventsWithAreAtLevel(r, "config file key=services.socket_uri rejected reason=", LogLevel::kWarn));
   CHECK(!EventsContain(r, "SECRETHOST"));
   CHECK(!EventsContain(r, "SECRETKEY"));
 }
@@ -383,13 +417,16 @@ void AnUnsetVariableInAKeyIsRejectedByKeyNotByName() {
   // The unset reference does not become a credential: the key counts as unset and the default stays.
   CHECK(r.config.httpKey.source == Source::kEmbedded && r.config.httpKey.text == kEmbApiKey);
   CHECK(EventsContain(r, "config file key=auth.http_key rejected reason=unset_variable"));
+  CHECK(EventsWithAreAtLevel(r, "config file key=auth.http_key rejected reason=unset_variable", LogLevel::kWarn));
   CHECK(EventsContain(r, "unset_variable_references=1"));
+  CHECK(EventsWithAreAtLevel(r, "unset_variable_references=1", LogLevel::kWarn));
   CHECK(!EventsContain(r, "NEVR_QUEST_TEST_UNSET_VAR_ZXQ"));
   // A boolean key that holds an unset reference keeps its default and is rejected by key.
   r = Load(Full(), "social:\n  facade: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n"
                    "diagnostics:\n  hardware_dump: \"${NEVR_QUEST_TEST_UNSET_VAR_ZXQ}\"\n");
   CHECK(r.config.effective.social && !r.config.effective.hwdump);
   CHECK(EventsContain(r, "config file key=social.facade rejected reason=unset_variable (default stays)"));
+  CHECK(EventsWithAreAtLevel(r, "key=social.facade rejected reason=unset_variable (default stays)", LogLevel::kWarn));
   CHECK(EventsContain(r, "config file key=diagnostics.hardware_dump rejected reason=unset_variable (default stays)"));
   CHECK(EventsContain(r, "unset_variable_references=1"));
   r = Load(Full(),
@@ -484,6 +521,7 @@ int main() {
   ARejectedFileNeverEchoesWhatItHeld();
   AnUnknownKeyInsideAKnownSectionIsNotAnError();
   OversizedFileIsRejected();
+  TheSizeCapIsInclusive();
   BadKeyValuesKeepTheDefault();
   UriShapeValidation();
   AScalarOfAnyYamlTypeIsAValueLikeOnThePc();
