@@ -44,14 +44,14 @@ each one gives; do the step this way on yours:
 | "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
 | "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
-| "System test after every commit": the production server, display `:0` | Log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. If you cannot run the game at all, say so in the PR: the runtime change is then unverified, and a maintainer runs it. |
+| "System test for runtime and auth changes": the production server, display `:0` | Log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. If you cannot run the game at all, say so in the PR: the runtime change is then unverified, and a maintainer runs it. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
 | Merging, and "Only the agent the owner has told to merge merges PRs" | A contributor's agent never merges. The maintainers review and merge. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
 **Keep Wine off the user's desktop.** `just verify` runs GTest binaries under Wine, and several tests and scripts
-start the game. Run each with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just verify`),
+start the game. Run each with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just <recipe>`),
 except for a client run on the nested display. A Wine process that reaches the user's display can take over their
 mouse and keyboard.
 
@@ -605,13 +605,17 @@ your seat name, for example `claude-main` or `codex`.
   Never interrupt another agent's build.
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
-- **The merge gate is the local capped `just verify`** (plus `just test-android` for a change under
-  `src/quest`). CI runs only when started by hand.
-- **`just verify` runs once per tip, never again to re-prove it.** Its log starts with `verify: HEAD <sha>` and
-  `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends `verify: OK` is the proof:
-  a reviewer reads that log and does not run verify again. A missing HEAD line is checked in seconds
-  (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time), never by a re-run.
-  Run verify again only when the tip changes.
+- **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
+  recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
+  `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
+  test for runtime and auth changes") when the change touches runtime or auth code. Run the quick check on the
+  PR's tip, in the build slice. CI runs only when started by hand.
+- **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
+  reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
+  `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
+  `verify: OK` is the proof: a reviewer reads that log and does not run verify again. A missing HEAD line is
+  checked in seconds (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time),
+  never by a re-run. Run verify again only when the tip changes.
 
 ### Git
 
@@ -752,8 +756,10 @@ your seat name, for example `claude-main` or `codex`.
   target moves after the PR is opened the base does not: it stays the commit you branched from until
   you `git merge origin/<target>`, and the check then names the new merge-base, so update the line
   (an edit to the body re-runs the check).
-- **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
-  the client login test as described under "System test after every commit". The run's log must
+- **Verification before merge.** The quick check green on the tip, run in the build slice (see "Builds"): the build,
+  the test recipe(s) that cover the changed code, and for a change to runtime or auth code the client login test as
+  described under "System test for runtime and auth changes". `just verify` is not part of it: it runs only on
+  main, when prepping a release. The run's log must
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
@@ -817,16 +823,16 @@ Forbidden actions (without explicit approval):
 
 This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation authorizes deployment.
 
-## System test after every commit
+## System test for runtime and auth changes
 
 > **Maintainers only.** The production server and its logs, and the display numbers, are the owner's machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
-  install"),** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+  install"),** on the tip of every PR whose change touches runtime or auth code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
 - **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against a headless `Xvfb :101 -screen 0 1920x1080x24` (Xephyr opens a window on the owner's desktop, so it is only for a run the owner asks to watch), and confirm `Xvfb :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
-- **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
+- **A green build and tests are necessary but not sufficient.** They catch C++ compile and test errors (`just verify`, which runs on main when prepping a release, adds the pattern sensors). None of them catches wire-format bugs, login failures, or rendering regressions. The system test covers what they cannot.
 
 ## Analysis: read what the program wrote, before anything else
 
@@ -884,7 +890,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
   repo.
-- **Verify entry point.** `just verify` is the single closed-loop gate:
+- **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
+  runs the quick check, see "Builds"):
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
   the Python test suite and source-invariant checks. The Go system suites are

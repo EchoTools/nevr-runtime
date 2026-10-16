@@ -57,13 +57,13 @@ Remaining points in a milestone divided by velocity is the number of sprints lef
 | Icebox | not scheduled | none |
 | Backlog | in the active milestone, not started | pointed |
 | Started | being worked | an owner is named |
-| Finished | PR open | capped `just verify` green on the PR head, output in the PR body |
-| Delivered | merged | `just verify` passes on `main` right after the merge, output recorded |
+| Finished | PR open | the quick check (AGENTS.md, "Builds") green on the PR head, output in the PR body |
+| Delivered | merged | merged to `main`; `just verify` runs on `main` when prepping a release, once per tip, output recorded |
 | Accepted | proven in real use | the owner or a tester confirmed it working, or the end-to-end check passed |
 | Rejected | failed acceptance | back to Started, with the failure quoted |
 
-No workflow runs on a pull request or a push, so the Finished and Delivered gates are the local capped
-`just verify`, not a CI status. CI runs by hand: `gh workflow run <file> --ref <branch>`.
+No workflow runs on a pull request or a push, so the Finished gate is the local capped quick check and the
+release-prep `just verify` on `main` is a local run, not a CI status. CI runs by hand: `gh workflow run <file> --ref <branch>`.
 
 Only Accepted points count toward velocity. Delivered is not done: merged code that nobody has seen work is not yet
 value.

@@ -11,13 +11,14 @@ Closes #
 ## How it was verified
 
 <!--
-`just verify` is the gate (see AGENTS.md). Paste the relevant output, and say what it does not cover:
-it does not catch wire-format bugs, login failures or rendering regressions.
-For runtime changes, say how it was run against a live server and quote the program's own log.
+The quick check is the gate for a PR (see AGENTS.md, "Builds"): the build, the test recipe(s) that cover the changed code,
+and the PC login test when the change touches runtime or auth. `just verify` runs only on main, when prepping a release.
+Paste the relevant output, and say what it does not cover: it does not catch wire-format bugs, login failures or
+rendering regressions. For runtime changes, quote the program's own log from the login test.
 See docs/standards/verification.md.
 -->
 
-- [ ] `just verify` passes (output pasted above)
+- [ ] The quick check passes on this tip (output pasted above)
 
 ## Checklist
 
