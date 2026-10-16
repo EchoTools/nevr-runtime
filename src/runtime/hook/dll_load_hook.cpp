@@ -38,11 +38,13 @@ struct Registration {
     PatchCallback callback;
     bool fired;
     std::uint64_t id;
+    HMODULE held;          // already loaded at registration during boot: fired by FireHeldCallbacks()
 };
 
 static std::vector<Registration> g_registrations;
 static std::mutex g_registryMutex;
 static std::uint64_t g_nextRegistrationId = 0;
+static bool g_holdEarly = false;  // guarded by g_registryMutex
 
 struct Filter {
     char name[48];
@@ -284,6 +286,8 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
 }
 
 void Install() {
+    // While the runtime boots, the game's log isn't usable until the log filter is in (FireHeldCallbacks).
+    HoldEarlyCallbacks();
 #ifdef _WIN32
     // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
     // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
@@ -348,20 +352,56 @@ void Shutdown() {
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_registrations.clear();
     g_filters.clear();
+    g_holdEarly = false;
+}
+
+void HoldEarlyCallbacks() {
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_holdEarly = true;
+}
+
+void FireHeldCallbacks() {
+    // Claim under the lock, call outside it: a callback may register more.
+    std::vector<Registration> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        g_holdEarly = false;
+        for (auto& reg : g_registrations) {
+            if (reg.fired || reg.held == nullptr) continue;
+            reg.fired = true;
+            pending.push_back(reg);
+        }
+    }
+    for (const auto& reg : pending) {
+        fprintf(stderr, "[NEVR.DLLHOOK] firing held patch callback for '%s' (module=%p)\n",
+                reg.dll_name, static_cast<void*>(reg.held));
+        fflush(stderr);
+        reg.callback(reg.dll_name, reg.held);
+    }
 }
 
 void OnLoad(const char* dll_name, PatchCallback callback) {
     Registration reg{};
     ExtractLowerFilename(dll_name, reg.dll_name, sizeof(reg.dll_name));
     reg.callback = callback;
+    reg.held = nullptr;
+    // If the DLL is already loaded, fire immediately (during boot: once the game log is up)
+    HMODULE existing = FindLoadedModule(dll_name);
     {
         std::lock_guard<std::mutex> lock(g_registryMutex);
         reg.id = ++g_nextRegistrationId;
+        if (existing && g_holdEarly) {
+            reg.held = existing;
+            g_registrations.push_back(reg);
+            fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p) during boot, "
+                            "held until the log filter is in\n",
+                    reg.dll_name, static_cast<void*>(existing));
+            fflush(stderr);
+            return;
+        }
         g_registrations.push_back(reg);
     }
 
-    // If the DLL is already loaded, fire immediately
-    HMODULE existing = FindLoadedModule(dll_name);
     if (existing) {
         bool claimed = false;
         {
