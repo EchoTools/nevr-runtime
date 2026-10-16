@@ -2,6 +2,7 @@
 // config.yaml, parsed by the PC's nevr_config (src/core/nevr_config.cpp).
 #include "quest/sentinel/quest_config.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -390,18 +391,29 @@ std::string NestedAliases(int levels) {
   return s;
 }
 
+// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s.
+constexpr std::chrono::milliseconds kRejectionBudget{100};
+
+LoadResult TimedLoad(const std::string& file, bool& withinBudget) {
+  const auto start = std::chrono::steady_clock::now();
+  LoadResult r = Load(Full(), file);
+  withinBudget = std::chrono::steady_clock::now() - start < kRejectionBudget;
+  return r;
+}
+
 void AliasesThatLoopOrExplodeAreRejectedNotWalkedForever() {
   const char* const nesting =
       "config file=config.yaml rejected reason=nesting_too_deep (embedded defaults stay)";
-  LoadResult r = Load(Full(), "x-a: &a [*a]\n");
-  CHECK(r.fileRejected && EventsContain(r, nesting));
+  bool fast = false;
+  LoadResult r = TimedLoad("x-a: &a [*a]\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
   CHECK(DefaultsOnly(r.config.effective) && r.config.socketUri.source == Source::kEmbedded);
-  r = Load(Full(), "x-a: &a {k: *a}\n");
-  CHECK(r.fileRejected && EventsContain(r, nesting));
-  r = Load(Full(), "plugins:\n  - name: p\n    args: &a {k: *a}\n");
-  CHECK(r.fileRejected && EventsContain(r, nesting));
-  r = Load(Full(), NestedAliases(8));
-  CHECK(r.fileRejected);
+  r = TimedLoad("x-a: &a {k: *a}\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
+  r = TimedLoad("plugins:\n  - name: p\n    args: &a {k: *a}\n", fast);
+  CHECK(r.fileRejected && EventsContain(r, nesting) && fast);
+  r = TimedLoad(NestedAliases(8), fast);
+  CHECK(r.fileRejected && fast);
   CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_many_nodes (embedded defaults stay)"));
   CHECK(!EventsContain(r, "lol"));
 }

@@ -6,6 +6,7 @@
 // and malformed-YAML failure. Built under -DBUILD_TESTING=ON and run under
 // Wine by `just test-auth-unit` (which `just verify` invokes).
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
@@ -459,14 +460,25 @@ std::string NestedSequences(std::size_t brackets) {
   return "x-d: " + std::string(brackets, '[') + "s" + std::string(brackets, ']') + "\n";
 }
 
+// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s.
+constexpr std::chrono::milliseconds kRejectionBudget{100};
+
+std::chrono::milliseconds RejectionTime(const std::string& yaml) {
+  const auto start = std::chrono::steady_clock::now();
+  ReasonOf(yaml);
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+}
+
 }  // namespace
 
 TEST(NevrConfig, ASelfReferencingSequenceIsRejectedNotWalkedForever) {
   EXPECT_EQ(ReasonOf("x-a: &a [*a]\n"), "nesting_too_deep");
+  EXPECT_LT(RejectionTime("x-a: &a [*a]\n"), kRejectionBudget);
 }
 
 TEST(NevrConfig, ASelfReferencingMapIsRejectedNotWalkedForever) {
   EXPECT_EQ(ReasonOf("x-a: &a {k: *a}\n"), "nesting_too_deep");
+  EXPECT_LT(RejectionTime("x-a: &a {k: *a}\n"), kRejectionBudget);
 }
 
 TEST(NevrConfig, ASelfReferencingPluginArgsMapIsRejected) {
@@ -475,6 +487,7 @@ TEST(NevrConfig, ASelfReferencingPluginArgsMapIsRejected) {
 
 TEST(NevrConfig, NestedAliasesThatExpandExponentiallyAreRejectedByTheNodeBudget) {
   EXPECT_EQ(ReasonOf(NestedAliases(8)), "too_many_nodes");
+  EXPECT_LT(RejectionTime(NestedAliases(8)), kRejectionBudget);
 }
 
 TEST(NevrConfig, NestingAtTheDepthCapLoadsAndOneDeeperIsRejected) {
