@@ -1819,13 +1819,12 @@ verify:
     N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/extension/plugin_interface.h) || N114_RC2=$?
     sensor_stage1 "N114 plugin capability ABI" "src/extension/plugin_interface.h" "$N114_RC2"
     sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
-    # Pinned to the CURRENT ABI version (N134 S6 bumped it 3->4 for the additive
-    # NvrPluginInitEx per-plugin-args export). The pin guards against a silent
-    # REGRESSION below the version where the capability channel (v3) and the args
-    # channel (v4) landed — a deliberate bump updates this line, exactly as this
-    # one did.
-    if ! grep -q 'NEVR_PLUGIN_API_VERSION 5' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 5; the capability (v3) + args (v4) + query-API (v5) channels must not regress below v5." >&2
+    # Pinned to the CURRENT ABI version. The pin guards against a silent REGRESSION
+    # below the version where the capability channel (v3), the args channel (v4), the
+    # query API (v5) and the host log (v6, #598) landed — a deliberate bump updates
+    # this line, exactly as this one did.
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 6' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 6; the capability (v3) + args (v4) + query-API (v5) + host-log (v6) channels must not regress below v6." >&2
         exit 1
     fi
     # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
@@ -2682,7 +2681,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1021
+    python3 tools/verify_gtest_floor.py --floor 1047
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

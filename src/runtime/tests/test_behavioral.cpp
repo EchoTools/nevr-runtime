@@ -18,6 +18,8 @@
 #include <cstdarg>
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <utility>
 #include <iterator>
 #include <cstdint>
 #include <cstdio>
@@ -126,13 +128,24 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// Every line with the level it was logged at, for tests that pin the level (#598).
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_testLogLeveled;
+
+bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return std::any_of(g_testLogLeveled.begin(), g_testLogLeveled.end(),
+                     [&](const std::pair<EchoVR::LogLevel, std::string>& entry) {
+                       return entry.first == level && entry.second.find(needle) != std::string::npos;
+                     });
+}
+
 void ClearTestLogs() {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   g_testLogMessages.clear();
+  g_testLogLeveled.clear();
 }
 
 void Log(EchoVR::LogLevel level, const char* format, ...) {
-  (void)level;
   char buffer[2048] = {};
   va_list args;
   va_start(args, format);
@@ -140,6 +153,7 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   va_end(args);
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   nevr_test_log_cap::Append(g_testLogMessages, buffer);
+  g_testLogLeveled.emplace_back(level, buffer);
 }
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
@@ -811,6 +825,83 @@ TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilit
   EXPECT_EQ(second->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION + 1u));
   EXPECT_EQ(second->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
   EXPECT_EQ(second->version_major, 1u);
+}
+
+// ----------------------------------------------------------------------------
+// #598: plugins log through the host's structured Log(), tagged with the plugin.
+// The fixtures (plugin_logging_test_dll.cpp) call ctx->log from init, per-frame, state change and
+// shutdown, through the real loader and a real LoadLibraryExA.
+// ----------------------------------------------------------------------------
+
+static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
+  const HMODULE plugin = GetModuleHandleA(dll);
+  if (plugin == nullptr) return 0xFFFFFFFFu;
+  const auto bound = reinterpret_cast<uint32_t (*)(void)>(GetProcAddress(plugin, "NevrTestPluginGetLogBoundAtInit"));
+  return bound != nullptr ? bound() : 0xFFFFFFFFu;
+}
+
+TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 6u);
+  NvrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NvrGameContext);
+  EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
+  EXPECT_GT(offsetof(NvrGameContext, plugin_id), offsetof(NvrGameContext, get_plugin_info))
+      << "the v6 fields extend the tail; a v5 plugin still reads the v5 fields at the same offsets";
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginInitLineReachesTheHostLogWithItsNameLevelAndFields) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LoggingFixtureBoundAtInit("test_plugin_logging_a.dll"), 1u)
+      << "the context handed to init did not carry plugin_id and log";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin=logger-a init hello answer=42 who=\"a b\""));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EachPluginsFrameAndStateLinesCarryItsOwnName) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"logger-b", "test_plugin_logging_b.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  ClearTestLogs();
+
+  TickLoadedPluginsOnce();
+  NvrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NvrGameContext);
+  NotifyPluginsStateChange(&ctx, 3, 5);
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "[NEVR.PLUGIN] plugin=logger-a frame n=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "[NEVR.PLUGIN] plugin=logger-b frame n=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin=logger-a state change from=3 to=5"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin=logger-b state change from=3 to=5"));
+  EXPECT_FALSE(TestLogContains("plugin=unknown")) << "a context reached a plugin with no id";
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginCanLogFromShutdownWithWhatItKeptAtInit) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  ClearTestLogs();
+
+  UnloadPlugins();
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "[NEVR.PLUGIN] plugin=logger-a shutdown bye"));
+}
+
+TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat) {
+  ClearTestLogs();
+  const NevrLogField fields[] = {{"k", "100%s"}};
+  HostPluginLog("direct", NEVR_LOG_ERROR, "50%n done", fields, 1);
+  HostPluginLog("direct", 99u, "bad level", nullptr, 0);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "[NEVR.PLUGIN] plugin=direct 50%n done k=100%s"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin=direct bad level level_invalid=99"));
+  ClearTestLogs();
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one

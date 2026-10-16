@@ -16,6 +16,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
+#include "runtime/ext/plugin_log.h"             // #598: a plugin's log line, as the host writes it
 #include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
 
 struct LoadedPlugin {
@@ -31,6 +32,7 @@ struct LoadedPlugin {
   NvrPluginOnGameStateChange_fn on_state_change;
   NvrPluginShutdown_fn        shutdown;
   std::string                 path;
+  const char*                 id;  /* the config.yaml entry's name; see InternPluginId */
 };
 
 // A deque: push_back never moves an element already stored, so the address GetLoadedPluginInfo hands
@@ -46,6 +48,43 @@ static std::vector<PluginManifestEntry> g_pluginReport;
 static void PublishPluginReport(std::vector<PluginManifestEntry> report) {
   std::lock_guard<std::mutex> lock(g_pluginReportMutex);
   g_pluginReport = std::move(report);
+}
+
+// N135 / #598: the host's name for a plugin (its config.yaml entry's `name`) as a string a plugin may keep
+// for the life of the process: ctx->plugin_id. A deque never moves a stored string, and the store is
+// never cleared, so the pointer outlives UnloadPlugins and stays valid for a plugin's Shutdown.
+static std::deque<std::string> g_pluginIds;
+
+static const char* InternPluginId(const std::string& name) {
+  for (const std::string& known : g_pluginIds) {
+    if (known == name) return known.c_str();
+  }
+  g_pluginIds.push_back(name);
+  return g_pluginIds.back().c_str();
+}
+
+// N135: ctx->log. The line goes through Log(), which is boot-aware: while the runtime boots under the
+// loader lock it reaches the boot tee, afterwards the game's log. The message is plain text and is
+// passed as an argument, never as the format.
+void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
+                   const NevrLogField* fields, uint32_t fieldCount) {
+  const nevr_plugin_log::Formatted out = nevr_plugin_log::Format(pluginId, level, message, fields, fieldCount);
+  EchoVR::LogLevel hostLevel = EchoVR::LogLevel::Info;
+  switch (out.level) {
+    case NEVR_LOG_DEBUG:   hostLevel = EchoVR::LogLevel::Debug;   break;
+    case NEVR_LOG_INFO:    hostLevel = EchoVR::LogLevel::Info;    break;
+    case NEVR_LOG_WARNING: hostLevel = EchoVR::LogLevel::Warning; break;
+    case NEVR_LOG_ERROR:   hostLevel = EchoVR::LogLevel::Error;   break;
+  }
+  Log(hostLevel, "%s", out.line.c_str());
+}
+
+// The context one plugin sees: the caller's, with that plugin's id and the host log filled in.
+static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
+  NvrGameContext ctx = base;
+  ctx.plugin_id = id != nullptr ? id : "";
+  ctx.log = HostPluginLog;
+  return ctx;
 }
 
 // N134 S8: query API — lets a plugin discover its neighbours at runtime.
@@ -508,10 +547,12 @@ class PluginLoadRun {
   for (const StagedPlugin& s : staged) {
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
+    const char* pluginId = InternPluginId(s.item.name);
+    const NvrGameContext pluginCtx = ContextFor(ctx, pluginId);
     int result = 0;
     switch (s.initKind) {
-      case PluginInitKind::Ex:     result = s.initExFn(&ctx, s.item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: result = s.initFn(&ctx); break;
+      case PluginInitKind::Ex:     result = s.initExFn(&pluginCtx, s.item.args_json.c_str()); break;
+      case PluginInitKind::Legacy: result = s.initFn(&pluginCtx); break;
       case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
     if (result != 0) {
@@ -556,7 +597,7 @@ class PluginLoadRun {
         s.apiVersion, s.caps};
     g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps, loadedInfo,
                          s.initFn, s.onFrameFn,
-                         s.onStateChangeFn, s.shutdownFn, s.path});
+                         s.onStateChangeFn, s.shutdownFn, s.path, pluginId});
     loaded.push_back({s.hModule, s.planIndex});
     {
       PluginManifestEntry& r = report[s.planIndex];
@@ -683,7 +724,8 @@ void UnloadPlugins() {
 void TickPlugins(const NvrGameContext* ctx) {
   for (auto& p : g_plugins) {
     if (p.on_frame) {
-      p.on_frame(ctx);
+      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      p.on_frame(&pluginCtx);
     }
   }
 }
@@ -691,7 +733,8 @@ void TickPlugins(const NvrGameContext* ctx) {
 void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
   for (auto& p : g_plugins) {
     if (p.on_state_change) {
-      p.on_state_change(ctx, old_state, new_state);
+      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      p.on_state_change(&pluginCtx, old_state, new_state);
     }
   }
 }
