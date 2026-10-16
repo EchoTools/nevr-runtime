@@ -15,6 +15,7 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/compat/socket_role.h"  // TagBridgeUrl: the config and login services get their own request target (#520)
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
@@ -348,7 +349,7 @@ const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource) {
 }
 
 const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int bridgeActive,
-                            unsigned bridgePort) {
+                            unsigned bridgePort, const char* serviceKey) {
   return AccessorBoundary("NevrCfgRedirect", [&]() -> const char* {
     if (result == nullptr) return nullptr;
     const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
@@ -358,6 +359,8 @@ const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int 
     const std::optional<std::string> redir =
         nevr_cfg::ResolveRedirect(result, socketTarget, httpTarget, bridgeActive != 0, bridgePort);
     if (!redir) return nullptr;
+    // Only the bridge address is tagged: a direct target (bridge inactive) is the community service's own URL.
+    if (bridgeActive != 0) return InternCStr(nevr_socket_role::TagBridgeUrl(*redir, bridgePort, serviceKey), "NevrCfgRedirect");
     return InternCStr(*redir, "NevrCfgRedirect");
   });
 }
@@ -371,11 +374,13 @@ const char* NevrGameNativeDefault(const char* key) {
   });
 }
 
-const char* NevrCfgAutoRelay(unsigned bridgePort) {
+const char* NevrCfgAutoRelay(unsigned bridgePort, const char* serviceKey) {
   return AccessorBoundary("NevrCfgAutoRelay", [&]() -> const char* {
     const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
     if (!socketTarget || socketTarget->empty()) return nullptr;
-    return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort), "NevrCfgAutoRelay");
+    return InternCStr(nevr_socket_role::TagBridgeUrl(std::string("ws://127.0.0.1:") + std::to_string(bridgePort),
+                                                      bridgePort, serviceKey),
+                      "NevrCfgAutoRelay");
   });
 }
 

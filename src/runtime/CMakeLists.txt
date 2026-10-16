@@ -119,6 +119,7 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/socket_role.h"
     "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
@@ -664,6 +665,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_party_share_check PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
+
+    # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
+    add_executable(test_socket_role tests/test_socket_role.cpp)
+    set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_socket_role PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
 
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.
