@@ -144,6 +144,9 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
 const CHAR* GetRunId() { return "test-run"; }
+// boot_log_tee.cpp sets Log()'s boot sink; the stub Log() above records every line instead, so the
+// sink is not kept (test_boot_log_routing drives the real routing).
+void SetBootLogSink(BootLogSink) {}
 
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
@@ -620,6 +623,22 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   ASSERT_NE(kept, nullptr);
   EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
+// #596: the address GetLoadedPluginInfo hands out belongs to the storage, not to a prediction of how
+// many plugins a later pass adds. Registering plugins the loader never planned for (the test hook
+// appends exactly as a load does) must not move the first one's entry.
+static void NoOpPluginFrame(const NvrGameContext*) {}
+
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan) {
+  TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  ASSERT_NE(first, nullptr);
+
+  for (int i = 0; i < 256; ++i) TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+
+  ASSERT_EQ(GetLoadedPluginCount(), 257);
+  EXPECT_EQ(first, GetLoadedPluginInfo(0)) << "adding plugins moved an entry a plugin may have kept";
 }
 
 // #496: an entry marked early loads in the early pass, alone; the normal pass loads the
@@ -2161,7 +2180,7 @@ TEST(N84_HookGuard, FullTable_DropsAreCountedAndReportedLoudly) {
     EXPECT_TRUE(TestLogContains("dropped=3 first=N84_dropped_first"));
 }
 
-// Record() runs under the DllMain loader lock at boot, so overflow itself must not Log().
+// Overflow itself does not Log(): the drop is counted and VerifyAll() reports it once.
 TEST(N84_HookGuard, FullTable_RecordDoesNotLogUnderTheLoaderLock) {
     nevr_hook_guard::ResetForTest();
     ClearTestLogs();
@@ -2553,8 +2572,8 @@ TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
 }
 
 TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog) {
-    // The boot path runs under the DllMain loader lock, where Log() is not allowed. The mismatch
-    // record is the only place the expected and actual bytes exist, so it has to reach the tee.
+    // The boot path runs under the DllMain loader lock and reports through the boot tee. The
+    // mismatch record is the only place the expected and actual bytes exist, so it has to reach it.
     char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     ASSERT_NE(base, nullptr);
     WriteXpidOriginals(base);

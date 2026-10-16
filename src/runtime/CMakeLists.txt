@@ -734,10 +734,11 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
     # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
-    # test_server_bringup.cpp (#45, header-only lifecycle/server_bringup.h) ride in this executable.
+    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) ride in this executable.
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
                    tests/test_server_bringup.cpp)
-    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
+                               ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
@@ -755,6 +756,14 @@ if(BUILD_TESTING)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
+
+    # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
+    add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_boot_log_routing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_boot_log_routing PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_boot_log_routing DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
