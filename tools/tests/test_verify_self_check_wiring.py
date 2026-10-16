@@ -114,6 +114,17 @@ class SelfCheckWiringGateTest(unittest.TestCase):
             self.edit(root, rel, old, new)
             self.assertEqual(run(root).returncode, 1, (rel, old))
 
+    def test_a_party_leave_check_that_is_not_fed_fails(self):
+        for rel, old in (
+            ("src/runtime/compat/ws_bridge.cpp",
+             "if (fromServer) nevr_party_leave_check::OnServerMessage(sym, payload, static_cast<size_t>(len));"),
+            ("src/quest/integration/production_steps.cpp",
+             "nevr_party_leave_check::OnServerMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));"),
+        ):
+            root = self.tree()
+            self.edit(root, rel, old, "")
+            self.assertEqual(run(root).returncode, 1, (rel, old))
+
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp", "ApplySelfCheck(&config.tap,", "(void)(&config.tap,")
