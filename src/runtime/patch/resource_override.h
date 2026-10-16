@@ -22,9 +22,9 @@ struct ResourceOverrideShutdownReport {
     bool hook_installed;
 };
 
-/// Reports the registry at dynamic unload: one warning per override the game never requested, and a summary
-/// line. When the hook is live the module is pinned (it cannot be unloaded), so the registry is kept; when it
-/// never installed, owned buffers are freed and the registry released.
+/// Reports the registry at normal process exit or dynamic unload: one warning per override the game never
+/// requested, and a summary. When the hook is live the module is pinned, so owned buffers stay until process
+/// exit; when it never installed, owned buffers are freed and the registry released.
 ResourceOverrideShutdownReport ShutdownResourceOverride();
 
 /// Install the resource override hook on AsyncResourceIOCallback.
