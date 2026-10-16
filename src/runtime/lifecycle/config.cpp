@@ -11,6 +11,8 @@
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/addresses.h"
+#include "runtime/lifecycle/server_timestep.h"
 
 #include <atomic>
 
@@ -88,6 +90,26 @@ VOID LoadEarlyConfig() {
 }
 
 /// <summary>
+// #511: a server's fixed time step, 1,000,000 / g_headlessTickRateHz microseconds. The step's state
+// (echovr.exe + FIXED_TIMESTEP_PTR) is there once the local config loads; the flag that makes the game
+// use it is set before PreprocessCommandLine (boot.cpp).
+static void ApplyServerTimestep() {
+  if (!g_isServer) return;
+  const uint32_t step = nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz);
+  if (step == 0) return;
+  CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+  if (state == nullptr) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] server tick rate not set: the game's time step state is not there when the local config loads");
+    return;
+  }
+  auto* stepUs = reinterpret_cast<UINT32*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+  const UINT32 was = *stepUs;
+  *stepUs = step;
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %u us)",
+      static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(step), static_cast<unsigned>(was));
+}
+
 /// A detour hook for the game's function to load the local config.json for the game instance.
 /// If a custom config path was provided via -config-path, it loads that file directly using
 /// the game's internal JSON loading function, bypassing the default _local/config.json.
@@ -256,6 +278,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     }
   }
 
+  ApplyServerTimestep();
   return result;
 }
 
