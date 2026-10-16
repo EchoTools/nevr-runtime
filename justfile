@@ -1642,6 +1642,11 @@ verify:
         echo "A server would give the game -fixedtimestep (30 Hz step, #511) and -timestep (rejected as not a valid command)." >&2
         exit 1
     fi
+    if ! grep -q 'g_timestepArgsRemoved.store(' <<<"$N125_CR"; then
+        echo "verify: FAIL — #515 GameMainWrapperHook no longer records how many time-step arguments it removed." >&2
+        echo "boot.cpp reads it (TimestepArgsRemoved) to log removed or NOT removed; without it a failed removal is silent." >&2
+        exit 1
+    fi
     if ! grep -q 'GameMain(gameArg)' <<<"$N125_CR"; then
         echo "verify: FAIL — #515 GameMainWrapperHook does not hand the game the stripped command line (GameMain(gameArg))." >&2
         echo "The strip's result must be what Main_ parses; passing the original string undoes it." >&2
