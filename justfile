@@ -1936,6 +1936,16 @@ verify:
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
     python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
+    # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
+    # target owns the code: the exact 26-name export set with its ordinals, DetoursExportPlaceholder at
+    # ordinal 1, no eager nevr.dll import. The game's own BugSplat64.dll imports are cross-checked when
+    # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
+    if [ -f echovr/bin/win10/echovr.exe ]; then
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe
+    else
+        echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
+    fi
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
