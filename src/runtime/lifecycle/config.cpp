@@ -523,8 +523,10 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 //   wss:// URLs → nevr_socket_uri (WebSocket endpoint)
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
 
-static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
-  return NevrCfgAutoRelay(bridgePort);
+// `serviceKey` is the key the override was read for (config.json's loginservice_host, ...): the bridge
+// address it is rerouted to carries that service's request target, as the service redirect's does (#520).
+static const char* ResolveLoginOverrideBridgeUrl(void* serviceKey, uint16_t bridgePort) {
+  return NevrCfgAutoRelay(bridgePort, static_cast<const char*>(serviceKey));
 }
 
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
@@ -550,8 +552,8 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   const char* chosen = nevr::lifecycle::DecideServiceRedirect(
       s_serviceRedirectsArmed.load(std::memory_order_acquire), keyName, result,
       [] { return NevrCfgGetFlat("nevr_http_uri"); },
-      [](const char* url, const char* httpTarget) {
-        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
+      [keyName](const char* url, const char* httpTarget) {
+        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort(), keyName);
       });
   if (chosen == result) return result;
 
@@ -591,7 +593,7 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   }
 
   const nevr::lifecycle::LoginRedirectOverrideOutcome overrideOutcome =
-      nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, nullptr);
+      nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, keyName);
   if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride) {
     if (overrideInput.redirectsArmed) {
       const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(
