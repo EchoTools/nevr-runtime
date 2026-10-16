@@ -185,7 +185,7 @@ cross-compile from Linux. Dependencies come from the vcpkg manifest.
 ```sh
 just                # list recipes
 just build          # build desktop targets
-just verify         # THE GATE — build + tests under Wine + invariant sensors
+just verify         # the full gate (main, release prep): build + tests under Wine + invariant sensors
 just test-system-short        # quick Go system tests (needs the game binary)
 just test-plugins-groundtruth # plugin tests without the game binary
 just test-android              # Quest binary-shape checks
@@ -195,7 +195,7 @@ just dist           # the stripped release package (symbols split to dist/symbol
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`
 (Windows). Output lands in `build/<preset>/bin/`.
 
-`just verify` is the closed-loop gate: it runs the build, C++ tests under Wine,
+`just verify` is the closed-loop gate for main when prepping a release (a PR runs the quick check, see `AGENTS.md`): it runs the build, C++ tests under Wine,
 Python harness tests, and source-invariant sensors.
 
 ## Deployment
