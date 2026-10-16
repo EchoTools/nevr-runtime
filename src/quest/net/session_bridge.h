@@ -101,6 +101,10 @@ class SessionBridge {
   bool LoginRemovedDue() const { return router_->GetStats().loginRemovedDue; }
   // Login-removed notices sent so far.
   std::uint64_t LoginsRemoved() const { return router_->GetStats().loginsRemoved; }
+  // Game connections the router has counted so far. It counts one only after the upgrade response is on the
+  // wire, and a connection's role is its place in this count, so a client that connects a second socket right
+  // after the first one's 101 must wait on this first.
+  std::size_t ConnectionsCounted() const { return router_->GetStats().nextConnIdx; }
   // Login connections currently held for the account (0 or 1 in practice).
   std::size_t HeldLogins() const { return router_->GetStats().heldRemotes; }
   // One whole EVR frame, toward the service, on the login session. False when there is no login session,

@@ -1,0 +1,44 @@
+name: PR read check
+
+# A tell for "did the author read AGENTS.md", not a security control: the last non-empty line of the PR
+# body must be `Read AGENTS.md at <sha>`, where <sha> is the merge-base of the PR head and its target
+# branch (AGENTS.md, "Review, verification and merge"). tools/check_pr_read_line.py decides.
+#
+# Trust boundary: `pull_request`, never `pull_request_target`. The token is read-only, no secret is
+# named, the clone keeps no credential, and the PR body and branch name reach the script through env
+# only, never inside a script body. A pull request from a fork needs a human to approve the run
+# first (the repository's approval policy for all outside contributors).
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-read-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  read-line:
+    name: the PR body ends with the read line
+    runs-on: ubuntu-latest
+    steps:
+      # The PR head, with every branch's history so the merge-base with the target can be computed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the last line of the PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse --verify "refs/remotes/origin/${BASE_REF}^{commit}")"
+          echo "target: origin/${BASE_REF} at ${base_sha}"
+          echo "head:   ${HEAD_SHA}"
+          python3 tools/check_pr_read_line.py --base-sha "$base_sha" --head-sha "$HEAD_SHA"

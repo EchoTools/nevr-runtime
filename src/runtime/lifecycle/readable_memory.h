@@ -9,6 +9,7 @@
 namespace nevr_crash_recovery {
 
 inline bool IsReadableProtection(DWORD protection) {
+  if ((protection & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
   switch (protection & 0xffU) {
     case PAGE_READONLY:
     case PAGE_READWRITE:

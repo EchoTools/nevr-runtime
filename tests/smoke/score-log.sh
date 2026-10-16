@@ -82,7 +82,7 @@ B06@@boot@@Built-in log filter installed@@log filter installed@@
 B07@@boot@@Log filter emitting health counters@@\[NEVR\.LOGFILTER\] health emitted=@@CAPTURED ZERO GAME LINES
 B08@@boot@@Optional config.json searched (issue #21)@@Early config loaded from:|no _local/config\.json under@@exists but did not parse|Failed to early-load config
 B09@@boot@@DLL-load hooks installed@@dll load hooks installed|LoadLibrary hooks OK@@
-B10@@boot@@Vectored exception handler installed@@veh installed|veh skipped reason=wine_client@@
+B10@@boot@@Vectored exception handler decision reported@@veh installed|veh deferred reason=wine_cli_unknown@@veh install failed
 B11@@boot@@Crash-recovery hooks installed@@crash recovery hooks installed@@
 B12@@boot@@Crash-dump probe hooked@@hooked name=HandleCrashDump@@hook failed name=HandleCrashDump
 B13@@boot@@Crash-reporter launch blocked@@CreateProcess[AW] hook installed@@Failed to find CreateProcess[AW]
@@ -133,7 +133,7 @@ S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
 S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@(reason|status)=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
-S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG|POSIX signal handlers NOT fully installed
+S31@@server@@Console shutdown handler installed@@console ctrl handler installed@@SetConsoleCtrlHandler FAILED
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@
 S34@@server@@CTRL+C reached the runtime@@shutdown signal received@@
