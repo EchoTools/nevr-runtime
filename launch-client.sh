@@ -1,7 +1,7 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test after every
 # commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll,
-# runs the client on Xephyr :101, judges the run from the game's own JSONL log, and
+# runs the client on display :101 (headless Xvfb; Xephyr when the owner watches), judges the run from the game's own JSONL log, and
 # restores the original DLL.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -54,7 +54,7 @@ acquire_game_run_lock
 
 # Nested display only: never the owner's desktop. Unset every Wayland/session
 # variable so nothing can fall back to it (gamescope did, see AGENTS.md).
-pgrep -f 'Xephyr :101' >/dev/null || { echo "ERROR: Xephyr :101 is not running" >&2; exit 2; }
+pgrep -f '([X]vfb|[X]ephyr) :101' >/dev/null || { echo "ERROR: no X server on :101 (start Xvfb :101 -screen 0 1920x1080x24)" >&2; exit 2; }
 unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 export DISPLAY=:101
 export WINEPREFIX

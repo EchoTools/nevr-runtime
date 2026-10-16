@@ -39,6 +39,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/lifecycle/server_timestep.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
@@ -53,6 +54,9 @@ namespace {
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
+// The one exception is the plugins config.yaml marks `early: true` (#496), which
+// PreprocessCommandLineHook loads right after this: they serve game data the
+// original call reads, and must stay off the graphics path.
 // -server is needed for the config loader's fail-loud policy. -config-path is
 // needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
@@ -97,6 +101,14 @@ void PreflightRuntimeBootstrap() {
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
   }
+
+  // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
+  // when the local config loads (config.cpp, LoadLocalConfigHook).
+  if (g_isServer && g_pGame != nullptr) {
+    auto* timestepFlags = reinterpret_cast<UINT64*>(
+        reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
+    *timestepFlags = nevr_server_timestep::WithFixedTimestep(*timestepFlags);
+  }
 }
 
 }  // namespace
@@ -138,6 +150,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   static std::atomic_bool s_spectatorStreamPatchAttempted{false};
   if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
     PatchSpectatorStreamCheck("pre-preprocess");
+  }
+  // #496: plugins marked `early: true` load here, once, before the original call: the
+  // game reads its manifests and opens its packages during it, before the graphics
+  // device exists (where the rest load), so a plugin that serves game data from
+  // elsewhere has to be in place now. Nothing marked early: nothing loads here.
+  static bool s_earlyPlugins = false;
+  if (!s_earlyPlugins) {
+    s_earlyPlugins = true;
+    LoadPlugins(PluginPhase::Early);
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
