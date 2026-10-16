@@ -201,10 +201,24 @@ TEST(CmdlineStrip, EveryGeneratedServerLineEndsWithNoTimestepOptionAndStaysAServ
     }
     ++servers;
     ASSERT_FALSE(HasTimestepOption(r.commandLine)) << "[" << line << "] -> [" << r.commandLine << "]";
+    // Every token that was kept reads the same to the game's tokenizer: none was glued to a neighbour.
+    ASSERT_EQ(TextsOf(r.commandLine), r.kept) << "[" << line << "] -> [" << r.commandLine << "]";
     ASSERT_TRUE(HasServerToken(r.commandLine)) << "[" << line << "] -> [" << r.commandLine << "]";
     ASSERT_EQ(StripServerTimestepArgs(r.commandLine).commandLine, r.commandLine) << "[" << line << "]";
   }
   EXPECT_GT(servers, 1000u) << "the generator must produce server lines";
+}
+
+// --- SF2: the game ends an unquoted token only at a space, so a tab at the seam must not glue ---------------
+
+TEST(CmdlineStrip, ATabAtTheSeamDoesNotGlueTheKeptTokens) {
+  // Reproduced by the reviewer: the output used to be `-server\t-noconsole`, one token to the game.
+  const auto a = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"\t-noconsole");
+  EXPECT_EQ(TextsOf(a.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "-noconsole"}))
+      << "[" << a.commandLine << "]";
+  const auto b = StripServerTimestepArgs("echovr.exe -server x\t -timestep \"5\"-noconsole");
+  EXPECT_EQ(TextsOf(b.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "x\t", "-noconsole"}))
+      << "[" << b.commandLine << "]";
 }
 
 // --- N2: the values the game attaches to a removed option go with it ---------------------------------------
@@ -268,6 +282,7 @@ TEST(PrepareForGame, AServerGetsANewPointerWithoutTheTokens) {
   EXPECT_FALSE(HasTimestepOption(h.commandLine));
   EXPECT_EQ(h.tokensRemoved, 3u);
   EXPECT_EQ(h.options, (std::vector<std::string>{"-fixedtimestep", "-timestep"}));
+  EXPECT_EQ(h.optionsText, "-fixedtimestep,-timestep") << "the report's text is built here, not in the hook";
   EXPECT_FALSE(h.residual);
 }
 
@@ -300,11 +315,16 @@ TEST(PrepareForGame, TheReportNamesEveryRemovedOptionAndNeverLeavesAResidual) {
   EXPECT_FALSE(h.residual);
 }
 
-// --- the server's step ---------------------------------------------------------------------------------------
+// --- the server path end to end -----------------------------------------------------------------------------
 
-TEST(CmdlineStrip, TheServerStepAfterTheStripIsTheConfiguredRate) {
-  // The step NEVR sets once the arguments are gone: 1,000,000 / g_headlessTickRateHz. The rate defaults to
-  // 120 Hz (core/globals.cpp), which is 8333 us.
-  EXPECT_EQ(g_headlessTickRateHz, 120u);
-  EXPECT_EQ(nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz), 8333u);
+TEST(CmdlineStrip, AServerLineLosesItsTimestepArgsAndThenGetsTheConfiguredStep) {
+  // The strip, then the step NEVR writes: 1,000,000 / g_headlessTickRateHz (120 Hz by default, 8333 us),
+  // written over the game's own 33333 in the clock's 64-bit step field.
+  std::string storage;
+  const auto h = PrepareForGame("echovr.exe -server -fixedtimestep -timestep 30 -noconsole", storage);
+  EXPECT_EQ(std::string(h.commandLine), "echovr.exe -server -noconsole");
+  uint64_t stepField = nevr_server_timestep::kGameDefaultStepUs;
+  const auto w = nevr_server_timestep::ApplyStep(true, g_headlessTickRateHz, &stepField);
+  EXPECT_EQ(w.outcome, nevr_server_timestep::StepOutcome::kSet);
+  EXPECT_EQ(stepField, 8333u);
 }

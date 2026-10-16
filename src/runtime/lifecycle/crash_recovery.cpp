@@ -104,29 +104,33 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   // failure falls back to arg1 (the game then sees the original string) and is logged and recorded.
   static std::string s_serverCommandLine;
   INT64 gameArg = arg1;
+  TimestepStripReport report;
   try {
+    // Everything that can throw runs before gameArg or g_stripReport is touched, so a throw leaves the
+    // game the original string, exactly as the Warning below says (#515 review).
     const nevr_cmdline::HandOff handOff =
         nevr_cmdline::PrepareForGame(reinterpret_cast<const char*>(arg1), s_serverCommandLine);
+    report.tokensRemoved = handOff.tokensRemoved;
+    report.residual = handOff.residual;
+    report.options = handOff.optionsText;
     gameArg = reinterpret_cast<INT64>(handOff.commandLine);
-    g_stripReport.tokensRemoved = handOff.tokensRemoved;
-    g_stripReport.residual = handOff.residual;
-    for (const std::string& option : handOff.options) {
-      if (!g_stripReport.options.empty()) g_stripReport.options += ',';
-      g_stripReport.options += option;
-    }
   } catch (const std::bad_alloc&) {
-    g_stripReport = TimestepStripReport{};
-    g_stripReport.failed = true;
+    gameArg = arg1;
+    report = TimestepStripReport{};
+    report.failed = true;
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] time-step argument removal failed (out of memory); the game gets the original command line");
   } catch (const std::exception& e) {
-    g_stripReport = TimestepStripReport{};
-    g_stripReport.failed = true;
+    gameArg = arg1;
+    report = TimestepStripReport{};
+    report.failed = true;
+    // Only the length of what(): exception text is not logged (docs/standards/logging.md, Rule 4).
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] time-step argument removal failed (std::exception, %zu bytes of text); the game gets the "
         "original command line",
         std::char_traits<char>::length(e.what()));
   }
+  g_stripReport = std::move(report);
   g_stripReportReady.store(true, std::memory_order_release);
 
   // Run the game main loop

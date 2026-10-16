@@ -26,6 +26,10 @@ UINT64 LoadLocalConfigHook(PVOID pGame);
 /// says what step the server runs on.
 nevr_server_timestep::StepWrite ServerStepWrite();
 
+/// #515: logs once what the clock the server runs on holds (its step and mode bits), so a run's log says
+/// whether the step NEVR wrote is live. Called from the per-frame tick on one tick (frame/tick.cpp).
+void LogServerStepReadBack(long tick);
+
 /// <summary>
 /// A detour hook for the game's HTTP(S) connect function. Redirects hardcoded endpoints
 /// using config.json overrides with fallback chain: service_key -> loginservice_host -> default.

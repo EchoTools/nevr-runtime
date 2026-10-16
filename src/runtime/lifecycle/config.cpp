@@ -13,6 +13,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/readable_memory.h"
 
 #include <atomic>
 
@@ -109,13 +110,9 @@ nevr_server_timestep::StepWrite ServerStepWrite() {
 
 static void ApplyServerTimestep() {
   using nevr_server_timestep::StepOutcome;
-  uint64_t* stepField = nullptr;
-  if (g_isServer) {
-    CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
-    if (state != nullptr) {
-      stepField = reinterpret_cast<uint64_t*>(state + nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
-    }
-  }
+  // The global is module data and always readable; ApplyStep decides on isServer, so a client writes nothing.
+  CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+  uint64_t* stepField = nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
   const nevr_server_timestep::StepWrite w =
       nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
   g_serverStepUs.store(w.stepUs, std::memory_order_relaxed);
@@ -138,10 +135,33 @@ static void ApplyServerTimestep() {
           "[NEVR.PATCH] server time step not set: the configured rate is 0 Hz, so the server keeps the "
           "game's own step (outcome=rate_zero)");
       break;
+    case StepOutcome::kUnexpectedOldValue:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server time step not set: the game's step field holds %llu us, not its default %llu us, "
+          "so nothing was written and the server keeps that step (outcome=unexpected_old_value)",
+          static_cast<unsigned long long>(w.was),
+          static_cast<unsigned long long>(nevr_server_timestep::kGameDefaultStepUs));
+      break;
     case StepOutcome::kNotServer:
     case StepOutcome::kNotApplied:
       break;  // a client: nothing was written, nothing to say
   }
+}
+
+// #515: the one-time read-back on a server, from the per-frame tick (frame/tick.cpp): is the step NEVR wrote
+// in the clock the server runs on? Two writers of the clock global (echovr.exe 0x1420a00e8) exist, and the
+// later one resets the step to 33333 (addresses.h, CLOCK_GLOBAL), so the write is not proof. The pointer and
+// the bytes read are checked readable first (N31); an unreadable or null clock is logged as absent.
+void LogServerStepReadBack(long tick) {
+  using nevr_server_timestep::ClockReadBack;
+  const void* state = *reinterpret_cast<void* const*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+  if (!nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan)) state = nullptr;
+  const ClockReadBack rb = nevr_server_timestep::ReadClock(state);
+  const nevr_server_timestep::StepWrite w = ServerStepWrite();
+  const uint32_t expected = nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz);
+  const std::string line = nevr_server_timestep::ReadBackLine(rb, expected, w.outcome, tick);
+  Log(nevr_server_timestep::ReadBackIsLive(rb, expected) ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] %s", line.c_str());
 }
 
 /// <summary>

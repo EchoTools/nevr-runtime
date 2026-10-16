@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/pch.h"
+#include "runtime/lifecycle/timestep_log.h"
 #include "runtime/lifecycle/veh_policy.h"
 
 /// Writes one line to stderr and, when armed, the crash record, with raw WriteFile only (no allocation, no
@@ -19,13 +20,8 @@ void InstallCrashRecoveryHooks();
 /// (N125). Called from Initialize.
 void InstallGameMainHook();
 
-/// #515: what GameMainWrapperHook did to the game's command line (lifecycle/cmdline_strip.h).
-struct TimestepStripReport {
-  unsigned tokensRemoved = 0;  ///< Time-step options and their parameters removed; 0 on a client or when none was given.
-  std::string options;         ///< The canonical names of the removed options, comma separated.
-  bool residual = false;       ///< A time-step option is still in the string handed to the game.
-  bool failed = false;         ///< The removal threw; the game got the original string.
-};
+/// #515: what GameMainWrapperHook did to the game's command line (lifecycle/timestep_log.h).
+using nevr_timestep_log::TimestepStripReport;
 
 /// The report GameMainWrapperHook recorded (all zero before it ran).
 TimestepStripReport GetTimestepStripReport();

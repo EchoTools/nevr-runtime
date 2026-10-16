@@ -23,9 +23,9 @@
 // CommandLineToArgvW, which differs on quotes: `[-server]` is not a server there and here, `"-server"`
 // is a server to boot.cpp and a parameter (not an option) to the game, and `-config "C:\dir\" -server` is
 // a server to the game's parser and a quoted string to CommandLineToArgvW. Neither is changed. The report
-// the hook records (TimestepStripReport, crash_recovery.h) is what boot.cpp logs: it names a removal that
-// happened on a line boot.cpp took for a client, and warns when boot.cpp took the line for a server and
-// nothing was removed.
+// the hook records (TimestepStripReport, timestep_log.h) is what boot.cpp logs: where arguments came out of
+// a line boot.cpp took for a client, boot.cpp logs a Warning (no flag or step was set); where it took the
+// line for a server and nothing was removed, it also logs a Warning.
 
 #include <cstddef>
 #include <string>
@@ -128,14 +128,17 @@ struct StripResult {
   std::string commandLine;             ///< The text to give the game.
   std::vector<std::string> removed;    ///< Each removed token's text (an option or a parameter), in order.
   std::vector<std::string> options;    ///< The canonical name of each removed option, in order.
+  std::vector<std::string> kept;       ///< The text of each token left in `commandLine`, in order.
 };
 
 namespace detail {
 
 /// Appends `piece` to `out`, with one space between them when the two would otherwise abut into one token.
+/// The game ends an unquoted token only at ' ' (FUN_1400d9000: `while (b != ' ' && b != 0)`), so a tab or
+/// another control byte at the seam does not separate them: the test is for ' ' alone.
 inline void Append(std::string& out, std::string_view piece) {
   if (piece.empty()) return;
-  if (!out.empty() && !IsSpace(out.back()) && !IsSpace(piece.front())) out.push_back(' ');
+  if (!out.empty() && out.back() != ' ' && piece.front() != ' ') out.push_back(' ');
   out.append(piece);
 }
 
@@ -173,6 +176,9 @@ inline StripResult StripServerTimestepArgs(std::string_view commandLine) {
   if (result.removed.empty()) return result;
   detail::Append(out, commandLine.substr(copied));
   result.commandLine = std::move(out);
+  for (std::size_t k = 0; k < tokens.size(); ++k) {
+    if (!drop[k]) result.kept.emplace_back(tokens[k].text);
+  }
   return result;
 }
 
@@ -182,6 +188,7 @@ struct HandOff {
   const char* commandLine = nullptr;
   unsigned tokensRemoved = 0;             ///< Options and their parameters.
   std::vector<std::string> options;       ///< Canonical names of the removed options, in order.
+  std::string optionsText;                ///< `options` joined with ',' (what the report logs).
   bool residual = false;                  ///< A time-step option is still in the text handed over.
 };
 
@@ -197,6 +204,10 @@ inline HandOff PrepareForGame(const char* original, std::string& storage) {
   h.commandLine = storage.c_str();
   h.tokensRemoved = static_cast<unsigned>(stripped.removed.size());
   h.options = std::move(stripped.options);
+  for (const std::string& option : h.options) {
+    if (!h.optionsText.empty()) h.optionsText += ',';
+    h.optionsText += option;
+  }
   h.residual = HasTimestepOption(storage);
   return h;
 }

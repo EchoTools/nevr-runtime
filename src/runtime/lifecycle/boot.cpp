@@ -41,16 +41,23 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
+#include "runtime/lifecycle/timestep_log.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
 #include "extension/module_interface.h"
 
 #include <cstdlib>
+#include <exception>
+#include <new>
 #include <atomic>
 #include <shellapi.h>
 
 namespace {
+
+// #515: what ApplyFlag did, for LogTimestepArgs.
+std::atomic<uint8_t> g_serverFlagOutcome{static_cast<uint8_t>(nevr_server_timestep::FlagOutcome::kNotApplied)};
+
 
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
@@ -104,10 +111,10 @@ void PreflightRuntimeBootstrap() {
   // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
   // when the local config loads (config.cpp, LoadLocalConfigHook). ApplyFlag leaves a client alone.
   UINT64* timestepFlags =
-      g_pGame == nullptr ? nullptr
-                         : reinterpret_cast<UINT64*>(reinterpret_cast<CHAR*>(g_pGame) +
-                                                     nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
-  nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);
+      nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
+  g_serverFlagOutcome.store(
+      static_cast<uint8_t>(nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags)),
+      std::memory_order_release);
 }
 
 }  // namespace
@@ -157,48 +164,32 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   return result;
 }
 
-// #515: one line saying what happened to a server's time-step arguments, from what GameMainWrapperHook
-// recorded and what ApplyServerTimestep recorded, not from the configured rate. It does not depend on
-// boot.cpp's own reading of the command line: the hook decides from the game's parser (see
-// runtime/lifecycle/cmdline_strip.h), CommandLineToArgvW differs on quotes. The game's own "CL Args: %s"
-// line (NRadPhysics::InitGlobals, echovr.exe 0x141548da0) still prints the original command line.
+// #515: what happened to a server's time-step arguments, from what GameMainWrapperHook recorded and what
+// ApplyServerTimestep and ApplyFlag recorded, not from the configured rate. The level and text are
+// nevr_timestep_log::Decide (a tested pure function). It does not depend on boot.cpp's own reading of the
+// command line: the hook decides from the game's parser (see runtime/lifecycle/cmdline_strip.h),
+// CommandLineToArgvW differs on quotes. The game's own "CL Args: %s" line (NRadPhysics::InitGlobals,
+// echovr.exe 0x141548da0) still prints the original command line. It allocates inside a game-called hook, so
+// a failure is caught by type and logged, never allowed to leave.
 static void LogTimestepArgs() {
-  const TimestepStripReport report = GetTimestepStripReport();
-  const nevr_server_timestep::StepWrite step = ServerStepWrite();
-  if (report.tokensRemoved > 0) {
-    const bool stepFailed = step.outcome == nevr_server_timestep::StepOutcome::kStateMissing ||
-                            step.outcome == nevr_server_timestep::StepOutcome::kRateZero;
-    char stepText[96];
-    if (step.outcome == nevr_server_timestep::StepOutcome::kSet) {
-      snprintf(stepText, sizeof(stepText), "the server step is %u us (%u Hz), set by NEVR",
-               static_cast<unsigned>(step.stepUs), static_cast<unsigned>(g_headlessTickRateHz));
-    } else if (stepFailed) {
-      snprintf(stepText, sizeof(stepText), "the server step was NOT set (step_state=%s)",
-               nevr_server_timestep::OutcomeName(step.outcome));
-    } else {
-      snprintf(stepText, sizeof(stepText), "NEVR sets the server step when the local config loads (step_state=%s)",
-               nevr_server_timestep::OutcomeName(step.outcome));
+  try {
+    nevr_timestep_log::Inputs in;
+    in.report = GetTimestepStripReport();
+    in.bootSaysServer = g_isServer != FALSE;
+    in.cmdHasTimestepOption = nevr_cmdline::HasTimestepOption(GetCommandLineA());
+    const nevr_server_timestep::StepWrite step = ServerStepWrite();
+    in.step = step.outcome;
+    in.stepUs = step.stepUs;
+    in.rateHz = g_headlessTickRateHz;
+    in.flag = static_cast<nevr_server_timestep::FlagOutcome>(g_serverFlagOutcome.load(std::memory_order_acquire));
+    for (const nevr_timestep_log::Line& line : nevr_timestep_log::Decide(in)) {
+      Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] %s", line.text.c_str());
     }
-    Log(stepFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] server time-step arguments removed from the game's command line options=%s "
-        "tokens_removed=%u; %s; the game's own \"CL Args\" line still shows the original command line",
-        report.options.c_str(), report.tokensRemoved, stepText);
-    if (report.residual) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] a time-step option is still in the game's command line after the removal "
-          "(residual=true): the game may read it");
-    }
-    return;
-  }
-  if (!nevr_cmdline::HasTimestepOption(GetCommandLineA())) return;
-  if (g_isServer) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] a time-step argument is on the command line and was NOT removed (tokens_removed=0 "
-        "hook_failed=%s): the game reads it. NEVR still sets the server step",
-        report.failed ? "true" : "false");
-  } else {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] time-step arguments passed to the game unchanged: NEVR sets the time step on a server only");
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (out of memory)");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (std::exception)");
   }
 }
 
