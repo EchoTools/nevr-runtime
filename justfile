@@ -1746,6 +1746,16 @@ verify:
         echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
         exit 1
     fi
+    # N2, any spelling: from the hook's first line to GameMain(gameArg); no local may have a destructor. The hook
+    # needs only trivial locals; a report, a std:: string/container/smart pointer/function or an `auto` local
+    # there (in any declaration form) would be alive across the call the VEH longjmps out of.
+    S515_PRE_GAMEMAIN=$(awk -v start="$S515_HOOK_LINE" 'NR>=start {print} NR>=start && /GameMain\(gameArg\);/ {exit}' <<<"$S515_CR")
+    sensor_nonempty "#515 hook body before GameMain" "GameMainWrapperHook up to GameMain(gameArg);" "$S515_PRE_GAMEMAIN"
+    if grep -qE 'TimestepStripReport|std::(string|wstring|vector|deque|map|unordered_map|unique_ptr|shared_ptr|function|ostringstream|stringstream)|(^|[^A-Za-z_])auto[[:space:]]' <<<"$S515_PRE_GAMEMAIN"; then
+        echo "verify: FAIL — #515 sensor: GameMainWrapperHook declares a local with a destructor before GameMain(gameArg);." >&2
+        echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
+    fi
     if grep -qF 'catch (...)' <<<"$S515_CR"; then
         echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
         exit 1
