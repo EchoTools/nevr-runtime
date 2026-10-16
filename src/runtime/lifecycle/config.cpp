@@ -16,6 +16,8 @@
 #include "runtime/lifecycle/readable_memory.h"
 
 #include <atomic>
+#include <exception>
+#include <new>
 
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.
@@ -98,17 +100,9 @@ VOID LoadEarlyConfig() {
 // is a 64-bit field at state+0x90 (ConfigureClocks, echovr.exe 0x140127a04: MOV qword ptr [RBX + 0x90], RAX).
 // The second clock ConfigureClocks writes the same way, at [pGame+0x7B00] (0x140127a0f-0x140127a34), is left
 // alone, as the legacy patch did. The outcome is recorded for boot.cpp's log line (ServerStepWrite).
-static std::atomic<uint32_t> g_serverStepUs{0};
-static std::atomic<uint64_t> g_serverStepWas{0};
-static std::atomic<uint8_t> g_serverStepOutcome{static_cast<uint8_t>(nevr_server_timestep::StepOutcome::kNotApplied)};
+static nevr_server_timestep::StepRecord g_stepRecord;
 
-nevr_server_timestep::StepWrite ServerStepWrite() {
-  nevr_server_timestep::StepWrite w;
-  w.outcome = static_cast<nevr_server_timestep::StepOutcome>(g_serverStepOutcome.load(std::memory_order_acquire));
-  w.stepUs = g_serverStepUs.load(std::memory_order_relaxed);
-  w.was = g_serverStepWas.load(std::memory_order_relaxed);
-  return w;
-}
+nevr_server_timestep::StepWrite ServerStepWrite() { return g_stepRecord.Load(); }
 
 static void ApplyServerTimestep() {
   using nevr_server_timestep::StepOutcome;
@@ -129,9 +123,7 @@ static void ApplyServerTimestep() {
   uint64_t* stepField = nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
   const nevr_server_timestep::StepWrite w =
       nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
-  g_serverStepUs.store(w.stepUs, std::memory_order_relaxed);
-  g_serverStepWas.store(w.was, std::memory_order_relaxed);
-  g_serverStepOutcome.store(static_cast<uint8_t>(w.outcome), std::memory_order_release);
+  g_stepRecord.Store(w);
   const char* source = rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default";
   switch (w.outcome) {
     case StepOutcome::kSet:
@@ -174,20 +166,25 @@ static void ApplyServerTimestep() {
   }
 }
 
-// #515: the one-time read-back on a server, from the per-frame tick (frame/tick.cpp): is the step NEVR wrote
+// #515: the one-time read-back on a server, from the per-frame tick (frame/tick.cpp), at ONE moment (tick 125,
+// about 1.2 s in: it says the step was live then, not that it stays live): is the step NEVR wrote
 // in the clock the server runs on? Two writers of the clock global (echovr.exe 0x1420a00e8) exist, and the
 // later one resets the step to 33333 (addresses.h, FIXED_TIMESTEP_PTR), so the write is not proof. The pointer and
 // the bytes read are checked readable first (N31); an unreadable or null clock is logged as absent.
 void LogServerStepReadBack(long tick) {
-  using nevr_server_timestep::ClockReadBack;
-  const void* state = *reinterpret_cast<void* const*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
-  if (!nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan)) state = nullptr;
-  const ClockReadBack rb = nevr_server_timestep::ReadClock(state);
-  const nevr_server_timestep::StepWrite w = ServerStepWrite();
-  const uint32_t expected = nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz);
-  const std::string line = nevr_server_timestep::ReadBackLine(rb, expected, w.outcome, tick);
-  Log(nevr_server_timestep::ReadBackIsLive(rb, expected) ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] %s", line.c_str());
+  try {
+    const void* state =
+        *reinterpret_cast<void* const*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
+    const nevr_server_timestep::ClockReadBack rb = nevr_server_timestep::ReadClockIf(readable, state);
+    const nevr_server_timestep::ReadBackDecision d =
+        nevr_server_timestep::DecideReadBack(ServerStepWrite(), g_headlessTickRateHz, rb, tick);
+    Log(d.live ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s", d.line.c_str());
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server clock read-back failed (out of memory)");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server clock read-back failed (std::exception)");
+  }
 }
 
 /// <summary>

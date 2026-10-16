@@ -1705,40 +1705,58 @@ verify:
             exit 1
         fi
     }
-    sensor_515_need "$N125_CR" 'nevr_cmdline::PrepareForGame(' "GameMainWrapperHook must make the one call that decides what the game parses; a server would give the game -fixedtimestep and -timestep."
-    sensor_515_need "$N125_CR" 'report.tokensRemoved = handOff.tokensRemoved;' "boot.cpp reads the report to log removed or NOT removed; without it a failed removal is silent."
-    sensor_515_need "$N125_CR" 'report.residual = handOff.residual;' "The report must say when a time-step option is left in the string the game parses."
-    sensor_515_need "$N125_CR" 'report.options = handOff.optionsText;' "The report must name the removed options."
-    sensor_515_need "$N125_CR" 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' "The game must be handed the result of PrepareForGame; passing the original string undoes the removal."
-    sensor_515_need "$N125_CR" 'g_stripReport = std::move(report);' "The report must be published (after everything that can throw)."
-    sensor_515_need "$N125_CR" 'g_stripReportReady.store(true' "The report must be published or boot.cpp sees none."
-    sensor_515_need "$N125_CR" 'GameMain(gameArg);' "The game must be called with that result."
-    sensor_515_need "$N125_CR" 'catch (const std::bad_alloc&)' "The hook allocates while the game calls it; a failure must fall back to the original string."
-    sensor_515_need "$N125_CR" 'catch (const std::exception&' "The hook allocates while the game calls it; a failure must fall back to the original string."
+    # Trailing `// ...` comments are stripped too (a mutant `GameMain(arg1);  // not GameMain(gameArg);` must not
+    # satisfy a pattern); only a `//` preceded by whitespace, so a URL in a string survives.
+    S515_STRIP_TRAILING='s#[[:space:]]+//.*$##'
+    S515_CR=$(sed -E "$S515_STRIP_TRAILING" <<<"$N125_CR")
+    sensor_515_need "$S515_CR" 'nevr_cmdline::PrepareForGame(' "The strip helper must make the one call that decides what the game parses; a server would give the game -fixedtimestep and -timestep."
+    sensor_515_need "$S515_CR" 'report.tokensRemoved = handOff.tokensRemoved;' "boot.cpp reads the report to log removed or NOT removed; without it a failed removal is silent."
+    sensor_515_need "$S515_CR" 'report.residual = handOff.residual;' "The report must say when a time-step option is left in the string the game parses."
+    sensor_515_need "$S515_CR" 'report.options = handOff.optionsText;' "The report must name the removed options."
+    sensor_515_need "$S515_CR" 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' "The game must be handed the result of PrepareForGame; passing the original string undoes the removal."
+    sensor_515_need "$S515_CR" 'g_stripReport = std::move(report);' "The report must be published (after everything that can throw)."
+    sensor_515_need "$S515_CR" 'g_stripReportReady.store(true' "The report must be published or boot.cpp sees none."
+    sensor_515_need "$S515_CR" 'const INT64 gameArg = PrepareGameArgument(arg1);' "GameMainWrapperHook must get the game's argument from the helper, whose std::string and report die before GameMain."
+    sensor_515_need "$S515_CR" 'GameMain(gameArg);' "The game must be called with that result."
+    sensor_515_need "$S515_CR" 'catch (const std::bad_alloc&)' "The helper allocates while the game calls it; a failure must fall back to the original string."
+    sensor_515_need "$S515_CR" 'catch (const std::exception&' "The helper allocates while the game calls it; a failure must fall back to the original string."
     # Order: gameArg and the report are assigned only after everything that can throw (#515 review SF1): the
     # options string is built before gameArg is assigned, and both catches put gameArg back.
-    S515_OPT=$(grep -nF 'report.options = handOff.optionsText;' <<<"$N125_CR" | cut -d: -f1)
-    S515_ARG=$(grep -nF 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' <<<"$N125_CR" | cut -d: -f1)
+    S515_OPT=$(grep -nF 'report.options = handOff.optionsText;' <<<"$S515_CR" | cut -d: -f1)
+    S515_ARG=$(grep -nF 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' <<<"$S515_CR" | cut -d: -f1)
     if [ -z "$S515_OPT" ] || [ -z "$S515_ARG" ] || [ "$S515_OPT" -ge "$S515_ARG" ]; then
         echo "verify: FAIL — #515 sensor: gameArg is assigned before the report's options string is built (or one is missing)." >&2
         echo "An allocation after gameArg throws leaves the game the stripped string while the log says the original." >&2
         exit 1
     fi
-    if [ "$(grep -cE '^[[:space:]]+gameArg = arg1;' <<<"$N125_CR")" -lt 2 ]; then
+    if [ "$(grep -cE '^[[:space:]]+gameArg = arg1;' <<<"$S515_CR")" -lt 2 ]; then
         echo "verify: FAIL — #515 sensor: the exception handlers no longer put gameArg back to arg1." >&2
         exit 1
     fi
-    if grep -qF 'catch (...)' <<<"$N125_CR"; then
+    if [ "$(grep -cF 'report = nevr_timestep_log::FailedReport();' <<<"$S515_CR")" -lt 2 ]; then
+        echo "verify: FAIL — #515 sensor: a handler no longer records the failure with FailedReport()." >&2
+        echo "boot.cpp would not know the removal threw and would log 'NOT removed' without hook_failed=true." >&2
+        exit 1
+    fi
+    # N2: the helper's std::string and report must be gone before GameMain, which the VEH longjmps out of.
+    S515_REPORT_LINE=$(grep -nF 'TimestepStripReport report;' <<<"$S515_CR" | cut -d: -f1)
+    S515_HOOK_LINE=$(grep -nF 'static INT64 GameMainWrapperHook(INT64 arg1) {' <<<"$S515_CR" | cut -d: -f1)
+    if [ -z "$S515_REPORT_LINE" ] || [ -z "$S515_HOOK_LINE" ] || [ "$S515_REPORT_LINE" -ge "$S515_HOOK_LINE" ] || [ "$(grep -cF 'TimestepStripReport report;' <<<"$S515_CR")" -ne 1 ]; then
+        echo "verify: FAIL — #515 sensor: a TimestepStripReport local is alive in GameMainWrapperHook (or the helper moved)." >&2
+        echo "A non-trivial local alive across GameMain is undefined behaviour when the VEH longjmps out of it." >&2
+        exit 1
+    fi
+    if grep -qF 'catch (...)' <<<"$S515_CR"; then
         echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
         exit 1
     fi
-    S515_RC=0; S515_CFG=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp) || S515_RC=$?
+    S515_RC=0; S515_CFG=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
     sensor_stage1 "#515 server step call site" "src/runtime/lifecycle/config.cpp" "$S515_RC"
     sensor_nonempty "#515 server step call site" "non-comment lines of config.cpp" "$S515_CFG"
-    S515_RC=0; S515_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || S515_RC=$?
+    S515_RC=0; S515_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
     sensor_stage1 "#515 server flag call site" "src/runtime/lifecycle/boot.cpp" "$S515_RC"
     sensor_nonempty "#515 server flag call site" "non-comment lines of boot.cpp" "$S515_BOOT"
-    S515_RC=0; S515_TICK=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/frame/tick.cpp) || S515_RC=$?
+    S515_RC=0; S515_TICK=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/frame/tick.cpp | sed -E "$S515_STRIP_TRAILING") || S515_RC=$?
     sensor_stage1 "#515 read-back call site" "src/runtime/frame/tick.cpp" "$S515_RC"
     sensor_nonempty "#515 read-back call site" "non-comment lines of tick.cpp" "$S515_TICK"
     if ! grep -qE '^[[:space:]]*ApplyServerTimestep\(\);' <<<"$S515_CFG"; then
@@ -1748,11 +1766,22 @@ verify:
     fi
     sensor_515_need "$S515_CFG" 'nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);' "ApplyServerTimestep must resolve the step field from the game's clock state."
     sensor_515_need "$S515_CFG" 'nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);' "ApplyServerTimestep must pass g_isServer and the configured rate to the step writer."
+    sensor_515_need "$S515_CFG" 'g_stepRecord.Store(w);' "The step outcome must be recorded: boot.cpp and the read-back report it."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::StepWrite ServerStepWrite() { return g_stepRecord.Load(); }' "The recorded outcome must be what boot.cpp and the read-back read."
+    sensor_515_need "$S515_CFG" 'const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);' "The read-back must check the clock readable before it reads (N31)."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::ReadClockIf(readable, state);' "The read-back must read the clock only when the guard says it is readable."
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::DecideReadBack(ServerStepWrite(), g_headlessTickRateHz, rb, tick);' "The read-back's expected step and liveness must come from the tested decision, with the recorded outcome."
+    sensor_515_need "$S515_CFG" 'Log(d.live ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s", d.line.c_str());' "The read-back level must follow the decision."
+    sensor_515_need "$S515_CFG" '"[NEVR.PATCH] server clock read-back failed (out of memory)"' "The read-back runs inside the per-frame dispatcher; a throw would leave its re-entrancy flag set for good, so it needs a named catch."
     sensor_515_need "$S515_BOOT" 'nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);' "boot.cpp must resolve the game's flags field (a null field is logged as field_missing, but only if this is the call)."
     sensor_515_need "$S515_BOOT" 'nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);' "boot.cpp must set the server's fixed-time-step flag, with g_isServer, before the original PreprocessCommandLine (#511)."
+    sensor_515_need "$S515_BOOT" 'g_flagRecord.Store(flagOutcome);' "The flag outcome must be recorded for LogTimestepArgs."
     sensor_515_need "$S515_BOOT" '  LogTimestepArgs();' "boot.cpp must report what happened to the time-step arguments."
-    sensor_515_need "$S515_BOOT" 'in.bootSaysServer = g_isServer != FALSE;' "LogTimestepArgs must pass boot.cpp's reading of server to the decision."
+    sensor_515_need "$S515_BOOT" 'nevr_timestep_log::BuildInputs(' "LogTimestepArgs must assemble its inputs with the tested function."
+    sensor_515_need "$S515_BOOT" 'GetTimestepStripReport(), g_isServer != FALSE, nevr_cmdline::HasTimestepOption(GetCommandLineA()),' "LogTimestepArgs must pass the hook's report, boot.cpp's reading of server and the command line's time-step options."
+    sensor_515_need "$S515_BOOT" 'ServerStepWrite(), g_flagRecord.Load(), g_headlessTickRateHz);' "LogTimestepArgs must pass the recorded step and flag outcomes and the rate."
     sensor_515_need "$S515_BOOT" 'nevr_timestep_log::Decide(in)' "LogTimestepArgs must log what the tested decision returns."
+    sensor_515_need "$S515_BOOT" 'Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,' "The log level must follow the decision's level."
     sensor_515_need "$S515_BOOT" 'catch (const std::bad_alloc&)' "LogTimestepArgs allocates inside a game-called hook; it needs a named catch."
     sensor_515_need "$S515_TICK" 'nevr_server_timestep::ShouldReadBack(g_isServer != FALSE, t)) LogServerStepReadBack(t);' "The server's one clock read-back must be called from the per-frame dispatcher (N86/N110); without it the run's log cannot say whether the step is live."
 

@@ -685,7 +685,8 @@ constexpr uintptr_t LOADOUT_RESOLVE_DATA_FROM_ID = 0x004F37A0;
 /// NRadPhysics::InitGlobals (0x141549074) and CR15Game::InitRenderWindowFromEngineFlags (0x1404f5aef,
 /// which replaces it with a new CClock when 0x1400cd8f0 returns one, then calls SetUseFixedTimeStep(1) at
 /// 0x1404f5b2b when [pGame+0x828] has 0x2000000). Whether the step ApplyServerTimestep writes survives
-/// the later one is what the read-back line answers.
+/// the later one is what the read-back line answers, at ONE moment (per-frame tick 125, about 1.2 s in):
+/// it says the step was live then, not that it stays live.
 constexpr uintptr_t FIXED_TIMESTEP_PTR = 0x020A00E8;
 constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 

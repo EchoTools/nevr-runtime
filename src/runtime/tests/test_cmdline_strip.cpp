@@ -154,8 +154,8 @@ TEST(CmdlineStrip, ARemovalDoesNotGlueTheNextTokenOnToTheLast) {
 }
 
 TEST(CmdlineStrip, TheResidualCasesFromTheReviewLeaveNoTimestepOption) {
-  // Each is a line from the reviewer's probe (probe-residual.out), given a real -server option: before the
-  // spacing rule the result still held a time-step option.
+  // Lines whose quotes and brackets after a removed token change how the rest tokenizes, given a real
+  // -server option: none may leave a time-step option in the result.
   const std::vector<std::string> inputs = {
       "echovr.exe -timestep \"-server\"\"x + -FixedTimeStep  ",
       "echovr.exe   -timestep     \"-server\"\" -timestep    ",
@@ -212,7 +212,7 @@ TEST(CmdlineStrip, EveryGeneratedServerLineEndsWithNoTimestepOptionAndStaysAServ
 // --- SF2: the game ends an unquoted token only at a space, so a tab at the seam must not glue ---------------
 
 TEST(CmdlineStrip, ATabAtTheSeamDoesNotGlueTheKeptTokens) {
-  // Reproduced by the reviewer: the output used to be `-server\t-noconsole`, one token to the game.
+  // A tab does not end an unquoted token for the game, so `-server\t-noconsole` would be one token.
   const auto a = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"\t-noconsole");
   EXPECT_EQ(TextsOf(a.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "-noconsole"}))
       << "[" << a.commandLine << "]";

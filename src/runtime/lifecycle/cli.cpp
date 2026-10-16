@@ -76,9 +76,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
 
-  // A server never gets -timestep or -fixedtimestep: GameMainWrapperHook removes them from the command
-  // line before the game parses it (crash_recovery.cpp, #515). A client still passes them to the game,
-  // and ValidateMainArgs (echovr.exe 0x1400da830) rejects a token with no syntax entry as "not a valid
+  // GameMainWrapperHook removes -timestep and -fixedtimestep from the command line before the game parses
+  // it when the line holds an option token exactly `-server` (crash_recovery.cpp, #515). They still reach
+  // the game on a client, when the removal fails (out of memory) and when NEVR's reading of -server
+  // differs from the game's (a quoted "-server"). ValidateMainArgs (echovr.exe 0x1400da830) rejects a token with no syntax entry as "not a valid
   // command", so the entries stay. -fixedtimestep is native (0x1404e7d60); -timestep is not, and a
   // client's game ignores it once it parses.
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);

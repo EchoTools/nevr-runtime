@@ -65,6 +65,47 @@ TimestepStripReport GetTimestepStripReport() {
   return g_stripReport;
 }
 
+// #515: arg1 is the ANSI command line the game parses in Main_ (GetCommandLineA, passed in RCX). A
+// server's time step is NEVR's, so -fixedtimestep and -timestep <value> come out before the game reads
+// them. Only this early is it effective: Main_ builds its CMainArgs from this string, before
+// PreprocessCommandLine. -server comes from the same string (g_isServer is not set yet). PrepareForGame
+// makes the whole decision; the buffer is static so it outlives Main_'s parse. A client, or a command
+// line with nothing to remove, gets arg1 back unchanged. This allocates while echovr.exe calls it, so a
+// failure falls back to arg1 (the game then sees the original string) and is logged and recorded. Its
+// std::string and report die when it returns: GameMainWrapperHook calls GameMain with only trivial locals
+// alive, because the VEH longjmps out of GameMain.
+static INT64 PrepareGameArgument(INT64 arg1) {
+  static std::string s_serverCommandLine;
+  INT64 gameArg = arg1;
+  TimestepStripReport report;
+  try {
+    // Everything that can throw runs before gameArg or g_stripReport is touched, so a throw leaves the
+    // game the original string, exactly as the Warning below says (#515 review).
+    const nevr_cmdline::HandOff handOff =
+        nevr_cmdline::PrepareForGame(reinterpret_cast<const char*>(arg1), s_serverCommandLine);
+    report.tokensRemoved = handOff.tokensRemoved;
+    report.residual = handOff.residual;
+    report.options = handOff.optionsText;
+    gameArg = reinterpret_cast<INT64>(handOff.commandLine);
+  } catch (const std::bad_alloc&) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (out of memory); the game gets the original command line");
+  } catch (const std::exception& e) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    // Only the length of what(): exception text is not logged (docs/standards/logging.md, Rule 4).
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (std::exception, %zu bytes of text); the game gets the "
+        "original command line",
+        std::char_traits<char>::length(e.what()));
+  }
+  g_stripReport = std::move(report);
+  g_stripReportReady.store(true, std::memory_order_release);
+  return gameArg;
+}
+
 static INT64 GameMainWrapperHook(INT64 arg1) {
   // Set up the recovery point on this thread. The VEH checks server mode and
   // thread identity at exception time.
@@ -95,43 +136,9 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
-  // #515: arg1 is the ANSI command line the game parses in Main_ (GetCommandLineA, passed in RCX). A
-  // server's time step is NEVR's, so -fixedtimestep and -timestep <value> come out before the game reads
-  // them. Only this early is it effective: Main_ builds its CMainArgs from this string, before
-  // PreprocessCommandLine. -server comes from the same string (g_isServer is not set yet). PrepareForGame
-  // makes the whole decision; the buffer is static so it outlives Main_'s parse. A client, or a command
-  // line with nothing to remove, gets arg1 back unchanged. This allocates while echovr.exe calls it, so a
-  // failure falls back to arg1 (the game then sees the original string) and is logged and recorded.
-  static std::string s_serverCommandLine;
-  INT64 gameArg = arg1;
-  TimestepStripReport report;
-  try {
-    // Everything that can throw runs before gameArg or g_stripReport is touched, so a throw leaves the
-    // game the original string, exactly as the Warning below says (#515 review).
-    const nevr_cmdline::HandOff handOff =
-        nevr_cmdline::PrepareForGame(reinterpret_cast<const char*>(arg1), s_serverCommandLine);
-    report.tokensRemoved = handOff.tokensRemoved;
-    report.residual = handOff.residual;
-    report.options = handOff.optionsText;
-    gameArg = reinterpret_cast<INT64>(handOff.commandLine);
-  } catch (const std::bad_alloc&) {
-    gameArg = arg1;
-    report = TimestepStripReport{};
-    report.failed = true;
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] time-step argument removal failed (out of memory); the game gets the original command line");
-  } catch (const std::exception& e) {
-    gameArg = arg1;
-    report = TimestepStripReport{};
-    report.failed = true;
-    // Only the length of what(): exception text is not logged (docs/standards/logging.md, Rule 4).
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] time-step argument removal failed (std::exception, %zu bytes of text); the game gets the "
-        "original command line",
-        std::char_traits<char>::length(e.what()));
-  }
-  g_stripReport = std::move(report);
-  g_stripReportReady.store(true, std::memory_order_release);
+  // #515: what the game parses (the time-step arguments of a server removed). Done in a helper so no
+  // non-trivial local is alive across GameMain, which the VEH longjmps out of.
+  const INT64 gameArg = PrepareGameArgument(arg1);
 
   // Run the game main loop
   const INT64 gameResult = GameMain(gameArg);

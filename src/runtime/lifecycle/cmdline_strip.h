@@ -18,9 +18,12 @@
 // (GetNumParameters, 0x1400d5d50; ValidateMainArgs, 0x1400da830, counts them against the syntax entry), so
 // removing an option removes the parameters that follow it too.
 //
-// Which "server" wins: StripServerTimestepArgs decides from what the GAME's parser sees, an option token
-// exactly "-server", because it edits the string the game parses. boot.cpp decides g_isServer from
-// CommandLineToArgvW, which differs on quotes: `[-server]` is not a server there and here, `"-server"`
+// Which "server" wins: StripServerTimestepArgs follows NEVR's own reading of `-server`, not the game's
+// name lookup. It requires an option token whose text is exactly "-server" (what boot.cpp's exact
+// lstrcmpW means), where the game's lookup would also match `--server` or `+SERVER` (leading dashes
+// skipped, A-Z lower-cased, CSymbol64::Lookup 0x1400ce120): server mode is NEVR's, and the game has no
+// -server token. The tokenization is the game's, because the strip edits the string the game parses.
+// boot.cpp decides g_isServer from CommandLineToArgvW, which differs on quotes: `[-server]` is not a server there and here, `"-server"`
 // is a server to boot.cpp and a parameter (not an option) to the game, and `-config "C:\dir\" -server` is
 // a server to the game's parser and a quoted string to CommandLineToArgvW. Neither is changed. The report
 // the hook records (TimestepStripReport, timestep_log.h) is what boot.cpp logs: where arguments came out of

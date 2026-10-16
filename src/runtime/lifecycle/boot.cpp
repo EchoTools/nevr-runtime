@@ -57,7 +57,7 @@ const char* TokenAuth_GetUsername(void);
 namespace {
 
 // #515: what ApplyFlag did, for LogTimestepArgs.
-std::atomic<uint8_t> g_serverFlagOutcome{static_cast<uint8_t>(nevr_server_timestep::FlagOutcome::kNotApplied)};
+nevr_server_timestep::FlagRecord g_flagRecord;
 
 
 // N146: only this minimal state is needed before the original command-line
@@ -117,7 +117,7 @@ void PreflightRuntimeBootstrap() {
       nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
   const nevr_server_timestep::FlagOutcome flagOutcome =
       nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);
-  g_serverFlagOutcome.store(static_cast<uint8_t>(flagOutcome), std::memory_order_release);
+  g_flagRecord.Store(flagOutcome);
 }
 
 }  // namespace
@@ -185,15 +185,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 // a failure is caught by type and logged, never allowed to leave.
 static void LogTimestepArgs() {
   try {
-    nevr_timestep_log::Inputs in;
-    in.report = GetTimestepStripReport();
-    in.bootSaysServer = g_isServer != FALSE;
-    in.cmdHasTimestepOption = nevr_cmdline::HasTimestepOption(GetCommandLineA());
-    const nevr_server_timestep::StepWrite step = ServerStepWrite();
-    in.step = step.outcome;
-    in.stepUs = step.stepUs;
-    in.rateHz = g_headlessTickRateHz;
-    in.flag = static_cast<nevr_server_timestep::FlagOutcome>(g_serverFlagOutcome.load(std::memory_order_acquire));
+    const nevr_timestep_log::Inputs in = nevr_timestep_log::BuildInputs(
+        GetTimestepStripReport(), g_isServer != FALSE, nevr_cmdline::HasTimestepOption(GetCommandLineA()),
+        ServerStepWrite(), g_flagRecord.Load(), g_headlessTickRateHz);
     for (const nevr_timestep_log::Line& line : nevr_timestep_log::Decide(in)) {
       Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
           "[NEVR.PATCH] %s", line.text.c_str());

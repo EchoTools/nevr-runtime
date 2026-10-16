@@ -103,7 +103,7 @@ TEST(TimestepLog, ArgumentsRemovedFromALineBootTookForAClientIsAWarningThatNoSte
   EXPECT_TRUE(Contains(lines[0].text, "no fixed-time-step flag or step was set"));
   EXPECT_TRUE(Contains(lines[0].text, "options=-fixedtimestep,-timestep"));
   EXPECT_FALSE(Contains(lines[0].text, "sets the server step when the local config loads"))
-      << "the old message claimed a step would still be set";
+      << "the message must not claim a step would still be set";
   EXPECT_FALSE(Contains(lines[0].text, "unchanged"));
 }
 
@@ -146,4 +146,59 @@ TEST(TimestepLog, NothingToSayWithoutATimestepArgument) {
   EXPECT_TRUE(Decide(server).empty());
   Inputs client;
   EXPECT_TRUE(Decide(client).empty());
+}
+
+TEST(TimestepLog, AServerWhoseFlagWasNeverWrittenIsAWarning) {
+  // boot.cpp's early bootstrap can return before the flag write; the record then stays pending.
+  Inputs in = ServerRemoved();
+  in.flag = FlagOutcome::kNotApplied;
+  const auto lines = Decide(in);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0].level, Level::kWarning);
+  EXPECT_TRUE(Contains(lines[0].text, "flag_state=pending")) << lines[0].text;
+}
+
+TEST(TimestepLog, ANotRemovedWarningClaimsNothingAboutTheStep) {
+  Inputs in;
+  in.bootSaysServer = true;
+  in.cmdHasTimestepOption = true;
+  in.step = StepOutcome::kNotApplied;
+  const auto lines = Decide(in);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_TRUE(Contains(lines[0].text, "step_state=pending")) << lines[0].text;
+  EXPECT_TRUE(Contains(lines[0].text, "not known at this point")) << lines[0].text;
+  EXPECT_FALSE(Contains(lines[0].text, "NEVR still sets"));
+}
+
+TEST(TimestepLog, BuildInputsCopiesEveryFieldFromItsArgument) {
+  nevr_timestep_log::TimestepStripReport report;
+  report.tokensRemoved = 7;
+  report.options = "-timestep";
+  report.residual = true;
+  report.failed = true;
+  nevr_server_timestep::StepWrite step;
+  step.outcome = StepOutcome::kWriteDidNotHold;
+  step.stepUs = 4242;
+  const Inputs in = nevr_timestep_log::BuildInputs(report, true, true, step, FlagOutcome::kFieldMissing, 77);
+  EXPECT_EQ(in.report.tokensRemoved, 7u);
+  EXPECT_EQ(in.report.options, "-timestep");
+  EXPECT_TRUE(in.report.residual);
+  EXPECT_TRUE(in.report.failed);
+  EXPECT_TRUE(in.bootSaysServer);
+  EXPECT_TRUE(in.cmdHasTimestepOption);
+  EXPECT_EQ(in.step, StepOutcome::kWriteDidNotHold);
+  EXPECT_EQ(in.stepUs, 4242u);
+  EXPECT_EQ(in.rateHz, 77u);
+  EXPECT_EQ(in.flag, FlagOutcome::kFieldMissing);
+  const Inputs client = nevr_timestep_log::BuildInputs(report, false, false, step, FlagOutcome::kSet, 1);
+  EXPECT_FALSE(client.bootSaysServer);
+  EXPECT_FALSE(client.cmdHasTimestepOption);
+}
+
+TEST(TimestepLog, AFailedReportMarksTheFailureAndNothingElse) {
+  const auto r = nevr_timestep_log::FailedReport();
+  EXPECT_TRUE(r.failed);
+  EXPECT_EQ(r.tokensRemoved, 0u);
+  EXPECT_TRUE(r.options.empty());
+  EXPECT_FALSE(r.residual);
 }

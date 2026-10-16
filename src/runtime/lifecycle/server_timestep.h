@@ -6,8 +6,21 @@
 // ticks a second and the disc and players move in steps. A server gets the flag before the original
 // PreprocessCommandLine (boot.cpp) and the step for g_headlessTickRateHz when the local config loads
 // (config.cpp), as the legacy patch did. A server is always fixed-timestep; the rate is the config key
-// network.tick_rate_hz (flat key nevr_tick_rate_hz, #595). Pure: values only, no game memory.
+// network.tick_rate_hz (flat key nevr_tick_rate_hz, #595).
+//
+// What is pure: ParseTickRateHz, StepMicroseconds, PlanStepWrite, ReadBackMatches, WithFixedTimestep and the
+// decision/format functions (DecideReadBack, ReadBackLine, OutcomeName) touch no memory but their arguments.
+// ApplyFlag and ApplyStep write, and ApplyStep reads, the field a caller hands them; ReadClock reads the
+// clock it is handed. They take the pointer from the caller (FieldAt resolves it), so a test drives the
+// server and client cases on a buffer without the game (#515). StepRecord and FlagRecord hold an outcome
+// for another thread to read. Both call sites pass g_isServer; a client is left exactly as it was.
+//
+// Whether the step NEVR writes is still in the clock the server runs on is read back ONCE, on per-frame tick
+// kReadBackTick (about 1.2 s after the dispatcher starts): it says the step was live at that moment, not
+// that it stays live. Two writers of the clock global (echovr.exe 0x1420a00e8) exist and the later one
+// resets the step to 33333 (addresses.h, FIXED_TIMESTEP_PTR).
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -252,5 +265,72 @@ inline std::string ReadBackLine(const ClockReadBack& rb, uint32_t expectedStepUs
                 OutcomeName(stepState), live ? "true" : "false");
   return buf;
 }
+
+/// Reads the clock at `state` only when `readable` (the caller's check that its bytes are committed
+/// and readable, N31); otherwise the clock is reported absent and nothing is dereferenced.
+inline ClockReadBack ReadClockIf(bool readable, const void* state) {
+  return ReadClock(readable ? state : nullptr);
+}
+
+/// What the read-back line says and at which level.
+struct ReadBackDecision {
+  uint32_t expectedStepUs = 0;
+  bool live = false;      ///< The clock holds the expected step.
+  std::string line;       ///< ReadBackLine for the expected step.
+};
+
+/// The step the clock should hold, and whether it does. After a write (kSet) it is the step written; at
+/// rate 0 (kKeepGameStep) it is the game's own step the slot held (`w.was`), which is the operator's choice
+/// and no failure; in every other state it is the configured rate's step. `live` is false for a clock that
+/// is absent or holds anything else, and the caller logs a Warning for it.
+inline ReadBackDecision DecideReadBack(const StepWrite& w, uint32_t rateHz, const ClockReadBack& rb, long tick) {
+  ReadBackDecision d;
+  if (w.outcome == StepOutcome::kSet) {
+    d.expectedStepUs = w.stepUs;
+  } else if (w.outcome == StepOutcome::kKeepGameStep) {
+    d.expectedStepUs = w.was > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(w.was);
+  } else {
+    d.expectedStepUs = StepMicroseconds(rateHz);
+  }
+  d.live = ReadBackIsLive(rb, d.expectedStepUs);
+  d.line = ReadBackLine(rb, d.expectedStepUs, w.outcome, tick);
+  return d;
+}
+
+/// The outcome of ApplyStep, kept for the log lines that report it from another thread and another time.
+class StepRecord {
+ public:
+  void Store(const StepWrite& w) {
+    stepUs_.store(w.stepUs, std::memory_order_relaxed);
+    was_.store(w.was, std::memory_order_relaxed);
+    after_.store(w.after, std::memory_order_relaxed);
+    outcome_.store(static_cast<uint8_t>(w.outcome), std::memory_order_release);
+  }
+  StepWrite Load() const {
+    StepWrite w;
+    w.outcome = static_cast<StepOutcome>(outcome_.load(std::memory_order_acquire));
+    w.stepUs = stepUs_.load(std::memory_order_relaxed);
+    w.was = was_.load(std::memory_order_relaxed);
+    w.after = after_.load(std::memory_order_relaxed);
+    return w;
+  }
+
+ private:
+  std::atomic<uint32_t> stepUs_{0};
+  std::atomic<uint64_t> was_{0};
+  std::atomic<uint64_t> after_{0};
+  std::atomic<uint8_t> outcome_{static_cast<uint8_t>(StepOutcome::kNotApplied)};
+};
+
+/// The outcome of ApplyFlag, kept the same way.
+class FlagRecord {
+ public:
+  void Store(FlagOutcome o) { outcome_.store(static_cast<uint8_t>(o), std::memory_order_release); }
+  FlagOutcome Load() const { return static_cast<FlagOutcome>(outcome_.load(std::memory_order_acquire)); }
+
+ private:
+  std::atomic<uint8_t> outcome_{static_cast<uint8_t>(FlagOutcome::kNotApplied)};
+};
+
 
 }  // namespace nevr_server_timestep

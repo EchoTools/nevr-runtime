@@ -40,6 +40,30 @@ struct Inputs {
   nevr_server_timestep::FlagOutcome flag = nevr_server_timestep::FlagOutcome::kNotApplied;
 };
 
+/// The inputs `Decide` needs, from what boot.cpp read: the hook's report, whether boot.cpp took the process
+/// for a server, whether a time-step option is on the command line, and the recorded outcomes. Every field is
+/// copied from its argument (a test pins each), so the assembly cannot drop or swap one unnoticed.
+inline Inputs BuildInputs(const TimestepStripReport& report, bool bootSaysServer, bool cmdHasTimestepOption,
+                          const nevr_server_timestep::StepWrite& step, nevr_server_timestep::FlagOutcome flag,
+                          uint32_t rateHz) {
+  Inputs in;
+  in.report = report;
+  in.bootSaysServer = bootSaysServer;
+  in.cmdHasTimestepOption = cmdHasTimestepOption;
+  in.step = step.outcome;
+  in.stepUs = step.stepUs;
+  in.rateHz = rateHz;
+  in.flag = flag;
+  return in;
+}
+
+/// The report for a removal that threw: the game was given the original string.
+inline TimestepStripReport FailedReport() {
+  TimestepStripReport r;
+  r.failed = true;
+  return r;
+}
+
 /// The lines to log: none when nothing concerns the time step; else one line, and a second Warning when a
 /// time-step option is still in the string the game parsed.
 inline std::vector<Line> Decide(const Inputs& in) {
@@ -63,7 +87,9 @@ inline std::vector<Line> Decide(const Inputs& in) {
       lines.push_back(l);
     } else {
       const bool stepFailed = nevr_server_timestep::StepFailed(in.step);
-      const bool flagFailed = in.flag == FlagOutcome::kFieldMissing;
+      // A server whose flag was never written (kNotApplied: boot.cpp's early bootstrap returned) is as
+      // wrong as one with no field.
+      const bool flagFailed = in.flag == FlagOutcome::kFieldMissing || in.flag == FlagOutcome::kNotApplied;
       if (in.step == StepOutcome::kSet) {
         std::snprintf(stepText, sizeof(stepText), "the server step is %u us (%u Hz), set by NEVR",
                       static_cast<unsigned>(in.stepUs), static_cast<unsigned>(in.rateHz));
@@ -101,7 +127,10 @@ inline std::vector<Line> Decide(const Inputs& in) {
     l.level = Level::kWarning;
     l.text = std::string("a time-step argument is on the command line and was NOT removed (tokens_removed=0 "
                          "hook_failed=") +
-             (r.failed ? "true" : "false") + "): the game reads it. NEVR still sets the server step";
+             (r.failed ? "true" : "false") +
+             "): the game reads it. NEVR writes the server step from config.yaml when the local config loads "
+             "(step_state=" +
+             nevr_server_timestep::OutcomeName(in.step) + "); whether it holds is not known at this point";
   } else {
     l.level = Level::kInfo;
     l.text = "time-step arguments passed to the game unchanged: NEVR sets the time step on a server only";
