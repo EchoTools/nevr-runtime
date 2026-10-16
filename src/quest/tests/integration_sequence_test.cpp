@@ -737,6 +737,26 @@ void TestIdentitySourcePublishesTheHoldWithTheReady() {
                 "HoldsFor must be noexcept");
 }
 
+// If token auth never exists, a final startup failure must survive a later Fetch of the missing
+// session. Otherwise Fetch republishes Starting and holds the game's local login answers again.
+void TestMissingAuthStaysFailedAfterFetch() {
+  using nevr::quest_auth::Readiness;
+  using nevr_session_router::LoginGate;
+  TokenIdentitySource source([] { return nevr::quest_auth::Snapshot{}; });  // no QuestTokenAuth
+  QCHECK(source.HoldsAnswers());
+  nevr::quest_auth::Snapshot failed;
+  failed.readiness = Readiness::Failed;
+  source.Observe(failed);
+  QCHECK(!source.HoldsAnswers());
+  QCHECK(TokenIdentitySource::GateFor(failed) == LoginGate::Refused);
+  nevr_quest_login::Identity identity;
+  QCHECK(source.Fetch(identity) == nevr_quest_login::IdentityStatus::NoToken);
+  QCHECK(!source.HoldsAnswers());
+  source.Observe(nevr::quest_auth::Snapshot{});  // a stale Starting observation cannot reopen the hold
+  QCHECK(!source.HoldsAnswers());
+  QCHECK(source.Fetch(identity) == nevr_quest_login::IdentityStatus::NoToken);
+}
+
 std::vector<std::string> g_holdLines;
 void CaptureHoldLine(sentinel::LogLevel, const char* line) { g_holdLines.emplace_back(line); }
 
@@ -1034,6 +1054,7 @@ int main() {
   TestLoginGateFollowsTheIdentityAnswer();
   TestIdentitySourcePublishesTheSharedAttemptGate();
   TestIdentitySourcePublishesTheHoldWithTheReady();
+  TestMissingAuthStaysFailedAfterFetch();
   TestTheHoldDecisionIsLoggedOnEachChange();
   TestDropReportsOnlyChanges();
   TestIdentitySourceReadyFollowsObservedState();

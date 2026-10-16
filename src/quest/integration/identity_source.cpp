@@ -58,6 +58,10 @@ void TokenIdentitySource::ReportHold(bool hold, const char* status, int* last) {
 }
 
 nevr_quest_login::IdentityStatus TokenIdentitySource::Fetch(nevr_quest_login::Identity& out) {
+  if (Terminal()) {
+    nevr_quest_login::attempt_gate::Publish(false, false);
+    return nevr_quest_login::IdentityStatus::NoToken;
+  }
   if (!snapshot_) {
     nevr_quest_login::attempt_gate::Publish(false, false);
     return nevr_quest_login::IdentityStatus::NotReady;
@@ -74,7 +78,12 @@ nevr_quest_login::IdentityStatus TokenIdentitySource::Fetch(nevr_quest_login::Id
 }
 
 void TokenIdentitySource::Observe(const nevr::quest_auth::Snapshot& snap) noexcept {
-  nevr_quest_login::attempt_gate::Publish(Classify(snap) == nevr_quest_login::IdentityStatus::Ok, HoldsFor(snap));
+  if ((snap.readiness == nevr::quest_auth::Readiness::Failed && !snap.will_retry) ||
+      snap.readiness == nevr::quest_auth::Readiness::Stopped) {
+    terminal_.store(true, std::memory_order_release);
+  }
+  nevr_quest_login::attempt_gate::Publish(!Terminal() && Classify(snap) == nevr_quest_login::IdentityStatus::Ok,
+                                          !Terminal() && HoldsFor(snap));
 }
 
 }  // namespace nevr_quest::integration
