@@ -44,16 +44,11 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by);
 
 /* Register a callback to fire when a DLL matching `dll_name` loads.
  * dll_name is matched case-insensitively against the filename only (not path).
- * The callback fires at most once per registration. Multiple callbacks per DLL are supported. */
+ * The callback fires at most once per registration. Multiple callbacks per DLL are supported.
+ * A DLL that is already loaded fires its callback before OnLoad returns, during the runtime's boot too
+ * (an injector such as Revive's loads dxgi/d3d12 before the runtime starts, #495): a callback that
+ * logs then reports through the boot tee, because Log() routes by boot phase (core/logging.h). */
 void OnLoad(const char* dll_name, PatchCallback callback);
-
-/* While the runtime boots, a callback for a DLL that is already loaded when it registers is held
- * instead of fired: an injector such as Revive's loads dxgi/d3d12 before the runtime starts, and the
- * callbacks log, which before the log filter goes through the game's CLog, not set up this early
- * (an access violation inside echovr.exe, #495). Install() starts holding them;
- * FireHeldCallbacks(), once the log filter is in, fires what was held and stops holding. */
-void HoldEarlyCallbacks();
-void FireHeldCallbacks();
 
 /* Trigger callbacks for a DLL that was loaded through a non-LoadLibrary path
  * (e.g., the game's CSysDLL_Load). Only fires each callback once per DLL. */

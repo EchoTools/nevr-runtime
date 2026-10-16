@@ -203,10 +203,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # every required hook succeeds in the logs this classification is based on, so
         # `just verify` would still go green while every server refused to start.
         self.assertIn("if (installed) return;", note)
-        # TeeFprintf, not Log(): this runs under the DllMain loader lock (N36). The N36 census
-        # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
-        # added inside this helper.
-        self.assertNotRegex(note, r"\bLog\s*\(")
         # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
         # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
         # way the original seven PatchDetour calls did.
@@ -597,19 +593,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         source = (ROOT / "src/runtime/compat/ws_bridge.cpp").read_text()
 
         self.assertNotIn("0x43e6963ac76beee4", source)
-
-    def test_held_dll_load_callbacks_fire_after_the_log_filter_is_in(self):
-        # #495: a callback for a DLL already loaded at registration is held during boot because it logs,
-        # and before the log filter Log() goes through the game's CLog (not set up that early). The
-        # unit tests cover the hold itself; the property that the guarded initialization releases the
-        # held callbacks, after the filter and exactly once, lives here.
-        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
-        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
-        self.assertEqual(body.count("nevr_dll_load_hook::FireHeldCallbacks("), 1)
-        self.assertEqual(body.count("nevr_builtin_log_filter::Init("), 1)
-        self.assertLess(body.index("nevr_builtin_log_filter::Init("),
-                        body.index("nevr_dll_load_hook::FireHeldCallbacks("),
-                        "held callbacks log: they must not fire before the log filter is installed")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@
 #include "runtime/hook/process_memory.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/hook/hook_guard.h"
-#include "runtime/log/boot_log_tee.h"
 
 /// <summary>
 /// Helper function to apply a memory patch at a specific offset from the game base address.
@@ -18,15 +17,9 @@
 static inline bool ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
   DWORD error = ERROR_SUCCESS;
   if (ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, patchData, patchSize, &error)) return true;
-  if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.PATCH] patch FAILED offset=0x%llX size=%llu error=%lu\n",
-        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(patchSize), error);
-  } else {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] patch FAILED offset=0x%llX size=%llu error=%lu",
-        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(patchSize), error);
-  }
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] patch FAILED offset=0x%llX size=%llu error=%lu",
+      static_cast<unsigned long long>(offset), static_cast<unsigned long long>(patchSize), error);
   return false;
 }
 
@@ -58,18 +51,11 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
     // detour passes through, so no call site can forget. Warning, not Debug: a
     // missing hook is an operator-actionable degradation, and this fires ONLY on
     // failure — a healthy boot, where every hook installs, adds no new line.
-    // While boot runs, DllMain still holds the loader lock and Log() would enter the game
-    // logger once EchoVR::WriteLog is resolved (#92), so the report goes through BootLogTee.
+    // During boot Log() reports through the boot tee itself (core/logging.h).
     const char* const shown = name ? name : "(unnamed)";
-    if (nevr_boot_log_tee::InBootPhase()) {
-      nevr_boot_log_tee::TeeFprintf(
-          "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed\n",
-          shown, target, Hooking::LastAttachError());
-    } else {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed",
-          shown, target, Hooking::LastAttachError());
-    }
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed",
+        shown, target, Hooking::LastAttachError());
   }
   return ok;
 }
