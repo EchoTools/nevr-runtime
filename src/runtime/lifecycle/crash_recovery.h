@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "core/pch.h"
 #include "runtime/lifecycle/veh_policy.h"
 
@@ -17,9 +19,16 @@ void InstallCrashRecoveryHooks();
 /// (N125). Called from Initialize.
 void InstallGameMainHook();
 
-/// #515: how many time-step arguments (-fixedtimestep, and -timestep with its value) the game-main hook
-/// removed from the game's command line. 0 on a client and when none was given.
-unsigned TimestepArgsRemoved();
+/// #515: what GameMainWrapperHook did to the game's command line (lifecycle/cmdline_strip.h).
+struct TimestepStripReport {
+  unsigned tokensRemoved = 0;  ///< Time-step options and their parameters removed; 0 on a client or when none was given.
+  std::string options;         ///< The canonical names of the removed options, comma separated.
+  bool residual = false;       ///< A time-step option is still in the string handed to the game.
+  bool failed = false;         ///< The removal threw; the game got the original string.
+};
+
+/// The report GameMainWrapperHook recorded (all zero before it ran).
+TimestepStripReport GetTimestepStripReport();
 
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
 /// and null-pointer AV recovery via longjmp in server mode.

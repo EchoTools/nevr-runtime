@@ -40,6 +40,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/cmdline_strip.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
@@ -101,12 +102,12 @@ void PreflightRuntimeBootstrap() {
   }
 
   // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
-  // when the local config loads (config.cpp, LoadLocalConfigHook).
-  if (g_isServer && g_pGame != nullptr) {
-    auto* timestepFlags = reinterpret_cast<UINT64*>(
-        reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
-    *timestepFlags = nevr_server_timestep::WithFixedTimestep(*timestepFlags);
-  }
+  // when the local config loads (config.cpp, LoadLocalConfigHook). ApplyFlag leaves a client alone.
+  nevr_server_timestep::ApplyFlag(
+      g_isServer != FALSE,
+      g_pGame == nullptr ? nullptr
+                         : reinterpret_cast<UINT64*>(reinterpret_cast<CHAR*>(g_pGame) +
+                                                     nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET));
 }
 
 }  // namespace
@@ -154,6 +155,51 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
   }
   return result;
+}
+
+// #515: one line saying what happened to a server's time-step arguments, from what GameMainWrapperHook
+// recorded and what ApplyServerTimestep recorded, not from the configured rate. It does not depend on
+// boot.cpp's own reading of the command line: the hook decides from the game's parser (see
+// runtime/lifecycle/cmdline_strip.h), CommandLineToArgvW differs on quotes. The game's own "CL Args: %s"
+// line (NRadPhysics::InitGlobals, echovr.exe 0x141548da0) still prints the original command line.
+static void LogTimestepArgs() {
+  const TimestepStripReport report = GetTimestepStripReport();
+  const nevr_server_timestep::StepWrite step = ServerStepWrite();
+  if (report.tokensRemoved > 0) {
+    const bool stepFailed = step.outcome == nevr_server_timestep::StepOutcome::kStateMissing ||
+                            step.outcome == nevr_server_timestep::StepOutcome::kRateZero;
+    char stepText[96];
+    if (step.outcome == nevr_server_timestep::StepOutcome::kSet) {
+      snprintf(stepText, sizeof(stepText), "the server step is %u us (%u Hz), set by NEVR",
+               static_cast<unsigned>(step.stepUs), static_cast<unsigned>(g_headlessTickRateHz));
+    } else if (stepFailed) {
+      snprintf(stepText, sizeof(stepText), "the server step was NOT set (step_state=%s)",
+               nevr_server_timestep::OutcomeName(step.outcome));
+    } else {
+      snprintf(stepText, sizeof(stepText), "NEVR sets the server step when the local config loads (step_state=%s)",
+               nevr_server_timestep::OutcomeName(step.outcome));
+    }
+    Log(stepFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] server time-step arguments removed from the game's command line options=%s "
+        "tokens_removed=%u; %s; the game's own \"CL Args\" line still shows the original command line",
+        report.options.c_str(), report.tokensRemoved, stepText);
+    if (report.residual) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] a time-step option is still in the game's command line after the removal "
+          "(residual=true): the game may read it");
+    }
+    return;
+  }
+  if (!nevr_cmdline::HasTimestepOption(GetCommandLineA())) return;
+  if (g_isServer) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] a time-step argument is on the command line and was NOT removed (tokens_removed=0 "
+        "hook_failed=%s): the game reads it. NEVR still sets the server step",
+        report.failed ? "true" : "false");
+  } else {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] time-step arguments passed to the game unchanged: NEVR sets the time step on a server only");
+  }
 }
 
 void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
@@ -342,27 +388,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       if (i + 1 < argc) ++i;
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
       // #515: a server's time step is NEVR's. GameMainWrapperHook (crash_recovery.cpp) removed these
-      // arguments from the string the game parses, before the game read it; this only reports it.
+      // arguments from the string the game parses, before the game read it; LogTimestepArgs reports it
+      // once, from what the hook recorded. Here the value is only consumed so it is not read as an option.
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
-      if (g_isServer) {
-        const unsigned removed = TimestepArgsRemoved();
-        if (removed > 0) {
-          Log(EchoVR::LogLevel::Info,
-              "[NEVR.PATCH] %ls removed from the game's command line (tokens_removed=%u); the server time "
-              "step is %u us (%u Hz), set by NEVR",
-              arg, removed, static_cast<unsigned>(nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz)),
-              static_cast<unsigned>(g_headlessTickRateHz));
-        } else {
-          Log(EchoVR::LogLevel::Warning,
-              "[NEVR.PATCH] %ls was NOT removed from the game's command line (tokens_removed=0): the game "
-              "may run the server on its own time step instead of %u us (%u Hz)",
-              arg, static_cast<unsigned>(nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz)),
-              static_cast<unsigned>(g_headlessTickRateHz));
-        }
-      } else {
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] %ls passed to the game unchanged: NEVR sets the time step on a server only", arg);
-      }
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.
@@ -392,6 +420,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   LocalFree(argv);
+
+  LogTimestepArgs();
 
   // -server forces -headless unconditionally (set in the -server branch above).
   // The OR here is a safety net: if g_isHeadless was set to TRUE for any other

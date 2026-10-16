@@ -120,12 +120,12 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
 /// reasons, and the SECOND is the decisive one.
 ///
-/// (1) It only matters under fixed timestep. A server runs on a fixed time step
-///     that NEVR sets itself (server_timestep.h), and `-timestep`/`-fixedtimestep`
-///     are removed from its command line before the game parses it
-///     (cmdline_strip.h). v1 applies it inside
-///     `if (isHeadless && headlessTimeStep != 0)` — a condition that can no
-///     longer be true.
+/// (1) It only matters under fixed timestep, and every server now runs on one:
+///     NEVR sets the flag and the step itself (server_timestep.h), and removes
+///     `-timestep`/`-fixedtimestep` from the command line (cmdline_strip.h).
+///     v1 applies it inside `if (isHeadless && headlessTimeStep != 0)`, a
+///     condition a server now meets. This reason therefore does not rule the
+///     patch out by itself; (2) does.
 ///
 /// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
 ///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:

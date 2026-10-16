@@ -1,19 +1,31 @@
 #pragma once
 
-// #511 / #515: a dedicated server's fixed time step is NEVR's, so the game must never see a time-step
-// argument from the operator. echovr.exe parses its command line in Main_ (0x1400cd550) into a CMainArgs
-// from the ANSI string GetCommandLineA() returned (the caller at 0x14151d45c passes it in RCX through
-// GameMainWrapper at 0x1400cd510), before PreprocessCommandLine runs. -fixedtimestep is a native token
-// there (CncaGame syntax table, 0x1404e7d60), so it would put a server on the game's 30 Hz step;
-// -timestep is not a native token: the game would reject it as "not a valid command"
-// (ValidateMainArgs, 0x1400da830). A server therefore has both removed from the string before Main_ reads
-// it (GameMainWrapperHook, crash_recovery.cpp), and sets the flag and the step itself (boot.cpp,
-// config.cpp, server_timestep.h).
+// #511 / #515: a dedicated server's fixed time step is NEVR's, and nothing about it is settable from
+// outside: the operator gives no time-step argument, so a server cannot be pointed at a different step
+// by a stray -fixedtimestep or -timestep. echovr.exe parses its command line in Main_ (0x1400cd550)
+// into a CMainArgs from the ANSI string GetCommandLineA() returned (the caller at 0x14151d45c passes it
+// in RCX through GameMainWrapper at 0x1400cd510), before PreprocessCommandLine runs. -fixedtimestep is a
+// native token there (CncaGame syntax table, 0x1404e7d60; ApplyCommandLineEngineFlags ORs 0x2000000
+// into [pGame+0x828] for it at 0x1405045bf, the bit NEVR sets itself in server_timestep.h). A server
+// therefore has both removed from the string before Main_ reads it (GameMainWrapperHook,
+// crash_recovery.cpp); NEVR sets the flag and the step (boot.cpp, config.cpp).
 //
 // Pure: text in, text out, no game memory. The tokenizer follows the game's own (FUN_1400d9000 and
 // FUN_1400d3c40): tokens split on ' ', a '"' or '[' opens a token that runs to the matching '"' or ']', a
 // token is an option when it starts with '-', '+' or 0x96 and the next character is not a digit, and a
 // name lookup skips every leading '-', '+' and 0x96 and lower-cases A-Z (CSymbol64::Lookup, 0x1400ce120).
+// The game attaches every non-option token after an option to it as that option's parameters
+// (GetNumParameters, 0x1400d5d50; ValidateMainArgs, 0x1400da830, counts them against the syntax entry), so
+// removing an option removes the parameters that follow it too.
+//
+// Which "server" wins: StripServerTimestepArgs decides from what the GAME's parser sees, an option token
+// exactly "-server", because it edits the string the game parses. boot.cpp decides g_isServer from
+// CommandLineToArgvW, which differs on quotes: `[-server]` is not a server there and here, `"-server"`
+// is a server to boot.cpp and a parameter (not an option) to the game, and `-config "C:\dir\" -server` is
+// a server to the game's parser and a quoted string to CommandLineToArgvW. Neither is changed. The report
+// the hook records (TimestepStripReport, crash_recovery.h) is what boot.cpp logs: it names a removal that
+// happened on a line boot.cpp took for a client, and warns when boot.cpp took the line for a server and
+// nothing was removed.
 
 #include <cstddef>
 #include <string>
@@ -49,6 +61,16 @@ inline bool NameIs(std::string_view token, std::string_view lowerName) {
   return true;
 }
 
+/// The two options a server loses, by their canonical names; an empty view for any other token.
+inline std::string_view TimestepOptionName(const Token& t) {
+  if (!t.option) return {};
+  if (NameIs(t.text, "fixedtimestep")) return "-fixedtimestep";
+  if (NameIs(t.text, "timestep")) return "-timestep";
+  return {};
+}
+
+inline bool IsSpace(char c) { return static_cast<unsigned char>(c) <= 0x20; }
+
 }  // namespace detail
 
 /// Splits `commandLine` into the tokens the game's parser produces. The views point into `commandLine`.
@@ -58,7 +80,7 @@ inline std::vector<Token> Tokenize(std::string_view commandLine) {
   std::size_t i = 0;
   while (i < n) {
     // The game skips bytes 1..0x20 between tokens; a byte with the high bit set starts a token.
-    while (i < n && static_cast<unsigned char>(commandLine[i]) <= 0x20) ++i;
+    while (i < n && detail::IsSpace(commandLine[i])) ++i;
     if (i >= n) break;
     Token t;
     t.begin = i;
@@ -84,23 +106,45 @@ inline std::vector<Token> Tokenize(std::string_view commandLine) {
   return tokens;
 }
 
-/// True when `commandLine` carries the exact token `-server` (how boot.cpp decides g_isServer).
+/// True when the game's parser reads `-server` in `commandLine`: an option token exactly "-server". See the
+/// header comment for how this differs from boot.cpp's CommandLineToArgvW reading.
 inline bool HasServerToken(std::string_view commandLine) {
   for (const Token& t : Tokenize(commandLine)) {
-    if (t.text == "-server") return true;
+    if (t.option && t.text == "-server") return true;
+  }
+  return false;
+}
+
+/// True when `commandLine` still holds a time-step option the game would read.
+inline bool HasTimestepOption(std::string_view commandLine) {
+  for (const Token& t : Tokenize(commandLine)) {
+    if (!detail::TimestepOptionName(t).empty()) return true;
   }
   return false;
 }
 
 /// The command line a server hands to the game, and what was taken out of it.
 struct StripResult {
-  std::string commandLine;            ///< The text to give the game.
-  std::vector<std::string> removed;   ///< Each removed token's text, in order; empty when nothing changed.
+  std::string commandLine;             ///< The text to give the game.
+  std::vector<std::string> removed;    ///< Each removed token's text (an option or a parameter), in order.
+  std::vector<std::string> options;    ///< The canonical name of each removed option, in order.
 };
 
-/// On a server (a `-server` token is present) removes every `-fixedtimestep` token and every `-timestep`
-/// token with its value (the next token, when that is not an option), and the space before each. On a
-/// client the text comes back untouched.
+namespace detail {
+
+/// Appends `piece` to `out`, with one space between them when the two would otherwise abut into one token.
+inline void Append(std::string& out, std::string_view piece) {
+  if (piece.empty()) return;
+  if (!out.empty() && !IsSpace(out.back()) && !IsSpace(piece.front())) out.push_back(' ');
+  out.append(piece);
+}
+
+}  // namespace detail
+
+/// On a server (a `-server` option is present) removes every `-fixedtimestep` and `-timestep` option with
+/// the parameters the game would attach to it (every non-option token that follows), and the space before
+/// each. Where the text that is kept would abut after a removal, one space is put between. On a client the
+/// text comes back untouched.
 inline StripResult StripServerTimestepArgs(std::string_view commandLine) {
   StripResult result;
   result.commandLine.assign(commandLine);
@@ -109,14 +153,11 @@ inline StripResult StripServerTimestepArgs(std::string_view commandLine) {
   const std::vector<Token> tokens = Tokenize(commandLine);
   std::vector<bool> drop(tokens.size(), false);
   for (std::size_t k = 0; k < tokens.size(); ++k) {
-    const Token& t = tokens[k];
-    if (!t.option) continue;
-    if (detail::NameIs(t.text, "fixedtimestep")) {
-      drop[k] = true;
-    } else if (detail::NameIs(t.text, "timestep")) {
-      drop[k] = true;
-      if (k + 1 < tokens.size() && !tokens[k + 1].option) drop[k + 1] = true;
-    }
+    const std::string_view name = detail::TimestepOptionName(tokens[k]);
+    if (name.empty()) continue;
+    drop[k] = true;
+    result.options.emplace_back(name);
+    for (std::size_t v = k + 1; v < tokens.size() && !tokens[v].option; ++v) drop[v] = true;
   }
 
   std::string out;
@@ -124,16 +165,40 @@ inline StripResult StripServerTimestepArgs(std::string_view commandLine) {
   for (std::size_t k = 0; k < tokens.size(); ++k) {
     if (!drop[k]) continue;
     // Keep the bytes before the token, minus the gap that separated it from the previous token.
-    std::size_t gapStart = k == 0 ? 0 : tokens[k - 1].end;
-    if (gapStart < copied) gapStart = copied;
-    out.append(commandLine.substr(copied, gapStart - copied));
+    const std::size_t gapStart = k == 0 ? 0 : tokens[k - 1].end;
+    detail::Append(out, commandLine.substr(copied, gapStart - copied));
     copied = tokens[k].end;
     result.removed.emplace_back(tokens[k].text);
   }
   if (result.removed.empty()) return result;
-  out.append(commandLine.substr(copied));
+  detail::Append(out, commandLine.substr(copied));
   result.commandLine = std::move(out);
   return result;
+}
+
+/// What GameMainWrapperHook hands the game, and what it took out. `commandLine` is `original` itself when
+/// nothing was removed (a client, nothing to remove, or a null `original`), else `storage.c_str()`.
+struct HandOff {
+  const char* commandLine = nullptr;
+  unsigned tokensRemoved = 0;             ///< Options and their parameters.
+  std::vector<std::string> options;       ///< Canonical names of the removed options, in order.
+  bool residual = false;                  ///< A time-step option is still in the text handed over.
+};
+
+/// The one decision GameMainWrapperHook makes: the string to give the game. `storage` holds the stripped
+/// text and must outlive the game's parse (the hook keeps it static). May throw std::bad_alloc.
+inline HandOff PrepareForGame(const char* original, std::string& storage) {
+  HandOff h;
+  h.commandLine = original;
+  if (original == nullptr) return h;
+  StripResult stripped = StripServerTimestepArgs(original);
+  if (stripped.removed.empty()) return h;
+  storage = std::move(stripped.commandLine);
+  h.commandLine = storage.c_str();
+  h.tokensRemoved = static_cast<unsigned>(stripped.removed.size());
+  h.options = std::move(stripped.options);
+  h.residual = HasTimestepOption(storage);
+  return h;
 }
 
 }  // namespace nevr_cmdline
