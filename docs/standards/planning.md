@@ -79,7 +79,11 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 - An issue that a merged PR fixed is closed, with the PR linked.
 
 **PRs**
-- A PR links the issue it resolves (`Closes #N`), or says in its body why there is none.
+- A PR links the issue it resolves with a closing keyword (`Fixes #N`) in its body, or says in its body why there is none.
+  GitHub copies the body into the squash commit, so the issue closes when the PR merges.
+- `Refs #N` is only for a PR that leaves a named live check owed (a headset run, a server run). That check is a
+  task line on the issue, and whoever does it closes the issue with the evidence. A merged PR never leaves its issue
+  open silently.
 - A PR carries the same milestone as the issue it resolves.
 - A PR with no activity across a sprint is either picked up, rebased, or closed with the reason. A PR that is far behind
   `main` or conflicting is replaced by a focused PR rather than rebased wholesale.
