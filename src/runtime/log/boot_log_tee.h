@@ -24,6 +24,9 @@ namespace nevr_boot_log_tee {
 
 /// Call ONCE before the first TeeFprintf.  Creates logs/nevr-boot.jsonl
 /// alongside the EXE (appending if it already exists from a prior run).
+/// Starts the boot phase: from here to Close(), Log() reports through this tee
+/// (with the level after the subsystem tag, logging.md Rule 12), never the
+/// game's CLog, which is not usable under the loader lock.
 /// Silently ignores errors — if the directory cannot be created or the
 /// file cannot be opened (read-only filesystem, permissions), all
 /// TeeFprintf calls degrade to stderr-only.
@@ -33,17 +36,13 @@ void Init();
 /// Writes to stderr (always) AND to the boot JSONL file (if open).
 void TeeFprintf(const char* fmt, ...);
 
-/// True between Init() and Close(), including when the boot file could not be
-/// opened. Boot runs under the DllMain loader lock, so code shared with later
-/// phases must report through TeeFprintf, not Log(), while this is true.
-bool InBootPhase();
-
 /// Full path of nevr-boot.jsonl once Init() has resolved it ("" before, or when the directory could
 /// not be built). Valid after Close(): the main log replays this run's lines from it (#5).
 const char* Path();
 
-/// Close the boot file handle.  After this call TeeFprintf still writes
-/// to stderr but the file mirror stops.
+/// Ends the boot phase (Log() returns to the game's CLog) and closes the boot
+/// file handle.  After this call TeeFprintf still writes to stderr but the
+/// file mirror stops.
 void Close();
 
 }  // namespace nevr_boot_log_tee
