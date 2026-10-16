@@ -249,8 +249,10 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
 # fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
-# be mounted by a debug-signed sideload, so it is never used.
+# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
+# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
+# APK's signer, so it is never used (the sentinel answers the game's mount itself:
+# docs/adr/0007-quest-obb-mount-skip.md).
 # The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
 # different data_sha256 gets its own _data-<hash prefix>.zip),
 # written as .part and renamed only after the hash matches. data_sha256

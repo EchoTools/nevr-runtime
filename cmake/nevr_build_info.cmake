@@ -10,9 +10,10 @@ set(NEVR_QUEST_DEFAULT_FEATURES "" CACHE STRING
     "Comma-separated Quest features on by default with no config file (redirect,bridge,login,social); empty: all off")
 
 # Fails the configure when `features` (a comma-separated list) names a feature the sentinel does not have.
-# (`self_check` is not one: the self-checks are on in every build, #451.)
+# (`self_check` is not one: the self-checks are on in every build, #451. Nor is `obb_skip`: the OBB mount is skipped
+# on every launch, #572.)
 function(nevr_validate_default_features features_csv)
-  set(known redirect bridge login social hwdump obb_skip)
+  set(known redirect bridge login social hwdump)
   string(REPLACE "," ";" features "${features_csv}")
   foreach(feature IN LISTS features)
     if(NOT feature IN_LIST known)
