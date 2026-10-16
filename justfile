@@ -1655,24 +1655,45 @@ verify:
     # --- #515: a server's time-step arguments are removed before the game parses them ----
     # echovr.exe builds its CMainArgs in Main_ from the string GameMainWrapper passes on, before
     # PreprocessCommandLine (lifecycle/cmdline_strip.h says where). The wrapper hook is the one place
-    # the removal reaches the game's parser, and no test runs it: a hook that calls the strip but then
-    # hands the game the ORIGINAL string, or no longer calls the strip, passes every unit test.
-    # Comment-stripped (N99/N111), reusing the capture above.
-    if ! grep -q 'StripServerTimestepArgs(' <<<"$N125_CR"; then
-        echo "verify: FAIL — #515 GameMainWrapperHook no longer calls StripServerTimestepArgs." >&2
-        echo "A server would give the game -fixedtimestep (30 Hz step, #511) and -timestep (rejected as not a valid command)." >&2
+    # the removal reaches the game's parser. The decision is a pure function (PrepareForGame, GTest
+    # test_cmdline_strip); no test runs the hook, so this pins that the hook makes that one call, hands
+    # the game its result, records the report boot.cpp logs, and keeps the exception boundary (never
+    # catch(...)). The server's two writes are pure helpers too (server_timestep.h, GTest
+    # test_server_timestep); this pins that both call sites still call them with g_isServer: 8d26b1a8
+    # removed this writer once, and a deleted call passes every unit test.
+    # Comment-stripped (N99/N111), reusing the N125 capture of crash_recovery.cpp.
+    sensor_515_need() { # $1 capture, $2 fixed-string pattern, $3 why it matters
+        if ! grep -qF -- "$2" <<<"$1"; then
+            echo "verify: FAIL — #515 sensor: '$2' is missing. $3" >&2
+            exit 1
+        fi
+    }
+    sensor_515_need "$N125_CR" 'nevr_cmdline::PrepareForGame(' "GameMainWrapperHook must make the one call that decides what the game parses; a server would give the game -fixedtimestep and -timestep."
+    sensor_515_need "$N125_CR" 'gameArg = reinterpret_cast<INT64>(handOff.commandLine);' "The game must be handed the result of PrepareForGame; passing the original string undoes the removal."
+    sensor_515_need "$N125_CR" 'GameMain(gameArg)' "The game must be called with that result."
+    sensor_515_need "$N125_CR" 'g_stripReport.tokensRemoved = handOff.tokensRemoved;' "boot.cpp reads the report to log removed or NOT removed; without it a failed removal is silent."
+    sensor_515_need "$N125_CR" 'g_stripReportReady.store(true' "The report must be published or boot.cpp sees none."
+    sensor_515_need "$N125_CR" 'catch (const std::bad_alloc&)' "The hook allocates while the game calls it; a failure must fall back to the original string."
+    sensor_515_need "$N125_CR" 'catch (const std::exception&' "The hook allocates while the game calls it; a failure must fall back to the original string."
+    if grep -qF 'catch (...)' <<<"$N125_CR"; then
+        echo "verify: FAIL — #515 sensor: crash_recovery.cpp has catch (...). Name the exception type (C++ addendum)." >&2
         exit 1
     fi
-    if ! grep -q 'g_timestepArgsRemoved.store(' <<<"$N125_CR"; then
-        echo "verify: FAIL — #515 GameMainWrapperHook no longer records how many time-step arguments it removed." >&2
-        echo "boot.cpp reads it (TimestepArgsRemoved) to log removed or NOT removed; without it a failed removal is silent." >&2
+    S515_RC=0; S515_CFG=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/config.cpp) || S515_RC=$?
+    sensor_stage1 "#515 server step call site" "src/runtime/lifecycle/config.cpp" "$S515_RC"
+    sensor_nonempty "#515 server step call site" "non-comment lines of config.cpp" "$S515_CFG"
+    S515_RC=0; S515_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || S515_RC=$?
+    sensor_stage1 "#515 server flag call site" "src/runtime/lifecycle/boot.cpp" "$S515_RC"
+    sensor_nonempty "#515 server flag call site" "non-comment lines of boot.cpp" "$S515_BOOT"
+    if ! grep -qE '^[[:space:]]*ApplyServerTimestep\(\);' <<<"$S515_CFG"; then
+        echo "verify: FAIL — #515 sensor: LoadLocalConfigHook no longer calls ApplyServerTimestep();" >&2
+        echo "The server would run on the game's own time step (#511); nothing else writes it." >&2
         exit 1
     fi
-    if ! grep -q 'GameMain(gameArg)' <<<"$N125_CR"; then
-        echo "verify: FAIL — #515 GameMainWrapperHook does not hand the game the stripped command line (GameMain(gameArg))." >&2
-        echo "The strip's result must be what Main_ parses; passing the original string undoes it." >&2
-        exit 1
-    fi
+    sensor_515_need "$S515_CFG" 'nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField)' "ApplyServerTimestep must pass g_isServer and the configured rate to the step writer."
+    sensor_515_need "$S515_BOOT" 'nevr_server_timestep::ApplyFlag(' "boot.cpp must set the server's fixed-time-step flag before the original PreprocessCommandLine (#511)."
+    sensor_515_need "$S515_BOOT" 'g_isServer != FALSE,' "boot.cpp must pass g_isServer to the flag writer."
+    sensor_515_need "$S515_BOOT" '  LogTimestepArgs();' "boot.cpp must report what happened to the time-step arguments."
 
     # --- N123: the login display name must be SOURCED, not a literal -------------
     # Every NEVR client announced the identical hardcoded name, so eight players in
