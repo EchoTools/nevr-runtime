@@ -67,6 +67,9 @@ inline std::vector<Line> Decide(const Inputs& in) {
       if (in.step == StepOutcome::kSet) {
         std::snprintf(stepText, sizeof(stepText), "the server step is %u us (%u Hz), set by NEVR",
                       static_cast<unsigned>(in.stepUs), static_cast<unsigned>(in.rateHz));
+      } else if (in.step == StepOutcome::kKeepGameStep) {
+        std::snprintf(stepText, sizeof(stepText),
+                      "the server keeps the game's own step (tick rate 0, the operator's choice)");
       } else if (stepFailed) {
         std::snprintf(stepText, sizeof(stepText), "the server step was NOT set (step_state=%s)",
                       nevr_server_timestep::OutcomeName(in.step));

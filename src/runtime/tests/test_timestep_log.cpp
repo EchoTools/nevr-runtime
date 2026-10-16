@@ -45,7 +45,8 @@ TEST(TimestepLog, AServerThatLostItsArgumentsAndGotTheStepSaysSoAtInfo) {
 }
 
 TEST(TimestepLog, TheStepIsReportedFromTheRecordedOutcomeNotTheRate) {
-  for (const StepOutcome failed : {StepOutcome::kStateMissing, StepOutcome::kRateZero, StepOutcome::kUnexpectedOldValue}) {
+  for (const StepOutcome failed : {StepOutcome::kStateMissing, StepOutcome::kRateRefused,
+                                   StepOutcome::kUnexpectedOldValue, StepOutcome::kWriteDidNotHold}) {
     Inputs in = ServerRemoved();
     in.step = failed;
     in.stepUs = 0;
@@ -56,6 +57,17 @@ TEST(TimestepLog, TheStepIsReportedFromTheRecordedOutcomeNotTheRate) {
     EXPECT_FALSE(Contains(lines[0].text, "8333")) << "no step is claimed when none was written: " << lines[0].text;
     EXPECT_TRUE(Contains(lines[0].text, nevr_server_timestep::OutcomeName(failed)));
   }
+}
+
+TEST(TimestepLog, ARateOfZeroKeepsTheGamesStepAtInfoAndClaimsNoStep) {
+  Inputs in = ServerRemoved();
+  in.step = StepOutcome::kKeepGameStep;
+  in.stepUs = 0;
+  const auto lines = Decide(in);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0].level, Level::kInfo);
+  EXPECT_TRUE(Contains(lines[0].text, "keeps the game's own step")) << lines[0].text;
+  EXPECT_FALSE(Contains(lines[0].text, "8333"));
 }
 
 TEST(TimestepLog, AStepNotYetWrittenIsPendingNotSet) {
