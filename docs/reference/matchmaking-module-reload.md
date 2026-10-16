@@ -21,12 +21,13 @@ reaches zero, so the next `LoadLibrary` maps new bytes at (possibly) a new base.
 
 | Piece | Where |
 | --- | --- |
-| Registration | `nevr_pnsrad_enabler::Init` registers `OnDllLoaded` with `LdrRegisterDllNotification` (`src/runtime/patch/pnsrad_enabler.cpp`, "Patch 4") |
-| Per-load handler | `OnDllLoaded` in the same file: for a load notification whose `BaseDllName` is `pnsradmatchmaking.dll` it calls `PatchMatchmakingHost(DllBase)` with no one-shot guard (the `pnsrad.dll` branch below it does use `s_pnsradPatched`) |
-| The patch | `PatchMatchmakingHost`: reads `GetMatchmakerBridgePort()` (`src/runtime/compat/ws_bridge.cpp`) at call time, builds `ws://127.0.0.1:<port>`, `memcmp`s the 47 characters at RVA `0x1c84d8` (a 48-byte slot: the 47 characters and their NUL, `nevr_matchmaker_host_patch::kHostSlotSize`) against `wss://matchmaker.readyatdawn.com/rad/rad15_live`, then `PatchMemory`. A slot that does not match is left alone and logged as `reason=bytes_mismatch` at Warning |
+| Registration | `nevr_pnsrad_enabler::Init` registers `OnDllLoaded` with `LdrRegisterDllNotification` and `ApplyPendingLoadsAtLibraryReturn` as a `nevr_dll_load_hook` post-load observer (`src/runtime/patch/pnsrad_enabler.cpp`, "Patch 4") |
+| Per-load record | `OnDllLoaded` in the same file: for a load notification whose `BaseDllName` is `pnsradmatchmaking.dll` it records the base in `nevr_pnsrad_load::PendingLoads` and returns; it runs under the loader lock and patches nothing (`docs/reference/pnsrad-load-boundary.md`) |
+| Per-load patch | `ApplyMatchmakingLoad`, run when the game's `LoadLibraryW` returns, before `GetProcAddress("MatchmakingLib")`: patches every recorded load, with no one-shot guard (the `pnsrad.dll` patch does use `s_pnsradPatched`) |
+| The patch | `nevr_matchmaker_host_patch::Apply`: reads `GetMatchmakerBridgePort()` (`src/runtime/compat/ws_bridge.cpp`) at call time, builds `ws://127.0.0.1:<port>`, `memcmp`s the 47 characters at RVA `0x1c84d8` (a 48-byte slot: the 47 characters and their NUL, `nevr_matchmaker_host_patch::kHostSlotSize`) against `wss://matchmaker.readyatdawn.com/rad/rad15_live`, then `PatchMemory`. A slot that does not match is left alone and logged as `reason=bytes_mismatch` at Warning |
 
-Because the handler keys on the notification and not on a flag, a reload that maps a new image is
-patched again. A load that maps the same already-patched image fails the `memcmp` and logs the
+Because each load notification is its own record and the patch keys on the record, not on a flag, a reload
+that maps a new image is patched again. A load that maps the same already-patched image fails the `memcmp` and logs the
 `reason=bytes_mismatch` warning; that line alone is not the failure from #18 (see below).
 
 ## What a run's log must show

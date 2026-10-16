@@ -3,10 +3,13 @@
 #include <string>
 
 #include "extension/plugin_interface.h"
+#include "runtime/ext/plugin_load_plan.h"  // PluginPhase
 
-// Discover and load all plugins from the plugins/ subdirectory.
+// Load the plugins config.yaml lists for `phase` from the plugins/ subdirectory:
+// the entries marked `early: true` in the early pass, the rest in the normal one
+// (see PluginPhase). An early pass with no entry marked early loads nothing.
 // Must be called after Hooking::Initialize() and after g_isServer/g_isHeadless are known.
-void LoadPlugins();
+void LoadPlugins(PluginPhase phase = PluginPhase::Normal);
 
 // Explicit normal-thread teardown helper: calls each optional shutdown export
 // in reverse load order, then releases the host's module reference. DllMain
@@ -27,6 +30,13 @@ void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uin
 // call them from its init, on_frame, or on_state_change callback.
 int  GetLoadedPluginCount(void);
 const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
+
+// #598: ctx->log. The host writes a plugin's line through Log() as
+// "[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ..." (see plugin_log.h). Every context the loader
+// passes a plugin (init, per-frame, state change) carries the plugin's id and this function, so the
+// caller's own context needs neither.
+void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
+                   const NevrLogField* fields, uint32_t fieldCount);
 
 // N134 S8: caps-based load-order priority. Lower loads first. This is the
 // sort key consumed by the loader's stable_sort in LoadPlugins. Defined

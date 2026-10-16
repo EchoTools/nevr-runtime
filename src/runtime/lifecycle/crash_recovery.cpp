@@ -1,5 +1,4 @@
 #include "runtime/lifecycle/crash_recovery.h"
-#include "runtime/log/boot_log_tee.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -32,6 +31,7 @@
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
+#include "runtime/patch/resource_override.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
 // its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
@@ -167,13 +167,9 @@ void InstallGameMainHook() {
   GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
   OriginalGameMainWrapper =
       reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
-  // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
+  // Runs in the boot phase, where Log() reports through the boot tee.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
-                                  : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
-                                    "longjmp is NOT armed\n");
-  } else if (hooked) {
+  if (hooked) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
         "null-deref AV in server mode will longjmp back here instead of terminating the process)");
@@ -324,6 +320,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called — not suppressed, process exiting", uExitCode);
+  ShutdownResourceOverride();
   OriginalExitProcess(uExitCode);
 }
 
@@ -1395,5 +1392,6 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   //    OriginalTerminateProcess which kills all threads immediately.
   //    On Wine, this also terminates the wineserver association, so the
   //    listener socket released in step 1 is reclaimed by the kernel.
+  ShutdownResourceOverride();
   ForceFatalExit(exitCode);
 }

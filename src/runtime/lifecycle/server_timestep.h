@@ -5,13 +5,8 @@
 // loop runs as fast as it can; with it and the game's default step (33333 us) a server runs at 30
 // ticks a second and the disc and players move in steps. A server gets the flag before the original
 // PreprocessCommandLine (boot.cpp) and the step for g_headlessTickRateHz when the local config loads
-// (config.cpp), as the legacy patch did. Pure: values and the two writes, through pointers the caller
-// resolves, so a test can drive the server and client cases without the game (#515). Both call sites
-// pass g_isServer; a client is left exactly as it was.
-//
-// Whether the step NEVR writes is still in the clock the server runs on is read back once, a second
-// after the per-frame tick starts (ReadBackLine, config.cpp LogServerStepReadBack): two writers of the
-// clock global (echovr.exe 0x1420a00e8) exist, and the later one resets the step to 33333 (addresses.h).
+// (config.cpp), as the legacy patch did. A server is always fixed-timestep; the rate is the config key
+// network.tick_rate_hz (flat key nevr_tick_rate_hz, #595). Pure: values only, no game memory.
 
 #include <cstddef>
 #include <cstdint>
@@ -20,20 +15,82 @@
 
 namespace nevr_server_timestep {
 
-/// The game object's fixed-time-step flag (at GAME_TIMESTEP_FLAGS_OFFSET), what -fixedtimestep sets
-/// (ApplyCommandLineEngineFlags ORs it into [pGame+0x828] at echovr.exe 0x1405045bf).
+/// The game object's fixed-time-step flag (at GAME_TIMESTEP_FLAGS_OFFSET), what -fixedtimestep sets.
 constexpr uint64_t kFixedTimestepFlag = 0x2000000;
-
-/// The game's own step in microseconds: CClock::CClock stores it at echovr.exe 0x1400cd964
-/// (`MOV qword ptr [RDI + 0x90], 0x8235`) and SetUseFixedTimeStep at 0x140511506. 1,000,000 / 30, rounded up.
-constexpr uint64_t kGameDefaultStepUs = 33333;
 
 /// `flags` with the fixed-time-step flag set; the other bits as they are.
 inline uint64_t WithFixedTimestep(uint64_t flags) { return flags | kFixedTimestepFlag; }
 
+/// The rate when the key is absent.
+constexpr uint32_t kDefaultTickRateHz = 120;
+/// The range of rates honoured. A rate of 0 is separate: it keeps the game's own step.
+constexpr uint32_t kMinTickRateHz = 10;
+constexpr uint32_t kMaxTickRateHz = 1000;
+/// The game's own fixed step, 30 a second, in microseconds.
+constexpr uint32_t kGameDefaultStepUs = 33333;
+
 /// The step for `ticksPerSecond`, in microseconds. 0 for a rate of 0: leave the game's step.
 inline uint32_t StepMicroseconds(uint32_t ticksPerSecond) {
   return ticksPerSecond == 0 ? 0 : 1000000u / ticksPerSecond;
+}
+
+/// The steps a step slot can plausibly hold: those of the rates in range. A value outside is not a
+/// step, so the address it was read from is not the step slot (N31).
+constexpr uint32_t kMinPlausibleStepUs = 1000000u / kMaxTickRateHz;
+constexpr uint32_t kMaxPlausibleStepUs = 1000000u / kMinTickRateHz;
+
+/// Parses network.tick_rate_hz. Absent or empty is kDefaultTickRateHz. 0 is 0: the game's own step,
+/// still fixed (the flag is set for every server), never an unpaced loop. A value that is not a plain
+/// whole number, or is outside [kMinTickRateHz, kMaxTickRateHz], is kDefaultTickRateHz with `problem`
+/// set; it is never clamped or wrapped into a rate the operator did not write.
+inline uint32_t ParseTickRateHz(const char* text, std::string* problem) {
+  if (problem != nullptr) problem->clear();
+  if (text == nullptr || text[0] == '\0') return kDefaultTickRateHz;
+  uint64_t value = 0;
+  for (const char* c = text; *c != '\0'; ++c) {
+    if (*c < '0' || *c > '9') {
+      if (problem != nullptr) *problem = "not a whole number";
+      return kDefaultTickRateHz;
+    }
+    value = value * 10 + static_cast<uint64_t>(*c - '0');
+    if (value > kMaxTickRateHz) {
+      if (problem != nullptr) *problem = "above the limit of " + std::to_string(kMaxTickRateHz);
+      return kDefaultTickRateHz;
+    }
+  }
+  if (value != 0 && value < kMinTickRateHz) {
+    if (problem != nullptr) *problem = "below the limit of " + std::to_string(kMinTickRateHz);
+    return kDefaultTickRateHz;
+  }
+  return static_cast<uint32_t>(value);
+}
+
+enum class StepAction {
+  Write,         // write `stepUs` to the slot
+  KeepGameStep,  // rate 0: the slot keeps the game's own step
+  RefuseRate,    // the rate is outside the range: nothing is written
+  RefuseSlot,    // the slot's current value is no step: the address is wrong, nothing is written
+};
+
+struct StepPlan {
+  StepAction action;
+  uint32_t stepUs;  // the step to write; meaningful for Write
+};
+
+/// What to do with the step slot for `hz`, given the `currentStepUs` read from it. The rate is
+/// range-checked and the value read back is bounds-checked before anything is written.
+inline StepPlan PlanStepWrite(uint32_t hz, uint32_t currentStepUs) {
+  if (hz == 0) return {StepAction::KeepGameStep, 0};
+  if (hz < kMinTickRateHz || hz > kMaxTickRateHz) return {StepAction::RefuseRate, 0};
+  if (currentStepUs < kMinPlausibleStepUs || currentStepUs > kMaxPlausibleStepUs) {
+    return {StepAction::RefuseSlot, 0};
+  }
+  return {StepAction::Write, StepMicroseconds(hz)};
+}
+
+/// Whether the slot holds the step that was written, read back after the write.
+inline bool ReadBackMatches(uint32_t writtenStepUs, uint32_t readBackStepUs) {
+  return writtenStepUs == readBackStepUs;
 }
 
 /// `base + offset` as a pointer to a 64-bit field; null when `base` is null.
@@ -70,69 +127,79 @@ inline FlagOutcome ApplyFlag(bool isServer, uint64_t* flags) {
 
 /// What ApplyStep did.
 enum class StepOutcome : uint8_t {
-  kNotApplied = 0,     ///< ApplyStep has not run yet.
-  kNotServer,          ///< A client: the game's step was left alone.
-  kRateZero,           ///< The configured rate is 0: the game's step was left alone.
-  kStateMissing,       ///< The game's time-step state was not there: nothing was written.
-  kUnexpectedOldValue, ///< The field held neither the game's default step nor ours: nothing was written (N31).
-  kSet,                ///< The step was written (or already was).
+  kNotApplied = 0,      ///< ApplyStep has not run yet.
+  kNotServer,           ///< A client: the game's step was left alone.
+  kKeepGameStep,        ///< The rate is 0: the game's own step is kept, by the operator's choice.
+  kRateRefused,         ///< The rate is outside the allowed range: nothing was written.
+  kStateMissing,        ///< The game's time-step state was not there: nothing was written.
+  kUnexpectedOldValue,  ///< The slot held no step (version drift, N31): nothing was written.
+  kWriteDidNotHold,     ///< The step was written and read back as something else.
+  kSet,                 ///< The step was written and read back.
 };
 
 inline const char* OutcomeName(StepOutcome o) {
   switch (o) {
     case StepOutcome::kNotApplied: return "pending";
     case StepOutcome::kNotServer: return "not_server";
-    case StepOutcome::kRateZero: return "rate_zero";
+    case StepOutcome::kKeepGameStep: return "keep_game_step";
+    case StepOutcome::kRateRefused: return "rate_refused";
     case StepOutcome::kStateMissing: return "state_missing";
     case StepOutcome::kUnexpectedOldValue: return "unexpected_old_value";
+    case StepOutcome::kWriteDidNotHold: return "write_did_not_hold";
     case StepOutcome::kSet: return "set";
   }
   return "unknown";
 }
 
-/// True when the step was meant to be written and was not: the server runs on the game's own step.
+/// True when the step was meant to be written and was not (or did not hold): the server runs on a step
+/// other than the configured one by accident rather than by the operator's choice.
 inline bool StepFailed(StepOutcome o) {
-  return o == StepOutcome::kStateMissing || o == StepOutcome::kRateZero || o == StepOutcome::kUnexpectedOldValue;
+  return o == StepOutcome::kRateRefused || o == StepOutcome::kStateMissing ||
+         o == StepOutcome::kUnexpectedOldValue || o == StepOutcome::kWriteDidNotHold;
 }
 
-/// The result of ApplyStep: the outcome, the step written (0 unless kSet) and the value found.
+/// The result of ApplyStep: the outcome, the step written (0 unless kSet) and the value found in the slot.
 struct StepWrite {
   StepOutcome outcome = StepOutcome::kNotApplied;
   uint32_t stepUs = 0;
   uint64_t was = 0;
+  uint64_t after = 0;  ///< The slot read back after a write.
 };
 
-/// Writes the server's step, 1,000,000 / `rateHz` microseconds, to `*stepField` (the game's 64-bit step,
-/// echovr.exe 0x140127a04 `MOV qword ptr [RBX + 0x90], RAX`) only when it holds the game's default step
-/// (kGameDefaultStepUs) or already holds ours; anything else is a layout or version the code does not know
-/// and nothing is written. A client, a rate of 0 or a null field writes nothing.
+/// Writes the server's step to `*stepField`, the game's 64-bit step (echovr.exe 0x140127a04
+/// `MOV qword ptr [RBX + 0x90], RAX`), by PlanStepWrite: the rate is range-checked and the value found is
+/// bounds-checked before the write (N31), and the write is read back. A client or a null field writes
+/// nothing.
 inline StepWrite ApplyStep(bool isServer, uint32_t rateHz, uint64_t* stepField) {
   StepWrite w;
   if (!isServer) {
     w.outcome = StepOutcome::kNotServer;
     return w;
   }
-  const uint32_t step = StepMicroseconds(rateHz);
-  if (step == 0) {
-    w.outcome = StepOutcome::kRateZero;
-    return w;
-  }
   if (stepField == nullptr) {
     w.outcome = StepOutcome::kStateMissing;
     return w;
   }
-  w.was = *stepField;
-  if (w.was != kGameDefaultStepUs && w.was != step) {
-    w.outcome = StepOutcome::kUnexpectedOldValue;
-    return w;
+  volatile uint64_t* slot = stepField;
+  w.was = *slot;
+  const uint32_t current = w.was > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(w.was);
+  const StepPlan plan = PlanStepWrite(rateHz, current);
+  switch (plan.action) {
+    case StepAction::KeepGameStep: w.outcome = StepOutcome::kKeepGameStep; return w;
+    case StepAction::RefuseRate: w.outcome = StepOutcome::kRateRefused; return w;
+    case StepAction::RefuseSlot: w.outcome = StepOutcome::kUnexpectedOldValue; return w;
+    case StepAction::Write: break;
   }
-  *stepField = step;
-  w.stepUs = step;
-  w.outcome = StepOutcome::kSet;
+  *slot = plan.stepUs;
+  w.after = *slot;
+  w.stepUs = plan.stepUs;
+  w.outcome = (w.after <= 0xFFFFFFFFull && ReadBackMatches(plan.stepUs, static_cast<uint32_t>(w.after)))
+                  ? StepOutcome::kSet
+                  : StepOutcome::kWriteDidNotHold;
   return w;
 }
 
-// --- the read-back --------------------------------------------------------------------------------------
+// --- the live read-back ---------------------------------------------------------------------------------
 
 /// Offsets within the clock object the global at echovr.exe 0x1420a00e8 points to (CClock): the step, and the
 /// mode word whose bits 0x8 (fixed step) and 0x10 (paced) SetUseFixedTimeStep sets (0x1405114d0).

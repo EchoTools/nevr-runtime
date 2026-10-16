@@ -114,7 +114,7 @@ class PrReadCheckWorkflowTest(unittest.TestCase):
         last = [l for l in template.splitlines() if l.strip()][-1]
         self.assertEqual(last, "Read AGENTS.md at <sha>")
         self.assertIn("## Checklist", template)
-        self.assertIn("- [ ] `just verify` passes", template)
+        self.assertIn("- [ ] The quick check passes", template)
 
     def test_actionlint_accepts_the_workflow_when_installed(self):
         actionlint = shutil.which("actionlint")

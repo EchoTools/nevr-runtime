@@ -4,14 +4,17 @@
 
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/patch/pnsrad_load_queue.h"
 #include "core/logging.h"
 
 #include <MinHook.h>
 #include <gtest/gtest.h>
 #include <windows.h>
+#include <winternl.h>
 
 #include <cwchar>
 #include <atomic>
+#include <cstdint>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -369,4 +372,151 @@ TEST(OculusPlatformPath, AllowsAFileWhoseFolderIsNamedLikeTheSdk) {
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"c:/libovrplatform64_1/readme.dll"));
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(L"kernel32.dll"));
   EXPECT_FALSE(nevr_dll_load_hook::IsOculusPlatformPath(nullptr));
+}
+
+namespace {
+
+int g_fired = 0;
+HMODULE g_module = nullptr;
+
+void Count(const char*, HMODULE module) {
+  g_fired++;
+  g_module = module;
+}
+
+}  // namespace
+
+// #593: a callback for a DLL that is already loaded when it registers fires right away, also during
+// the runtime's boot (an injector such as Revive's loads dxgi/d3d12 before the runtime starts, #495).
+// What made that unsafe was the callbacks' Log() reaching the game's CLog; Log() reports through the
+// boot tee while the runtime boots (test_boot_log_routing).
+TEST(DllLoadHookOnLoad, AnAlreadyLoadedDllsCallbackFiresAtOnceAfterInstall) {
+  UseFakeHooks();
+  nevr_dll_load_hook::Install();
+  g_fired = 0;
+  g_module = nullptr;
+  nevr_dll_load_hook::OnLoad("KERNEL32.dll", Count);
+  EXPECT_EQ(g_fired, 1) << "Install() must not delay the callback of a loaded DLL";
+  EXPECT_EQ(g_module, GetModuleHandleA("kernel32.dll"));
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
+// #504: the pnsrad patches are applied when the LoadLibrary call that mapped the module returns, not in the
+// loader's DLL notification (which runs under the loader lock). This is the timing fixture: a real LoadLibraryW of a
+// stand-in pnsrad.dll, the same record-then-apply path the runtime uses, and the caller's first read of the
+// module right after LoadLibraryW returns. It fails if that read can see the unpatched byte.
+namespace {
+
+typedef struct {
+  ULONG Flags;
+  const UNICODE_STRING* FullDllName;
+  const UNICODE_STRING* BaseDllName;
+  PVOID DllBase;
+  ULONG SizeOfImage;
+} FixtureNotificationData;
+typedef void(CALLBACK* FixtureNotificationFn)(ULONG, const FixtureNotificationData*, void*);
+typedef NTSTATUS(NTAPI* RegisterNotificationFn)(ULONG, FixtureNotificationFn, void*, void**);
+typedef NTSTATUS(NTAPI* UnregisterNotificationFn)(void*);
+
+nevr_pnsrad_load::PendingLoads g_fixtureLoads;
+std::atomic<bool> g_notifiedUnderLoaderLock{false};
+std::atomic<int> g_observerRuns{0};
+std::atomic<int> g_fixturePatches{0};
+
+void CALLBACK RecordFixtureLoad(ULONG reason, const FixtureNotificationData* data, void*) {
+  if (reason != nevr_matchmaker_host_patch::kNotificationLoaded || !data || !data->BaseDllName) return;
+  if (nevr_dll_load_hook::LoaderLockHeldByThisThread()) g_notifiedUnderLoaderLock = true;
+  const auto module = nevr_pnsrad_load::Classify(data->BaseDllName->Buffer, data->BaseDllName->Length / sizeof(WCHAR));
+  if (module) g_fixtureLoads.Note(*module, reinterpret_cast<std::uintptr_t>(data->DllBase));
+}
+
+// Stands in for the pnsrad patches: rewrites the fixture's exported data word.
+void PatchFixtureLoads() {
+  ++g_observerRuns;
+  g_fixtureLoads.Drain([](nevr_pnsrad_load::Module module, std::uintptr_t base) {
+    if (module != nevr_pnsrad_load::Module::Pnsrad) return;
+    auto* data = reinterpret_cast<int*>(GetProcAddress(reinterpret_cast<HMODULE>(base), "FixtureData"));
+    if (data == nullptr) return;
+    DWORD old = 0;
+    if (!VirtualProtect(data, sizeof(int), PAGE_READWRITE, &old)) return;
+    *data = 4321;
+    VirtualProtect(data, sizeof(int), old, &old);
+    ++g_fixturePatches;
+  });
+}
+
+void CountObserverRun() { ++g_observerRuns; }
+
+std::wstring FixturePnsradPath() {
+  wchar_t exe[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  std::wstring dir(exe);
+  dir.resize(dir.find_last_of(L"\\/") + 1);
+  return dir + L"export-trace-fixture\\pnsrad.dll";
+}
+
+}  // namespace
+
+TEST(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirstRead) {
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  nevr_dll_load_hook::Install();
+  ASSERT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
+  nevr_dll_load_hook::AddPostLoadObserver(&PatchFixtureLoads);
+
+  HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+  auto reg = reinterpret_cast<RegisterNotificationFn>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
+  auto unreg = reinterpret_cast<UnregisterNotificationFn>(GetProcAddress(ntdll, "LdrUnregisterDllNotification"));
+  ASSERT_NE(reg, nullptr);
+  ASSERT_NE(unreg, nullptr);
+  void* cookie = nullptr;
+  ASSERT_EQ(reg(0, RecordFixtureLoad, nullptr, &cookie), 0);
+
+  const std::wstring path = FixturePnsradPath();
+  ASSERT_EQ(GetModuleHandleW(path.c_str()), nullptr) << "precondition: the fixture is not loaded yet";
+  HMODULE module = LoadLibraryW(path.c_str());
+  // The caller's first use of the module, as the game's CModule loader does right after LoadLibraryW.
+  const auto* data = module ? reinterpret_cast<const int*>(GetProcAddress(module, "FixtureData")) : nullptr;
+  const int firstRead = data ? *data : -1;
+
+  unreg(cookie);
+  ASSERT_NE(module, nullptr) << "fixture missing: export-trace-fixture\\pnsrad.dll next to the test";
+  EXPECT_TRUE(g_notifiedUnderLoaderLock) << "the notification is expected to run under the loader lock";
+  EXPECT_EQ(g_fixturePatches.load(), 1) << "the post-load observer did not patch the recorded load";
+  EXPECT_EQ(firstRead, 4321) << "the caller read the module before its patch landed";
+  FreeLibrary(module);
+  nevr_dll_load_hook::Shutdown();
+  MH_Uninitialize();
+}
+
+TEST(DllLoadHookPostLoad, ObserversWaitUntilTheCallingThreadReleasesTheLoaderLock) {
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  nevr_dll_load_hook::Install();
+  nevr_dll_load_hook::AddPostLoadObserver(&CountObserverRun);
+  g_observerRuns = 0;
+
+  ASSERT_FALSE(nevr_dll_load_hook::LoaderLockHeldByThisThread());
+  ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
+  EXPECT_EQ(g_observerRuns.load(), 1) << "an observer runs after every LoadLibrary return";
+
+  // A LoadLibrary call made while this thread holds the loader lock (as from inside a DllMain).
+  auto* peb = reinterpret_cast<std::uint8_t*>(NtCurrentTeb()->ProcessEnvironmentBlock);
+  auto* loaderLock = *reinterpret_cast<RTL_CRITICAL_SECTION**>(peb + 0x110);
+  ASSERT_NE(loaderLock, nullptr);
+  EnterCriticalSection(loaderLock);
+  const bool heldInside = nevr_dll_load_hook::LoaderLockHeldByThisThread();
+  HMODULE underLock = LoadLibraryW(L"ws2_32.dll");
+  const int runsUnderLock = g_observerRuns.load();
+  LeaveCriticalSection(loaderLock);
+
+  EXPECT_TRUE(heldInside);
+  EXPECT_NE(underLock, nullptr);
+  EXPECT_EQ(runsUnderLock, 1) << "an observer ran while the calling thread held the loader lock";
+  EXPECT_FALSE(nevr_dll_load_hook::LoaderLockHeldByThisThread());
+  ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
+  EXPECT_EQ(g_observerRuns.load(), 2);
+  nevr_dll_load_hook::Shutdown();
+  MH_Uninitialize();
 }

@@ -15,15 +15,15 @@ Commit `@COMMIT@`.
 @IF_NOAPK@| `SHA256SUMS` | SHA-256 of `@ZIP@` |
 
 @IF_APK@Neither build needs a config file. The service endpoints and the public client keys are built in; the
-@IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK turns its login and social features on
-@IF_APK@with no `nevr-quest.json`.
+@IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK logs in and runs its social features
+@IF_APK@with no `config.yaml` either.
 @IF_NOAPK@The Windows DLL needs no config file: the service endpoints and the public client keys are built in, so
 @IF_NOAPK@it logs in with no `config.yaml`.
 
 ## What to test
 - Sign in (the device-code prompt on first run), reach the lobby, see your friends.
 - Invite a friend and join a party; mute and ghost toggles.
-- Leave and re-enter a match; voice chat (Windows: the game's own microphone path).
+- Leave and re-enter a match; voice chat (Windows: the runtime's microphone provider picks your headset's microphone first; the log's `[NEVR.MIC] capture device:` line names the one it used).
 - Report anything odd with the newest log file (see below).
 
 ## Install and uninstall

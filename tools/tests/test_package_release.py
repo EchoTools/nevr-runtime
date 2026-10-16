@@ -39,10 +39,9 @@ def defaults_header(values):
         f'inline constexpr const char* {NAMES[k]} = "{v}";\n' for k, v in values.items()) + "}\n"
 
 
-def build_info(version, features):
+def build_info(version):
     return (f'inline constexpr const char* kVersion = "{version}";\n'
-            f'inline constexpr const char* kCommit = "{COMMIT[:8]}";\n'
-            f'inline constexpr const char* kDefaultFeatures = "{features}";\n')
+            f'inline constexpr const char* kCommit = "{COMMIT[:8]}";\n')
 
 
 def identity(version, commit=COMMIT):
@@ -70,7 +69,7 @@ class PackageFixture(unittest.TestCase):
         self.quest_header = self.tmp / "quest.h"
         self.quest_header.write_text(defaults_header(VALUES))
         self.info = self.tmp / "info.h"
-        self.info.write_text(build_info(self.version, "redirect,bridge,login,social"))
+        self.info.write_text(build_info(self.version))
         self.dll = self.tmp / "BugSplat64.dll"
         self.dll.write_bytes(binary(self.version))
         self.apk = self.tmp / "signed.apk"
@@ -169,11 +168,16 @@ class LocalDevPackageTest(PackageFixture):
         self.assertFalse(self.out.exists())
 
     def test_a_quest_build_that_needs_a_config_file_to_log_in_is_refused(self):
-        self.info.write_text(build_info(self.version, ""))
-        result = self.run_tool()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("quest: feature login is not on by default", result.stderr)
-        self.assertFalse(self.out.exists())
+        # No config.yaml key turns the login on: it follows from the embedded socket URI and server key.
+        for key, name, what in (("NEVR_SOCKET_URI", "kSocketUri", "socket URI"),
+                                ("NEVR_PUBLIC_SOCKET_KEY", "kPublicSocketKey", "server key")):
+            with self.subTest(missing=what):
+                emptied = dict(VALUES, **{key: ""})
+                self.quest_header.write_text(defaults_header(emptied))
+                result = self.run_tool()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"quest: no embedded {what}: the APK would need a config.yaml to log in", result.stderr)
+                self.assertFalse(self.out.exists())
 
     def test_the_apk_sentinel_must_embed_the_values_too(self):
         with zipfile.ZipFile(self.apk, "w") as z:

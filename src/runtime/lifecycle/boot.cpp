@@ -7,6 +7,7 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/state_machine.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -62,6 +63,9 @@ std::atomic<uint8_t> g_serverFlagOutcome{static_cast<uint8_t>(nevr_server_timest
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
+// The one exception is the plugins config.yaml marks `early: true` (#496), which
+// PreprocessCommandLineHook loads right after this: they serve game data the
+// original call reads, and must stay off the graphics path.
 // -server is needed for the config loader's fail-loud policy. -config-path is
 // needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
@@ -98,10 +102,9 @@ void PreflightRuntimeBootstrap() {
   // reaches the main menu normally.
   //
   // The bit is keyed on -windowed, not on -server: it is a client flag.  A
-  // -server run does not reach BeginMultiplayer (issue #45), and leaving the bit
-  // off does not change that.  Other client-only handling in the same family
-  // (windowed, no-VR, spectator-stream flags) has not been ruled out as a
-  // collision with server mode.
+  // -server run begins multiplayer after its login through the state machine
+  // (state_machine.cpp, issue #45: no menu runs on a server to begin it); this
+  // bit plays no part in that.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
@@ -112,9 +115,9 @@ void PreflightRuntimeBootstrap() {
   // when the local config loads (config.cpp, LoadLocalConfigHook). ApplyFlag leaves a client alone.
   UINT64* timestepFlags =
       nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
-  g_serverFlagOutcome.store(
-      static_cast<uint8_t>(nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags)),
-      std::memory_order_release);
+  const nevr_server_timestep::FlagOutcome flagOutcome =
+      nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);
+  g_serverFlagOutcome.store(static_cast<uint8_t>(flagOutcome), std::memory_order_release);
 }
 
 }  // namespace
@@ -146,16 +149,25 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
   // the NOP is written here, before the first original call, rather than only from
   // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
-  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
-  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
-  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
-  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
-  // run earlier is not established. Server only: the client's first original call initializes
-  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
-  // attempted on the first server entry only and its record is emitted once.
+  // first original call (tools/tests/test_spectatorstream_order.py). The NOP does not begin
+  // multiplayer: what begins it on a server is the call the state machine queues when the login
+  // completes (state_machine.cpp, #514). Not part of this write: PatchEnableHeadless,
+  // PatchBypassOvrPlatform and PatchBlockOculusSDK run in RunDeferredRuntimeBootstrap, after the
+  // original call returns; whether any of them has to run earlier is not established. Server only:
+  // the client's first original call initializes D3D and is left alone (N146). This hook may be
+  // entered more than once, so the write is attempted on the first server entry only and its
+  // record is emitted once.
   static std::atomic_bool s_spectatorStreamPatchAttempted{false};
   if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
     PatchSpectatorStreamCheck("pre-preprocess");
+  }
+  // #496: plugins marked `early: true` load here, once, before the original call: the
+  // game reads its manifests and opens its packages during it, before the graphics
+  // device exists (where the rest load), so a plugin that serves game data from
+  // elsewhere has to be in place now. Nothing marked early: nothing loads here.
+  static std::atomic_bool s_earlyPlugins{false};
+  if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
+    LoadPlugins(PluginPhase::Early);
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
@@ -255,6 +267,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       ServerFatal("One or more boot hooks failed to install — server would be degraded: %s",
                   g_bootHookFailedCause[0] != '\0' ? g_bootHookFailedCause : "cause not recorded");
     }
+
+    // #592: the two game functions that begin multiplayer after the login are checked once, here;
+    // a mismatch exits the server now rather than leaving it logged in and idle after its login.
+    ValidateServerBringup();
   }
 
   // Load modules. Order matters — dependencies must load first.

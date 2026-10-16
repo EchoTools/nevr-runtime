@@ -136,11 +136,13 @@ void Drain(int fd) {
 }  // namespace
 
 struct LoopbackGameServer::Conn {
+  enum class HandshakeState { Silent, Reading, Upgraded, Evicted };
   GameId id = 0;
   int fd = -1;
   int wake[2] = {-1, -1};
   std::thread thread;
   std::atomic<bool> done{false};
+  std::atomic<HandshakeState> handshakeState{HandshakeState::Silent};
 
   std::mutex writeMutex;  // guards writeBuf, closeRequested, closeAfterFlush
   std::string writeBuf;
@@ -365,8 +367,35 @@ int LoopbackGameServer::AcceptPending(bool* resourceBlocked, bool* identityLost)
     }
     const char* refusal = nullptr;
     if (count >= config_.maxConnections) {
-      refusal = "connection_limit";
-    } else if (!SetNonBlocking(fd)) {
+      // Only a socket that has sent no handshake bytes can give up its slot to a new arrival.
+      std::shared_ptr<Conn> evicted;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& entry : conns_) {
+          auto expected = Conn::HandshakeState::Silent;
+          if (entry.second->handshakeState.compare_exchange_strong(expected, Conn::HandshakeState::Evicted)) {
+            evicted = entry.second;
+            break;
+          }
+        }
+      }
+      if (evicted) {
+        ::shutdown(evicted->fd, SHUT_RDWR);
+        Poke(evicted->wake[1]);
+        if (evicted->thread.joinable()) evicted->thread.join();
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          conns_.erase(evicted->id);
+        }
+        CloseFd(evicted->fd);
+        CloseFd(evicted->wake[0]);
+        CloseFd(evicted->wake[1]);
+        --count;
+      } else {
+        refusal = "connection_limit";
+      }
+    }
+    if (refusal == nullptr && !SetNonBlocking(fd)) {
       refusal = "set_nonblocking_failed";
     }
     if (refusal != nullptr) {
@@ -519,6 +548,10 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   };
 
   while (open && !stop_) {
+    if (conn->handshakeState.load() == Conn::HandshakeState::Evicted) {
+      endReason = "silent_preempted";
+      break;
+    }
     bool wantWrite = false;
     bool closing = false;
     {
@@ -563,6 +596,10 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
     if (ready <= 0) continue;
     if ((fds[1].revents & POLLIN) != 0) Drain(conn->wake[0]);
+    if (conn->handshakeState.load() == Conn::HandshakeState::Evicted) {
+      endReason = "silent_preempted";
+      break;
+    }
 
     if ((fds[0].revents & (POLLERR | POLLNVAL)) != 0) {
       endReason = "socket_error";
@@ -601,6 +638,12 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
 
     if (!handshaken) {
+      auto expected = Conn::HandshakeState::Silent;
+      if (!conn->handshakeState.compare_exchange_strong(expected, Conn::HandshakeState::Reading) &&
+          expected == Conn::HandshakeState::Evicted) {
+        endReason = "silent_preempted";
+        break;
+      }
       inbox.append(chunk, static_cast<std::size_t>(got));
       UpgradeRequest request;
       const HandshakeStatus hs = ParseUpgradeRequest(inbox, &request);
@@ -647,6 +690,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       }
       queueWrite(BuildUpgradeResponse(request.key), true);
       handshaken = true;
+      conn->handshakeState.store(Conn::HandshakeState::Upgraded);
       upgradedAt = std::chrono::steady_clock::now();
       {
         std::lock_guard<std::mutex> lock(conn->writeMutex);
@@ -746,6 +790,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
   }
 
+  if (conn->handshakeState.load() == Conn::HandshakeState::Evicted) endReason = "silent_preempted";
   releaseOpenTurn();  // a connection that ends without an open must not hold the line
   if (endReason == nullptr) endReason = stop_ ? "server_stopped" : "unknown";
   nlohmann::json record = Record(kConnEvent, "ended");

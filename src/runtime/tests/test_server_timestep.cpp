@@ -10,12 +10,20 @@
 namespace {
 
 using nevr_server_timestep::ApplyFlag;
-using nevr_server_timestep::FlagOutcome;
 using nevr_server_timestep::ApplyStep;
-using nevr_server_timestep::kFixedTimestepFlag;
+using nevr_server_timestep::FlagOutcome;
 using nevr_server_timestep::StepOutcome;
+using nevr_server_timestep::kFixedTimestepFlag;
 using nevr_server_timestep::StepMicroseconds;
 using nevr_server_timestep::WithFixedTimestep;
+using nevr_server_timestep::kDefaultTickRateHz;
+using nevr_server_timestep::kGameDefaultStepUs;
+using nevr_server_timestep::kMaxTickRateHz;
+using nevr_server_timestep::kMinTickRateHz;
+using nevr_server_timestep::ParseTickRateHz;
+using nevr_server_timestep::PlanStepWrite;
+using nevr_server_timestep::ReadBackMatches;
+using nevr_server_timestep::StepAction;
 
 TEST(ServerTimestep, StepIsAMillionMicrosecondsOverTheRate) {
   EXPECT_EQ(StepMicroseconds(120), 8333u);
@@ -33,6 +41,88 @@ TEST(ServerTimestep, TheFlagIsSetAndTheOtherBitsKept) {
   const uint64_t others = 0x8000000000000001ULL | 0x100000ULL;
   EXPECT_EQ(WithFixedTimestep(others), others | 0x2000000ULL);
   EXPECT_EQ(WithFixedTimestep(WithFixedTimestep(others)), WithFixedTimestep(others));
+}
+
+// #595: the tick rate is the config key network.tick_rate_hz (flat key nevr_tick_rate_hz).
+TEST(ServerTimestep, AnAbsentOrEmptyKeyIsTheDefaultRateWithNoProblem) {
+  std::string problem = "stale";
+  EXPECT_EQ(ParseTickRateHz(nullptr, &problem), 120u);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseTickRateHz("", &problem), 120u);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(kDefaultTickRateHz, 120u);
+}
+
+TEST(ServerTimestep, AValueInRangeIsTheRate) {
+  std::string problem;
+  EXPECT_EQ(ParseTickRateHz("60", &problem), 60u);
+  EXPECT_TRUE(problem.empty());
+  EXPECT_EQ(ParseTickRateHz("240", &problem), 240u);
+  EXPECT_EQ(ParseTickRateHz("10", &problem), kMinTickRateHz);
+  EXPECT_EQ(ParseTickRateHz("1000", &problem), kMaxTickRateHz);
+  EXPECT_TRUE(problem.empty());
+}
+
+TEST(ServerTimestep, AValueOutOfRangeIsRefusedForTheDefaultWithAProblem) {
+  std::string problem;
+  EXPECT_EQ(ParseTickRateHz("9", &problem), kDefaultTickRateHz);
+  EXPECT_FALSE(problem.empty());
+  EXPECT_EQ(ParseTickRateHz("1001", &problem), kDefaultTickRateHz);
+  EXPECT_FALSE(problem.empty());
+  // 2^32 + 60 must not wrap into a valid rate.
+  EXPECT_EQ(ParseTickRateHz("4294967356", &problem), kDefaultTickRateHz);
+  EXPECT_FALSE(problem.empty());
+  EXPECT_EQ(ParseTickRateHz("99999999999999999999999", &problem), kDefaultTickRateHz);
+  EXPECT_FALSE(problem.empty());
+}
+
+TEST(ServerTimestep, AValueThatIsNotAWholeNumberIsRefusedForTheDefaultWithAProblem) {
+  for (const char* text : {"abc", "-5", "12.5", "60hz", " 60", "0x3c"}) {
+    std::string problem;
+    EXPECT_EQ(ParseTickRateHz(text, &problem), kDefaultTickRateHz) << text;
+    EXPECT_FALSE(problem.empty()) << text;
+  }
+}
+
+// Rate 0 is "the game's own step": the fixed-step flag is still set (a server is always fixed-step),
+// so 0 is the game's 30 a second, never an unpaced loop.
+TEST(ServerTimestep, ARateOfZeroIsTheGamesOwnStepAndIsNotAProblem) {
+  std::string problem;
+  EXPECT_EQ(ParseTickRateHz("0", &problem), 0u);
+  EXPECT_TRUE(problem.empty());
+  const auto plan = PlanStepWrite(0, kGameDefaultStepUs);
+  EXPECT_EQ(plan.action, StepAction::KeepGameStep);
+  EXPECT_EQ(kGameDefaultStepUs, StepMicroseconds(30));
+}
+
+TEST(ServerTimestep, TheStepIsWrittenForARateInRangeOverAPlausibleStep) {
+  const auto plan = PlanStepWrite(120, kGameDefaultStepUs);
+  EXPECT_EQ(plan.action, StepAction::Write);
+  EXPECT_EQ(plan.stepUs, 8333u);
+}
+
+TEST(ServerTimestep, NothingIsWrittenForARateOutOfRange) {
+  EXPECT_EQ(PlanStepWrite(1, kGameDefaultStepUs).action, StepAction::RefuseRate);
+  EXPECT_EQ(PlanStepWrite(9, kGameDefaultStepUs).action, StepAction::RefuseRate);
+  EXPECT_EQ(PlanStepWrite(1001, kGameDefaultStepUs).action, StepAction::RefuseRate);
+  EXPECT_EQ(PlanStepWrite(0xFFFFFFFFu, kGameDefaultStepUs).action, StepAction::RefuseRate);
+}
+
+// N31: the current step is read from a fixed game address; a value no step can have means the address
+// is not the step any more (a changed binary), so nothing is written over it.
+TEST(ServerTimestep, NothingIsWrittenOverAStepNoStepCanBe) {
+  EXPECT_EQ(PlanStepWrite(120, 0).action, StepAction::RefuseSlot);
+  EXPECT_EQ(PlanStepWrite(120, 999).action, StepAction::RefuseSlot);
+  EXPECT_EQ(PlanStepWrite(120, 100001).action, StepAction::RefuseSlot);
+  EXPECT_EQ(PlanStepWrite(120, 0xDEADBEEFu).action, StepAction::RefuseSlot);
+  EXPECT_EQ(PlanStepWrite(120, 1000).action, StepAction::Write);
+  EXPECT_EQ(PlanStepWrite(120, 100000).action, StepAction::Write);
+}
+
+TEST(ServerTimestep, TheReadBackMustBeTheStepWritten) {
+  EXPECT_TRUE(ReadBackMatches(8333, 8333));
+  EXPECT_FALSE(ReadBackMatches(8333, 33333));
+  EXPECT_FALSE(ReadBackMatches(8333, 0));
 }
 
 
@@ -61,10 +151,17 @@ TEST(ServerTimestep, AServerGetsTheStepAndTheOldValueIsReported) {
   EXPECT_EQ(w.outcome, StepOutcome::kSet);
   EXPECT_EQ(w.stepUs, 8333u);
   EXPECT_EQ(w.was, 33333u);
-  EXPECT_EQ(field, 8333u) << "the whole 64-bit field holds the step";
-  uint64_t wide = 0xFFFFFFFF00000000ULL;
-  ApplyStep(true, 120, &wide);
-  EXPECT_EQ(wide, 8333u) << "the upper half of the qword is written too";
+  EXPECT_EQ(w.after, 8333u);
+  EXPECT_EQ(field, 8333u);
+}
+
+TEST(ServerTimestep, TheSlotIsReadAsAQwordSoDataInItsUpperHalfIsNoStep) {
+  // The game stores the step as a qword (echovr.exe 0x140127a04). A slot with anything above bit 31 is not a
+  // step, even when its low half looks like one.
+  uint64_t field = (1ULL << 40) | 33333ULL;
+  const auto w = ApplyStep(true, 120, &field);
+  EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue);
+  EXPECT_EQ(field, (1ULL << 40) | 33333ULL) << "nothing is written";
 }
 
 TEST(ServerTimestep, AClientsStepIsUntouched) {
@@ -76,21 +173,23 @@ TEST(ServerTimestep, AClientsStepIsUntouched) {
 
 TEST(ServerTimestep, ARateOfZeroOrMissingStateWritesNothingAndSaysSo) {
   uint64_t field = 33333;
-  EXPECT_EQ(ApplyStep(true, 0, &field).outcome, StepOutcome::kRateZero);
+  EXPECT_EQ(ApplyStep(true, 0, &field).outcome, StepOutcome::kKeepGameStep);
+  EXPECT_EQ(ApplyStep(true, 9, &field).outcome, StepOutcome::kRateRefused);
   EXPECT_EQ(field, 33333u);
   EXPECT_EQ(ApplyStep(true, 120, nullptr).outcome, StepOutcome::kStateMissing);
 }
 
-TEST(ServerTimestep, AFieldHoldingSomethingElseIsNotWritten) {
-  // N31: only the game's default step (33333) or our own is overwritten; any other value is a layout or a
-  // version the code does not know.
-  uint64_t other = 12345;
-  const auto w = ApplyStep(true, 120, &other);
-  EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue);
-  EXPECT_EQ(w.was, 12345u);
-  EXPECT_EQ(w.stepUs, 0u);
-  EXPECT_EQ(other, 12345u) << "nothing is written";
-  EXPECT_TRUE(nevr_server_timestep::StepFailed(w.outcome));
+TEST(ServerTimestep, AFieldHoldingNoStepIsNotWritten) {
+  // N31 (main's PlanStepWrite): a value no step can have means the address is not the step slot.
+  for (const uint64_t other : {0ULL, 999ULL, 100001ULL}) {
+    uint64_t field = other;
+    const auto w = ApplyStep(true, 120, &field);
+    EXPECT_EQ(w.outcome, StepOutcome::kUnexpectedOldValue) << other;
+    EXPECT_EQ(w.was, other);
+    EXPECT_EQ(w.stepUs, 0u);
+    EXPECT_EQ(field, other) << "nothing is written";
+    EXPECT_TRUE(nevr_server_timestep::StepFailed(w.outcome));
+  }
   uint64_t ours = 8333;  // a second run over our own value is still a set
   EXPECT_EQ(ApplyStep(true, 120, &ours).outcome, StepOutcome::kSet);
   EXPECT_EQ(ours, 8333u);
@@ -150,5 +249,6 @@ TEST(ServerTimestep, EachOutcomeHasAName) {
   EXPECT_STREQ(nevr_server_timestep::OutcomeName(StepOutcome::kUnexpectedOldValue), "unexpected_old_value");
   EXPECT_STREQ(nevr_server_timestep::FlagOutcomeName(FlagOutcome::kFieldMissing), "field_missing");
 }
+
 
 }  // namespace

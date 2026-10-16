@@ -44,14 +44,14 @@ each one gives; do the step this way on yours:
 | "ReVault" | ReVault is private. Keep its rules (search the whole project, every binary; report `searched N of N`; never guess an address) with your own disassembler on your own copy of the game files. When you need a fact you cannot derive, ask in the PR with the address and the binary. |
 | "Check production Nakama logs" and "ask sprockee" | The production server's logs are maintainer-only. On a server you run, read its log yourself. For production, ask in the PR, giving the run's time window (UTC), the account and the client log lines around the failure. Where the file says ask sprockee, ask in the PR or issue. |
 | "Production Deployment" | Never, for a contributor's agent. No approval you can receive counts. |
-| "System test after every commit": the production server, display `:0` | Log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the nested Xephyr display exactly as described. If you cannot run the game at all, say so in the PR: the runtime change is then unverified, and a maintainer runs it. |
+| "System test for runtime and auth changes": the production server, display `:0` | Log in to the server your build's embedded defaults point at, or one you run. Never use the user's own display; use the headless Xvfb `:101` display exactly as described. If you cannot run the game at all, say so in the PR: the runtime change is then unverified, and a maintainer runs it. |
 | "Write down what you learn": `.claude/memory/` | That directory is git-ignored and local to a machine. Put a fact about the game or protocol where the next contributor will find it: a code comment at the site, `docs/reference/`, or an issue. |
 | Merging, and "Only the agent the owner has told to merge merges PRs" | A contributor's agent never merges. The maintainers review and merge. |
 | `config/public-defaults.env` | Copy `config/public-defaults.env.example` and fill in the four public values. They are public by design (every client embeds them); if you don't have them, ask in an issue. `just worktree-setup` copies the main checkout's file into a new worktree. |
 | `just test-winvm` | Needs a Windows VM you provide (`tools/winvm/README.md`). |
 
 **Keep Wine off the user's desktop.** `just verify` runs GTest binaries under Wine, and several tests and scripts
-start the game. Run each with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just verify`),
+start the game. Run each with `DISPLAY` and `WAYLAND_DISPLAY` unset (`env -u DISPLAY -u WAYLAND_DISPLAY just <recipe>`),
 except for a client run on the nested display. A Wine process that reaches the user's display can take over their
 mouse and keyboard.
 
@@ -141,8 +141,8 @@ comment (for example N41, N48) is not a rule.
 
 | Rule | Statement | Guards | Checked by |
 | --- | --- | --- | --- |
-| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
-| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock: after `InitializeFunctionPointers()` it logs only through `nevr_boot_log_tee::TeeFprintf`, with at most one `Log()`, the final line. | `src/runtime/lifecycle/initialize.cpp` | verify; `tools/tests/test_patch_detour_logging.py` for the callees |
+| N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
+| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify (the call order); `src/runtime/tests/test_boot_log_routing.cpp` (the routing); `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
 | (unnamed) | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | verify (sensor "Plugin detach teardown boundary", which names no rule) |
 | N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization under the loader lock, through kernel32 calls only (no CRT locks); it is the one documented exception to the addendum's no-file-I/O-from-DllMain rule. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |
 | N59 | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | verify |
@@ -156,7 +156,7 @@ comment (for example N41, N48) is not a rule.
 | N82 | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | `tools/verify_hook_invariants.py` |
 | N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
 | N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; initialization calls `InstallGameMainHook()`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, plugins, file I/O or bridge), because the client's D3D initialization runs inside that call. The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, before the first original call (#519). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`PatchMatchmakingHost`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp` | `tools/tests/test_spectatorstream_order.py`, `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_runtime_lifecycle_invariants.py` (the host patch runs on every load); nothing for the boot-state limit or the image base |
+| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, before the first original call (#519). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); nothing for the boot-state limit or the image base |
 | N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
 
 #### Server, bridge and login
@@ -174,9 +174,9 @@ comment (for example N41, N48) is not a rule.
 | N60 | The bridge collects connections under `g_pairsMutex` and calls `stop()` outside it (`stop()` joins callback threads). | `src/runtime/compat/ws_bridge.cpp` | verify |
 | N61 | Each matchmaker connection (index 2 and up) registers its own callback on the shared remote; closing the login pair clears only its own. | `src/runtime/compat/ws_bridge.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
 | N85 | Never hand ixwebsocket an empty callback (`setOnMessageCallback(nullptr)`); use a no-op lambda. Callbacks have an exception boundary. | `src/runtime/compat/ws_bridge.cpp` | verify |
-| N91 | Two connections must not both inject a login; the login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp` | verify (the log line only; #520 records the gap) |
+| N91 | One login per login session, and a game socket's role is what it asked for, not when it connected. The socket that takes the login slot injects the LoginRequest; a further socket that asks for `/login` while a login session exists shares that session and injects nothing. The redirect gives the config and login services the request targets `/config` and `/login` on the bridge address; the Open handler reads the target of every socket (`openInfo.uri`), then the listener (the matchmaker listener makes a matchmaker), then the connect order over the slots no tagged socket is expected to take; a first frame that contradicts the role is logged. The login-injection line is logged at Info with the XPID (`docs/standards/logging.md` Rule 2). | `src/runtime/compat/ws_bridge.cpp`, `src/runtime/compat/socket_role.h`, `src/runtime/lifecycle/service_config.cpp`, `src/runtime/lifecycle/config.cpp` | verify (the Open handler admits by request target; the injection log line); `src/runtime/tests/test_socket_role.cpp`, `src/runtime/tests/test_behavioral.cpp` (`RolesByPathTest`, through the real bridge), `src/runtime/tests/test_service_config.cpp` (the redirect's request targets), `tools/tests/test_bridge_role_wiring.py` |
 | N92 | The WebSocket bridge is compiled into `BugSplat64.dll` and started in-process from `boot.cpp`; no ws-bridge module is built or loaded. | `src/runtime/lifecycle/boot.cpp`, `CMakeLists.txt` | verify |
-| N102 | A dedicated server that ServerDB refused, or that has no token, exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp` | verify |
+| N102 | A dedicated server that ServerDB refused, that has no token, or that cannot begin multiplayer (a changed prologue of `QueueGameThreadCall` or `BeginMultiplayerLobby`, checked once at boot by `ValidateServerBringup`; a net game not logged in when the queued begin runs) exits with a cause through `ServerFatal` (mode-gated), not `FatalError`. | `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/server_bringup.h` | verify; `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
 | N106 | A server exchanges its refresh token for an access token (`HasValidRefreshToken()` then `RefreshAuthToken`); without it every registration falls back to password auth. | `src/runtime/server/gameserver_serverdb.cpp` | verify |
 | N112 | The client login and the server registration carry the build identity (`nevr_identity`, from `nevr_build_identity::Get()`) and the plugin manifest (`nevr_plugins`, from `BuildPluginManifestJson()`). | `src/core/build_identity.h`, `src/core/build_identity.cpp`, `src/runtime/compat/login_profile.cpp`, `src/runtime/server/gameserver_callbacks.cpp`, `src/runtime/ext/plugin_loader.cpp` | verify (N112a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N115 | The login's `system_info` block is measured (`nevr_system_info::Get`), never a literal. | `src/runtime/compat/ws_bridge.cpp` | verify |
@@ -192,9 +192,10 @@ comment (for example N41, N48) is not a rule.
 | N75 | Plugins load with a restricted DLL search path, so a DLL dropped next to `echovr.exe` cannot satisfy a dependency first. | `src/runtime/ext/plugin_loader.cpp` | verify |
 | N89 | The loader refuses a plugin whose function is built in (`log_filter.dll`). | `src/runtime/ext/plugin_loader.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
 | N95 | `log-filter` is neither built nor packaged. | `plugins/CMakeLists.txt`, `CMakeLists.txt` | verify |
-| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 5. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
-| N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure. | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` |
-| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 31 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
+| N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 6. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
+| N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `src/extension/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `plugins/common/include/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
+| N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
+| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 32 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
 
 #### Hooks and binary patches
@@ -206,7 +207,7 @@ comment (for example N41, N48) is not a rule.
 | N22 | The peer-timeout bug in the game (unsigned subtraction of a wrapped timestamp) is fixed by the overflow-safe `GetTimeMilliseconds` replacement. | `src/runtime/hook/addresses.h`, `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
 | N25, N28 | A hook in `binary_bug_fixes.cpp` validates the expected bytes before it hooks. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it (the Guardrails rule) |
 | N26 | The `CPrecisionSleep::Wait` hook is that function's only owner; nothing chains on it. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
-| N31 | A value read from a fixed game global (the spin-wait limit) is bounds-checked, to catch a misread after the binary changes version. | `src/runtime/patch/binary_bug_fixes.cpp` | nothing names it |
+| N31 | A value read from a fixed game global (the spin-wait limit, the server's step slot) is bounds-checked, to catch a misread after the binary changes version; the server tick rate is range-checked before the step is written, and the write is read back. | `src/runtime/patch/binary_bug_fixes.cpp`, `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/server_timestep.h` | `src/runtime/tests/test_server_timestep.cpp` (the step slot; the spin-wait limit has none) |
 | N32 | A caller count in `addresses.h` is a dated snapshot with the command that refreshes it; refresh it before relying on it. | `src/runtime/hook/addresses.h` | nothing names it |
 | N33, N113 | Exactly one writer patches `CPrecisionSleep::BusyWait`; it validates the prologue, saves the original byte and restores it at shutdown. | `src/runtime/patch/binary_bug_fixes.cpp` | verify |
 | N66 | `FormatSymbolId` returns 0 for a non-positive length or a null buffer. | `src/runtime/hook/symbol_corpus.cpp`, `tools/gen_symbol_corpus.py` | `src/runtime/tests/test_behavioral.cpp`; `tools/tests/test_symbol_corpus_template.py` |
@@ -238,7 +239,7 @@ comment (for example N41, N48) is not a rule.
 | N90 | pnsrad.dll's own `CLog::PrintfImpl` is hooked, so its output goes through the filter; the hook is installed from the live tick. | `src/runtime/log/builtin_filter.h`, `src/runtime/log/builtin_filter.cpp`, `src/runtime/frame/tick.cpp` | verify |
 | N108 | `src/abi/` never includes `src/core/`. | `src/abi` | verify |
 | N109 | `src/runtime/CMakeLists.txt` does not put its own source directory on the include path. | `src/runtime/CMakeLists.txt` | verify |
-| N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
+| N122, N124 | A config or mode decision logs its outcome at Info even when nothing happens (UPnP key and mapping, telemetry disabled, the server bring-up prologue check). | `src/runtime/lifecycle/config.cpp`, `src/runtime/server/upnp.cpp`, `src/runtime/server/gameserver_serverdb.cpp`, `src/runtime/server/gameserver_telemetry.cpp`, `src/runtime/lifecycle/state_machine.cpp` | nothing in verify; a run scored by `tests/smoke/score-log.sh` |
 
 #### Writing a sensor (N93, N99, N101, N111)
 
@@ -421,7 +422,9 @@ filter and the loader refuses to load it. Other plugins (audio-intercom,
 game-rules-override, session-unlocker, combat-mod, combat-2d) live in
 `nevr-runtime-plugins`.
 
-Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
+Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`, `plugin_logger.h`) providing address resolution, prologue validation, config loading and logging utilities.
+
+A plugin logs through the host's structured `Log()` (N135): `NEVR_DEFINE_PLUGIN_LOG` in `plugin_logger.h` generates `PluginLogBind(ctx)`, `PluginLog`/`PluginLogWarning`/`PluginLogError`/`PluginLogDebug` and `PluginLogFields(level, message, {{key, value}})`. Call `PluginLogBind(ctx)` first thing in `NvrPluginInit` or `NvrPluginInitEx`; the host log exists from the init callback on (not in `DllMain`, not before init). Lines land in the host's log as `[NEVR.PLUGIN] plugin=<name> ...` (rules: `docs/standards/logging.md`, Rule 15). Per-plugin log files and rate limiting are not provided.
 
 ### Runtime-loaded modules
 
@@ -490,7 +493,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## Conventions
 
-- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
+- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`. A plugin uses `plugin_logger.h`, which routes to the host's `Log()` (N135).
 - **Hooking**: MinHook-based (`NEVR_USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
@@ -602,8 +605,17 @@ your seat name, for example `claude-main` or `codex`.
   Never interrupt another agent's build.
 - **Each worktree has its own vcpkg root** (`build/vcpkg-root`, created by `just worktree-setup`).
   Never point a build at `~/.vcpkg` directly.
-- **The merge gate is the local capped `just verify`** (plus `just test-android` for a change under
-  `src/quest`). CI runs only when started by hand.
+- **A PR runs the quick check, not `just verify`.** The quick check is: the build (`just build`), the test
+  recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
+  `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
+  test for runtime and auth changes") when the change touches runtime or auth code. Run the quick check on the
+  PR's tip, in the build slice. CI runs only when started by hand.
+- **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
+  reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
+  `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
+  `verify: OK` is the proof: a reviewer reads that log and does not run verify again. A missing HEAD line is
+  checked in seconds (`git rev-parse HEAD`, `git status --porcelain`, the log's mtime against the commit time),
+  never by a re-run. Run verify again only when the tip changes.
 
 ### Git
 
@@ -744,8 +756,10 @@ your seat name, for example `claude-main` or `codex`.
   target moves after the PR is opened the base does not: it stays the commit you branched from until
   you `git merge origin/<target>`, and the check then names the new merge-base, so update the line
   (an edit to the body re-runs the check).
-- **Verification before merge.** `just verify` green on the tip, run in the build slice (see "Builds"), and for a change to runtime code
-  the client login test as described under "System test after every commit". The run's log must
+- **Verification before merge.** The quick check green on the tip, run in the build slice (see "Builds"): the build,
+  the test recipe(s) that cover the changed code, and for a change to runtime or auth code the client login test as
+  described under "System test for runtime and auth changes". `just verify` is not part of it: it runs only on
+  main, when prepping a release. The run's log must
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
@@ -809,16 +823,16 @@ Forbidden actions (without explicit approval):
 
 This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation authorizes deployment.
 
-## System test after every commit
+## System test for runtime and auth changes
 
 > **Maintainers only.** The production server and its logs, and the display numbers, are the owner's machine. Contributors: see "For contributors", "Maintainers only, and what to do instead".
 
 - **Run `./launch-client.sh` against the production server, on a copy of the install (see "The game
-  install"),** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
-- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
+  install"),** on the tip of every PR whose change touches runtime or auth code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against a headless `Xvfb :101 -screen 0 1920x1080x24` (Xephyr opens a window on the owner's desktop, so it is only for a run the owner asks to watch), and confirm `Xvfb :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Hand/mouse input does not reach menu buttons in the tested Xephyr setup.** Find Arena, Find Combat and Private did not send requests under `Xephyr :101`; boot, login and lobby joins need no input and work nested. A check that needs input requires the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
-- **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
+- **A green build and tests are necessary but not sufficient.** They catch C++ compile and test errors (`just verify`, which runs on main when prepping a release, adds the pattern sensors). None of them catches wire-format bugs, login failures, or rendering regressions. The system test covers what they cannot.
 
 ## Analysis: read what the program wrote, before anything else
 
@@ -876,7 +890,8 @@ When something fails, the first act is reading the failing program's **own** log
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
   repo.
-- **Verify entry point.** `just verify` is the single closed-loop gate:
+- **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
+  runs the quick check, see "Builds"):
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
   the Python test suite and source-invariant checks. The Go system suites are

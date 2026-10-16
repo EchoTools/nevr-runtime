@@ -20,10 +20,13 @@ Presets are `mingw-debug`, `mingw-release` (Linux default), `debug` and `release
 
 ## Verify
 
-`just verify` is the single gate. It builds, runs the C++ tests under Wine, then runs the source-invariant sensors. It
-fails closed: run it before you open a PR and paste its output into the PR.
+A PR runs the quick check: the build (`just build`), the test recipe(s) that cover the changed code (`just --list`
+names them), and, for a change to runtime or auth code, the PC login test. Paste its output into the PR.
 
-It is necessary but not sufficient. It does not catch wire-format bugs, login failures or rendering regressions; for a
+`just verify` is the full gate. It builds, runs the C++ tests under Wine, then runs the source-invariant sensors. It
+fails closed. It runs only on main, when prepping a release, once per tip; a PR does not run it.
+
+Neither is sufficient. They do not catch wire-format bugs, login failures or rendering regressions; for a
 change to runtime code, also run the game against a server (`NEVR_GAME_ROOT=<copy of the install> ./launch-client.sh`, see "The game install" in `AGENTS.md`) and check the program's own log.
 [`docs/standards/verification.md`](docs/standards/verification.md) says what counts as evidence for a claim like
 "fixed" or "verified", and [`docs/standards/logging.md`](docs/standards/logging.md) covers what a component must log.
@@ -45,7 +48,7 @@ binary. See "Testing" in `AGENTS.md`.
 2. One logical change per commit, with a conventional prefix (`feat:`, `fix:`, `docs:`, `ci:`; an optional scope is
    fine, as in `fix(bridge): ...`), and the issue number in the subject when there is one.
 3. Push the branch and open a pull request against `main`. The PR template asks for what and why, the linked issue,
-   and how it was verified. The merge gate is the local capped `just verify`; no workflow runs on a pull request or
+   and how it was verified. The merge gate is the local capped quick check (`just verify` runs only on main, when prepping a release); no workflow runs on a pull request or
    a push. Run CI by hand with `gh workflow run <file> --ref <branch>` (`build.yml`, `android.yml`,
    `vcpkg-cache.yml`, `defender-scan.yml`).
 4. Link the issue it resolves with `Closes #N` (or say in the body why there is none), and give the PR the same
