@@ -21,10 +21,12 @@
 #include <iterator>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
@@ -40,6 +42,9 @@
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/patch/evrp_package.h"
+#include "runtime/patch/xpid_patch.h"
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/hook/addresses.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -104,7 +109,6 @@ CHAR   g_regionOverride[64]   = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
-volatile sig_atomic_t g_shutdownRequested = 0;
 
 // --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
 std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
@@ -165,6 +169,10 @@ void ServerFatal(const CHAR* format, ...) {
   g_lastServerFatal = buf;
   fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
 }
+
+// --- initialize.h extern (set by xpid_patch.cpp; initialize.cpp is not linked here) ---
+bool g_bootHookFailed = false;
+char g_bootHookFailedCause[96] = {};
 
 // --- config.h extern (used by ws_bridge.cpp) ---
 PVOID g_pGame = nullptr;
@@ -275,6 +283,49 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
   EXPECT_TRUE(TestLogContains("plugin_that_does_not_exist.dll"));
   EXPECT_TRUE(TestLogContains("LoadLibrary failed: error"));
   EXPECT_TRUE(TestLogContains("optional, continuing"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
+  char exePath[MAX_PATH] = {};
+  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+  std::string directory(exePath);
+  directory.resize(directory.find_last_of("\\/") + 1);
+  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
+  const std::string escaped = directory + "test_plugin_escape.dll";
+  ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
+  ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
+
+  g_testPluginLoadPlan.push_back({"escape", "..\\test_plugin_escape.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_escape.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  UnloadPlugins();
+  EXPECT_TRUE(DeleteFileA(escaped.c_str()));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) {
+  constexpr char kEventName[] = "Local\\NEVRTestPartialInitShutdownObserved";
+  HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kEventName);
+  ASSERT_NE(shutdownObserved, nullptr);
+
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_partial_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0), WAIT_OBJECT_0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_partial_init_fail.dll"), nullptr);
+  CloseHandle(shutdownObserved);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitWithoutShutdownRetainsModule) {
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_NE(GetModuleHandleA("test_plugin_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("retained until process exit"));
 }
 
 TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
@@ -797,6 +848,32 @@ class N61_WsBridgeTest : public ::testing::Test {
     TestHook_N61_ResetState();
   }
 };
+
+TEST(WsBridgeListener, GracefulStopReleasesBothListeningPorts) {
+  SetWebSocketBridgeTarget("wss://127.0.0.1:9/ws");
+  InstallWebSocketBridge();
+  const uint16_t proxyPort = GetWebSocketBridgePort();
+  const uint16_t matchPort = GetMatchmakerBridgePort();
+  ASSERT_NE(proxyPort, 0);
+  ASSERT_NE(matchPort, 0);
+  ASSERT_NE(proxyPort, matchPort);
+
+  StopWebSocketBridgeListener();
+  SetWebSocketBridgeTarget("");
+
+  for (const uint16_t port : {proxyPort, matchPort}) {
+    SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_NE(probe, INVALID_SOCKET);
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+    const int result = bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    const int error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+    EXPECT_NE(result, SOCKET_ERROR) << "port " << port << " stayed bound after stop: WSA " << error;
+    closesocket(probe);
+  }
+}
 
 // #70: when the shared remote session ends, every game socket on it (login and matchmaker) is closed so
 // the game reconnects; a socket on another remote, or one the game already closed, is left alone.
@@ -1823,6 +1900,14 @@ struct GuardScratch {
     }
 };
 
+HANDLE g_guardEntered = nullptr;
+HANDLE g_guardContinue = nullptr;
+
+void WaitBeforeGuardPublish() {
+    SetEvent(g_guardEntered);
+    WaitForSingleObject(g_guardContinue, 5000);
+}
+
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
@@ -1834,6 +1919,36 @@ TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
     nevr_hook_guard::Record(s.page, "N84_unchanged");
     EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
+}
+
+TEST(N84_HookGuard, ReadersSkipReservedEntryUntilWriterPublishesIt) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    g_guardEntered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_guardContinue = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ASSERT_NE(g_guardEntered, nullptr);
+    ASSERT_NE(g_guardContinue, nullptr);
+    nevr_hook_guard::SetBeforePublishForTest(&WaitBeforeGuardPublish);
+
+    std::thread writer([&] { nevr_hook_guard::Record(s.page, "N84_pending"); });
+    const DWORD entered = WaitForSingleObject(g_guardEntered, 5000);
+    if (entered == WAIT_OBJECT_0) {
+        EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
+        EXPECT_FALSE(nevr_hook_guard::IsOurDetour(s.page));
+        EXPECT_EQ(nevr_hook_guard::VerifyAll("test:pending"), 0);
+    }
+    SetEvent(g_guardContinue);
+    writer.join();
+    nevr_hook_guard::SetBeforePublishForTest(nullptr);
+    EXPECT_EQ(entered, WAIT_OBJECT_0);
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(s.page));
+    CloseHandle(g_guardEntered);
+    CloseHandle(g_guardContinue);
+    g_guardEntered = nullptr;
+    g_guardContinue = nullptr;
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {
@@ -1896,6 +2011,61 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "uncommitted memory was recorded; VerifyAll would fault reading it";
     VirtualFree(reserved, 0, MEM_RELEASE);
+}
+
+// The table holds every install site the runtime has. 62 is the count of sites in src/ that reach
+// nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
+// guards on a healthy boot. A new site raises that count and this number with it.
+TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
+    constexpr int kInstallSitesInSource = 62;
+    EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
+}
+
+// A full table must not look like a clean one. Recording past Capacity() drops the site, and the drop
+// has to be counted and reported at ERROR by VerifyAll, not vanish.
+TEST(N84_HookGuard, FullTable_DropsAreCountedAndReportedLoudly) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+
+    const int cap = nevr_hook_guard::Capacity();
+    ASSERT_GT(cap, 0);
+    for (int i = 0; i < cap; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap);
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 0);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:full"), 0);
+    EXPECT_FALSE(TestLogContains("hook guard table full")) << "reported a drop that never happened";
+
+    nevr_hook_guard::Record(s.page, "N84_dropped_first");
+    nevr_hook_guard::Record(s.page, "N84_dropped_second");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap) << "a full table must not grow";
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 2);
+
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overflow"), 0) << "a drop is not an overwrite";
+    EXPECT_TRUE(TestLogContains("hook guard table full cap=")) << "the drop was not reported";
+    EXPECT_TRUE(TestLogContains("dropped=2 first=N84_dropped_first")) << "the report must name the first dropped detour";
+
+    // Edge-triggered: the same drops are not reported again, a new drop is.
+    ClearTestLogs();
+    nevr_hook_guard::VerifyAll("test:again");
+    EXPECT_FALSE(TestLogContains("hook guard table full"));
+    nevr_hook_guard::Record(s.page, "N84_dropped_third");
+    nevr_hook_guard::VerifyAll("test:third");
+    EXPECT_TRUE(TestLogContains("dropped=3 first=N84_dropped_first"));
+}
+
+// Record() runs under the DllMain loader lock at boot, so overflow itself must not Log().
+TEST(N84_HookGuard, FullTable_RecordDoesNotLogUnderTheLoaderLock) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    for (int i = 0; i < nevr_hook_guard::Capacity() + 3; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 3);
+    EXPECT_FALSE(TestLogContains("hook guard")) << "Record() logged on overflow; it can run under the loader lock";
 }
 
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
@@ -2144,4 +2314,178 @@ TEST(HmdSerial, StockChoice) {
   char full[nevr_hmd_serial::kSerialBytes];
   std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
   EXPECT_EQ(nevr_hmd_serial::Select(false, full).value, std::string(24, 'Z'));
+}
+
+
+// ============================================================================
+// #479 — the XPID provider-string patch reports failure through g_bootHookFailed.
+//
+// PatchDscProvider runs from Initialize(), before the CLI is parsed, so g_isServer is still false
+// there and ServerFatal() would only warn. The failure has to reach boot.cpp's server check
+// (`if (g_bootHookFailed) ServerFatal(...)`) through the flag instead.
+//
+// The test builds a 32 MB stand-in for the game image, puts the five provider strings at the
+// real RVAs, and points EchoVR::g_GameBaseAddress at it.
+// ============================================================================
+
+namespace {
+
+constexpr size_t kXpidImageSize = 0x2000000;
+
+struct XpidSite {
+    uintptr_t rva;
+    const char* original;  // 4 bytes including the terminator or dash
+    const char* patched;
+};
+
+const XpidSite kXpidSites[] = {
+    {nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "PSN-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "???-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME, "???", "DSC"},
+};
+
+void WriteXpidOriginals(char* base) {
+    for (const auto& site : kXpidSites) memcpy(base + site.rva, site.original, 4);
+}
+
+// Points EchoVR::g_GameBaseAddress at `base` for one test and restores it, and clears the flag the
+// code under test sets.
+struct XpidBaseScope {
+    CHAR* saved;
+    explicit XpidBaseScope(char* base) : saved(EchoVR::g_GameBaseAddress) {
+        EchoVR::g_GameBaseAddress = base;
+        g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
+        g_serverFatalCalls = 0;
+    }
+    ~XpidBaseScope() {
+        EchoVR::g_GameBaseAddress = saved;
+        g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
+    }
+};
+
+// Opens the boot tee's file for one test and closes it again. Init() starts the boot phase, so
+// the code under test reports through TeeFprintf exactly as it does under the loader lock.
+// Output() returns what the tee wrote to nevr-boot.jsonl after the guard was constructed.
+struct BootTeeCapture {
+    std::string path;
+    std::streamoff start = 0;
+    BootTeeCapture() {
+        nevr_boot_log_tee::Init();
+        path = nevr_boot_log_tee::Path();
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in) start = in.tellg();
+    }
+    ~BootTeeCapture() { nevr_boot_log_tee::Close(); }
+    std::string Output() const {
+        std::ifstream in(path, std::ios::binary);
+        in.seekg(start);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+};
+
+}  // namespace
+
+TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "") << "a healthy image records no failure cause";
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    for (const auto& site : kXpidSites) {
+        EXPECT_EQ(memcmp(base + site.rva, site.patched, 4), 0) << "site rva=0x" << std::hex << site.rva;
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AnImageWithUnexpectedBytesFailsTheBootThroughTheFlagNotServerFatal) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);  // not this build
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a validation failure must reach boot.cpp's server check";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+    }
+    // Nothing is half-patched: validation happens before any write.
+    EXPECT_EQ(memcmp(base + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
+    // The same bytes through a read-only view of a section: validation passes, then
+    // VirtualProtect(PAGE_EXECUTE_READWRITE) on the view is refused, so every ApplyPatch fails.
+    HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        static_cast<DWORD>(kXpidImageSize), nullptr);
+    ASSERT_NE(section, nullptr);
+    char* writable = static_cast<char*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kXpidImageSize));
+    ASSERT_NE(writable, nullptr);
+    WriteXpidOriginals(writable);
+    UnmapViewOfFile(writable);
+    char* readOnly = static_cast<char*>(MapViewOfFile(section, FILE_MAP_READ, 0, 0, kXpidImageSize));
+    ASSERT_NE(readOnly, nullptr);
+    {
+        XpidBaseScope scope(readOnly);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
+        EXPECT_STREQ(g_bootHookFailedCause, "XPID provider-string patch write failed");
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    UnmapViewOfFile(readOnly);
+    CloseHandle(section);
+}
+
+TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog) {
+    // The boot path runs under the DllMain loader lock, where Log() is not allowed. The mismatch
+    // record is the only place the expected and actual bytes exist, so it has to reach the tee.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        written = tee.Output();
+    }
+    char expected[160];
+    snprintf(expected, sizeof(expected),
+             "[NEVR.XPID] dash prefix mismatch rva=0x%X expected=50534e2d actual=58595a2d",
+             static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+    EXPECT_NE(written.find(expected), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, TheRefusalCauseNamesTheFirstMismatchedSite) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "XYZ-", 4);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        char expected[96];
+        snprintf(expected, sizeof(expected), "XPID dash prefix mismatch rva=0x%X",
+                 static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+        EXPECT_STREQ(g_bootHookFailedCause, expected)
+            << "boot.cpp's ServerFatal prints this: it must name the failing site";
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
 }

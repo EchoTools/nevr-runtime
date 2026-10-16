@@ -6,6 +6,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+#include <MinHook.h>
+#endif
 
 namespace nevr_dll_load_hook {
 
@@ -26,7 +29,8 @@ typedef bool (*LoadFilter)(const wchar_t* lower_path);
  * feature that must veto a load registers here instead of installing its own detour on the same
  * targets (MinHook allows one per target: the second install fails with MH_ERROR_ALREADY_CREATED,
  * #361). A refused load returns NULL with ERROR_MOD_NOT_FOUND. `name` is for the log line.
- * Applies to every LoadLibrary variant and every dwFlags value. */
+ * Applies to every LoadLibrary variant and every dwFlags value. `name` is truncated to 47 bytes
+ * (the truncation is logged); IsLoadBlocked reports the truncated name. */
 void AddLoadFilter(const char* name, LoadFilter filter);
 
 /* The Oculus Platform SDK predicate: true when the FILE NAME of `lower_path` (the part after the
@@ -34,12 +38,13 @@ void AddLoadFilter(const char* name, LoadFilter filter);
  * does not match, so a library under such a directory is not refused. */
 bool IsOculusPlatformPath(const wchar_t* lower_path);
 
-/* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests). */
+/* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests).
+ * `blocked_by` remains valid until the next IsLoadBlocked call on the same thread. */
 bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by);
 
 /* Register a callback to fire when a DLL matching `dll_name` loads.
  * dll_name is matched case-insensitively against the filename only (not path).
- * The callback fires once per load. Multiple callbacks per DLL are supported. */
+ * The callback fires at most once per registration. Multiple callbacks per DLL are supported. */
 void OnLoad(const char* dll_name, PatchCallback callback);
 
 /* While the runtime boots, a callback for a DLL that is already loaded when it registers is held
@@ -53,5 +58,23 @@ void FireHeldCallbacks();
 /* Trigger callbacks for a DLL that was loaded through a non-LoadLibrary path
  * (e.g., the game's CSysDLL_Load). Only fires each callback once per DLL. */
 void FireCallbacksForModule(const char* lower_name, HMODULE module);
+
+#ifdef NEVR_DLL_LOAD_HOOK_TESTING
+using ModuleProbe = HMODULE(WINAPI*)(LPCSTR);
+void SetModuleProbeForTest(ModuleProbe probe);
+
+/* The three MinHook calls Install() makes, replaceable so a test can make creation or enabling
+ * fail and watch the cleanup. A null member keeps the real function. */
+struct MinHookOps {
+  MH_STATUS(WINAPI* create)(LPVOID target, LPVOID detour, LPVOID* original);
+  MH_STATUS(WINAPI* enable)(LPVOID target);
+  MH_STATUS(WINAPI* remove)(LPVOID target);
+};
+void SetMinHookOpsForTest(const MinHookOps* ops);
+
+/* The trampoline Install() holds for "LoadLibraryA"/"LoadLibraryW"/"LoadLibraryExA"/"LoadLibraryExW",
+ * or nullptr when it holds none. */
+void* OriginalForTest(const char* name);
+#endif
 
 } // namespace nevr_dll_load_hook

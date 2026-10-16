@@ -1,4 +1,5 @@
 #include "quest/redirect/service_redirector.h"
+#include "runtime/compat/status_redirect_check.h"
 
 #include <cstring>
 #include <exception>
@@ -140,10 +141,17 @@ const char* ServiceRedirector::Apply(const char* key, const char* result) noexce
 }
 
 const char* ServiceRedirector::ApplyUrl(const char* url) noexcept {
-  if (!active_ || (!IsApiBaseUrl(url) && !IsGraphBaseUrl(url))) return url;
+  if (!active_ || (!IsApiBaseUrl(url) && !IsGraphBaseUrl(url))) {
+    // Every connect is counted by class for the status_redirect self-check (#408), including the ones this
+    // redirector leaves alone: a service-domain host it does not cover is the failing shape of #408. Relaxed
+    // atomics and a bounded host copy only (this runs in the game's CreateConnection).
+    nevr_status_redirect_check::NoteConnect(url, url);
+    return url;
+  }
   const char* const chosen = ApplyChecked(url, /*graphRule=*/true);
   RedirectCounters& counters = GlobalCounters();
   (chosen != url ? counters.urlRedirected : counters.urlPassThrough).fetch_add(1, std::memory_order_relaxed);
+  nevr_status_redirect_check::NoteConnect(url, chosen);
   return chosen;
 }
 

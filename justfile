@@ -52,17 +52,13 @@ launcher: configure
 verbose-build: configure
     cmake --build --preset {{ preset }}
 
-# Create distribution packages
+# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/
 dist: build
     @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
 verbose-dist: build
     cmake --build --preset {{ preset }} --target dist
-
-# Build stripped binaries without debug symbols
-dist-lite: build
-    cmake --build --preset {{ preset }} --target dist-lite
 
 # Create legacy distribution package (v1 DLLs only)
 dist-legacy: build
@@ -253,8 +249,10 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk" features="r
 # fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
-# APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
-# be mounted by a debug-signed sideload, so it is never used.
+# APK reads (/sdcard/readyatdawn/_data). The store OBB is a keyed (encrypted) OBB;
+# Horizon OS, like Android 11 and later, refuses every keyed mount whatever the
+# APK's signer, so it is never used (the sentinel answers the game's mount itself:
+# docs/adr/0007-quest-obb-mount-skip.md).
 # The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
 # different data_sha256 gets its own _data-<hash prefix>.zip),
 # written as .part and renamed only after the hash matches. data_sha256
@@ -364,7 +362,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -488,7 +486,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -732,14 +730,17 @@ test-quest-tls:
     trap cleanup EXIT
     server=../../src/quest/tests/tls_ws_server.py
     python3 -I "$server" tls server.pem server.key good.port & pids+=($!)
+    python3 -I "$server" tls-delay server.pem server.key delay.port & pids+=($!)
+    python3 -I "$server" tls-stall server.pem server.key stall.port & pids+=($!)
+    python3 -I "$server" tls-trickle server.pem server.key trickle.port & pids+=($!)
     python3 -I "$server" tls selfsigned.pem selfsigned.key selfsigned.port & pids+=($!)
     python3 -I "$server" plain plain.stats plain.port & pids+=($!)
-    for f in good.port selfsigned.port plain.port; do
+    for f in good.port delay.port stall.port trickle.port selfsigned.port plain.port; do
         for _ in $(seq 1 100); do [ -s "$f" ] && break; sleep 0.1; done
         [ -s "$f" ] || { echo "test-quest-tls: server for $f did not start" >&2; exit 1; }
     done
     ./curl_ws_tls_test trust-good trust-other "$(cat good.port)" "$(cat selfsigned.port)" \
-        "$(cat plain.port)" plain.stats
+        "$(cat plain.port)" plain.stats "$(cat stall.port)" "$(cat delay.port)" "$(cat trickle.port)"
     echo "test-quest-tls: verified-TLS connector tests pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -800,6 +801,18 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
+    # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_prerequisites.cpp -o "$out/chain_login_prerequisites.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
+    "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_signin_code_chain_test" -ldl
+    timeout 120 "$out/login_signin_code_chain_test"
     # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
     # game's callback and wait loop.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
@@ -817,7 +830,17 @@ test-quest-redirect:
     set -euo pipefail
     out="build/quest-redirect-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-redirect: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     fx=src/quest/redirect/tests
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
         -o "$out/libredirfx_provider.so"
@@ -892,7 +915,17 @@ test-quest-social:
     set -euo pipefail
     out="build/quest-social-host"
     mkdir -p "$out"
-    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # nlohmann::json comes from the header the build installed from vcpkg.json (as in test-quest-integration),
+    # never a system package: the CI builder image has none.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-social: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
     off=("${on[@]}" -fno-exceptions)
     "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
@@ -1066,6 +1099,9 @@ verify:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
+    # The log names what it tested, so a pass is never re-run to prove it.
+    echo "verify: HEAD $(git rev-parse HEAD)"
+    echo "verify: tree $( [ -z "$(git status --porcelain)" ] && echo clean || echo DIRTY)"
     just build
     # `just build` filters its output through grep and always exits 0, so its exit
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
@@ -1081,7 +1117,6 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1163,7 +1198,7 @@ verify:
     QTLS_LITERAL=$(grep -ciE 'curl_easy_setopt\(curl,[[:space:]]*CURLOPT_[A-Z0-9_]+,' <<<"$QTLS_CODE" || true)
     [ "$QTLS_CALLS" = "$QTLS_LITERAL" ] || qtls_fail "$QTLS_CALLS curl_easy_setopt line(s) but only $QTLS_LITERAL name their option with a direct CURLOPT_ literal"
     if grep -qiE 'curl_easy_option|curl_easy_setopt[^(]' <<<"$QTLS_CODE"; then qtls_fail "curl_easy_option_* or an indirect curl_easy_setopt reference"; fi
-    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
+    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_TIMEOUT CURLOPT_XFERINFODATA CURLOPT_XFERINFOFUNCTION CURLOPT_NOPROGRESS CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
     QTLS_NAMES=$(grep -oiE 'CURLOPT_[A-Z0-9_]+' <<<"$QTLS_CODE" || true)
     while IFS= read -r qtls_name; do
         [ -n "$qtls_name" ] || continue
@@ -1259,8 +1294,8 @@ verify:
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
         exit 1
     fi
-    # The graceful signal path must release it too, and must not reintroduce a
-    # runtime symbol lookup on a path that cannot take the loader lock (N62).
+    # The graceful console-control path must release it too, without a
+    # runtime symbol lookup during shutdown (N62).
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
         exit 1
@@ -1724,9 +1759,20 @@ verify:
         echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
         exit 1
     fi
-    if ! grep -q 'ServerFatal' <<<"$N120_XPID"; then
+    # ServerFatal is not callable here: the patch runs before the CLI is parsed, so g_isServer is
+    # still false and ServerFatal would only warn. The failure goes through g_bootHookFailed, which
+    # boot.cpp checks once the mode is known (src/runtime/tests/test_behavioral.cpp XpidPatchBoot).
+    if ! grep -q 'g_bootHookFailed = true' <<<"$N120_XPID"; then
         echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
         echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
+        exit 1
+    fi
+    # The flag alone is satisfied by one `g_bootHookFailed = true`, so a ServerFatal() restored on the
+    # validation path would pass the check above. It must stay out of this file altogether: it runs
+    # before the CLI is parsed, where ServerFatal only warns and the boot would go on.
+    if grep -q 'ServerFatal(' <<<"$N120_XPID"; then
+        echo "verify: FAIL — N120 xpid_patch.cpp calls ServerFatal()." >&2
+        echo "The patch runs before the CLI is parsed, so g_isServer is still false and ServerFatal only warns; report through g_bootHookFailed (boot.cpp refuses to start a server)." >&2
         exit 1
     fi
 
@@ -1901,7 +1947,7 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
-    python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    timeout -k 10 600 python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
@@ -1949,10 +1995,12 @@ verify:
         exit 1
     fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
-    # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
-    # generic branch still exists, and the attribution table is still populated
+    # generic null-ptr branch, NOT by per-site hooks. The VEH must call the
+    # policy that enforces the low-address and game-loop-thread conditions, and
+    # the attribution table must remain populated
     # (without it a fire reports a bare RVA and the class is unrecognisable).
-    if ! grep -q 'target < 0x10000' src/runtime/lifecycle/crash_recovery.cpp; then
+    if ! grep -q 'if (nevr_veh_policy::ShouldRecoverNullPointerAv(' src/runtime/lifecycle/crash_recovery.cpp \
+       || ! grep -q 'return isServer && target < 0x10000 && jumpBufferValid && gameLoopThreadId != 0 &&' src/runtime/lifecycle/veh_policy.h; then
         echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
         echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
         exit 1
@@ -1980,9 +2028,7 @@ verify:
             exit 1
         fi
     done
-    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources are kept out —
-    # the stderr FILE lock (Log -> vfprintf) and the loader lock
-    # (GetModuleHandleA/GetProcAddress). Both must stay out of PerformGracefulShutdown.
+    # N62: graceful shutdown must not resolve symbols through the loader lock.
     # Strip comment lines first: the function's own comment says "NO
     # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
     # violation of itself. Same false positive the N81 and N85 sensors hit.
@@ -1992,18 +2038,12 @@ verify:
     N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
     if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
-        echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
-        echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
+        echo "both take the loader lock and may deadlock shutdown." >&2
+        echo "Call StopWebSocketBridgeListener() directly." >&2
         exit 1
     fi
     if ! grep -q 'ResolveShutdownDependencies();' src/runtime/lifecycle/boot.cpp; then
-        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing; the cached" >&2
-        echo "WsBridge_Shutdown pointer stays null and the listener leaks on every shutdown." >&2
-        exit 1
-    fi
-    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/runtime/lifecycle/crash_recovery.cpp; then
-        echo "verify: FAIL — N62 signal-context flag is not volatile sig_atomic_t (the only type" >&2
-        echo "a signal handler may portably touch)." >&2
+        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing." >&2
         exit 1
     fi
     # N86: the per-frame tick MUST be dispatched from a site that runs in server
@@ -2569,7 +2609,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 872
+    python3 tools/verify_gtest_floor.py --floor 942
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
@@ -2595,7 +2635,7 @@ generate-certs:
 renew-certs:
     ./certs/generate-ca.sh --renew
 
-# Build normal and lite archives with required local Authenticode signing.
+# Build the stripped archives with required local Authenticode signing.
 sign:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2612,7 +2652,7 @@ sign:
     export CODESIGN_TSURL="http://timestamp.digicert.com"
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=ON
     build_status=0
-    cmake --build --preset {{ preset }} --target dist dist-lite || build_status=$?
+    cmake --build --preset {{ preset }} --target dist || build_status=$?
     cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=OFF > /dev/null
     exit "$build_status"
 
@@ -2656,7 +2696,9 @@ _vcpkg-mingw:
         root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
         cd "$root"
         unset VCPKG_ROOT
-        ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # Fixed PATH: the triplet passes PATH through (VCPKG_ENV_PASSTHROUGH), so the caller's PATH
+        # would be hashed into every package ABI and miss the shared binary cache.
+        env PATH=/usr/local/bin:/usr/bin ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
             --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
     fi

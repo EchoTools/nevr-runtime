@@ -22,9 +22,10 @@
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
 //      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
-//                                    AStorageManager_getMountedObbPath); independent of every feature above,
-//                                    runs right after the clock hook so it is in place before libr15 runs
-//                                    CSysFile::Init. Its counters are registered with the others (step 3).
+//                                    AStorageManager_getMountedObbPath); on every launch, whatever the
+//                                    configuration says, right after the clock hook so it is in place before
+//                                    libr15 runs CSysFile::Init. Its counters are registered with the others
+//                                    (step 3).
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -111,7 +112,7 @@ class Steps {
   virtual bool RegisterLoginCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
   virtual bool RegisterLoginPromptCounters() = 0;
-  // The OBB-mount skip's counters (#319), registered when the obb_skip feature is on.
+  // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
   virtual bool StartReporter() = 0;
 

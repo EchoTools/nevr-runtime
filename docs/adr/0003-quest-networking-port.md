@@ -225,7 +225,7 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   The hook skips (a plain return) the enable of the error pages while the latch is armed, and the enable of
   the logging-in page while the latch is armed and the login may not proceed. "May proceed" is one
   process-wide word (`quest/login/login_attempt_gate.h`) that the token-auth source publishes and that
-  both this hook and the login prerequisites (`IdentitySource::Ready`) read, so they cannot disagree: the
+  both this hook and the login prerequisites (`IdentitySource::Ready`, `IdentitySource::HoldsAnswers`) read, so they cannot disagree: the
   skip stops in the same instant the login may proceed, and an attempt whose logging-in page was skipped is
   poisoned and fails its prerequisites until the game leaves "logging in", even if the gate turns ready
   meanwhile (otherwise the login would succeed on a screen that cannot show it). The signed-in notice is
@@ -1067,9 +1067,13 @@ The four user requests are answered without Meta either (local answers, `login_p
 `local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
 the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
 `ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
-it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
-`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
-code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array)
+unless `IdentitySource::HoldsAnswers` holds the answers. They are held only while token auth has a token coming
+without the player (starting, refreshing, expired, a failure it retries, a token that ran out), so a login that
+token auth will complete waits where it already waits. While the player is awaited, or when no token will come, they
+are delivered; the identity is not ready, so the not-ready reset (`ResetHeldStandIns`) withdraws the stand-ins after
+each synthetic callback and the game's own `UpdateInternal` fails the login with "One or more prerequisites are
+missing", the local failure the sign-in code is written onto (`IsLocalLoginFailure`). The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
 the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
 `ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
 are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
@@ -1109,10 +1113,13 @@ by the walk: `blr`/`br` and a PLT stub into the library's own exports.
 its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
-`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
+`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
+not-ready reset withdraws the stand-in it gave) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
 that is never answered shows as a request with no callback. No record carries a token, nonce, user
-name or id value. The install logs one `quest_login_prerequisites_install` summary. Measured on the
+name or id value. The install logs one `quest_login_prerequisites_install` summary, and the token-auth poll logs one
+`quest_login_answers` record (`mode` held or answered, `status` the readiness) on its first pass and each time the
+hold changes. Measured on the
 host against a fake Platform SDK (`src/quest/tests/login_prerequisites_test.cpp`); not run on a
 device.
 
@@ -1703,7 +1710,9 @@ slots (`integration_hooks_test` runs the sequence against the real registration 
 `IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
 (token auth Ready with an access token and a NEVR account) and clear it in every other state, so a
-stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). It can trail a state
+stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). The same observation publishes
+the hold (`IdentitySource::HoldsAnswers`, `TokenIdentitySource::HoldsFor`) in the same store of the attempt gate;
+the local answers are held only while it is set and the gate is neither ready nor poisoned. Both can trail a state
 change by up to one poll period (2 s).
 
 **Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth

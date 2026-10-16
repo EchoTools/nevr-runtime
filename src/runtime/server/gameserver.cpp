@@ -206,6 +206,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 
   m_context->Initialize(lobby, broadcaster);
   m_context->FinalizeInitialization();
+  m_reconnectPending.store(false, std::memory_order_release);
+  m_reconnectRegistrationEnabled.store(true, std::memory_order_release);
 
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
@@ -242,6 +244,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 }
 
 VOID GameServerLib::Terminate() {
+  m_reconnectRegistrationEnabled.store(false, std::memory_order_release);
+  m_reconnectPending.store(false, std::memory_order_release);
   g_activeServerLib.store(nullptr, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] terminating game server");
   m_context->Terminate();
@@ -278,6 +282,12 @@ VOID GameServerLib::Update() {
   // is unregistered and about to exit; skip the rest of the frame rather than
   // process ServerDB traffic for a server that no longer exists.
   if (m_gameThreadHandoff.Service()) return;
+
+  if (m_reconnectPending.exchange(false, std::memory_order_acq_rel) &&
+      m_reconnectRegistrationEnabled.load(std::memory_order_acquire) &&
+      m_wsClient && m_wsClient->IsConnected()) {
+    ProcessPendingReconnect();
+  }
 
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
@@ -324,6 +334,9 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
         "[NEVR.GAMESERVER] BeginGracefulShutdown already in progress — ignoring redundant call");
     return;
   }
+
+  m_reconnectRegistrationEnabled.store(false, std::memory_order_release);
+  m_reconnectPending.store(false, std::memory_order_release);
 
   // Prevent further reconnection attempts so the next disconnect is final.
   if (m_wsClient) m_wsClient->DisableReconnection();

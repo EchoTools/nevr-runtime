@@ -1,0 +1,278 @@
+"""A stripped PE and its split-off symbol file match by .gnu_debuglink name and CRC32 (tools/verify_symbols.py).
+
+StrippedBinaryMatchesItsSymbolsTest puts a tiny mingw executable through the same objcopy/strip sequence the
+dist target in CMakeLists.txt runs and skips when no mingw compiler is installed. SyntheticPairTest builds
+minimal PE images in the test, needs no toolchain and never reads a build output."""
+from __future__ import annotations
+
+import shutil
+import struct
+import subprocess
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+TOOL = REPO / "tools" / "verify_symbols.py"
+GCC = shutil.which("x86_64-w64-mingw32-gcc")
+OBJCOPY = shutil.which("x86_64-w64-mingw32-objcopy")
+STRIP = shutil.which("x86_64-w64-mingw32-strip")
+
+
+def verify(binary: Path, symbols: Path):
+    return subprocess.run(["python3", "-I", str(TOOL), str(binary), str(symbols)], capture_output=True, text=True)
+
+
+class DistCmakeSequenceTest(unittest.TestCase):
+    def test_dist_splits_symbols_before_stripping_and_links_after(self):
+        cmake = (REPO / "CMakeLists.txt").read_text()
+        section = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
+        for name in ("BugSplat64.dll", "echovr_server.exe"):
+            keep = section.index(f'--only-keep-debug "${{DIST_STAGE_DIR}}/{name}" "${{DIST_SYMBOLS_DIR}}/{name}.dbg"')
+            strip = section.index(f'--strip-all "${{DIST_STAGE_DIR}}/{name}"')
+            link = section.index(f'"--add-gnu-debuglink=${{DIST_SYMBOLS_DIR}}/{name}.dbg" "${{DIST_STAGE_DIR}}/{name}"')
+            self.assertLess(keep, strip, name)
+            self.assertLess(strip, link, name)
+
+
+def make_pe(sections: list[tuple[str, bytes]], nsyms: int = 0) -> bytes:
+    """A minimal PE/COFF image: DOS stub pointer, PE signature, COFF header, section table, section data, then
+    a COFF symbol table of nsyms 18-byte records and a string table that carries the long section names."""
+    strings = b""
+    names = []
+    for name, _ in sections:
+        if len(name) <= 8:
+            names.append(name.encode().ljust(8, b"\0"))
+        else:
+            names.append(b"/" + str(4 + len(strings)).encode().ljust(7, b"\0"))
+            strings += name.encode() + b"\0"
+    header = 0x40 + 4 + 20 + 40 * len(sections)
+    data, table, offset = b"", b"", header
+    for (_, payload), raw in zip(sections, names):
+        table += struct.pack("<8sIIIIIIHHI", raw, len(payload), 0, len(payload), offset, 0, 0, 0, 0, 0)
+        data += payload
+        offset += len(payload)
+    coff = struct.pack("<HHIIIHH", 0x8664, len(sections), 0, offset, nsyms, 0, 0x2022)
+    dos = b"MZ" + b"\0" * 0x3A + struct.pack("<I", 0x40)
+    return (dos + b"PE\0\0" + coff + table + data + b"\x01" * (18 * nsyms)
+            + struct.pack("<I", 4 + len(strings)) + strings)
+
+
+def debuglink(name: str, target: bytes) -> bytes:
+    """The .gnu_debuglink payload: NUL-terminated name padded to 4 bytes, then the CRC32 of the symbol file."""
+    raw = name.encode() + b"\0"
+    return raw.ljust((len(raw) + 3) & ~3, b"\0") + struct.pack("<I", zlib.crc32(target) & 0xFFFFFFFF)
+
+
+class SyntheticPairTest(unittest.TestCase):
+    """verify_symbols against hand-built PEs: every check has a fixture that trips only that check."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="verify-symbols-synth-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def pair(self, dbg_sections=None, dbg_nsyms=3, pe_sections=None, pe_nsyms=0, link=None):
+        dbg_bytes = make_pe(dbg_sections if dbg_sections is not None else [(".debug_info", b"dwarf")], dbg_nsyms)
+        dbg = self.dir / "t.exe.dbg"
+        dbg.write_bytes(dbg_bytes)
+        sections = pe_sections if pe_sections is not None else [
+            (".text", b"code"), (".gnu_debuglink", link if link is not None else debuglink("t.exe.dbg", dbg_bytes))]
+        exe = self.dir / "t.exe"
+        exe.write_bytes(make_pe(sections, pe_nsyms))
+        return exe, dbg
+
+    def assert_one_line(self, result, filename, reason):
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        lines = result.stderr.splitlines()
+        self.assertEqual(len(lines), 1, result.stderr)
+        self.assertTrue(lines[0].startswith(f"verify_symbols: {filename}: "), lines[0])
+        self.assertIn(reason, lines[0])
+
+    def test_a_split_pair_with_dwarf_and_function_names_matches(self):
+        result = verify(*self.pair())
+        self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
+
+    def test_a_symbol_file_without_dwarf_is_refused(self):
+        result = verify(*self.pair(dbg_sections=[(".text", b"code")]))
+        self.assert_one_line(result, "t.exe.dbg", "carries no DWARF sections")
+
+    def test_a_symbol_file_with_an_empty_coff_symbol_table_is_refused(self):
+        result = verify(*self.pair(dbg_nsyms=0))
+        self.assert_one_line(result, "t.exe.dbg", "COFF symbol table is empty")
+
+    def test_a_symbol_file_whose_symbol_table_runs_past_the_file_is_refused(self):
+        exe, dbg = self.pair(dbg_sections=[(".debug_a", b"dwarf")])  # 8 chars: no string table needed
+        blob = bytearray(dbg.read_bytes())
+        struct.pack_into("<I", blob, 0x40 + 16, 3000)  # NumberOfSymbols: 3000 declared, 3 present
+        dbg.write_bytes(bytes(blob))
+        # the debuglink CRC32 is of the file as built; relink so only the symbol table is wrong
+        exe.write_bytes(make_pe([(".text", b"code"), (".gnu_debuglink", debuglink("t.exe.dbg", bytes(blob)))]))
+        result = verify(exe, dbg)
+        self.assert_one_line(result, "t.exe.dbg", "runs past the end of the file")
+
+    def test_a_binary_that_still_carries_dwarf_is_refused(self):
+        exe, dbg = self.pair(pe_sections=[(".text", b"code"), (".debug_info", b"dwarf"),
+                                          (".gnu_debuglink", debuglink("t.exe.dbg", b""))])
+        self.assertIn("still carries DWARF sections", verify(exe, dbg).stderr)
+
+    def test_a_binary_that_still_carries_a_coff_symbol_table_is_refused(self):
+        result = verify(*self.pair(pe_nsyms=2))
+        self.assert_one_line(result, "t.exe", "still carries a COFF symbol table (2 symbols; not stripped)")
+
+    def test_a_binary_without_a_debuglink_is_refused(self):
+        result = verify(*self.pair(pe_sections=[(".text", b"code")]))
+        self.assert_one_line(result, "t.exe", "no .gnu_debuglink")
+
+    def test_a_debuglink_with_no_room_for_a_crc_is_refused_not_a_traceback(self):
+        for name, link in (("no-nul", b"t.exe.dbg"), ("no-crc", b"t.exe.dbg\0")):
+            with self.subTest(link=name):
+                self.assert_one_line(verify(*self.pair(link=link)), "t.exe", "too short")
+
+    def test_a_binary_that_is_not_a_pe_is_one_line_not_a_traceback(self):
+        exe, dbg = self.pair()
+        exe.write_text("#!/bin/sh\necho hi\n")
+        self.assert_one_line(verify(exe, dbg), "t.exe", "not a PE file (no MZ header)")
+
+    def test_a_pe_signature_that_is_missing_is_one_line(self):
+        exe, dbg = self.pair()
+        exe.write_bytes(b"MZ" + b"\0" * 0x3A + struct.pack("<I", 0x40) + b"XX\0\0" + b"\0" * 64)
+        self.assert_one_line(verify(exe, dbg), "t.exe", "no PE signature")
+
+    def test_a_symbol_file_that_is_not_a_pe_is_one_line(self):
+        exe, dbg = self.pair()
+        dbg.write_bytes(b"\x7fELF" + b"\0" * 60)
+        self.assert_one_line(verify(exe, dbg), "t.exe.dbg", "not a PE file")
+
+    def test_a_missing_symbol_file_is_one_line(self):
+        exe, dbg = self.pair()
+        dbg.unlink()
+        self.assert_one_line(verify(exe, dbg), "t.exe.dbg", "cannot read")
+
+    def test_a_missing_binary_is_one_line(self):
+        exe, dbg = self.pair()
+        exe.unlink()
+        self.assert_one_line(verify(exe, dbg), "t.exe", "cannot read")
+
+    def test_a_file_cut_off_inside_a_section_is_one_line(self):
+        exe, dbg = self.pair()
+        exe.write_bytes(make_pe([(".text", b"code" * 8)])[:0x40 + 4 + 20 + 40 + 10])  # 10 of 32 data bytes
+        self.assert_one_line(verify(exe, dbg), "t.exe", "section .text runs")
+
+    def test_a_file_cut_off_inside_the_headers_is_one_line(self):
+        exe, dbg = self.pair()
+        exe.write_bytes(exe.read_bytes()[:0x40 + 4 + 20 + 40 + 10])  # second section entry is incomplete
+        self.assert_one_line(verify(exe, dbg), "t.exe", "truncated file")
+
+    def test_a_tree_with_a_file_that_is_not_a_pe_names_it_and_does_not_traceback(self):
+        exe, dbg = self.pair()
+        package, symbols = self.dir / "pkg", self.dir / "syms"
+        package.mkdir()
+        symbols.mkdir()
+        (package / "bad.dll").write_text("text, not a PE\n")
+        (symbols / "bad.dll.dbg").write_bytes(dbg.read_bytes())
+        result = subprocess.run(["python3", "-I", str(TOOL), "--tree", str(package), str(symbols)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("verify_symbols: bad.dll: not a PE file (no MZ header)", result.stderr)
+
+
+@unittest.skipUnless(GCC and OBJCOPY and STRIP, "no mingw toolchain")
+class StrippedBinaryMatchesItsSymbolsTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="verify-symbols-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        (self.dir / "t.c").write_text("int main(void){return 0;}\n")
+        subprocess.run([GCC, "-g", "-o", str(self.dir / "full.exe"), str(self.dir / "t.c")], check=True)
+        self.exe, self.dbg = self.dir / "t.exe", self.dir / "t.exe.dbg"
+        shutil.copy(self.dir / "full.exe", self.exe)
+        subprocess.run([OBJCOPY, "--only-keep-debug", str(self.exe), str(self.dbg)], check=True)
+        subprocess.run([STRIP, "--strip-all", str(self.exe)], check=True)
+
+    def test_a_release_build_without_dash_g_still_carries_function_names(self):
+        """The release preset has no -g: the symbol file is toolchain DWARF plus the COFF symbol table."""
+        subprocess.run([GCC, "-O3", "-o", str(self.exe), str(self.dir / "t.c")], check=True)
+        subprocess.run([OBJCOPY, "--only-keep-debug", str(self.exe), str(self.dbg)], check=True)
+        subprocess.run([STRIP, "--strip-all", str(self.exe)], check=True)
+        self.link()
+        result = verify(self.exe, self.dbg)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def link(self):
+        subprocess.run([OBJCOPY, f"--add-gnu-debuglink={self.dbg}", str(self.exe)], check=True)
+
+    def test_a_split_stripped_linked_pair_matches(self):
+        self.link()
+        result = verify(self.exe, self.dbg)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_symbol_file_that_changed_after_linking_does_not_match(self):
+        self.link()
+        with self.dbg.open("ab") as f:
+            f.write(b"x")
+        result = verify(self.exe, self.dbg)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CRC32", result.stderr)
+
+    def test_a_stripped_binary_without_a_debuglink_is_refused(self):
+        result = verify(self.exe, self.dbg)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no .gnu_debuglink", result.stderr)
+
+    def test_a_binary_that_still_carries_dwarf_is_refused(self):
+        result = verify(self.dir / "full.exe", self.dbg)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not stripped", result.stderr)
+
+    def tree(self, name="pkg"):
+        package, symbols = self.dir / name, self.dir / (name + "-symbols")
+        package.mkdir()
+        symbols.mkdir()
+        return package, symbols
+
+    def tree_run(self, package, symbols):
+        return subprocess.run(["python3", "-I", str(TOOL), "--tree", str(package), str(symbols)],
+                              capture_output=True, text=True)
+
+    def test_a_package_tree_passes_when_every_pe_matches_its_symbol_file(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "t.exe")
+        shutil.copy(self.dbg, symbols / "t.exe.dbg")
+        (package / "install.ps1").write_text("not a PE\n")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_package_tree_with_an_unstripped_pe_is_refused(self):
+        package, symbols = self.tree()
+        shutil.copy(self.dir / "full.exe", package / "t.exe")
+        shutil.copy(self.dbg, symbols / "t.exe.dbg")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not stripped", result.stderr)
+
+    def test_a_package_tree_with_a_pe_that_has_no_symbol_file_is_refused(self):
+        self.link()
+        package, symbols = self.tree()
+        shutil.copy(self.exe, package / "t.exe")
+        result = self.tree_run(package, symbols)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no symbol file", result.stderr)
+
+    def test_an_empty_package_tree_is_refused(self):
+        package, symbols = self.tree()
+        self.assertEqual(self.tree_run(package, symbols).returncode, 1)
+
+    def test_a_link_to_another_file_name_is_refused(self):
+        self.link()
+        other = self.dir / "other.dbg"
+        shutil.copy(self.dbg, other)
+        result = verify(self.exe, other)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("names 't.exe.dbg'", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

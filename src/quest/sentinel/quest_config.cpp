@@ -40,17 +40,23 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-// Feature names that existed and are gone. A file that still names one is told so, by name: the name is one of
+// Retired feature names: no build reads them. A file that names one is told so, by name and why: the name is one of
 // ours, so logging it leaks nothing a file could supply. Anything else unknown is only counted.
-constexpr std::array<const char*, 1> kRetiredFeatures = {"self_check"};  // self-checks are on in every build (#451)
+struct RetiredFeature {
+  const char* name;
+  const char* why;
+};
+constexpr std::array<RetiredFeature, 2> kRetiredFeatures = {{
+    {"self_check", "self-checks are on in every build"},  // #451
+    {"obb_skip", "the OBB mount is skipped on every launch"},  // #572
+}};
 
-constexpr std::array<FeatureSpec, 8> kFeatures = {{
+constexpr std::array<FeatureSpec, 7> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
     {"social", Feature::kSocial, &Features::social},
     {"hwdump", Feature::kHwDump, &Features::hwdump},
-    {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
 }};
@@ -98,6 +104,9 @@ const char* KnownName(const std::string& name) {
   }
   for (const FeatureSpec& f : kFeatures) {
     if (name == f.name) return f.name;
+  }
+  for (const RetiredFeature& gone : kRetiredFeatures) {
+    if (name == gone.name) return gone.name;
   }
   return "<unknown>";
 }
@@ -233,9 +242,9 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
     }
     if (spec == nullptr) {
       bool retired = false;
-      for (const char* name : kRetiredFeatures) {
-        if (item.key() == name) {
-          warn(std::string("config file feature=") + name + " retired ignored (self-checks are on in every build)");
+      for (const RetiredFeature& gone : kRetiredFeatures) {
+        if (item.key() == gone.name) {
+          warn(std::string("config file feature=") + gone.name + " retired ignored (" + gone.why + ")");
           retired = true;
         }
       }

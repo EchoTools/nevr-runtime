@@ -388,6 +388,10 @@ int LoopbackGameServer::AcceptPending(bool* resourceBlocked, bool* identityLost)
       conn->id = nextId_++;
       conns_[conn->id] = conn;
     }
+    {
+      const std::lock_guard<std::mutex> lock(openOrderMutex_);
+      pending_.insert(conn->id);  // accept order: ids are taken under mutex_ above, one accept thread
+    }
     nlohmann::json record = Record(kConnEvent, "accepted");
     record["conn"] = conn->id;
     record["open"] = count + 1;
@@ -482,6 +486,15 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   const GameId id = conn->id;
   const auto started = std::chrono::steady_clock::now();
   bool opened = false;
+  // This id entered pending_ at accept. It leaves when its open has been reported to the router, or the
+  // connection ends without one; every connection accepted after it waits for that before reporting its own.
+  auto releaseOpenTurn = [&] {
+    {
+      const std::lock_guard<std::mutex> lock(openOrderMutex_);
+      pending_.erase(id);
+    }
+    openOrderCv_.notify_all();
+  };
   bool open = true;
   const char* endReason = nullptr;  // a fixed token; set where the loop decides to end
   std::string inbox;               // handshake bytes
@@ -649,7 +662,32 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         record["handshake_ms"] = MillisSince(started);
         Log(LogLevel::Info, Dump(record));
       }
+      if (config_.beforeOpenHook) config_.beforeOpenHook(id);
+      {
+        // The router gives a connection its role from the order opens reach it, so opens are reported in
+        // ACCEPT order: wait until every earlier-accepted connection has reported or ended. An earlier one
+        // that is still handshaking ends itself within handshakeTimeoutMs, and one past its handshake is
+        // already running toward its report, so this wait ends without a clock. It never goes ahead out of
+        // order; if an earlier connection has not resolved after the handshake time plus the close-flush
+        // time, that is said once, naming both ids, and the wait goes on.
+        const auto slow = std::chrono::milliseconds(config_.handshakeTimeoutMs + config_.closeFlushTimeoutMs);
+        std::unique_lock<std::mutex> lock(openOrderMutex_);
+        bool said = false;
+        const auto inOrder = [&] { return stop_.load() || pending_.empty() || *pending_.begin() >= id; };
+        while (!openOrderCv_.wait_for(lock, slow, inOrder)) {
+          if (said) continue;
+          said = true;
+          nlohmann::json record = Record(kConnEvent, "open_order_wait_slow");
+          record["conn"] = id;
+          record["waiting_on_conn"] = *pending_.begin();
+          record["after_ms"] = static_cast<int64_t>(slow.count());
+          lock.unlock();
+          Log(LogLevel::Warning, Dump(record));
+          lock.lock();
+        }
+      }
       router_->OnGameOpen(id);
+      releaseOpenTurn();
       const std::string leftover = inbox.substr(request.consumed);
       inbox.clear();
       if (!leftover.empty()) decoder.Feed(leftover.data(), leftover.size());
@@ -708,6 +746,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     }
   }
 
+  releaseOpenTurn();  // a connection that ends without an open must not hold the line
   if (endReason == nullptr) endReason = stop_ ? "server_stopped" : "unknown";
   nlohmann::json record = Record(kConnEvent, "ended");
   record["conn"] = id;

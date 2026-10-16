@@ -54,6 +54,18 @@ TEST(CrashRecoveryReadableMemory, RejectsCommittedNoAccessPages) {
   EXPECT_NE(VirtualFree(page, 0, MEM_RELEASE), FALSE);
 }
 
+TEST(CrashRecoveryReadableMemory, RejectsCommittedGuardPagesWithoutTouchingThem) {
+  void* page = VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  ASSERT_NE(page, nullptr);
+  DWORD oldProtection = 0;
+  ASSERT_NE(VirtualProtect(page, 4096, PAGE_READWRITE | PAGE_GUARD, &oldProtection), FALSE);
+  EXPECT_FALSE(nevr_crash_recovery::IsReadableMemory(page, 1));
+  MEMORY_BASIC_INFORMATION info = {};
+  ASSERT_NE(VirtualQuery(page, &info, sizeof(info)), 0U);
+  EXPECT_NE(info.Protect & PAGE_GUARD, 0U);
+  EXPECT_NE(VirtualFree(page, 0, MEM_RELEASE), FALSE);
+}
+
 TEST(CrashDumpFormat, AccessViolationIncludesCodeAddressAndGameModule) {
   char line[256] = {};
   const int written = nevr_crash_recovery::FormatCrashExceptionSummary(
@@ -115,8 +127,7 @@ TEST(ConsoleCtrlPolicy, NoDeferReasonNamesTheMissingPrecondition) {
   EXPECT_STREQ(nevr_console_ctrl_policy::NoDeferReason(false, true), "no game console handler behind ours");
 }
 
-// #339: the boot line states what InstallVEH did, per platform. The Wine client skips the handler
-// and must not log "veh installed".
+// The early Wine decision is deferred until CLI preflight identifies server mode.
 TEST(VehPolicy, InstallsOnServersAndNativeClientsOnly) {
   EXPECT_TRUE(nevr_veh_policy::ShouldInstall(/*isServer=*/true, /*isWineClient=*/false));
   EXPECT_TRUE(nevr_veh_policy::ShouldInstall(/*isServer=*/true, /*isWineClient=*/true));
@@ -125,11 +136,24 @@ TEST(VehPolicy, InstallsOnServersAndNativeClientsOnly) {
 }
 
 TEST(VehPolicy, BootLineSaysInstalledOnlyWhenInstalled) {
-  EXPECT_STREQ(nevr_veh_policy::BootLine(true), "[NEVR.CRASH] veh installed\n");
-  EXPECT_STREQ(nevr_veh_policy::BootLine(false), "[NEVR.CRASH] veh skipped reason=wine_client\n");
+  using nevr_veh_policy::InstallResult;
+  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Installed), "[NEVR.CRASH] veh installed\n");
+  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::DeferredWine),
+               "[NEVR.CRASH] veh deferred reason=wine_cli_unknown\n");
+  EXPECT_STREQ(nevr_veh_policy::BootLine(InstallResult::Failed), "[NEVR.CRASH] veh install failed\n");
 }
 
 TEST(VehPolicy, WineClientBootLineNeverClaimsInstalled) {
-  const bool installed = nevr_veh_policy::ShouldInstall(/*isServer=*/false, /*isWineClient=*/true);
-  EXPECT_EQ(std::string(nevr_veh_policy::BootLine(installed)).find("veh installed"), std::string::npos);
+  EXPECT_EQ(std::string(nevr_veh_policy::BootLine(nevr_veh_policy::InstallResult::DeferredWine))
+                .find("veh installed"), std::string::npos);
+}
+
+TEST(VehPolicy, RecoversLowAddressAvOnlyOnTheGameLoopThread) {
+  using nevr_veh_policy::ShouldRecoverNullPointerAv;
+  EXPECT_TRUE(ShouldRecoverNullPointerAv(true, 0x10, true, 42, 42));
+  EXPECT_FALSE(ShouldRecoverNullPointerAv(true, 0x10, true, 43, 42));
+  EXPECT_FALSE(ShouldRecoverNullPointerAv(true, 0x10, true, 42, 0));
+  EXPECT_FALSE(ShouldRecoverNullPointerAv(true, 0x10, false, 42, 42));
+  EXPECT_FALSE(ShouldRecoverNullPointerAv(false, 0x10, true, 42, 42));
+  EXPECT_FALSE(ShouldRecoverNullPointerAv(true, 0x10000, true, 42, 42));
 }
