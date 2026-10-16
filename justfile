@@ -1724,7 +1724,7 @@ verify:
         echo "An allocation after gameArg throws leaves the game the stripped string while the log says the original." >&2
         exit 1
     fi
-    if [ "$(grep -cF 'gameArg = arg1;' <<<"$N125_CR")" -lt 2 ]; then
+    if [ "$(grep -cE '^[[:space:]]+gameArg = arg1;' <<<"$N125_CR")" -lt 2 ]; then
         echo "verify: FAIL — #515 sensor: the exception handlers no longer put gameArg back to arg1." >&2
         exit 1
     fi
