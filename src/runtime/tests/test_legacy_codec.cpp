@@ -107,7 +107,7 @@ TEST(LegacySymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
       {"SNSLobbySessionFailurev2", lc::kSNSLobbySessionFailurev2},
       {"SNSLobbySessionSuccessv5", lc::kSNSLobbySessionSuccessv5},
       {"SNSLobbySessionFailurev4", lc::kSNSLobbySessionFailurev4},
-      {"SNSConfigSuccessv2", lc::kSNSConfigSuccessv2},
+      {"SNSConfigSuccessv2", nevr_evr_codec::kSymConfigSuccess},
       {"SNSReconcileIAP", lc::kSNSReconcileIAP},
       {"SNSReconcileIAPResult", lc::kSNSReconcileIAPResult},
       {"SNSLobbyMatchmakerStatus", lc::kSNSLobbyMatchmakerStatus},
@@ -364,7 +364,7 @@ TEST(LegacyLocal, LeaderboardRequestIsAnsweredWithAnEmptyBoardUnderTheSameTag) {
 TEST(LegacyConfig, ConfigAndReconcileRowsPassThroughBothWays) {
   const lc::Context ctx = MakeContext();
   for (const uint64_t symbol :
-       {nevr_evr_codec::kSymConfigRequest, lc::kSNSConfigSuccessv2, nevr_evr_codec::kSymConfigFailure,
+       {nevr_evr_codec::kSymConfigRequest, nevr_evr_codec::kSymConfigSuccess, nevr_evr_codec::kSymConfigFailure,
         lc::kSNSReconcileIAP, lc::kSNSReconcileIAPResult, nevr_evr_codec::kSymMatchmakerStatusRequest,
         lc::kSNSLobbyMatchmakerStatus, lc::kSNSLobbyPlayerSessionsSuccessv3}) {
     EXPECT_EQ(lc::LegacyToCurrent(symbol, "x", ctx, ProfileV2()).outcome, lc::Outcome::Passthrough)

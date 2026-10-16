@@ -6,20 +6,32 @@
 // no TLS, no game state, no logging backend. Adapters supply the two transports and the login frame;
 // the router owns the rules:
 //
-//   * connection identity: a connection's role is named by its FIRST data frame (ClassifyFirstFrame):
-//     SNSConfigRequestv2 is config, the lobby requests are matchmaker, LogInRequestv2 is login. Until that
-//     frame arrives the role is provisional, by connection order: the Nth connection is config (0), login
-//     (1) or matchmaker (2+), so the remote can open before the game has said anything. The login
-//     connection owns a remote session; matchmaker connections attach to that same remote session (Nakama
-//     correlates a matchmaker allocation with the login session). A first frame that contradicts the
-//     provisional role moves the connection to the role the frame names.
-//   * server-to-game routing on the shared login session is by role, never to whichever socket spoke last:
+//   * connection identity: an adapter that knows a connection's role says so when the connection opens
+//     (OpenHint: the PC bridge reads the request target and the listener). A hinted role is final: a first frame
+//     that contradicts it is logged once at Warning and not acted on. Without a hint (Quest) a connection's role
+//     is named by its FIRST data frame (ClassifyFirstFrame): SNSConfigRequestv2 is config, the lobby requests are
+//     matchmaker, LogInRequestv2 is login. Until that frame arrives the role is provisional, by connection order:
+//     the Nth connection is config (0), login (1) or matchmaker (2+), so the session can open before the game has
+//     said anything. A first frame that corrects the provisional role relabels the connection IN PLACE on the
+//     session it already shares: nothing is released, closed or re-attached.
+//   * one session: config, login and matchmaker connections share ONE remote session (RemoteOpenRequest::session).
+//     It is opened by the first config or login connection, and a matchmaker attaches to it once a login
+//     connection has been attached (Nakama correlates a matchmaker allocation with the login session). A
+//     matchmaker that arrives with no login connection yet, or with no session, keeps a remote of its own
+//     (standaloneMatchmaker); that remote is never the session. A connection closing never ends the session; the
+//     session ends when its remote ends (see "remote end").
+//   * server-to-game routing on the session is by role, never to whichever socket spoke last:
 //     replies to login-connection requests (and the settings that follow a login) go to the login
-//     connection, lobby traffic to the newest matchmaker connection, and an STcpConnectionUnrequireEvent to
-//     the connection whose reply it follows, only while that connection has a request outstanding (the game's
-//     own count wraps otherwise; see TakeUnrequireLocked); one with nothing to lower is dropped.
-//   * login injection: exactly once per login session, before any frame the game queued while the
-//     remote was still opening, from a caller-supplied builder (the router never sees a token).
+//     connection; SNSConfigSuccessv2 and SNSConfigFailurev2 go to the config connection whose request is next in
+//     the session's FIFO of forwarded config requests (the service answers a session's requests in order), and
+//     are dropped and counted (Stats::configRepliesOrphaned) when that connection has closed; lobby traffic goes
+//     to the newest matchmaker connection; and an STcpConnectionUnrequireEvent goes to the connection whose reply
+//     it follows, only while that connection has a request outstanding (the game's own count wraps otherwise; see
+//     TakeUnrequireLocked); one with nothing to lower is dropped.
+//   * login injection: exactly once per session, from a caller-supplied builder (the router never sees a token),
+//     when a login connection is attached to an OPEN session that has not sent one: at attach or at open,
+//     whichever comes second. Frames of the connections attached to the session queue behind it (a config
+//     connection's pass), and a closing connection's queued frames leave the queue with it.
 //   * login removal notice (Options::loginRemovedJson, Quest): the game sends its own login and, when the login
 //     session ends under it (a remote failure) with nothing outstanding on a login socket that is still
 //     open, its login socket reconnects WITHOUT a new login (an established count-0 socket raises no Lost
@@ -33,18 +45,19 @@
 //     token. A login connection that ended with requests outstanding is the game's Lost path (-95, RETRY):
 //     nothing is armed for it. What is kept is the 16-byte account id of the last LoginSuccess, cleared on any
 //     LogOut, a rejected login and Shutdown.
-//   * ordering: frames reach the remote in the order they arrived; the login request is first.
-//   * remote end (close or error): every game socket on that session is closed and the session is
-//     forgotten, so the game's next connection is a new login rather than a matchmaker.
-//   * a held login: while the wiring says the account the login needs is still being obtained
-//     (Options::loginGate answers Awaiting) the login connection's remote is not opened, and the connection
-//     is neither failed nor closed. When the gate
-//     answers Ready the remote opens and the frames the game queued meanwhile follow; when it answers Refused
-//     the hold ends with a close. Config and matchmaker connections are never held: with no account they fail
-//     at once.
+//   * ordering: frames reach the remote in the order they arrived; an injected login request is first.
+//   * remote end (close or error): every game socket on that session, config included, is closed and the
+//     session is forgotten, so the game's next connection is a new login rather than a matchmaker.
+//   * a held session: while the wiring says the account the login needs is still being obtained
+//     (Options::loginGate answers Awaiting) the session remote is not opened, whichever connection opened the
+//     session, and the connections on it are neither failed nor closed; their frames queue. When the gate
+//     answers Ready the remote opens and the queued frames follow; when it answers Refused the hold ends with a
+//     close of every connection on the session (kCloseInternalError). A standalone matchmaker is never held.
 //   * the login connection is silent until the game sends its LogInRequest, however long the player takes, so
 //     the transport is told (GameTransport::SetIdleExempt) not to close it for sending nothing, held or not,
-//     for as long as it is the login connection.
+//     for as long as its role is login, provisional or confirmed. A relabel moves the exemption with the role: a
+//     provisional login that proves to be config drops it, and the real login takes it once its first frame
+//     names it.
 //   * limits: an oversized frame, an unbounded wait for a remote that never opens and a transport that
 //     never drains are each ended with a named close code and one log line, never silently dropped.
 //
@@ -70,6 +83,7 @@
 #include <vector>
 
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/socket_role.h"
 
 namespace nevr_session_router {
 
@@ -78,12 +92,14 @@ using RemoteId = uint64_t;  // one remote session; never reused within a Router
 inline constexpr GameId kNoGame = 0;
 inline constexpr RemoteId kNoRemote = 0;
 
-enum class Role { Config, Login, Matchmaker };
-const char* RoleName(Role role);
+// One role type for the router and the PC bridge's RoleTable.
+using Role = nevr_socket_role::Role;
+using nevr_socket_role::RoleName;
 
 // What the adapter knows about a connection when it opens, before the game has sent a frame. PC knows the
 // role from the request target (/config, /login) or the listener; Quest knows nothing and leaves `hinted`
-// false. A hinted role is final. Declared for #578; the router does not read it yet.
+// false. A hinted role is final: a first frame that contradicts it is logged, not acted on. The matchmaker cap
+// counts a connection by its hint.
 struct OpenHint {
   Role role = Role::Config;
   bool hinted = false;
@@ -107,6 +123,8 @@ enum class SendResult {
 Role ClassifyFirstFrame(uint64_t symbol);
 // True for the server-to-game messages that answer a request made on the login connection.
 bool IsLoginSessionReply(uint64_t symbol);
+// True for SNSConfigSuccessv2 and SNSConfigFailurev2: the answers to a config connection's request.
+bool IsConfigSessionReply(uint64_t symbol);
 // True when a message the game sends on a connection of role `role` raises the connection's
 // outstanding-request count (the game sends it with the require flag). The service's
 // STcpConnectionUnrequireEvent lowers it; the game's count is 8 bits and wraps below zero.
@@ -131,10 +149,11 @@ struct RemoteOpenRequest {
   RemoteId remote = kNoRemote;
   int connIdx = -1;
   Role role = Role::Config;
-  // True when a matchmaker connection found no login session to share and needs its own remote.
+  // True when a matchmaker connection found no session with a login connection to share and needs its own
+  // remote. Such a remote is never the session.
   bool standaloneMatchmaker = false;
-  // True when this remote is the session remote that config, login and matchmaker connections share.
-  // Declared for #578; the router does not set it yet.
+  // True when this remote is the session remote that config, login and matchmaker connections share. The
+  // opener's role is `role`, which may be config or login.
   bool session = false;
 };
 
@@ -156,7 +175,7 @@ using LogSink = std::function<void(LogLevel level, const std::string& line)>;
 using LoginFrameBuilder = std::function<std::optional<std::string>()>;
 
 // Whether the account a login needs is available. Awaiting: not yet (the player has not signed in); the
-// login connection is held. Ready: it is. Refused: it will not be (the sign-in failed for good).
+// session is held. Ready: it is. Refused: it will not be (the sign-in failed for good).
 enum class LoginGate { Ready, Awaiting, Refused };
 // Called with the router lock held, from OnGameOpen/OnGameFrame/ReevaluateHeldLogins: it must be a lock-free
 // read of a flag the wiring keeps current (never the token session itself), and must not call the router.
@@ -167,7 +186,7 @@ struct Limits {
   std::size_t maxPendingFrames = 256;                   // game frames waiting for a remote to open
   std::size_t maxPendingBytes = 4u * 1024u * 1024u;
   std::size_t maxOutboundBytes = 4u * 1024u * 1024u;    // frames a full transport has not taken yet
-  std::size_t maxMatchmakerConnections = 8;             // live matchmaker connections sharing the login session
+  std::size_t maxMatchmakerConnections = 8;             // live matchmaker connections (counted by role, hinted or not)
 };
 
 // Injection is OFF unless the wiring turns it on, and is mutually exclusive with a game that sends its own
@@ -190,7 +209,7 @@ struct Stats {
   std::size_t remotes = 0;
   std::size_t pendingFrames = 0;  // across all remotes
   std::size_t outboundBytes = 0;  // to remotes and to games
-  std::size_t heldRemotes = 0;    // login remotes waiting for the account (not opened yet)
+  std::size_t heldRemotes = 0;    // session remotes waiting for the account (not opened yet)
   int nextConnIdx = 0;
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
@@ -201,8 +220,8 @@ struct Stats {
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
   uint64_t unmatchedEmbeddedUnrequires = 0;
-  // Config replies whose requesting socket had closed, dropped rather than sent to its replacement.
-  // Declared for #578; the router does not count them yet.
+  // Config replies whose requesting socket had closed (or that no forwarded request is owed), dropped rather
+  // than sent to another socket.
   uint64_t configRepliesOrphaned = 0;
 };
 
@@ -214,6 +233,7 @@ class Router {
   Router& operator=(const Router&) = delete;
 
   // ---- events from the game side (the loopback listener) ----------------------------------------
+  // `hint.hinted`: the adapter names the role and it is final. Otherwise the role is provisional (by order).
   void OnGameOpen(GameId game, OpenHint hint = OpenHint());
   void OnGameFrame(GameId game, std::string frame, bool binary);
   void OnGameClose(GameId game);
@@ -232,8 +252,8 @@ class Router {
   void OnRemoteError(RemoteId remote, int status, std::string_view what);
   void OnRemoteWritable(RemoteId remote);
 
-  // Re-reads Options::loginGate for every held login: Ready opens the remote, Refused ends the hold with a
-  // close (kCloseInternalError). Call it whenever the wiring changes the gate's answer. Idempotent, cheap
+  // Re-reads Options::loginGate for every held session: Ready opens the remote, Refused ends the hold with a
+  // close of every connection on it (kCloseInternalError). Call it whenever the wiring changes the gate's answer. Idempotent, cheap
   // when nothing is held, safe from any thread.
   void ReevaluateHeldLogins();
 
@@ -246,6 +266,7 @@ class Router {
   struct Item {
     std::shared_ptr<const std::string> data;  // shared so a drainer can send without holding the lock
     bool binary = true;
+    GameId game = kNoGame;  // the connection that sent it (Remote::pending only): its frames leave with it
   };
   struct Outbox {
     std::deque<Item> queue;
@@ -259,6 +280,7 @@ class Router {
     RemoteId remote = kNoRemote;  // kNoRemote once its session ended
     bool closing = false;         // a close was issued; waiting for the transport's OnGameClose
     bool classified = false;      // the first data frame has named the role
+    bool hinted = false;          // the adapter named the role at open: it is final
     uint32_t required = 0;        // requests sent on the shared login session that await their Unrequire
     uint64_t noticeEpoch = 0;     // the loss this socket reconnected after (0: none was due when it opened)
     bool noticeSent = false;      // it was sent the login-removed notice (never twice)
@@ -267,11 +289,13 @@ class Router {
   struct Remote {
     int ownerConn = -1;  // connIdx of the connection that created it
     RemoteOpenRequest request;  // what Open was (or will be) called with
-    bool deferred = false;      // a held login: Open has not been called yet
+    bool deferred = false;      // a held session: Open has not been called yet
     bool open = false;
-    bool loginPending = false;  // open event seen, login builder running
+    bool loginPending = false;  // login builder running: frames of non-config connections queue behind it
     bool loginSent = false;
-    std::deque<Item> pending;  // game frames that arrived before the remote opened, in arrival order
+    bool loginAttached = false;  // a login connection has been attached (never cleared): a matchmaker may share
+    // Game frames that arrived before the remote opened or while the login is being built, in arrival order.
+    std::deque<Item> pending;
     std::size_t pendingBytes = 0;
     Outbox out;
   };
@@ -279,11 +303,23 @@ class Router {
 
   // All of these require mutex_ held (suffix Locked) and only record work in `fx`.
   void FailSessionLocked(RemoteId remote, uint16_t code, const char* why, bool closeRemote, Effects& fx);
+  // `from` is the game whose frame this is (kNoGame for a frame the router made). A config request from a game
+  // joins the session's FIFO of config requests.
   bool PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<const std::string> data, bool binary,
-                          Effects& fx);
+                          GameId from, Effects& fx);
   void FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx);
   void CloseGameLocked(GameId game, uint16_t code, const char* why, Effects& fx);
+  // Gives `g` (whose connIdx and role are set) its remote: the session, or a remote of its own.
   void AttachLocked(GameId game, Game& g, Effects& fx);
+  // Creates a remote for `g`; `session` makes it the session remote.
+  void OpenRemoteLocked(GameId game, Game& g, bool session, Effects& fx);
+  // Makes `game` the session's login connection; the previous one, if still open, rides it as a matchmaker.
+  void TakeOverLoginLocked(GameId game, Game& g, Effects& fx);
+  // Starts a login injection when a login connection is attached to the open session and none was sent.
+  void MaybeInjectLocked(Effects& fx);
+  bool LoginAttachedLocked(RemoteId remote) const;
+  // Removes the frames `game` queued on the remotes' pending queues (never an outbox).
+  void PurgePendingLocked(GameId game);
   bool GateAwaitingLocked() const;
   Role ProvisionalRoleLocked() const;
   void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
@@ -292,10 +328,9 @@ class Router {
   // reconnected gets it: the game drops it on any peer but its login peer (CNSUser::LoginRemovedCB).
   void SendLoginRemovedLocked(GameId game, Game& g, Effects& fx);
   void ForgetLoginUserLocked();
-  bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();
-  bool OnLoginSessionLocked(GameId id) const;
-  GameId RouteLoginSessionFrameLocked(const std::string& frame, bool* quietDrop);
+  bool OnSessionLocked(GameId id) const;
+  GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop);
   bool TakeUnrequireLocked(GameId target);
   void CountRequirementsLocked(Game& g, const std::string& frame);
   std::size_t LiveMatchmakersLocked() const;
@@ -303,6 +338,7 @@ class Router {
   void Log(Effects& fx, LogLevel level, std::string line);
 
   void Run(Effects& fx);  // executes recorded work with the mutex released
+  void BuildAndSendLogin(RemoteId remote);  // the builder runs here, with no lock held
   void DrainRemote(RemoteId remote);
   void DrainGame(GameId game);
 
@@ -315,9 +351,13 @@ class Router {
   std::unordered_map<RemoteId, Remote> remoteTable_;
   RemoteId nextRemote_ = 1;
   int connectionCount_ = 0;
-  RemoteId loginRemote_ = kNoRemote;
-  GameId loginGame_ = kNoGame;
-  GameId activeGame_ = kNoGame;   // the newest matchmaker connection on the login session
+  RemoteId sessionRemote_ = kNoRemote;  // the remote config, login and matchmaker connections share
+  GameId loginGame_ = kNoGame;          // the session's login connection (provisional or confirmed)
+  GameId activeGame_ = kNoGame;         // the newest matchmaker connection on the session
+  // The config connections whose requests went to the session remote and are not answered yet, in the order
+  // they went out: the service answers a session's requests in order, so a config reply takes the front.
+  std::deque<GameId> configOwners_;
+  uint64_t configRepliesOrphaned_ = 0;
   // The connections that owe an Unrequire for the messages the service paired with one, in the order those
   // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
   std::deque<GameId> owedUnrequires_;

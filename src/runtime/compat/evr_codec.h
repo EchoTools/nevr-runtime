@@ -80,7 +80,8 @@ inline constexpr uint64_t kSymTelemetryEvent = 0xf9bc2a364e230214ULL;           
 inline constexpr uint64_t kSymRemoteLogSet = 0x244b47685187eae1ULL;                 // SNSRemoteLogSetv3 (no require flag)
 // The service's answer to SNSChannelInfoRequest; the service follows it with an Unrequire.
 inline constexpr uint64_t kSymChannelInfoResponse = 0x6c8f16cd9f8964c5ULL;          // SNSChannelInfoResponse
-// A config reply on the config connection's own remote.
+// The service's answers to SNSConfigRequestv2, on the session remote; each is followed by an Unrequire.
+inline constexpr uint64_t kSymConfigSuccess = 0xb9cdaf586f7bd012ULL;                // SNSConfigSuccessv2
 inline constexpr uint64_t kSymConfigFailure = 0x9e687a63dddd3870ULL;                // SNSConfigFailurev2
 // A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
 inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
