@@ -1961,6 +1961,30 @@ void TestTheNinthHintedMatchmakerIsRefused() {
   QCHECK(rig.router->GetStats().games == 8);
 }
 
+// N5: a connection relabelled to matchmaker by its first frame is counted against the cap like one that
+// opened as a matchmaker. With the cap at 1 and a matchmaker already on the session, the provisional login
+// whose first frame is a lobby request is refused (closed with the cap's code) and its frame goes nowhere.
+// Failure caught: the cap bypassed by opening as login and relabelling.
+void TestRelabelToMatchmakerChecksTheCap() {
+  const CaseScope scope("relabel cap");
+  Options o;
+  o.limits.maxMatchmakerConnections = 1;
+  Rig rig(std::move(o));
+  OpenThree(rig);  // config 1, login 2, matchmaker 3: one matchmaker, at the cap
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(rig.games.Closes().empty());
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Matchmaker), true);  // the provisional login is a matchmaker
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1);
+  if (closes.size() == 1) {
+    QCHECK(closes[0].id == 2);
+    QCHECK(closes[0].code == kCloseTryAgainLater);
+  }
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymFindSessionRequest) == 0);  // the frame is not forwarded
+  QCHECK(rig.router->GetStats().droppedGameFrames == 1);
+}
+
 // A hinted role is final. A hinted config socket whose first frame is LogInRequestv2 stays config: the
 // contradiction is logged once, at Warning, and nothing is relabelled or taken over. The hinted login
 // socket keeps the exemption and the login replies, and the config socket still gets config replies.
@@ -2460,6 +2484,7 @@ int main() {
   TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames();
   TestTheNinthHintedMatchmakerIsRefused();
   TestAHintedConfigSocketThatSendsALoginStaysConfig();
+  TestRelabelToMatchmakerChecksTheCap();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
