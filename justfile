@@ -1691,8 +1691,7 @@ verify:
         exit 1
     fi
     sensor_515_need "$S515_CFG" 'nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField)' "ApplyServerTimestep must pass g_isServer and the configured rate to the step writer."
-    sensor_515_need "$S515_BOOT" 'nevr_server_timestep::ApplyFlag(' "boot.cpp must set the server's fixed-time-step flag before the original PreprocessCommandLine (#511)."
-    sensor_515_need "$S515_BOOT" 'g_isServer != FALSE,' "boot.cpp must pass g_isServer to the flag writer."
+    sensor_515_need "$S515_BOOT" 'nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);' "boot.cpp must set the server's fixed-time-step flag, with g_isServer, before the original PreprocessCommandLine (#511)."
     sensor_515_need "$S515_BOOT" '  LogTimestepArgs();' "boot.cpp must report what happened to the time-step arguments."
 
     # --- N123: the login display name must be SOURCED, not a literal -------------

@@ -103,11 +103,11 @@ void PreflightRuntimeBootstrap() {
 
   // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
   // when the local config loads (config.cpp, LoadLocalConfigHook). ApplyFlag leaves a client alone.
-  nevr_server_timestep::ApplyFlag(
-      g_isServer != FALSE,
+  UINT64* timestepFlags =
       g_pGame == nullptr ? nullptr
                          : reinterpret_cast<UINT64*>(reinterpret_cast<CHAR*>(g_pGame) +
-                                                     nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET));
+                                                     nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
+  nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);
 }
 
 }  // namespace
