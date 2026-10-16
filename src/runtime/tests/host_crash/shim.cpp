@@ -8,8 +8,7 @@
 // to initialize.
 
 #include "core/runtime_abi.h"
-#include "runtime/host/bootstrap_diagnostics.h"
-#include "runtime/host/crash_capture.h"
+#include "runtime/host/host_entry.h"
 #include "runtime/host/runtime_load.h"
 
 #include <windows.h>
@@ -20,8 +19,6 @@
 
 namespace {
 
-nevr_host::BootstrapDiagnostics g_diagnostics;
-nevr_host::CrashCapture g_capture;
 nevr_host::RuntimeLoader g_loader;
 
 std::uint64_t DummyOriginalPreprocess(void*) { return 0; }
@@ -56,7 +53,7 @@ __declspec(noinline) void ReentrancyProbe() {
 }  // namespace
 
 extern "C" void BugSplat_createReport(void*, PEXCEPTION_POINTERS exception_pointers) {
-  g_capture.Capture(exception_pointers);
+  nevr_host::CreateReport(exception_pointers);
 }
 
 extern "C" void nevr_host_test_SetCaptureProbe(const wchar_t* probe_path) {
@@ -72,8 +69,8 @@ extern "C" void nevr_host_test_SetFailWrites() {
 }
 
 extern "C" void nevr_host_test_Prepare(HMODULE host_module) {
-  g_diagnostics.Prepare(host_module);
-  g_capture.Prepare(host_module, &g_diagnostics);
+  // Launcher mode prepares the diagnostics and the capture and installs nothing.
+  nevr_host::OnProcessAttach(host_module, nullptr, true);
   g_loader.Prepare(host_module);
 }
 
@@ -85,7 +82,7 @@ extern "C" std::uint32_t nevr_host_test_LoadRuntime() {
   host.host_module = GetModuleHandleW(L"BugSplat64.dll");
   host.game_module = GetModuleHandleW(nullptr);
   host.original_preprocess = &DummyOriginalPreprocess;
-  g_loader.Load(host, g_diagnostics);
+  g_loader.Load(host, nevr_host::Diagnostics());
   return static_cast<std::uint32_t>(g_loader.Result().outcome);
 }
 

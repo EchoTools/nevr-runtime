@@ -77,6 +77,18 @@ initialization, a wrong timestamp and a wrong prologue. What it measured:
 
 The harness runs under Wine in `just verify`. It has not run on native Windows.
 
+The production path is `src/runtime/host/host_entry.cpp`, which the host's `DllMain`
+and its exports call (`OnProcessAttach`, `SetGameModule`, `CreateReport`,
+`OnCrashReporterConstructed`), and `runtime_rendezvous.cpp` (the detour,
+`InitOnce`-guarded load, the dispatch). `src/runtime/tests/rendezvous` drives those
+objects behind a `BugSplat64.dll` shim: server, repeated server call, client, missing
+runtime, same-thread re-entry from `initialize` and a wrong prologue, then
+`NEVR_SetGameModule` with a supported and an unsupported module. Each child asserts the
+ordered `host_attach` and `runtime_load` records, that `preprocess_before` ran before the
+original and `preprocess_after` after it, and that the server globals are set before the
+original runs and the deferred server bootstrap runs once after it. The runtime in that
+harness is a stand-in that emulates those semantics; it is not `nevr.dll`.
+
 ### The host's own files
 
 The host writes under its own per-game folder, never the game's `EchoVR` folder:
@@ -145,5 +157,6 @@ called from inside `PreprocessCommandLine` (`0x140503ADF`, in the first callee o
   that carries one without the other is a defect, not a configuration.
 - The export table is part of the contract: a change to it is a change to
   `tools/verify_pe_contract.py` in the same commit.
-- Until the target split, `src/runtime/host/` is compiled only into the test
+- Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
+  diagnostics, the crash capture and the loader) is compiled only into the test
   harnesses. The shipped `BugSplat64.dll` does not use it.

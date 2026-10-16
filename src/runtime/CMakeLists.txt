@@ -407,18 +407,21 @@ if(BUILD_TESTING)
 
     # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
     # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
-    # recorder, the minidump capture and the runtime load/validate state machine.
-    # It is a static library of its own so the tests
+    # recorder, the minidump capture, the runtime load/validate state machine and the
+    # PreprocessCommandLine rendezvous. It is a static library of its own so the tests
     # drive the objects the host links and not a copy. Built only for the tests until the
     # target split links it into BugSplat64.dll.
     find_package(nlohmann_json CONFIG REQUIRED)
     add_library(nevr_host_core STATIC
       host/bootstrap_diagnostics.cpp
       host/crash_capture.cpp
-      host/runtime_load.cpp)
+      host/host_entry.cpp
+      host/runtime_load.cpp
+      host/runtime_rendezvous.cpp
+      lifecycle/game_image_guard.cpp)
     target_compile_options(nevr_host_core PRIVATE -Werror)
     target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(nevr_host_core PUBLIC nlohmann_json::nlohmann_json)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
 
     add_executable(test_host_json tests/test_host_json.cpp)
     set_source_files_properties(tests/test_host_json.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -440,6 +443,11 @@ if(BUILD_TESTING)
     target_compile_options(test_host_runtime_load PRIVATE -Werror)
     target_link_libraries(test_host_runtime_load PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_host_runtime_load DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_rendezvous tests/test_host_rendezvous.cpp)
+    target_compile_options(test_host_rendezvous PRIVATE -Werror)
+    target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_host_minidump tests/test_host_minidump.cpp)
     target_compile_options(test_host_minidump PRIVATE -Werror)
@@ -500,6 +508,51 @@ if(BUILD_TESTING)
       test_host_crash_runtime_bad_version
       test_host_crash_runtime_init_failure
       test_host_crash_runtime_missing_entry)
+
+    # Early PreprocessCommandLine rendezvous harness for the BugSplat64.dll / nevr.dll
+    # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Early bootstrap"). The host
+    # shim (BugSplat64.dll) calls the production host entry points: one detour from
+    # DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on the first call.
+    # test_rendezvous.exe drives server / server-twice / client / missing / reenter /
+    # bad-prologue child scenarios plus the NEVR_SetGameModule external contract.
+    set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
+    set(RENDEZVOUS_FIXTURE_DIR "${RENDEZVOUS_DIR}/fixtures")
+
+    function(rendezvous_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_rendezvous_host SHARED tests/rendezvous/host_shim.cpp)
+    target_link_libraries(test_rendezvous_host PRIVATE nevr_host_core)
+    set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    rendezvous_output(test_rendezvous_host "${RENDEZVOUS_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    function(add_rendezvous_fixture target fixture_dir)
+      add_library(${target} SHARED tests/rendezvous/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      rendezvous_output(${target} "${RENDEZVOUS_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_rendezvous_fixture(test_rendezvous_runtime_good good)
+    add_rendezvous_fixture(test_rendezvous_runtime_reenter reenter-init
+      RENDEZVOUS_PROBE_REENTER_INIT)
+
+    add_executable(test_rendezvous tests/rendezvous/rendezvous_test.cpp)
+    target_link_libraries(test_rendezvous PRIVATE nlohmann_json::nlohmann_json)
+    rendezvous_output(test_rendezvous "${RENDEZVOUS_DIR}")
+    add_dependencies(test_rendezvous
+      test_rendezvous_host
+      test_rendezvous_runtime_good
+      test_rendezvous_runtime_reenter)
 
     # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
     # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
