@@ -6,6 +6,7 @@
 // in the PR body.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1287,6 +1288,661 @@ void TestOnlyTheLoginConnectionIsIdleExempt() {
   QCHECK(fourExempt && twoReleased);
 }
 
+// ---------------------------------------------------------------------------------------------
+// #578: one session, roles named by an adapter's hint or by the first frame, relabelled in place.
+//
+// Every test below states a rule the router had not yet been given when it was written. Each prints
+// "FAILED in <label>" (stderr) after its failing checks, so a failing run names the case.
+
+constexpr GameId kCfg = 1;  // the config socket's id in the permutation tests
+constexpr GameId kLog = 2;  // the login socket's
+constexpr GameId kMm = 3;   // the matchmaker socket's
+
+GameId IdOf(Role role) {
+  switch (role) {
+    case Role::Config: return kCfg;
+    case Role::Login: return kLog;
+    case Role::Matchmaker: return kMm;
+  }
+  return kNoGame;
+}
+
+using Perm = std::array<Role, 3>;
+
+// All 6 orders of the three roles.
+std::vector<Perm> AllPerms() {
+  std::array<int, 3> idx = {0, 1, 2};
+  const Role roles[3] = {Role::Config, Role::Login, Role::Matchmaker};
+  std::vector<Perm> out;
+  do {
+    out.push_back({roles[idx[0]], roles[idx[1]], roles[idx[2]]});
+  } while (std::next_permutation(idx.begin(), idx.end()));
+  return out;
+}
+
+std::string PermName(const Perm& p) {
+  std::string s;
+  for (std::size_t i = 0; i < p.size(); ++i) s += std::string(i == 0 ? "" : ",") + RoleName(p[i]);
+  return s;
+}
+
+std::size_t IndexOf(const Perm& p, Role role) {
+  for (std::size_t i = 0; i < p.size(); ++i) {
+    if (p[i] == role) return i;
+  }
+  return p.size();
+}
+
+// Prints a line after the checks of a case that failed, so the stderr names the case.
+class CaseScope {
+ public:
+  explicit CaseScope(std::string label) : label_(std::move(label)), before_(quest_test::Failures()) {}
+  ~CaseScope() {
+    if (quest_test::Failures() != before_) {
+      std::fprintf(stderr, "FAILED in %s: %d check(s)\n", label_.c_str(), quest_test::Failures() - before_);
+    }
+  }
+  CaseScope(const CaseScope&) = delete;
+  CaseScope& operator=(const CaseScope&) = delete;
+
+ private:
+  std::string label_;
+  int before_;
+};
+
+// The first data frame each role's socket sends.
+std::string FirstFrameOf(Role role) {
+  switch (role) {
+    case Role::Config: return Msg(nevr_evr_codec::kSymConfigRequest, "cfg");
+    case Role::Login: return Msg(nevr_evr_codec::kSymLoginRequest, "login");
+    case Role::Matchmaker: return Msg(nevr_evr_codec::kSymFindSessionRequest, "find");
+  }
+  return std::string();
+}
+
+// The remote that carries the session: one the router marked as the session remote, else the last remote
+// opened as a login, else the last remote opened at all. kNoRemote when nothing was opened.
+RemoteId SessionRemote(Rig& rig) {
+  const auto opens = rig.remotes.Opens();
+  for (const auto& o : opens) {
+    if (o.session) return o.remote;
+  }
+  for (auto it = opens.rbegin(); it != opens.rend(); ++it) {
+    if (it->role == Role::Login) return it->remote;
+  }
+  return opens.empty() ? kNoRemote : opens.back().remote;
+}
+
+// Whether `game` holds the idle exemption now: the last SetIdleExempt for it said so.
+bool Exempt(Rig& rig, GameId game) {
+  bool exempt = false;
+  for (const auto& h : rig.games.Holds()) {
+    if (h.first == game) exempt = h.second;
+  }
+  return exempt;
+}
+
+std::size_t ExemptCount(Rig& rig) {
+  std::size_t n = 0;
+  for (const GameId g : {kCfg, kLog, kMm, GameId(4), GameId(5)}) n += Exempt(rig, g) ? 1 : 0;
+  return n;
+}
+
+// (game id, first symbol) of every frame the router delivered to a game, in delivery order.
+using Delivery = std::pair<GameId, uint64_t>;
+std::vector<Delivery> Delivered(Rig& rig) {
+  std::vector<Delivery> out;
+  for (const SentFrame& f : rig.games.Sent()) out.emplace_back(f.id, nevr_evr_codec::FirstSymbol(f.data));
+  return out;
+}
+
+int CountUpstream(Rig& rig, RemoteId remote, uint64_t symbol) {
+  int n = 0;
+  for (const SentFrame& f : rig.remotes.Sent()) {
+    if (f.id == remote && nevr_evr_codec::FirstSymbol(f.data) == symbol) ++n;
+  }
+  return n;
+}
+
+int CountUpstreamAnywhere(Rig& rig, uint64_t symbol) {
+  int n = 0;
+  for (const SentFrame& f : rig.remotes.Sent()) n += nevr_evr_codec::FirstSymbol(f.data) == symbol ? 1 : 0;
+  return n;
+}
+
+const std::string kUnrequire = Msg(nevr_evr_codec::kSymConnectionUnrequire, "");
+
+// One shared walk for the unhinted (Quest) cases: three sockets open in `openOrder` (each one the role its
+// name says, but the router is told nothing), the first frames arrive in `frameOrder`, and the service
+// answers on the one session remote. The rules pinned:
+//   * the three sockets share ONE remote, marked as the session remote (A4);
+//   * a socket whose first frame corrects its provisional role is relabelled in place: no remote is opened,
+//     closed or re-attached, no socket is closed (A3);
+//   * the idle exemption follows the real login socket once it is identified, and no other socket (S6);
+//   * config, login and lobby replies each reach their socket, each Unrequire the socket that owes it (A6).
+void RunUnhinted(const Perm& openOrder, const Perm& frameOrder, const std::string& label) {
+  const CaseScope scope(label);
+  Rig rig;
+  for (const Role r : openOrder) rig.router->OnGameOpen(IdOf(r));
+  QCHECK(rig.remotes.Opens().size() == 1);  // one remote for the three
+  QCHECK(rig.remotes.Opens().empty() || rig.remotes.Opens()[0].session);
+  QCHECK(rig.router->GetStats().remotes == 1);
+  const RemoteId remote = SessionRemote(rig);
+  rig.router->OnRemoteOpen(remote);
+  // Before any first frame: the socket the router takes for the login (second by order) holds the exemption;
+  // a real login socket the router has not identified is still idle-closable (S6).
+  QCHECK(Exempt(rig, IdOf(openOrder[1])));
+  if (openOrder[1] != Role::Login) QCHECK(!Exempt(rig, kLog));
+
+  for (const Role r : frameOrder) {
+    rig.router->OnGameFrame(IdOf(r), FirstFrameOf(r), true);
+    if (r == Role::Login) rig.router->OnGameFrame(kLog, Msg(nevr_evr_codec::kSymDocumentRequest, "doc"), true);
+  }
+  // Relabelled in place: nothing opened, nothing closed.
+  QCHECK(rig.remotes.Opens().size() == 1);
+  QCHECK(rig.remotes.Closes().empty());
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(rig.router->GetStats().remotes == 1);
+  // The idle hold sits on the real login socket and on no other (S6).
+  QCHECK(Exempt(rig, kLog));
+  QCHECK(!Exempt(rig, kCfg));
+  QCHECK(!Exempt(rig, kMm));
+  QCHECK(ExemptCount(rig) == 1);
+  // The game's four frames all went up the one remote.
+  QCHECK(rig.remotes.Sent().size() == 4);
+  for (const SentFrame& f : rig.remotes.Sent()) QCHECK(f.id == remote);
+
+  rig.router->OnRemoteFrame(remote, Msg(kSymConfigSuccess, "config"), true);                 // -> config
+  rig.router->OnRemoteFrame(remote, kUnrequire, true);                                       // -> config (its reply's)
+  rig.router->OnRemoteFrame(remote, LoginReplyFrame(), true);                                // -> login (Unrequire inside)
+  rig.router->OnRemoteFrame(remote, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "p"), true);  // -> login
+  rig.router->OnRemoteFrame(remote, Msg(nevr_evr_codec::kSymDocumentSuccess, "d"), true);    // -> login
+  rig.router->OnRemoteFrame(remote, kUnrequire, true);                                       // -> login (the document's)
+  rig.router->OnRemoteFrame(remote, Msg(kSymLobbySessionSuccess, "lobby"), true);            // -> matchmaker
+  rig.router->OnRemoteFrame(remote, Msg(nevr_evr_codec::kSymLobbyPingRequest, "ping"), true);  // -> matchmaker
+  rig.router->OnRemoteFrame(remote, kUnrequire, true);                                       // -> matchmaker (the ping's)
+  const std::vector<Delivery> expected = {
+      {kCfg, kSymConfigSuccess},
+      {kCfg, nevr_evr_codec::kSymConnectionUnrequire},
+      {kLog, nevr_evr_codec::kSymLoginSuccess},
+      {kLog, nevr_evr_codec::kSymLoggedInUserProfileSuccess},
+      {kLog, nevr_evr_codec::kSymDocumentSuccess},
+      {kLog, nevr_evr_codec::kSymConnectionUnrequire},
+      {kMm, kSymLobbySessionSuccess},
+      {kMm, nevr_evr_codec::kSymLobbyPingRequest},
+      {kMm, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+  QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 0);
+}
+
+// (a) Unhinted: all 6 open orders of config, login and matchmaker, the first frames arriving in open order.
+// Failure caught: config getting a remote of its own (two remotes where there is one session), and a reply
+// or an Unrequire landing on the wrong socket in any order.
+void TestUnhintedAllOpenOrdersShareOneSession() {
+  for (const Perm& order : AllPerms()) RunUnhinted(order, order, "unhinted open=" + PermName(order));
+}
+
+// (b) The first frames arrive in a different order from the opens, so a socket's provisional role (by open
+// order) is corrected by its first frame while the others hold the session. Failure caught: a correction
+// that releases and re-attaches (a remote opened or closed, a socket closed, "role stays login").
+void TestUnhintedFirstFrameOrderVariedSeparatelyFromOpenOrder() {
+  for (const Perm& open : AllPerms()) {
+    for (const Perm& frames : AllPerms()) {
+      if (open == frames) continue;
+      RunUnhinted(open, frames, "unhinted open=" + PermName(open) + " first-frames=" + PermName(frames));
+    }
+  }
+}
+
+// S6: the idle exemption follows the role, provisional or confirmed. Login is opened first (provisionally
+// config), config second (provisionally login, so exempt), a matchmaker third. When config's first frame
+// names it, the exemption leaves it even though the matchmaker shares the session (today: "role stays
+// login" and the exemption stays on the config socket). The real login takes it only once identified.
+void TestIdleExemptionFollowsTheRoleThroughARelabel() {
+  const CaseScope scope("idle exemption");
+  Rig rig;
+  rig.router->OnGameOpen(kLog);  // provisionally config
+  rig.router->OnGameOpen(kCfg);  // provisionally login
+  rig.router->OnGameOpen(kMm);
+  QCHECK(Exempt(rig, kCfg));   // provisional login holds it
+  QCHECK(!Exempt(rig, kLog));  // the real login, silent and unidentified, is still idle-closable
+  rig.router->OnGameFrame(kCfg, FirstFrameOf(Role::Config), true);
+  QCHECK(!Exempt(rig, kCfg));  // a provisional login that turned out to be config drops it
+  rig.router->OnGameFrame(kLog, FirstFrameOf(Role::Login), true);
+  QCHECK(Exempt(rig, kLog));   // the real login holds it once identified
+  QCHECK(!Exempt(rig, kCfg));
+  QCHECK(!Exempt(rig, kMm));
+  QCHECK(ExemptCount(rig) == 1);
+  QCHECK(rig.remotes.Opens().size() == 1);
+  QCHECK(rig.remotes.Closes().empty());
+}
+
+// ---- (c) hinted: the PC adapter names each socket's role at open ------------------------------------
+
+Options PcOptions(int* builds) {
+  Options o;
+  o.buildLogin = [builds]() {
+    ++*builds;
+    return std::optional<std::string>(kLogin);
+  };
+  return o;
+}
+
+OpenHint Hinted(Role role) {
+  OpenHint h;
+  h.role = role;
+  h.hinted = true;
+  return h;
+}
+
+// Opens the sockets of `order` with their hints. When `remoteOpensEarly`, each remote is opened as soon as
+// the router asks for it, so the session remote can open before the login socket attaches; otherwise they
+// open once every socket is attached.
+void RunHinted(const Perm& order, bool remoteOpensEarly, const std::string& label) {
+  const CaseScope scope(label);
+  int builds = 0;
+  Rig rig(PcOptions(&builds));
+  const std::size_t loginAt = IndexOf(order, Role::Login);
+  const std::size_t mmAt = IndexOf(order, Role::Matchmaker);
+  std::size_t opened = 0;  // remotes already given OnRemoteOpen
+  bool mmSentEarly = false;
+  const auto openNewRemotes = [&]() {
+    const auto opens = rig.remotes.Opens();
+    for (; opened < opens.size(); ++opened) rig.router->OnRemoteOpen(opens[opened].remote);
+  };
+  for (std::size_t i = 0; i < order.size(); ++i) {
+    rig.router->OnGameOpen(IdOf(order[i]), Hinted(order[i]));
+    if (remoteOpensEarly) {
+      openNewRemotes();
+      // No login is built until a login socket is attached to an open session.
+      if (i < loginAt) QCHECK(builds == 0);
+      if (i == loginAt) QCHECK(builds == 1);  // injected at attach, the session being open already
+      if (order[i] == Role::Matchmaker && i < loginAt) {
+        // A standalone matchmaker is not attached to the session, so it does not wait for a login that may
+        // never come (S12): its first frame goes straight up its own open remote.
+        rig.router->OnGameFrame(kMm, FirstFrameOf(Role::Matchmaker), true);
+        mmSentEarly = true;
+        RemoteId own = kNoRemote;
+        for (const auto& o : rig.remotes.Opens()) {
+          if (o.standaloneMatchmaker) own = o.remote;
+        }
+        QCHECK(own != kNoRemote && CountUpstream(rig, own, nevr_evr_codec::kSymFindSessionRequest) == 1);
+        QCHECK(builds == 0);
+      }
+    }
+  }
+  // One session remote; a matchmaker that came before the login socket had no session to share and
+  // keeps a remote of its own (S12).
+  const auto opens = rig.remotes.Opens();
+  const bool mmStandalone = mmAt < loginAt;
+  QCHECK(opens.size() == (mmStandalone ? 2u : 1u));
+  int sessions = 0;
+  for (const auto& o : opens) {
+    sessions += o.session ? 1 : 0;
+    if (o.standaloneMatchmaker) QCHECK(!o.session);
+  }
+  QCHECK(sessions == 1);
+  const RemoteId session = SessionRemote(rig);
+  RemoteId mmRemote = session;
+  for (const auto& o : opens) {
+    if (o.standaloneMatchmaker) mmRemote = o.remote;
+  }
+  QCHECK(mmStandalone == (mmRemote != session));
+  QCHECK(rig.router->GetStats().remotes == opens.size());
+
+  // The game's first frames, sent before the remotes open when they have not yet.
+  rig.router->OnGameFrame(kCfg, FirstFrameOf(Role::Config), true);
+  rig.router->OnGameFrame(kLog, Msg(nevr_evr_codec::kSymLoggedInUserProfileRequest, "profile"), true);
+  if (!mmSentEarly) rig.router->OnGameFrame(kMm, FirstFrameOf(Role::Matchmaker), true);
+  openNewRemotes();
+
+  // Exactly one login per session, injected on the session remote and nowhere else, and first on it.
+  QCHECK(builds == 1);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(CountUpstreamAnywhere(rig, nevr_evr_codec::kSymLoginRequest) == 1);
+  const std::vector<SentFrame> up = rig.remotes.Sent();
+  RemoteId firstOnSession = kNoRemote;
+  uint64_t firstSymbol = 0;
+  for (const SentFrame& f : up) {
+    if (f.id == session) {
+      firstSymbol = nevr_evr_codec::FirstSymbol(f.data);
+      firstOnSession = f.id;
+      break;
+    }
+  }
+  // The login frame leads the session remote's traffic.
+  QCHECK(firstOnSession == session && firstSymbol == nevr_evr_codec::kSymLoginRequest);
+  // The login frame is ahead of the login socket's own frame and of the matchmaker's, if it shares the session.
+  std::size_t loginPos = up.size(), profilePos = up.size(), findPos = up.size();
+  for (std::size_t i = 0; i < up.size(); ++i) {
+    if (up[i].id != session) continue;
+    const uint64_t sym = nevr_evr_codec::FirstSymbol(up[i].data);
+    if (sym == nevr_evr_codec::kSymLoginRequest) loginPos = i;
+    if (sym == nevr_evr_codec::kSymLoggedInUserProfileRequest) profilePos = i;
+    if (sym == nevr_evr_codec::kSymFindSessionRequest) findPos = i;
+  }
+  QCHECK(loginPos < profilePos);
+  if (!mmStandalone) QCHECK(loginPos < findPos);
+
+  // Each reply reaches its own socket.
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "config"), true);                              // -> config
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);  // -> login
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "p"), true);      // -> login
+  rig.router->OnRemoteFrame(mmRemote, Msg(kSymLobbySessionSuccess, "lobby"), true);                        // -> matchmaker
+  const std::vector<Delivery> expected = {
+      {kCfg, kSymConfigSuccess},
+      {kLog, nevr_evr_codec::kSymLoginSuccess},
+      {kLog, nevr_evr_codec::kSymLoggedInUserProfileSuccess},
+      {kMm, kSymLobbySessionSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(builds == 1);
+}
+
+// (c) Hinted, all 6 open orders, the remotes opening after every socket is attached.
+// Failure caught: a remote per config/login socket, a second login, a login behind the game's frames.
+void TestHintedAllOpenOrdersOneSessionOneLogin() {
+  for (const Perm& order : AllPerms()) RunHinted(order, false, "hinted open=" + PermName(order));
+}
+
+// (c) Hinted, all 6 open orders, each remote opening as soon as it is asked for, so the session remote opens
+// before the login socket attaches in the orders where config (or a standalone matchmaker's neighbour) comes
+// first. Failure caught: the login injected only at remote open (never, when the login socket attaches to an
+// already open session), or injected twice (at attach and at open).
+void TestHintedSessionRemoteOpeningBeforeTheLoginSocketAttaches() {
+  for (const Perm& order : AllPerms()) RunHinted(order, true, "hinted early-open open=" + PermName(order));
+}
+
+// ---- (d), (e): the #239 sequence and the end of a session --------------------------------------------
+
+// (d) After login the config socket closes and the game opens a new one. It reattaches to the SAME session:
+// no new remote, none closed, and its replies reach it while the login socket's still reach the login.
+void TestConfigClosesAndReopensAfterLoginOnTheSameSession() {
+  const CaseScope scope("config reopens after login");
+  Rig rig;
+  OpenThree(rig);  // config 1, login 2, matchmaker 3
+  QCHECK(rig.remotes.Opens().size() == 1);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(3, FirstFrameOf(Role::Matchmaker), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "config"), true);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);
+  rig.router->OnRemoteFrame(session, LoginReplyFrame(), true);
+  rig.router->OnGameClose(1);  // the config socket goes; a socket closing never ends the session
+  QCHECK(rig.remotes.Closes().empty());
+  QCHECK(rig.router->GetStats().remotes == 1);
+  rig.router->OnGameOpen(4);  // the game's new config socket
+  QCHECK(rig.remotes.Opens().size() == 1);  // it rides the session
+  rig.router->OnGameFrame(4, FirstFrameOf(Role::Config), true);
+  QCHECK(rig.remotes.Opens().size() == 1);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymConfigRequest) == 2);  // both on the one remote
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "config2"), true);   // -> the new config socket
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                          // -> the new config socket
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "p"), true);  // -> login
+  const std::vector<Delivery> expected = {
+      {1, kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+      {2, nevr_evr_codec::kSymLoginSuccess},
+      {4, kSymConfigSuccess},
+      {4, nevr_evr_codec::kSymConnectionUnrequire},
+      {2, nevr_evr_codec::kSymLoggedInUserProfileSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.remotes.Closes().empty());
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// (e) The session ends under the game. Every socket on it closes, the config socket too (it shares the
+// session), and when the game reconnects, config included, the sockets share ONE new session.
+void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
+  const CaseScope scope("session end");
+  Rig rig;
+  OpenThree(rig);
+  QCHECK(rig.remotes.Opens().size() == 1);
+  const RemoteId first = SessionRemote(rig);
+  rig.router->OnRemoteOpen(first);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnRemoteError(first, 0, "network error");
+  std::vector<uint64_t> closed;
+  for (const CloseRecord& c : rig.games.Closes()) {
+    closed.push_back(c.id);
+    QCHECK(c.code == kCloseGoingAway);
+  }
+  std::sort(closed.begin(), closed.end());
+  QCHECK(closed == std::vector<uint64_t>({1, 2, 3}));  // the config socket included
+  rig.router->OnGameClose(1);
+  rig.router->OnGameClose(2);
+  rig.router->OnGameClose(3);
+  rig.router->OnGameOpen(4);  // config reconnects
+  rig.router->OnGameOpen(5);  // login reconnects
+  QCHECK(rig.remotes.Opens().size() == 2);  // one new session remote for both
+  const auto opens = rig.remotes.Opens();
+  RemoteId second = kNoRemote;
+  if (opens.size() == 2) {
+    second = opens[1].remote;
+    QCHECK(second != first);
+    QCHECK(opens[1].session);
+  }
+  rig.router->OnRemoteOpen(second);
+  rig.router->OnGameFrame(4, FirstFrameOf(Role::Config), true);
+  rig.router->OnGameFrame(5, FirstFrameOf(Role::Login), true);
+  QCHECK(CountUpstream(rig, second, nevr_evr_codec::kSymConfigRequest) == 1);
+  QCHECK(CountUpstream(rig, first, nevr_evr_codec::kSymConfigRequest) == 1);  // only the first session's own
+  rig.router->OnRemoteFrame(second, Msg(kSymConfigSuccess, "config"), true);
+  rig.router->OnRemoteFrame(second, LoginReplyFrame(), true);
+  const std::vector<Delivery> expected = {
+      {4, kSymConfigSuccess},
+      {5, nevr_evr_codec::kSymLoginSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+}
+
+// ---- (f) the config reply owner (S1) ----------------------------------------------------------------
+
+// Two /config sockets on one session, the newer sending first. The service answers a session's requests
+// in order, so each SNSConfigSuccessv2 goes to the socket whose request is next in the FIFO, and the
+// Unrequire after it to the same socket. Failure caught: the oldest config socket (or the newest) taking
+// every reply.
+void TestTwoConfigSocketsAreAnsweredInRequestOrder() {
+  const CaseScope scope("two config sockets");
+  Rig rig;
+  OpenThree(rig);  // config 1, login 2, matchmaker 3 (the second config socket, by order)
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(3, FirstFrameOf(Role::Config), true);  // the newer config socket sends first
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  QCHECK(rig.remotes.Opens().size() == 1);
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "first"), true);   // -> 3
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 3
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "second"), true);  // -> 1
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 1
+  const std::vector<Delivery> expected = {
+      {3, kSymConfigSuccess},
+      {3, nevr_evr_codec::kSymConnectionUnrequire},
+      {1, kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// A config socket closes with its request in flight and a new one takes its place. The old socket's reply
+// is dropped and counted, never handed to the replacement; the Unrequire after it goes to the same (closed)
+// socket and is dropped; the replacement's own reply reaches it.
+void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
+  const CaseScope scope("closed config socket's reply");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);  // in flight
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(4);
+  rig.router->OnGameFrame(4, FirstFrameOf(Role::Config), true);  // the replacement's request, behind it
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "for-the-closed-socket"), true);
+  QCHECK(rig.games.Sent().empty());                                  // not handed to game 4
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);              // the closed socket's: dropped
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "for-game-4"), true);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);
+  const std::vector<Delivery> expected = {
+      {4, kSymConfigSuccess},
+      {4, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+}
+
+// S16: SNSConfigFailurev2 is a config reply: it goes to the config socket, and its Unrequire after it.
+// Failure caught: the failure falling to the matchmaker (lobby traffic) or the login socket.
+void TestConfigFailureGoesToTheConfigSocket() {
+  const CaseScope scope("config failure");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(3, FirstFrameOf(Role::Matchmaker), true);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymConfigFailure, "no"), true);  // -> config
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                                    // -> config
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "p"), true);
+  const std::vector<Delivery> expected = {
+      {1, nevr_evr_codec::kSymConfigFailure},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+      {2, nevr_evr_codec::kSymLoggedInUserProfileSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// ---- (g) a held session, S2 ---------------------------------------------------------------------------
+
+// The login gate holds the SESSION, whoever opened it. Config opens first and is held with it: its request
+// queues, and on Ready the session opens, the request is flushed and its reply arrives. Failure caught:
+// config opening a remote of its own (and failing 1011) while the player has not signed in.
+void TestHeldSessionQueuesConfigThenFlushesOnReady() {
+  const CaseScope scope("held session");
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);  // config
+  rig.router->OnGameOpen(2);  // login
+  QCHECK(rig.remotes.Opens().empty());  // nothing opens while the account is awaited
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(Exempt(rig, 2));
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  QCHECK(rig.router->GetStats().pendingFrames == 1);  // queued, in the held session
+  QCHECK(rig.remotes.Sent().empty());
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(rig.remotes.Opens().size() == 1);
+  QCHECK(rig.remotes.Opens().empty() || rig.remotes.Opens()[0].session);
+  QCHECK(rig.router->GetStats().heldRemotes == 0);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymConfigRequest) == 1);  // flushed
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "config"), true);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);
+  const std::vector<Delivery> expected = {
+      {1, kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.games.Closes().empty());
+}
+
+// S2: a held session whose config socket closes and reopens three times. A closing socket's queued frames
+// leave the session's queue with it, so Ready flushes one request per LIVE socket, and the counts stay
+// consistent (the live socket's reply and Unrequire are matched). Failure caught: the closed sockets'
+// requests flushed to the service, whose replies would be orphans.
+void TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames() {
+  const CaseScope scope("held session purge");
+  Gate gate;
+  Options o;
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);  // config, first life
+  rig.router->OnGameOpen(2);  // login
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  QCHECK(rig.router->GetStats().pendingFrames == 2);
+  // The config socket closes three times and reopens each time: lives 1, 3, 4 close, lives 3, 4, 5 open.
+  const GameId lives[] = {1, 3, 4, 5};
+  for (std::size_t i = 0; i + 1 < sizeof(lives) / sizeof(lives[0]); ++i) {
+    rig.router->OnGameClose(lives[i]);
+    QCHECK(rig.router->GetStats().pendingFrames == 1);  // only the login's request is left
+    rig.router->OnGameOpen(lives[i + 1]);
+    rig.router->OnGameFrame(lives[i + 1], FirstFrameOf(Role::Config), true);
+    QCHECK(rig.router->GetStats().pendingFrames == 2);
+  }
+  QCHECK(rig.router->GetStats().heldRemotes == 1);
+  QCHECK(rig.remotes.Opens().empty());
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymConfigRequest) == 1);  // game 5's, nobody else's
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(rig.router->GetStats().pendingFrames == 0);
+  rig.router->OnRemoteFrame(session, Msg(kSymConfigSuccess, "config"), true);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);
+  const std::vector<Delivery> expected = {
+      {5, kSymConfigSuccess},
+      {5, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+  QCHECK(rig.router->GetStats().outboundBytes == 0);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+}
+
+// S16: the matchmaker cap counts a connection by its hint. Nine hinted matchmakers open before any
+// config or login socket: the router's order-based guess would call the first two config and login, so
+// only seven would count. The ninth is refused with the cap's close code and the other eight stay.
+void TestTheNinthHintedMatchmakerIsRefused() {
+  const CaseScope scope("ninth hinted matchmaker");
+  Rig rig;
+  for (GameId g = 1; g <= 9; ++g) rig.router->OnGameOpen(g, Hinted(Role::Matchmaker));
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1);
+  if (closes.size() == 1) {
+    QCHECK(closes[0].id == 9);
+    QCHECK(closes[0].code == kCloseTryAgainLater);
+  }
+  QCHECK(rig.router->GetStats().games == 8);
+}
+
 }  // namespace
 
 // ---- login removal notice after a lost session (#320, option B) -----------------------------------------
@@ -1734,6 +2390,20 @@ int main() {
   TestReplacementLoginConnectionIsHeldOnTheSameSession();
   TestNoGateNeverHolds();
   TestOnlyTheLoginConnectionIsIdleExempt();
+  // #578: the one-session and role-hint rules.
+  TestUnhintedAllOpenOrdersShareOneSession();
+  TestUnhintedFirstFrameOrderVariedSeparatelyFromOpenOrder();
+  TestIdleExemptionFollowsTheRoleThroughARelabel();
+  TestHintedAllOpenOrdersOneSessionOneLogin();
+  TestHintedSessionRemoteOpeningBeforeTheLoginSocketAttaches();
+  TestConfigClosesAndReopensAfterLoginOnTheSameSession();
+  TestSessionEndClosesConfigAndConfigReconnectsToANewSession();
+  TestTwoConfigSocketsAreAnsweredInRequestOrder();
+  TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement();
+  TestConfigFailureGoesToTheConfigSocket();
+  TestHeldSessionQueuesConfigThenFlushesOnReady();
+  TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames();
+  TestTheNinthHintedMatchmakerIsRefused();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

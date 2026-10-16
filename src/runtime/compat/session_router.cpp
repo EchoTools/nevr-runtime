@@ -575,7 +575,8 @@ void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& 
   RecomputeActiveLocked();
 }
 
-void Router::OnGameOpen(GameId game) {
+void Router::OnGameOpen(GameId game, OpenHint hint) {
+  (void)hint;  // #578: declared so the role-hint tests compile; the router does not read it yet
   Effects fx;
   {
     std::lock_guard<std::mutex> lock(mutex_);

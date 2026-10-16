@@ -81,6 +81,14 @@ inline constexpr RemoteId kNoRemote = 0;
 enum class Role { Config, Login, Matchmaker };
 const char* RoleName(Role role);
 
+// What the adapter knows about a connection when it opens, before the game has sent a frame. PC knows the
+// role from the request target (/config, /login) or the listener; Quest knows nothing and leaves `hinted`
+// false. A hinted role is final. Declared for #578; the router does not read it yet.
+struct OpenHint {
+  Role role = Role::Config;
+  bool hinted = false;
+};
+
 // WebSocket close codes the router closes with (RFC 6455 7.4.1).
 inline constexpr uint16_t kCloseGoingAway = 1001;      // the remote session ended; game should reconnect
 inline constexpr uint16_t kClosePolicyViolation = 1008;  // a connection the router refuses to serve
@@ -125,6 +133,9 @@ struct RemoteOpenRequest {
   Role role = Role::Config;
   // True when a matchmaker connection found no login session to share and needs its own remote.
   bool standaloneMatchmaker = false;
+  // True when this remote is the session remote that config, login and matchmaker connections share.
+  // Declared for #578; the router does not set it yet.
+  bool session = false;
 };
 
 class RemoteTransport {
@@ -190,6 +201,9 @@ struct Stats {
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
   uint64_t unmatchedEmbeddedUnrequires = 0;
+  // Config replies whose requesting socket had closed, dropped rather than sent to its replacement.
+  // Declared for #578; the router does not count them yet.
+  uint64_t configRepliesOrphaned = 0;
 };
 
 class Router {
@@ -200,7 +214,7 @@ class Router {
   Router& operator=(const Router&) = delete;
 
   // ---- events from the game side (the loopback listener) ----------------------------------------
-  void OnGameOpen(GameId game);
+  void OnGameOpen(GameId game, OpenHint hint = OpenHint());
   void OnGameFrame(GameId game, std::string frame, bool binary);
   void OnGameClose(GameId game);
   void OnGameWritable(GameId game);
