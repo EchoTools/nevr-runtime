@@ -313,12 +313,28 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // command line (runtime/hook/export_tracer.cpp), so no ordering with this parse can matter.
       if (i + 1 < argc) ++i;
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
-      // Deprecated — silently consume value arg if present
+      // #515: a server's time step is NEVR's. GameMainWrapperHook (crash_recovery.cpp) removed these
+      // arguments from the string the game parses, before the game read it; this only reports it.
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] %ls is deprecated and ignored (fixed timestep is determined internally; "
-          "no CLI override exists)",
-          arg);
+      if (g_isServer) {
+        const unsigned removed = TimestepArgsRemoved();
+        if (removed > 0) {
+          Log(EchoVR::LogLevel::Info,
+              "[NEVR.PATCH] %ls removed from the game's command line (tokens_removed=%u); the server time "
+              "step is %u us (%u Hz), set by NEVR",
+              arg, removed, static_cast<unsigned>(nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz)),
+              static_cast<unsigned>(g_headlessTickRateHz));
+        } else {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.PATCH] %ls was NOT removed from the game's command line (tokens_removed=0): the game "
+              "may run the server on its own time step instead of %u us (%u Hz)",
+              arg, static_cast<unsigned>(nevr_server_timestep::StepMicroseconds(g_headlessTickRateHz)),
+              static_cast<unsigned>(g_headlessTickRateHz));
+        }
+      } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] %ls passed to the game unchanged: NEVR sets the time step on a server only", arg);
+      }
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.

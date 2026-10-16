@@ -12,6 +12,10 @@ void InstallCrashRecoveryHooks();
 /// (N125). Called from Initialize.
 void InstallGameMainHook();
 
+/// #515: how many time-step arguments (-fixedtimestep, and -timestep with its value) the game-main hook
+/// removed from the game's command line. 0 on a client and when none was given.
+unsigned TimestepArgsRemoved();
+
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
 /// and null-pointer AV recovery via longjmp in server mode.
 /// Also snapshots the module table (N70 — the handler must never enumerate,

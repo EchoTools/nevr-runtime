@@ -364,7 +364,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_export_trace
@@ -452,6 +452,12 @@ test-auth-unit:
     fi
     run_test "$bin"
     bin="build/{{ preset }}/bin/test_early_quit_lockout.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_cmdline_strip.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
@@ -1622,6 +1628,23 @@ verify:
     if ! grep -q 'InstallGameMainHook()' src/runtime/lifecycle/initialize.cpp; then
         echo "verify: FAIL — N125 initialize.cpp no longer calls InstallGameMainHook()." >&2
         echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
+        exit 1
+    fi
+
+    # --- #515: a server's time-step arguments are removed before the game parses them ----
+    # echovr.exe builds its CMainArgs in Main_ from the string GameMainWrapper passes on, before
+    # PreprocessCommandLine (lifecycle/cmdline_strip.h says where). The wrapper hook is the one place
+    # the removal reaches the game's parser, and no test runs it: a hook that calls the strip but then
+    # hands the game the ORIGINAL string, or no longer calls the strip, passes every unit test.
+    # Comment-stripped (N99/N111), reusing the capture above.
+    if ! grep -q 'StripServerTimestepArgs(' <<<"$N125_CR"; then
+        echo "verify: FAIL — #515 GameMainWrapperHook no longer calls StripServerTimestepArgs." >&2
+        echo "A server would give the game -fixedtimestep (30 Hz step, #511) and -timestep (rejected as not a valid command)." >&2
+        exit 1
+    fi
+    if ! grep -q 'GameMain(gameArg)' <<<"$N125_CR"; then
+        echo "verify: FAIL — #515 GameMainWrapperHook does not hand the game the stripped command line (GameMain(gameArg))." >&2
+        echo "The strip's result must be what Main_ parses; passing the original string undoes it." >&2
         exit 1
     fi
 

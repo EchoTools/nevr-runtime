@@ -19,10 +19,12 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <string>
 
 #include <unistd.h>
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/cmdline_strip.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -53,6 +55,12 @@ static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
 typedef INT64 GameMainFunc(INT64 arg1);
 static GameMainFunc* GameMain = nullptr;
 
+// #515: how many time-step arguments GameMainWrapperHook took out of the game's command line (see
+// StripServerTimestepArgs). boot.cpp reads it later to say whether the removal happened.
+static std::atomic<unsigned> g_timestepArgsRemoved{0};
+
+unsigned TimestepArgsRemoved() { return g_timestepArgsRemoved.load(std::memory_order_acquire); }
+
 static INT64 GameMainWrapperHook(INT64 arg1) {
   // Always set up the longjmp recovery point — g_isServer isn't set yet when this
   // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
@@ -82,8 +90,26 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
+  // #515: arg1 is the ANSI command line the game parses in Main_ (GetCommandLineA, passed in RCX). A
+  // server's time step is NEVR's, so -fixedtimestep and -timestep <value> come out before the game reads
+  // them. Only this early is it effective: Main_ builds its CMainArgs from this string, before
+  // PreprocessCommandLine. -server comes from the same string (g_isServer is not set yet). The buffer is
+  // static so it outlives Main_'s parse; a client, or a command line with nothing to remove, passes
+  // arg1 on unchanged.
+  static std::string s_serverCommandLine;
+  INT64 gameArg = arg1;
+  if (arg1 != 0) {
+    nevr_cmdline::StripResult stripped =
+        nevr_cmdline::StripServerTimestepArgs(reinterpret_cast<const char*>(arg1));
+    if (!stripped.removed.empty()) {
+      s_serverCommandLine = std::move(stripped.commandLine);
+      gameArg = reinterpret_cast<INT64>(s_serverCommandLine.c_str());
+      g_timestepArgsRemoved.store(static_cast<unsigned>(stripped.removed.size()), std::memory_order_release);
+    }
+  }
+
   // Run the game main loop
-  const INT64 gameResult = GameMain(arg1);
+  const INT64 gameResult = GameMain(gameArg);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit. (A hold

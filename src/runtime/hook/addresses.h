@@ -120,9 +120,10 @@ constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 /// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
 /// reasons, and the SECOND is the decisive one.
 ///
-/// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
-///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
-///     ignored" and discards the value). v1 applies it inside
+/// (1) It only matters under fixed timestep. A server runs on a fixed time step
+///     that NEVR sets itself (server_timestep.h), and `-timestep`/`-fixedtimestep`
+///     are removed from its command line before the game parses it
+///     (cmdline_strip.h). v1 applies it inside
 ///     `if (isHeadless && headlessTimeStep != 0)` — a condition that can no
 ///     longer be true.
 ///
