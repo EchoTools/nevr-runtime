@@ -90,6 +90,10 @@ enum NvrHostFlags : uint32_t {
  *      NvrPluginShutdown() in REVERSE load order before releasing its module
  *      references (last loaded shuts down first, so hooks installed on top of
  *      earlier plugins' hooks are torn down before what they depend on).
+ *      If init returns non-zero and this export exists, the host calls it
+ *      immediately before releasing the failed plugin. Without the export,
+ *      the host retains that module until process exit because init may have
+ *      installed hooks or acquired resources that cannot safely be undone.
  *      Shutdown is not guaranteed on process exit. Runtime dynamic unloading
  *      is not a supported lifecycle path.
  *
