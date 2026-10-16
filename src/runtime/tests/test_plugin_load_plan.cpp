@@ -87,6 +87,37 @@ plugins:
   EXPECT_EQ(plan[1].target, "");    // absent
 }
 
+// #496: `early` reaches the plan; absent means the normal pass.
+TEST(PluginLoadPlan, EarlyCarriedAndOffByDefault) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(R"YAML(
+plugins:
+  - name: overlay
+    early: true
+  - name: later
+  - name: spelled_out
+    early: false
+)YAML");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 3u);
+  EXPECT_TRUE(plan[0].early);
+  EXPECT_FALSE(plan[1].early);  // absent
+  EXPECT_FALSE(plan[2].early);
+}
+
+TEST(PluginLoadPlan, EachPassTakesItsOwnEntries) {
+  PluginLoadItem early;
+  early.early = true;
+  const PluginLoadItem normal;
+  EXPECT_TRUE(PluginInPhase(early, PluginPhase::Early, false));
+  EXPECT_FALSE(PluginInPhase(normal, PluginPhase::Early, false));
+  // After the early pass, the normal pass leaves its entries alone.
+  EXPECT_FALSE(PluginInPhase(early, PluginPhase::Normal, true));
+  EXPECT_TRUE(PluginInPhase(normal, PluginPhase::Normal, true));
+  // A boot path that never ran the early pass still loads every plugin.
+  EXPECT_TRUE(PluginInPhase(early, PluginPhase::Normal, false));
+  EXPECT_TRUE(PluginInPhase(normal, PluginPhase::Normal, false));
+}
+
 TEST(PluginLoadPlan, EmptyWhenNoPluginsKey) {
   // Config authoritative + no glob fallback: no `plugins:` key -> load nothing.
   const NevrConfig cfg = NevrConfig::LoadFromString("version: \"1\"\n");

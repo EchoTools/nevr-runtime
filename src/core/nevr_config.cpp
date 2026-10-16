@@ -270,6 +270,9 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out, WalkBudg
     const YAML::Node requiredN = ChildByKey(entry, "required");
     if (requiredN.IsScalar()) spec.required = ParseBool(requiredN.Scalar()).value_or(false);
 
+    const YAML::Node earlyN = ChildByKey(entry, "early");
+    if (earlyN.IsScalar()) spec.early = ParseBool(earlyN.Scalar()).value_or(false);
+
     const YAML::Node targetN = ChildByKey(entry, "target");
     if (targetN.IsScalar()) spec.target = InterpolateString(targetN.Scalar(), nullptr, targetN.Mark());
 
