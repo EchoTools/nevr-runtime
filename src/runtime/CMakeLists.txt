@@ -667,6 +667,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
+    # The #403 self-check (compat/party_leave_check.h): each SNSPartyLeaveNotify the game client receives is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_party_leave_check
+      tests/test_party_leave_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_party_leave_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_party_leave_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_leave_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_party_leave_check DISCOVERY_MODE PRE_TEST)
+
     # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
     add_executable(test_socket_role tests/test_socket_role.cpp)
     set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
