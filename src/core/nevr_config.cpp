@@ -43,24 +43,16 @@ std::optional<std::string> GetEnv(const std::string& name) {
   return s;
 }
 
-// Collects the names of unset bare ${VAR} references while a load validates the
-// tree; null outside that pass, so the repeated read-time interpolation is silent.
-thread_local std::set<std::string>* t_unsetBareVars = nullptr;
-
-// Points t_unsetBareVars at a set for the guard's lifetime, including on a throw.
-class UnsetBareSink {
- public:
-  explicit UnsetBareSink(std::set<std::string>* sink) { t_unsetBareVars = sink; }
-  ~UnsetBareSink() { t_unsetBareVars = nullptr; }
-  UnsetBareSink(const UnsetBareSink&) = delete;
-  UnsetBareSink& operator=(const UnsetBareSink&) = delete;
-};
+// Where unset bare ${VAR} names are collected: a pointer passed down the call, null when the caller does not
+// want them. Not a thread_local: the Quest sentinel (which builds this file) allows no thread-local state of its
+// own (tests/quest TestNoEmulatedTLSInHookPath).
+using UnsetSink = std::set<std::string>*;
 
 // Resolve one `${...}` body. Forms:
 //   ${VAR}        optional in effect — stays literal "${VAR}" if unset (warned at load)
 //   ${VAR:?msg}   required — throws with `msg` (or a default) if unset
 //   ${VAR:-def}   optional — `def` if unset
-std::string ResolveVar(const std::string& inner) {
+std::string ResolveVar(const std::string& inner, UnsetSink unset) {
   std::string var = inner;
   char mode = 0;  // 0 bare, '?' required-with-msg, '-' default
   std::string rest;
@@ -84,7 +76,7 @@ std::string ResolveVar(const std::string& inner) {
   // Bare ${VAR}, unset: the text stays as written. Failing here would cost a client
   // its whole config (every plugin) over one value; secrets use ${VAR:?msg}, which
   // still throws. The name is collected for the caller (UnsetBareVars()), which reports it.
-  if (t_unsetBareVars != nullptr) t_unsetBareVars->insert(var);
+  if (unset != nullptr) unset->insert(var);
   return "${" + inner + "}";
 }
 
@@ -94,7 +86,7 @@ std::string ResolveVar(const std::string& inner) {
 // otherwise be read as a variable reference). No other `$` is special: $$ not followed by
 // { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
 // variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
-std::string InterpolateString(const std::string& in) {
+std::string InterpolateString(const std::string& in, UnsetSink unset = nullptr) {
   std::string out;
   std::size_t i = 0;
   while (i < in.size()) {
@@ -107,7 +99,7 @@ std::string InterpolateString(const std::string& in) {
         out += in.substr(i);
         break;
       }
-      out += ResolveVar(in.substr(i + 2, close - (i + 2)));
+      out += ResolveVar(in.substr(i + 2, close - (i + 2)), unset);
       i = close + 1;
     } else {
       out += in[i++];
@@ -117,8 +109,8 @@ std::string InterpolateString(const std::string& in) {
 }
 
 // If `n` is a scalar, return its interpolated value; otherwise nullopt.
-std::optional<std::string> InterpolateScalar(const YAML::Node& n) {
-  if (n.IsScalar()) return InterpolateString(n.Scalar());
+std::optional<std::string> InterpolateScalar(const YAML::Node& n, UnsetSink unset = nullptr) {
+  if (n.IsScalar()) return InterpolateString(n.Scalar(), unset);
   return std::nullopt;
 }
 
@@ -129,16 +121,16 @@ std::optional<std::string> InterpolateScalar(const YAML::Node& n) {
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
 // lazily at read time (GetString etc.); this walk only validates.
-void ValidateInterpolation(const YAML::Node& node) {
+void ValidateInterpolation(const YAML::Node& node, UnsetSink unset) {
   switch (node.Type()) {
     case YAML::NodeType::Scalar:
-      (void)InterpolateString(node.Scalar());  // may throw
+      (void)InterpolateString(node.Scalar(), unset);  // may throw
       break;
     case YAML::NodeType::Sequence:
-      for (const auto& child : node) ValidateInterpolation(child);
+      for (const auto& child : node) ValidateInterpolation(child, unset);
       break;
     case YAML::NodeType::Map:
-      for (const auto& kv : node) ValidateInterpolation(kv.second);
+      for (const auto& kv : node) ValidateInterpolation(kv.second, unset);
       break;
     default:
       break;
@@ -309,10 +301,7 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
 
   ValidateTopLevel(raw);
   std::set<std::string> unsetBare;
-  {
-    UnsetBareSink sink(&unsetBare);
-    ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
-  }
+  ValidateInterpolation(raw, &unsetBare);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_);
@@ -332,8 +321,7 @@ std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* 
   if (!impl_) return std::nullopt;
   if (hadUnsetBare == nullptr) return InterpolateScalar(ResolvePath(impl_->root, path));
   std::set<std::string> unset;
-  UnsetBareSink sink(&unset);
-  std::optional<std::string> value = InterpolateScalar(ResolvePath(impl_->root, path));
+  std::optional<std::string> value = InterpolateScalar(ResolvePath(impl_->root, path), &unset);
   *hadUnsetBare = !unset.empty();
   return value;
 }
