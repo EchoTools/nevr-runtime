@@ -459,7 +459,7 @@ char* ProveOfflineId(const sentinel::ElfImage& image) {
   return reinterpret_cast<char*>(image.base + T::kOfflineIdVaddr);
 }
 
-// ReadyFn / ResetFn for the prerequisites. The reset runs on a login attempt where no NEVR login is
+// ReadyFn / ResetFn (and below HoldFn) for the prerequisites. The reset runs on a login attempt where no NEVR login is
 // ready, so a stand-in held in the globals by an earlier ready attempt the game then failed on its
 // own path (never reaching the hooked send) does not persist in OfflineID() or the party records.
 // It writes only over our own stand-ins (StandIn predicates), so a real Oculus value is untouched.
@@ -483,6 +483,14 @@ void LoginResetHeldStandIns() noexcept {
 bool LoginIdentityReady() noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
   return state != nullptr && state->source != nullptr && state->source->Ready();
+}
+
+// HoldFn for the prerequisites (#581): the four local login answers wait while the installed identity source says
+// token auth has a token coming without the player (IdentitySource::HoldsAnswers, one lock-free atomic load by
+// contract). Without a published state or a source nothing holds, so the answers are delivered.
+bool LoginIdentityHolds() noexcept {
+  const State* state = g_published.load(std::memory_order_acquire);
+  return state != nullptr && state->source != nullptr && state->source->HoldsAnswers();
 }
 
 // Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
@@ -600,8 +608,9 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   }
   // The four Oculus answers the game needs before it calls SendLogInRequest; installed here so
   // they are in place before RadPluginMain issues the first requests. Substitution is gated on the
-  // identity source being Ready (fail closed), logged by the install summary. Logs its own summary.
-  InstallLoginPrerequisites(image, &LoginIdentityReady, &LoginResetHeldStandIns);
+  // identity source being Ready (fail closed) and the local answers wait while it holds them (#581), logged by
+  // the install summary. Logs its own summary.
+  InstallLoginPrerequisites(image, &LoginIdentityReady, &LoginResetHeldStandIns, &LoginIdentityHolds);
   const LogKv fields[] = {{"op", "install", 0}, {"state", "installed", 0}, {"slot", "CNSUser::SendLogInRequest", 0}};
   log(Level::Info, "quest_login_install", fields, 3);
   return InstallState::Installed;
