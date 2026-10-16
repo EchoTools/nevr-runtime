@@ -29,9 +29,7 @@ result into `gOBBPath`, logs `OBB mounted at '%s'` and sets the flag byte. `CSys
 ## Decision
 
 **No feature flag.** The skip runs on every launch: nothing in the configuration turns it off, and it needs no other
-feature. A fix has no reason to be switched off, and a flag is a second code path to support. `obb_skip` is a retired
-feature name (`kRetiredFeatures` in `sentinel/quest_config.cpp`): a config file that names it gets one warning saying
-so, and `NEVR_QUEST_DEFAULT_FEATURES` naming it fails the configure (`cmake/nevr_build_info.cmake`).
+feature. A fix has no reason to be switched off, and a flag is a second code path to support.
 
 **The ctor steps.** `register_obb_skip_counters` (with the other counters, before the single reporter start) and
 `install_obb_skip` (right after the clock hook, so it is in place before libr15 runs `CSysFile::Init`), both on every
@@ -83,6 +81,5 @@ services the looper, and that remaining time is not measured. A missing extracte
 | `obb_skip_hook_test` (`just test-quest-hooks`) | the handlers through the thunk entries against a model of the callback and the wait loop: no wait when armed, the callback gets state 1 and its own arguments, the root is served, a call without a callback and a path request before the skip go to the original, a thunk without an original is a fault |
 | `integration_sequence_test` | installed with every feature off and when the configuration cannot be resolved; counters before the reporter; `counters_refused`; a failing or throwing step leaves the others unchanged |
 | `integration_hooks_test` | the counter budget with the four counters |
-| `quest_config_test` | not a feature: the feature report does not name it; a file naming `obb_skip` gets the retired warning and nothing changes |
-| `tools/tests/test_quest_default_features.py` | `NEVR_QUEST_DEFAULT_FEATURES` naming `obb_skip` fails the configure |
+| `quest_config_test` | not a feature: the feature report does not name it |
 | `got_pinned_test` (`just test-quest-hooks-pinned`) | both slots resolve in the pinned `libr15.so` |
