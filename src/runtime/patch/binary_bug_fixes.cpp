@@ -462,8 +462,8 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
  * the flags byte at entry, so a live -server run shows whether bit1 is set;
  * static analysis could not find the setter (indirect dispatch, and
  * revault_search_code returns reconstruction-node noise for generic offset
- * patterns).  In a hung -server run the hook installs and is never invoked,
- * so the block is upstream of this function.
+ * patterns).  A -server run reaches this function once multiplayer begins, which
+ * the state machine starts after the login (state_machine.cpp).
  *
  * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
  * through unmodified. Server mode only (client mode calls this constantly
@@ -655,14 +655,25 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
     } else {
         // Save original byte before overwriting — N33: restore on Shutdown.
         memcpy(&s_busywait_original_byte, busywait, 1);
-        s_busywait_patched = true;
         uint8_t ret_byte = 0xC3;
-        ProcessMemcpy(busywait, &ret_byte, 1);
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX why=\"its QPC + Sleep(0) spin loop starves the hyper-thread sibling; now returns immediately (costs about 250 us of frame-pacing precision)\" saved_orig_byte=0x%02X",
-            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
-            static_cast<unsigned int>(s_busywait_original_byte));
-        installed++;
+        DWORD error = ERROR_SUCCESS;
+        if (WriteBusyWaitByte(busywait, &ret_byte, s_busywait_patched, true,
+                              [&error](void* address, const uint8_t* byte, size_t size) {
+                                  return ProcessMemcpy(address, byte, size, &error);
+                              })) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX why=\"its QPC + Sleep(0) spin loop starves the hyper-thread sibling; now returns immediately (costs about 250 us of frame-pacing precision)\" saved_orig_byte=0x%02X",
+                static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
+                static_cast<unsigned int>(s_busywait_original_byte));
+            installed++;
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] patch failed name=CPrecisionSleep::BusyWait va=0x%llX error=%lu",
+                static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT), static_cast<unsigned long>(error));
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += "CPrecisionSleep::BusyWait";
+            failed++;
+        }
     }
 
     // BUG #62 fix: httpport HTTP-listener bind failure must be fatal (server mode).
@@ -813,13 +824,25 @@ void nevr_binary_bug_fixes::Shutdown() {
     if (s_busywait_patched) {
         void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
         if (busywait) {
-            ProcessMemcpy(busywait, &s_busywait_original_byte, 1);
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] binary bug fixes shutdown restored BusyWait byte 0x%02X at va=0x%llX",
-                static_cast<unsigned int>(s_busywait_original_byte),
+            DWORD error = ERROR_SUCCESS;
+            if (WriteBusyWaitByte(busywait, &s_busywait_original_byte, s_busywait_patched, false,
+                                  [&error](void* address, const uint8_t* byte, size_t size) {
+                                      return ProcessMemcpy(address, byte, size, &error);
+                                  })) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.PATCH] binary bug fixes shutdown restored BusyWait byte 0x%02X at va=0x%llX",
+                    static_cast<unsigned int>(s_busywait_original_byte),
+                    static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] restore failed name=CPrecisionSleep::BusyWait va=0x%llX error=%lu",
+                    static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT), static_cast<unsigned long>(error));
+            }
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] restore failed name=CPrecisionSleep::BusyWait va=0x%llX reason=address_unmapped",
                 static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
         }
-        s_busywait_patched = false;
     }
     if (s_cached_timer != NULL) {
         CloseHandle(s_cached_timer);

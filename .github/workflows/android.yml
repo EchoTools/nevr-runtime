@@ -88,9 +88,9 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
         restore-keys: |
-          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-
+          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-
 
     - name: Build and test (just build-android, just test-android)
       env:
@@ -108,4 +108,4 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}

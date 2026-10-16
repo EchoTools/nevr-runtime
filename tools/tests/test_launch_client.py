@@ -53,7 +53,7 @@ def make_fake_bin(directory: pathlib.Path) -> None:
     (directory / "pgrep").write_text(
         '#!/bin/bash\n'
         'for a in "$@"; do\n'
-        '  if [[ "$a" == "Xephyr :101" ]]; then exit 0; fi\n'
+        '  if [[ "$a" == "([X]vfb|[X]ephyr) :101" ]]; then exit 0; fi\n'
         'done\n'
         'matches_cmdline=0\n'
         'for a in "$@"; do [[ "$a" == "-f" ]] && matches_cmdline=1; done\n'
@@ -355,6 +355,14 @@ class VerifyServerTest(unittest.TestCase):
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
         self.assertFalse((self.win10 / "plugins/extra.dll").exists(), "a deployed plugin was left behind")
         self.assertIn("deployed files restored and verified", (self.tmp / "server-runs/run1/server.log").read_text())
+
+    def test_the_timestep_flag_set_passes_the_options_a_server_strips(self):
+        # #515: the run that shows GameMainWrapperHook removing -fixedtimestep and -timestep <value>.
+        result = subprocess.run([str(self.checkout / "verify-server.sh"), "run-ts", "timestep", "1"], env=self.env,
+                                cwd=self.checkout, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("args=-server -headless -noconsole -fixedtimestep -timestep 120",
+                      (self.tmp / "server-runs/run-ts/context.txt").read_text().splitlines())
 
     def test_an_interrupted_run_still_restores(self):
         env = dict(self.env, FAKE_WINE_SLEEP="30")

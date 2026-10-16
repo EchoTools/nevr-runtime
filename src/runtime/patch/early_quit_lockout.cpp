@@ -132,9 +132,15 @@ void KeepFeatureFlagBit1() {
   }
   // The game service decides which bits are set; the client keeps them all.
   std::uint8_t keepAll = 0xFF;
-  ProcessMemcpy(static_cast<std::uint8_t*>(target) + kFeatureFlagsMaskOffset, &keepAll, sizeof(keepAll));
-  nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx\n",
-                         static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset));
+  DWORD error = ERROR_SUCCESS;
+  if (ProcessMemcpy(static_cast<std::uint8_t*>(target) + kFeatureFlagsMaskOffset, &keepAll, sizeof(keepAll), &error)) {
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] feature-flag mask 0xdd -> 0xff va=0x%llx\n",
+                           static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset));
+  } else {
+    nevr_boot_log_tee::TeeFprintf("[NEVR.EARLYQUIT] warn; feature-flag mask patch failed va=0x%llx error=%lu\n",
+                           static_cast<unsigned long long>(kFeatureFlagsCallbackVA + kFeatureFlagsMaskOffset),
+                           static_cast<unsigned long>(error));
+  }
 }
 
 }  // namespace

@@ -2,7 +2,7 @@
  *
  * DLL Load Interceptor
  *
- * Hooks LoadLibraryA/W to intercept DLL loads at runtime. Components
+ * Hooks LoadLibraryA/W/ExA/ExW to intercept DLL loads at runtime. Components
  * register interest in specific DLL names via OnLoad(). When a matching
  * DLL loads, the registered callback fires with the HMODULE — allowing
  * post-load patching before the game uses the DLL.
@@ -29,6 +29,7 @@
 
 #ifdef _WIN32
 #include <MinHook.h>
+#include <winternl.h>  // TEB::ProcessEnvironmentBlock
 #endif
 
 namespace nevr_dll_load_hook {
@@ -49,6 +50,8 @@ struct Filter {
     LoadFilter predicate;
 };
 static std::vector<Filter> g_filters;
+
+static std::vector<PostLoadObserver> g_observers;
 
 #ifdef _WIN32
 
@@ -188,10 +191,26 @@ static void FireCallbacks(const char* lower_name, HMODULE module) {
     }
 }
 
+/* The PEB's LoaderLock field (an RTL_CRITICAL_SECTION*) on x64. winternl.h's PEB names it Reserved. */
+static constexpr size_t kPebLoaderLockOffset = 0x110;
+
+/* Run every post-load observer, unless this thread holds the loader lock. Copies the list first, so an
+ * observer may load a library or register another observer. */
+static void RunPostLoadObservers() {
+    if (LoaderLockHeldByThisThread()) return;
+    std::vector<PostLoadObserver> observers;
+    {
+        std::lock_guard<std::mutex> lock(g_registryMutex);
+        observers = g_observers;
+    }
+    for (const auto observer : observers) observer();
+}
+
 /* Hook implementations */
 static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryA(lpFileName);
+    RunPostLoadObservers();
     if (result && lpFileName) {
         char lower[64];
         ExtractLowerFilename(lpFileName, lower, sizeof(lower));
@@ -203,6 +222,7 @@ static HMODULE WINAPI HookedLoadLibraryA(LPCSTR lpFileName) {
 static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryW(lpFileName);
+    RunPostLoadObservers();
     if (result && lpFileName) {
         char lower[64];
         ExtractLowerFilenameW(lpFileName, lower, sizeof(lower));
@@ -214,6 +234,7 @@ static HMODULE WINAPI HookedLoadLibraryW(LPCWSTR lpFileName) {
 static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryExA(lpFileName, hFile, dwFlags);
+    RunPostLoadObservers();
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
         ExtractLowerFilename(lpFileName, lower, sizeof(lower));
@@ -225,6 +246,7 @@ static HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpFileName, HANDLE hFile, DWOR
 static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWORD dwFlags) {
     if (lpFileName && RefuseLoad(LowerWide(lpFileName))) return nullptr;
     HMODULE result = g_origLoadLibraryExW(lpFileName, hFile, dwFlags);
+    RunPostLoadObservers();
     if (result && lpFileName && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) {
         char lower[64];
         ExtractLowerFilenameW(lpFileName, lower, sizeof(lower));
@@ -283,16 +305,35 @@ bool IsLoadBlocked(const wchar_t* lower_path, const char** blocked_by) {
     return false;
 }
 
+bool LoaderLockHeldByThisThread() {
+#ifdef _WIN32
+    const auto* peb = reinterpret_cast<const std::uint8_t*>(NtCurrentTeb()->ProcessEnvironmentBlock);
+    const auto* loaderLock = *reinterpret_cast<RTL_CRITICAL_SECTION* const*>(peb + kPebLoaderLockOffset);
+    if (loaderLock == nullptr) return false;
+    // OwningThread holds the owner's thread id (not a handle) while the section is entered, 0 otherwise.
+    return reinterpret_cast<std::uintptr_t>(loaderLock->OwningThread) ==
+           static_cast<std::uintptr_t>(GetCurrentThreadId());
+#else
+    return false;
+#endif
+}
+
+void AddPostLoadObserver(PostLoadObserver observer) {
+    if (!observer) return;
+    std::lock_guard<std::mutex> lock(g_registryMutex);
+    g_observers.push_back(observer);
+}
+
 void Install() {
 #ifdef _WIN32
-    // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
-    // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
-    // one. A single "OK"/"PARTIAL" across all four variants would hide WHICH
-    // variant failed and WHY. In the one
-    // path where a silently-unhooked LoadLibrary is a hijack gap, that is the worst
-    // place to be vague. Report each variant and its MH_STATUS, mirroring N126/N128
-    // for the PatchDetour path. (This path does not go through PatchDetour, so it
-    // needs its own reporting — it was the last MinHook install site without it.)
+    // N129. These four hooks run the load filters (AddLoadFilter), post-load
+    // observers (AddPostLoadObserver) and DLL-load callbacks (OnLoad) the runtime
+    // registers, each under its own condition (the Hooked* functions above). They
+    // restrict no search path (N75's is the plugin loader's own load flags). A single
+    // "OK"/"PARTIAL" across all four variants would hide WHICH variant failed and WHY:
+    // loads through an unhooked variant run no filter, observer or callback. Report
+    // each variant and its MH_STATUS, mirroring N126/N128 for the PatchDetour path.
+    // (This path does not go through PatchDetour, so it needs its own reporting.)
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
@@ -323,10 +364,12 @@ void Install() {
                 }
                 *s.original = nullptr;
             }
-            fprintf(stderr,
-                    "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
-                    "hardening inactive for this variant\n",
-                    s.name, MH_StatusToString(st));
+            // A create that failed because the hook already exists leaves that hook live.
+            const char* effect = created == MH_ERROR_ALREADY_CREATED
+                                     ? "a hook created earlier stays in place"
+                                     : "loads through this variant run no load filter, observer or callback";
+            fprintf(stderr, "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — %s\n", s.name,
+                    MH_StatusToString(st), effect);
         }
     }
 
@@ -348,20 +391,21 @@ void Shutdown() {
     std::lock_guard<std::mutex> lock(g_registryMutex);
     g_registrations.clear();
     g_filters.clear();
+    g_observers.clear();
 }
 
 void OnLoad(const char* dll_name, PatchCallback callback) {
     Registration reg{};
     ExtractLowerFilename(dll_name, reg.dll_name, sizeof(reg.dll_name));
     reg.callback = callback;
+    // If the DLL is already loaded, fire immediately
+    HMODULE existing = FindLoadedModule(dll_name);
     {
         std::lock_guard<std::mutex> lock(g_registryMutex);
         reg.id = ++g_nextRegistrationId;
         g_registrations.push_back(reg);
     }
 
-    // If the DLL is already loaded, fire immediately
-    HMODULE existing = FindLoadedModule(dll_name);
     if (existing) {
         bool claimed = false;
         {

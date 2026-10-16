@@ -225,7 +225,7 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   The hook skips (a plain return) the enable of the error pages while the latch is armed, and the enable of
   the logging-in page while the latch is armed and the login may not proceed. "May proceed" is one
   process-wide word (`quest/login/login_attempt_gate.h`) that the token-auth source publishes and that
-  both this hook and the login prerequisites (`IdentitySource::Ready`) read, so they cannot disagree: the
+  both this hook and the login prerequisites (`IdentitySource::Ready`, `IdentitySource::HoldsAnswers`) read, so they cannot disagree: the
   skip stops in the same instant the login may proceed, and an attempt whose logging-in page was skipped is
   poisoned and fails its prerequisites until the game leaves "logging in", even if the gate turns ready
   meanwhile (otherwise the login would succeed on a screen that cannot show it). The signed-in notice is
@@ -424,23 +424,29 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    auth inputs; platform adapters supply the environment and embedded defaults. The first
    Quest use is the shared URL policy at the config-string lookup below. It neither adds nor
    depends on a game `config.json`, and a test shows the Quest config path never names one.
-   `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
+   `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `config.yaml` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
    time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
-   from the repository's Actions variables, at configure time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
-   `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
-   is off unless the file turns it on, and is forced off while its prerequisite is missing
-   (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
-   non-object or oversized (64 KiB) file is rejected whole: embedded values, all features off.
+   from the repository's Actions variables, at configure time only), else absent. The file is parsed by the PC's
+   `nevr_config` (`src/core/nevr_config.cpp`, yaml-cpp), so the keys are the PC's: `services.socket_uri`,
+   `auth.http_uri`, `auth.http_key`, `auth.server_key` and `social.facade`, plus the Quest-only
+   `social.send_presence_to_meta` and `diagnostics.hardware_dump` (`docs/reference/example-config.yaml`
+   documents each). No key switches the redirect, the bridge or the login: the redirect is on when a target
+   (`services.socket_uri` or `auth.http_uri`) resolves, the bridge when the redirect is on and a socket URI resolves,
+   login when the bridge is on and a server key resolves, and social (default on, the status names with it) needs
+   login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it
+   down with it, and each logs `forced off reason=<name>`. A YAML error, an unknown top-level key, a top level that
+   is not a mapping, a malformed `plugins` list, an unset `${VAR:?}`, nesting deeper than 64 levels, more than
+   100,000 nodes once aliases are expanded, or a file over 64 KiB rejects the file whole: embedded values, the default
+   features, one Error line `config file=<path> rejected reason=<token> (embedded defaults stay)` where the token is
+   `nevr_config`'s class of failure (`ReasonToken`), never the parser's text.
    Every key source, requested and effective feature state, and rejection is logged by key or
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
-   same directory, as one JSON object per line. A value the file gives as the empty string is
-   rejected and cannot clear an embedded default; a key given twice in one object takes the
-   last value and logs a warning. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
-   limits). Warnings about the file are capped at 32 lines plus one suppression line, and
-   repeated duplicate keys collapse to one line per name. A name taken from the file is logged
-   only when it is one of the keys or features above; any other name is counted ("unknown key
-   #N"), never echoed. `sentinel_host_test` runs
+   same directory, as one JSON object per line, and the log names the file it read
+   (`config file=<path> loaded`, or `absent, using embedded defaults`). A value the file gives as the empty
+   string is rejected and cannot clear an embedded default. A `nevr-quest.json` in the
+   same directory is not read; the log says once that it is present and ignored. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
+   limits). `sentinel_host_test` runs
    the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
    host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
@@ -638,7 +644,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      16 KiB), installs handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGBUS` and `SIGTRAP`
      (`InstallHandlersLocked`, `kExceptionSignals`), and creates a dump GUID from `getrandom`
      (`GRND_NONBLOCK`) or, failing that, `/dev/urandom` (`extern/breakpad/src/common/linux/guid_creator.cc`);
-   - `InitActivation()`: opens `nevr-quest.json` read-only and `nevr-sentinel.log` read-write in
+   - `InitActivation()`: opens `config.yaml` read-only and `nevr-sentinel.log` read-write in
      append mode in the app's external files directory. Both opens are non-blocking, the log open
      does not follow symlinks, and each target must be a regular file (a FIFO or device is
      refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open (a
@@ -1067,9 +1073,13 @@ The four user requests are answered without Meta either (local answers, `login_p
 `local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
 the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
 `ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
-it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
-`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
-code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array)
+unless `IdentitySource::HoldsAnswers` holds the answers. They are held only while token auth has a token coming
+without the player (starting, refreshing, expired, a failure it retries, a token that ran out), so a login that
+token auth will complete waits where it already waits. While the player is awaited, or when no token will come, they
+are delivered; the identity is not ready, so the not-ready reset (`ResetHeldStandIns`) withdraws the stand-ins after
+each synthetic callback and the game's own `UpdateInternal` fails the login with "One or more prerequisites are
+missing", the local failure the sign-in code is written onto (`IsLocalLoginFailure`). The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
 the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
 `ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
 are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
@@ -1109,10 +1119,13 @@ by the walk: `blr`/`br` and a PLT stub into the library's own exports.
 its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
-`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
+`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
+not-ready reset withdraws the stand-in it gave) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
 that is never answered shows as a request with no callback. No record carries a token, nonce, user
-name or id value. The install logs one `quest_login_prerequisites_install` summary. Measured on the
+name or id value. The install logs one `quest_login_prerequisites_install` summary, and the token-auth poll logs one
+`quest_login_answers` record (`mode` held or answered, `status` the readiness) on its first pass and each time the
+hold changes. Measured on the
 host against a fake Platform SDK (`src/quest/tests/login_prerequisites_test.cpp`); not run on a
 device.
 
@@ -1622,13 +1635,11 @@ What the integration commit calls, and when:
    `social_game_calls.cpp` are `-fno-exceptions` (CMake source properties); the sentinel's link must not
    change that.
 
-The social switch (for `quest_config.*`, owned by the config package; not edited here): a fourth
-`Feature`, `kSocial`, named `social`, read from `features.social` in `nevr-quest.json`, off unless the file
-turns it on, like the others. Its prerequisite is the login feature being effective (the facade is only
-meaningful with an account and the service connection behind it); otherwise it is forced off with the
-logged reason `login_not_enabled`. `Features` gains a `social` flag, `kFeatures` a fourth entry, and the
-config test vectors cover: social alone forced off; social with login, bridge and redirect on; social
-absent from the file. The only consumer is the install call above.
+The social switch (`quest_config.*`): the feature `social`, read from `social.facade` in `config.yaml` (the PC's key and
+default, true). Its prerequisite is the login feature being effective (the facade is only meaningful with an account
+and the service connection behind it); otherwise it is forced off with the logged reason `login_not_enabled`. The
+config test vectors cover: login without its server key forcing social off, the chain from a missing socket URI, and
+`social.facade: false`. The only consumer is the install call above.
 
 ### Risks
 
@@ -1703,7 +1714,9 @@ slots (`integration_hooks_test` runs the sequence against the real registration 
 `IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
 (token auth Ready with an access token and a NEVR account) and clear it in every other state, so a
-stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). It can trail a state
+stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). The same observation publishes
+the hold (`IdentitySource::HoldsAnswers`, `TokenIdentitySource::HoldsFor`) in the same store of the attempt gate;
+the local answers are held only while it is set and the gate is neither ready nor poisoned. Both can trail a state
 change by up to one poll period (2 s).
 
 **Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth

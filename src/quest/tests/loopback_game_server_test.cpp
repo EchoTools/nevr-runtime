@@ -56,6 +56,7 @@ class FakeRemotes : public RemoteTransport {
   void Close(RemoteId remote, uint16_t) override {
     std::lock_guard<std::mutex> lock(mutex);
     closedRemotes.push_back(remote);
+    cv.notify_all();
   }
   template <class Pred>
   bool WaitFor(Pred pred, int ms = 3000) {
@@ -137,6 +138,7 @@ std::string UpgradeRequestText(const std::string& target, const std::string& ext
 struct Rig {
   FakeRemotes remotes;
   std::mutex logMutex;
+  std::condition_variable logCv;
   std::vector<std::string> logs;
   std::unique_ptr<LoopbackGameServer> server;
   std::unique_ptr<Router> router;
@@ -152,6 +154,7 @@ struct Rig {
     cfg.log = [this](LogLevel, const std::string& l) {
       std::lock_guard<std::mutex> lock(logMutex);
       logs.push_back(l);
+      logCv.notify_all();
     };
     server = std::make_unique<LoopbackGameServer>(cfg);
     Options options;
@@ -210,6 +213,17 @@ struct Rig {
       ++n;
     }
     return n;
+  }
+  bool WaitForAccepted(std::size_t count) {
+    std::unique_lock<std::mutex> lock(logMutex);
+    return logCv.wait_for(lock, std::chrono::seconds(3), [&] {
+      std::size_t accepted = 0;
+      for (const std::string& line : logs) {
+        if (line.find("\"event\":\"router_game_conn\"") != std::string::npos &&
+            line.find("\"action\":\"accepted\"") != std::string::npos) ++accepted;
+      }
+      return accepted >= count;
+    });
   }
   bool WaitForRecord(const std::string& event, const std::string& action, const std::string& why = "",
                      int ms = 3000) {
@@ -402,6 +416,7 @@ void TestOversizedMessage() {
   QCHECK(game.Read(expected.size()) == expected);
   QCHECK(game.WaitEof());
   QCHECK(rig.remotes.sent.empty());
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.closedRemotes.size() == 1; }));
   QCHECK(rig.router->GetStats().games == 0);
 }
 
@@ -669,6 +684,26 @@ void TestEveryConnectionIsRecorded() {
   QCHECK(!rig.HasLog(rig.Token()));
 }
 
+void TestSilentSocketsDoNotRefuseGameUpgrade() {
+  Rig rig(1u << 20, 8u << 20, 30000,
+          [](LoopbackGameServer::Config& c) { c.handshakeTimeoutMs = 5000; });
+  const uint16_t port = rig.server->Start();
+  QCHECK(port != 0);
+  std::vector<std::unique_ptr<Client>> silent;
+  for (std::size_t i = 0; i < 16; ++i) {
+    silent.push_back(std::make_unique<Client>(port));
+    QCHECK(silent.back()->fd >= 0);
+  }
+  QCHECK(rig.WaitForAccepted(16));
+  Client game(port);
+  QCHECK(game.fd >= 0);
+  game.Write(UpgradeRequestText(rig.GoodTarget()));
+  const std::string response = game.Read(50);
+  QCHECK(response.rfind("HTTP/1.1 101", 0) == 0);
+  QCHECK(silent.front()->WaitEof());
+  QCHECK(rig.Count("router_game_conn", "ended", "silent_preempted") == 1);
+}
+
 // Failure caught (#240): the listening socket closed by someone else in the process (a stale close of a
 // reused number). The game then got ECONNREFUSED every 5 s and the server logged nothing. Now the loss is
 // reported with the class that names it, and the same port listens again with the same token.
@@ -849,6 +884,7 @@ int main() {
   TestLoginConnectionIsNeverIdleClosedAfterTheRelease();
   TestHeldLoginIsClosedWhenTheAccountIsRefused();
   TestEveryConnectionIsRecorded();
+  TestSilentSocketsDoNotRefuseGameUpgrade();
   TestListenerClosedUnderneathIsReportedAndRestored();
   TestListenerThatStopsListeningIsReportedAndRestored();
   TestReplacedListenerNumberIsNotClosed();

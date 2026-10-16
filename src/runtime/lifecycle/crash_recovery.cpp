@@ -1,5 +1,4 @@
 #include "runtime/lifecycle/crash_recovery.h"
-#include "runtime/log/boot_log_tee.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -18,8 +17,12 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <exception>
+#include <new>
+#include <string>
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/cmdline_strip.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -28,6 +31,7 @@
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
+#include "runtime/patch/resource_override.h"
 
 // N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
 // its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
@@ -50,6 +54,57 @@ static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
 /// it directly in the restart loop without going through the wrapper.
 typedef INT64 GameMainFunc(INT64 arg1);
 static GameMainFunc* GameMain = nullptr;
+
+// #515: what GameMainWrapperHook did to the game's command line, for boot.cpp's log line. Written once,
+// before GameMain, then published by g_stripReportReady.
+static TimestepStripReport g_stripReport;
+static std::atomic<bool> g_stripReportReady{false};
+
+TimestepStripReport GetTimestepStripReport() {
+  if (!g_stripReportReady.load(std::memory_order_acquire)) return TimestepStripReport{};
+  return g_stripReport;
+}
+
+// #515: arg1 is the ANSI command line the game parses in Main_ (GetCommandLineA, passed in RCX). A
+// server's time step is NEVR's, so -fixedtimestep and -timestep <value> come out before the game reads
+// them. Only this early is it effective: Main_ builds its CMainArgs from this string, before
+// PreprocessCommandLine. -server comes from the same string (g_isServer is not set yet). PrepareForGame
+// makes the whole decision; the buffer is static so it outlives Main_'s parse. A client, or a command
+// line with nothing to remove, gets arg1 back unchanged. This allocates while echovr.exe calls it, so a
+// failure falls back to arg1 (the game then sees the original string) and is logged and recorded. Its
+// std::string and report die when it returns: GameMainWrapperHook calls GameMain with only trivial locals
+// alive, because the VEH longjmps out of GameMain.
+static INT64 PrepareGameArgument(INT64 arg1) {
+  static std::string s_serverCommandLine;
+  INT64 gameArg = arg1;
+  TimestepStripReport report;
+  try {
+    // Everything that can throw runs before gameArg or g_stripReport is touched, so a throw leaves the
+    // game the original string, exactly as the Warning below says (#515 review).
+    const nevr_cmdline::HandOff handOff =
+        nevr_cmdline::PrepareForGame(reinterpret_cast<const char*>(arg1), s_serverCommandLine);
+    report.tokensRemoved = handOff.tokensRemoved;
+    report.residual = handOff.residual;
+    report.options = handOff.optionsText;
+    gameArg = reinterpret_cast<INT64>(handOff.commandLine);
+  } catch (const std::bad_alloc&) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (out of memory); the game gets the original command line");
+  } catch (const std::exception& e) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    // Only the length of what(): exception text is not logged (docs/standards/logging.md, Rule 4).
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (std::exception, %zu bytes of text); the game gets the "
+        "original command line",
+        std::char_traits<char>::length(e.what()));
+  }
+  g_stripReport = std::move(report);
+  g_stripReportReady.store(true, std::memory_order_release);
+  return gameArg;
+}
 
 static INT64 GameMainWrapperHook(INT64 arg1) {
   // Set up the recovery point on this thread. The VEH checks server mode and
@@ -81,8 +136,12 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
+  // #515: what the game parses (the time-step arguments of a server removed). Done in a helper so no
+  // non-trivial local is alive across GameMain, which the VEH longjmps out of.
+  const INT64 gameArg = PrepareGameArgument(arg1);
+
   // Run the game main loop
-  const INT64 gameResult = GameMain(arg1);
+  const INT64 gameResult = GameMain(gameArg);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
@@ -115,13 +174,9 @@ void InstallGameMainHook() {
   GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
   OriginalGameMainWrapper =
       reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
-  // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
+  // Runs in the boot phase, where Log() reports through the boot tee.
   const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
-                                  : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
-                                    "longjmp is NOT armed\n");
-  } else if (hooked) {
+  if (hooked) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
         "null-deref AV in server mode will longjmp back here instead of terminating the process)");
@@ -272,6 +327,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called — not suppressed, process exiting", uExitCode);
+  ShutdownResourceOverride();
   OriginalExitProcess(uExitCode);
 }
 
@@ -1343,5 +1399,6 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   //    OriginalTerminateProcess which kills all threads immediately.
   //    On Wine, this also terminates the wineserver association, so the
   //    listener socket released in step 1 is reclaimed by the kernel.
+  ShutdownResourceOverride();
   ForceFatalExit(exitCode);
 }

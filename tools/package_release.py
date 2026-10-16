@@ -39,7 +39,6 @@ import check_embedded_defaults as defaults_check  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
-REQUIRED_FEATURES = ("redirect", "bridge", "login", "social")
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
@@ -59,7 +58,7 @@ def sha256(path: Path) -> str:
 def read_build_info(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     out = {}
-    for name in ("kVersion", "kCommit", "kDefaultFeatures"):
+    for name in ("kVersion", "kCommit"):
         match = re.search(rf'\b{name}\s*=\s*"([^"]*)";', text)
         if not match:
             raise GateFailure(f"{path.name}: {name} not found")
@@ -163,10 +162,12 @@ def gate(args, work: Path) -> dict:
             raise GateFailure(f"the APK has no {SENTINEL_IN_APK}")
     problems += [f"quest: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.quest_header), [sentinel])]
     info = read_build_info(Path(args.quest_build_info))
-    features = set(filter(None, info["kDefaultFeatures"].split(",")))
-    for feature in REQUIRED_FEATURES:
-        if feature not in features:
-            problems.append(f"quest: feature {feature} is not on by default: the APK would need a nevr-quest.json")
+    # No config.yaml key turns the redirect, the bridge or the login on: they follow from the embedded socket URI
+    # and server key. An APK that embeds neither would need a config.yaml to log in.
+    embedded = defaults_check.read_header(Path(args.quest_header))
+    for key, what in (("NEVR_SOCKET_URI", "socket URI"), ("NEVR_PUBLIC_SOCKET_KEY", "server key")):
+        if not embedded[key]:
+            problems.append(f"quest: no embedded {what}: the APK would need a config.yaml to log in")
     version, _ = identity_in(Path(args.dll).read_bytes(), "windows") if not problems else (None, None)
     if version is not None:
         if info["kVersion"] != version:

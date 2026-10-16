@@ -9,59 +9,74 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BootPhaseLogging(unittest.TestCase):
-    """#92: InitializeAfterGameImageGuard runs from DllMain under the loader lock. Once
-    InitializeFunctionPointers() resolves EchoVR::WriteLog, Log() enters the game logger
-    there. The N36 census in `just verify` only reads that function's own body, so the
-    helpers it calls are checked here."""
+    """InitializeAfterGameImageGuard runs from DllMain under the loader lock, between
+    nevr_boot_log_tee::Init() and Close(). Log() routes by that phase itself (#593): through the boot
+    tee while it runs, through the game's CLog after. test_boot_log_routing drives the routing; these
+    checks keep callers from branching on the phase by hand again."""
 
-    def test_patch_detour_reports_through_the_tee_during_boot(self):
+    def test_no_caller_branches_on_the_boot_phase(self):
+        offenders = []
+        for path in sorted((ROOT / "src").rglob("*")):
+            if path.suffix not in (".h", ".cpp") or "legacy" in path.parts:
+                continue
+            if "InBootPhase" in strip_comments(path.read_text(errors="replace")):
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [], "Log() knows the boot phase; callers must not branch on it")
+
+    def test_patch_detour_reports_a_failed_hook_through_log(self):
         source = (ROOT / "src/runtime/hook/patching.h").read_text()
-        body = extract_braced_function(source, "inline BOOL PatchDetour(")
-        match = re.search(
-            r"if\s*\(\s*nevr_boot_log_tee::InBootPhase\(\)\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<other>.*?)\}",
-            body,
-            re.S,
-        )
-        self.assertIsNotNone(match, "PatchDetour must branch on nevr_boot_log_tee::InBootPhase()")
-        self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("then"))
-        self.assertNotRegex(match.group("then").replace("TeeFprintf(", ""), r"\bLog\(")
-        self.assertIn("Log(EchoVR::LogLevel::Warning", match.group("other"))
-        outside = body.replace(match.group(0), "")
-        self.assertNotRegex(outside, r"\bLog\(", "PatchDetour logs outside the else branch")
+        body = strip_comments(extract_braced_function(source, "inline BOOL PatchDetour("))
+        self.assertIn("Log(EchoVR::LogLevel::Warning", body)
+        self.assertNotIn("TeeFprintf", body)
 
-    def test_boot_helpers_in_initialize_do_not_call_log(self):
-        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
-        for signature in ("static void NoteBootHookResult(", "static void InstallBootDetour("):
-            body = extract_braced_function(source, signature)
-            self.assertNotRegex(body, r"\bLog\(", f"{signature} calls Log() under the loader lock")
+    def test_log_routes_through_the_boot_sink_before_the_game_logger(self):
+        source = strip_comments((ROOT / "src/core/logging.cpp").read_text())
+        body = extract_braced_function(source, "VOID Log(EchoVR::LogLevel level, const CHAR* format, ...)")
+        self.assertIn("g_bootLogSink.load(", body)
+        self.assertLess(body.index("g_bootLogSink.load("), body.index("EchoVR::WriteLog("),
+                        "Log() must take the boot sink before the game logger")
 
-    def test_game_main_hook_reports_through_the_tee_during_boot(self):
-        # InstallGameMainHook runs in the boot phase (initialize.cpp), under the loader lock.
-        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
-        body = extract_braced_function(source, "void InstallGameMainHook(")
-        self.assertRegex(body, r"nevr_boot_log_tee::InBootPhase\(\)")
-        before_else = body.split("} else", 1)[0]
-        self.assertNotRegex(before_else, r"\bLog\(", "InstallGameMainHook logs before the InBootPhase branch ends")
-        self.assertIn("nevr_boot_log_tee::TeeFprintf(", before_else)
+    def test_the_boot_tee_owns_the_boot_sink(self):
+        # The boot phase is exactly the window the tee's sink is set: from the first statement of Init()
+        # to the first statement of Close().
+        source = (ROOT / "src/runtime/log/boot_log_tee.cpp").read_text()
+        init = strip_comments(extract_braced_function(source, "void nevr_boot_log_tee::Init("))
+        self.assertRegex(init.lstrip("{ \n"), r"^SetBootLogSink\(&ReportBootLog\)")
+        close = strip_comments(extract_braced_function(source, "void nevr_boot_log_tee::Close("))
+        self.assertRegex(close.lstrip("{ \n"), r"^SetBootLogSink\(nullptr\)")
 
-    def test_log_filter_init_cleanup_failure_goes_through_the_tee(self):
-        # nevr_builtin_log_filter::Init runs from InitializeAfterGameImageGuard under the loader
-        # lock, so the failed-hook cleanup record must use the boot tee. The N36 census reads only
-        # that function's own body and would not see a Log() here.
+    def test_log_filter_init_cleanup_failure_is_reported(self):
+        # nevr_builtin_log_filter::Init runs from InitializeAfterGameImageGuard, in the boot phase.
         source = (ROOT / "src/runtime/log/builtin_filter.cpp").read_text()
         body = extract_braced_function(source, "void nevr_builtin_log_filter::Init(")
         self.assertIn("MH_RemoveHook(g_hook_target)", body, "subject vanished: no failed-hook cleanup")
         match = re.search(r"if\s*\(\s*cleanup\s*!=\s*MH_OK\s*\)\s*\{(?P<b>[^{}]*)\}", body)
         self.assertIsNotNone(match, "the cleanup failure must be reported")
-        self.assertIn("nevr_boot_log_tee::TeeFprintf(", match.group("b"))
-        self.assertNotRegex(match.group("b"), r"\bLog\(", "the cleanup failure calls Log() under the loader lock")
+        self.assertRegex(match.group("b"), r"nevr_boot_log_tee::TeeFprintf\(|\bLog\(")
 
-    def test_xpid_boot_path_reports_through_the_tee_and_never_log_or_serverfatal(self):
-        # PatchDscProvider and PatchProviderPrefixOvrOrg run from Initialize() under the loader lock,
-        # before the CLI is parsed: Log() is not allowed and ServerFatal would only warn.
+    def test_log_filter_init_hook_outcomes_use_only_the_boot_tee(self):
+        source = (ROOT / "src/runtime/log/builtin_filter.cpp").read_text()
+        body = extract_braced_function(source, "void nevr_builtin_log_filter::Init(")
+        self.assertEqual(
+            2,
+            len(re.findall(
+                r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] warn; hook failed name=CLog::PrintfImpl',
+                body,
+            )),
+            "both failed hook stages must report through the boot tee",
+        )
+        self.assertEqual(2, body.count('"current=%02x%02x%02x%02x status=%s\\n"'))
+        self.assertRegex(
+            body,
+            r'nevr_boot_log_tee::TeeFprintf\(\s*"\[NEVR.PATCH\] debug; hooked name=CLog::PrintfImpl va=0x%llX\\n"',
+        )
+        self.assertNotRegex(body, r"\bLog\s*\(", "Init() runs in the boot phase (N36): its records go to the boot tee, not Log()")
+
+    def test_xpid_boot_path_reports_through_the_tee_and_never_serverfatal(self):
+        # PatchDscProvider and PatchProviderPrefixOvrOrg run from Initialize(), before the CLI is
+        # parsed: ServerFatal would only warn.
         source = strip_comments((ROOT / "src/runtime/patch/xpid_patch.cpp").read_text())
         self.assertGreater(source.count("nevr_boot_log_tee::TeeFprintf("), 4, "subject vanished: no tee records")
-        self.assertNotRegex(source, r"\bLog\(", "xpid_patch.cpp calls Log() on the boot path")
         self.assertNotIn("ServerFatal(", source, "xpid_patch.cpp calls ServerFatal before g_isServer is known")
 
     def test_every_boot_failure_records_a_cause_and_the_server_refusal_names_it(self):
@@ -75,7 +90,7 @@ class BootPhaseLogging(unittest.TestCase):
         self.assertRegex(boot, r"if\s*\(\s*g_bootHookFailed\s*\)\s*\{\s*ServerFatal\([^;]*g_bootHookFailedCause")
 
     def test_every_boot_return_ends_the_boot_phase(self):
-        # An early return that skips nevr_boot_log_tee::Close() leaves InBootPhase() true for the whole run.
+        # An early return that skips nevr_boot_log_tee::Close() leaves Log() on the boot tee for the whole run.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
         body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
         failure = re.search(r"if\s*\(\s*!Hooking::Initialize\(\)\s*\)\s*\{(?P<b>.*?)\n  \}", body, re.S)
@@ -88,14 +103,6 @@ class BootPhaseLogging(unittest.TestCase):
         line = re.search(r"[^\n]*RadPluginShutdown of a platform DLL skipped[^\n]*", source).group(0)
         self.assertIn("Log(", line)
         self.assertNotIn("TeeFprintf", line)
-
-    def test_boot_phase_flag_does_not_depend_on_the_file_opening(self):
-        source = (ROOT / "src/runtime/log/boot_log_tee.cpp").read_text()
-        init = extract_braced_function(source, "void nevr_boot_log_tee::Init(")
-        self.assertRegex(init.lstrip("{ \n"), r"^g_boot_phase\.store\(true")
-        close = extract_braced_function(source, "void nevr_boot_log_tee::Close(")
-        self.assertIn("g_boot_phase.store(false", close)
-        self.assertIn("bool nevr_boot_log_tee::InBootPhase()", strip_comments(source))
 
 
 if __name__ == "__main__":

@@ -122,6 +122,15 @@ def extract_braced_function(source: str, signature: str) -> str:
 
 
 class RuntimeLifecycleInvariantTest(unittest.TestCase):
+    def test_normal_exit_reports_resource_buffers_before_process_termination(self):
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        client_exit = extract_braced_function(source, "VOID WINAPI ExitProcessHook(")
+        server_exit = extract_braced_function(source, "void PerformGracefulShutdown(")
+        self.assertRegex(client_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*OriginalExitProcess\s*\(\s*uExitCode\s*\)")
+        self.assertRegex(server_exit,
+                         r"ShutdownResourceOverride\s*\(\s*\)\s*;\s*ForceFatalExit\s*\(\s*exitCode\s*\)")
+
     def test_dllmain_does_not_run_plugin_shutdown_or_unload(self):
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
@@ -203,10 +212,6 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # every required hook succeeds in the logs this classification is based on, so
         # `just verify` would still go green while every server refused to start.
         self.assertIn("if (installed) return;", note)
-        # TeeFprintf, not Log(): this runs under the DllMain loader lock (N36). The N36 census
-        # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
-        # added inside this helper.
-        self.assertNotRegex(note, r"\bLog\s*\(")
         # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
         # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
         # way the original seven PatchDetour calls did.
@@ -317,6 +322,24 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         for level in ("INFO", "WARNING", "ERROR"):
             self.assertIn(f'"{level}"', header)
 
+    def test_plugins_log_through_the_host_log(self):
+        # Issue #598: a plugin had no way into the host's structured Log(). The context carries the
+        # plugin's id and the host's log function, the loader fills both into every context it passes a
+        # plugin (init, per-frame, state change), and the shared plugin logger binds to them at init.
+        iface = strip_comments((ROOT / "src/extension/plugin_interface.h").read_text())
+        self.assertRegex(iface, r"const char\*\s+plugin_id;")
+        self.assertRegex(iface, r"NevrLogFn\s+log;")
+        loader = strip_comments((ROOT / "src/runtime/ext/plugin_loader.cpp").read_text())
+        self.assertRegex(loader, r"ctx\.log\s*=\s*HostPluginLog\s*;")
+        self.assertRegex(loader, r"ctx\.plugin_id\s*=")
+        self.assertEqual(len(re.findall(r"\bContextFor\(\s*\*?\w+\s*,", loader)), 3,
+                         "init, TickPlugins and NotifyPluginsStateChange each pass the plugin its own context")
+        logger = strip_comments((ROOT / "plugins/common/include/plugin_logger.h").read_text())
+        self.assertRegex(logger, r"binding\.log\s*\(\s*binding\.id\s*,")
+        for rel in ("plugins/example/src/plugin.cpp", "plugins/debug-lockout/src/plugin.cpp"):
+            text = strip_comments((ROOT / rel).read_text())
+            self.assertRegex(text, r"\bPluginLogBind\s*\(\s*ctx\s*\)", f"{rel} never binds to the host log")
+
     def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
         # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
         # duplicated nevr_hook_liveness::Report for the same two hooks. HookLiveness is the one instrument.
@@ -327,12 +350,29 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                              ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
             body = extract_braced_function(patches, hook)
             self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
-            self.assertRegex(body, r"if\s*\(\s*!nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
+            self.assertRegex(body, r"if\s*\(\s*!chainReadable\b")
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
         for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('nevr_hook_liveness::Report("periodic")', tick)
+
+    def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
+                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+            body = extract_braced_function(patches, hook)
+            guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
+            self.assertGreaterEqual(guard, 0, hook)
+            self.assertLess(guard, body.find(original), hook)
+            self.assertNotRegex(body, r"\*\s*arg1\b")
+            self.assertRegex(body, re.compile(r"if\s*\(\s*!chainReadable\s*\|\|.*?kMaximumUserAddress", re.S))
+            self.assertIn('"pointer_chain"', body)
+            warning = body.find("Log(EchoVR::LogLevel::Warning,", guard)
+            self.assertGreater(warning, guard, hook)
+            self.assertLess(warning, body.find(original), hook)
+            self.assertNotRegex(body[guard:warning], r"\breturn\b", hook)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -417,18 +457,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         body = extract_braced_function(source, "void InstallGameMainHook(")
         self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
 
-    def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
-        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
-        # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
-        # that OnDllLoaded does not guard it lives here.
-        source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
-        body = extract_braced_function(source, "static void CALLBACK OnDllLoaded(")
-        start = body.index("IsMatchmakingModule(")
-        branch = body[start:body.index("OnModuleNotification(", start)]
-        self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
-                            "a guard around the matchmaking host patch leaves a reloaded image unpatched")
-        # The decision itself (which notification, which module) is the header's OnModuleNotification: it
-        # holds no state either, so every load notification reaches Apply().
+    def test_matchmaking_host_patch_decision_is_stateless(self):
+        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so every load is
+        # patched. That the apply step holds no guard is pinned in test_pnsrad_load_boundary.py (#504); the
+        # header's per-image decision holds no state either, so a reloaded image reaches Apply().
         header = strip_comments((ROOT / "src/runtime/patch/matchmaker_host_patch.h").read_text())
         decision = extract_braced_function(header, "std::optional<Result> OnModuleNotification(")
         self.assertNotRegex(decision, r"\bstatic\b|\bonce\b|\bdone\b|\bPatched\b",

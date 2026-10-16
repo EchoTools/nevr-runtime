@@ -11,8 +11,13 @@
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
 #include "runtime/hook/patching.h"
+#include "runtime/hook/addresses.h"
+#include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/readable_memory.h"
 
 #include <atomic>
+#include <exception>
+#include <new>
 
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.
@@ -84,6 +89,101 @@ VOID LoadEarlyConfig() {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] no _local/config.json under %s (optional — NEVR settings come from config.yaml)",
         moduleDir);
+  }
+}
+
+// #511, #595: a server's fixed time step, 1,000,000 / network.tick_rate_hz microseconds (flat key
+// nevr_tick_rate_hz, default 120; 0 keeps the game's own 30 a second). The step's state (echovr.exe +
+// FIXED_TIMESTEP_PTR, the global at RVA 0x20A00E8) is there once the local config loads; the flag that makes
+// the game use it is set before PreprocessCommandLine (boot.cpp). The rate is range-checked and the slot's
+// current value bounds-checked before the write (N31), and the write is read back (ApplyStep, #605). The step
+// is a 64-bit field at state+0x90 (ConfigureClocks, echovr.exe 0x140127a04: MOV qword ptr [RBX + 0x90], RAX).
+// The second clock ConfigureClocks writes the same way, at [pGame+0x7B00] (0x140127a0f-0x140127a34), is left
+// alone, as the legacy patch did. The outcome is recorded for boot.cpp's log line (ServerStepWrite).
+static nevr_server_timestep::StepRecord g_stepRecord;
+
+nevr_server_timestep::StepWrite ServerStepWrite() { return g_stepRecord.Load(); }
+
+static void ApplyServerTimestep() {
+  using nevr_server_timestep::StepOutcome;
+  const CHAR* rateText = nullptr;
+  if (g_isServer) {
+    rateText = NevrCfgGetFlat("nevr_tick_rate_hz");
+    std::string rateProblem;
+    g_headlessTickRateHz = nevr_server_timestep::ParseTickRateHz(rateText, &rateProblem);
+    if (!rateProblem.empty()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] network.tick_rate_hz=%s is %s (allowed 0 or %u..%u); using %u Hz", rateText,
+          rateProblem.c_str(), static_cast<unsigned>(nevr_server_timestep::kMinTickRateHz),
+          static_cast<unsigned>(nevr_server_timestep::kMaxTickRateHz), static_cast<unsigned>(g_headlessTickRateHz));
+    }
+  }
+  // The global is module data and always readable; ApplyStep decides on isServer, so a client writes nothing.
+  CHAR* state = *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+  uint64_t* stepField = nevr_server_timestep::FieldAt(state, nevr_patch_addresses::FIXED_TIMESTEP_OFFSET);
+  const nevr_server_timestep::StepWrite w =
+      nevr_server_timestep::ApplyStep(g_isServer != FALSE, g_headlessTickRateHz, stepField);
+  g_stepRecord.Store(w);
+  const char* source = rateText != nullptr && rateText[0] != '\0' ? "config.yaml" : "default";
+  switch (w.outcome) {
+    case StepOutcome::kSet:
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] server tick rate: %u a second (step %u us; the game had %llu us); source=%s",
+          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
+          static_cast<unsigned long long>(w.was), source);
+      break;
+    case StepOutcome::kKeepGameStep:
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] server tick rate: 0 keeps the game's own step (%llu us); source=%s",
+          static_cast<unsigned long long>(w.was), source);
+      break;
+    case StepOutcome::kStateMissing:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the game's time step state is not there when the "
+          "local config loads",
+          static_cast<unsigned>(g_headlessTickRateHz));
+      break;
+    case StepOutcome::kRateRefused:
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server tick rate not set rate=%u Hz: outside the allowed range",
+          static_cast<unsigned>(g_headlessTickRateHz));
+      break;
+    case StepOutcome::kUnexpectedOldValue:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server tick rate not set rate=%u Hz: the step slot holds %llu us, which is no step "
+          "(version drift; allowed %u..%u us)",
+          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned long long>(w.was),
+          static_cast<unsigned>(nevr_server_timestep::kMinPlausibleStepUs),
+          static_cast<unsigned>(nevr_server_timestep::kMaxPlausibleStepUs));
+      break;
+    case StepOutcome::kWriteDidNotHold:
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] server tick rate write did not hold rate=%u Hz wrote=%u us read_back=%llu us",
+          static_cast<unsigned>(g_headlessTickRateHz), static_cast<unsigned>(w.stepUs),
+          static_cast<unsigned long long>(w.after));
+      break;
+    case StepOutcome::kNotServer:
+    case StepOutcome::kNotApplied:
+      break;  // a client: nothing was written, nothing to say
+  }
+}
+
+// #515: the one-time read-back on a server, from the per-frame tick (frame/tick.cpp), at ONE moment (tick 125,
+// about 1.2 s in: it says the step was live then, not that it stays live): is the step NEVR wrote
+// in the clock the server runs on? Two writers of the clock global (echovr.exe 0x1420a00e8) exist, and the
+// later one resets the step to 33333 (addresses.h, FIXED_TIMESTEP_PTR), so the write is not proof. The pointer and
+// the bytes read are checked readable first (N31); an unreadable or null clock is logged as absent.
+void LogServerStepReadBack(long tick) {
+  try {
+    const void* state =
+        *reinterpret_cast<void* const*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::FIXED_TIMESTEP_PTR);
+    const bool readable = nevr_crash_recovery::IsReadableMemory(state, nevr_server_timestep::kClockReadSpan);
+    const nevr_server_timestep::ClockReadBack rb = nevr_server_timestep::ReadClockIf(readable, state);
+    const nevr_server_timestep::ReadBackDecision d =
+        nevr_server_timestep::DecideReadBack(ServerStepWrite(), g_headlessTickRateHz, rb, tick);
+    Log(d.live ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s", d.line.c_str());
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server clock read-back failed (out of memory)");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] server clock read-back failed (std::exception)");
   }
 }
 
@@ -256,6 +356,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     }
   }
 
+  ApplyServerTimestep();
   return result;
 }
 
@@ -459,8 +560,10 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 //   wss:// URLs → nevr_socket_uri (WebSocket endpoint)
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
 
-static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
-  return NevrCfgAutoRelay(bridgePort);
+// `serviceKey` is the key the override was read for (config.json's loginservice_host, ...): the bridge
+// address it is rerouted to carries that service's request target, as the service redirect's does (#520).
+static const char* ResolveLoginOverrideBridgeUrl(void* serviceKey, uint16_t bridgePort) {
+  return NevrCfgAutoRelay(bridgePort, static_cast<const char*>(serviceKey));
 }
 
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
@@ -486,8 +589,8 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   const char* chosen = nevr::lifecycle::DecideServiceRedirect(
       s_serviceRedirectsArmed.load(std::memory_order_acquire), keyName, result,
       [] { return NevrCfgGetFlat("nevr_http_uri"); },
-      [](const char* url, const char* httpTarget) {
-        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
+      [keyName](const char* url, const char* httpTarget) {
+        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort(), keyName);
       });
   if (chosen == result) return result;
 
@@ -527,7 +630,7 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   }
 
   const nevr::lifecycle::LoginRedirectOverrideOutcome overrideOutcome =
-      nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, nullptr);
+      nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, keyName);
   if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride) {
     if (overrideInput.redirectsArmed) {
       const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(

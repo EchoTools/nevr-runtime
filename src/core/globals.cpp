@@ -8,7 +8,8 @@ BOOL g_isHeadless = FALSE;
 /// If a round is active, the exit is deferred until the round ends (plus a 30-second grace period).
 /// Default TRUE — suppress with -noexitonerror.
 BOOL g_exitOnError = TRUE;
-/// Headless mode tick rate (ticks/second). Non-zero sets the override; zero removes throttling.
+/// A dedicated server's tick rate (ticks/second). Set from config network.tick_rate_hz (default 120, range
+/// 10..1000). Zero keeps the game's own fixed step (30 a second); a server is always fixed-timestep.
 UINT32 g_headlessTickRateHz = 120;
 /// Whether telemetry streaming is enabled (default TRUE). Disabled by -notelemetry.
 BOOL g_telemetryEnabled = TRUE;

@@ -34,8 +34,8 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
 /// the single g_bootHookFailed decision below, which boot.cpp turns into the
 /// terminal severity once the CLI says whether this is a server.
 ///
-/// This runs from Initialize() under the DllMain loader lock, so it reports
-/// through the boot tee (stderr and nevr-boot.jsonl), never Log(). The first
+/// This runs from Initialize() under the DllMain loader lock, in the boot phase,
+/// so it reports through the boot tee (stderr and nevr-boot.jsonl). The first
 /// mismatch is also the cause boot.cpp names when a server refuses to start.
 static void ReportByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
@@ -152,8 +152,22 @@ VOID PatchProviderPrefixOvrOrg() {
   if (PatchDetour(&g_RealGetProviderPrefix, reinterpret_cast<PVOID>(GetProviderPrefixHook),
                   "GetProviderPrefix")) {
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
-  } else {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED target=%p status=%s\n",
-                                  target, Hooking::LastAttachError());
+    return;
   }
+  const char* const status = Hooking::LastAttachError();
+  // N120. Without this detour the 17 callers of GetProviderPrefix (CreateUser, SaveLocalData,
+  // LobbyFindSession, LobbyPlayerSessions, the Send() paths) keep building xpids with the game's own
+  // PSN- prefix while the bridge logs in as OVR-ORG, so a server that went on would register and
+  // match under two identities. That is the same degraded identity a failed five-site byte patch
+  // leaves, so it gets the same answer: g_bootHookFailed, which boot.cpp turns into a refusal to
+  // start a server once the CLI says it is one (ServerFatal would only warn here), and a client
+  // reports ok=false and goes on.
+  g_bootHookFailed = true;
+  char cause[sizeof(g_bootHookFailedCause)];
+  snprintf(cause, sizeof(cause), "XPID GetProviderPrefix detour failed: %s", status);
+  NoteBootHookFailureCause(cause);
+  nevr_boot_log_tee::TeeFprintf(
+      "[NEVR.XPID] warn; GetProviderPrefix detour FAILED target=%p status=%s — 17 callers still format PSN- xpids; "
+      "a server will refuse to start\n",
+      target, status);
 }

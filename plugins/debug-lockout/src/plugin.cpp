@@ -135,6 +135,7 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void)
 
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
 {
+    PluginLogBind(ctx);  /* from here on the host's log; stderr on a host older than API v6 */
     if (ctx == nullptr) {
         PluginLogError("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
         return -1;

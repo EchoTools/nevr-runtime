@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "extension/module_interface.h"
+#include "runtime/compat/socket_role.h"
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/config_redirect_result.h"
@@ -330,6 +331,56 @@ TEST(DecideServiceRedirect, ABridgeRewritesTheSocketToLoopbackAndTheHttpTargetNe
       true, "apiservice_host", httpResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
       [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 1, 53748); });
   EXPECT_STREQ(http, "https://service.example:7350");
+}
+
+// #520: the redirect gives the config and login services each their own request target on the bridge
+// address. The bridge reads that target to tell their sockets apart, so a login socket that connects before
+// the config socket is still the login. Every other service, and a redirect that does not go through the
+// bridge, keeps the plain address.
+TEST(DecideServiceRedirect, TheBridgeAddressCarriesTheConfigAndLoginServicesRequestTarget) {
+  SetConfigInputs();
+  nevr_socket_role::GlobalAdvertisement().Reset();
+  const char socketResult[] = "wss://login.readyatdawn.com/rad15";
+  const auto http = [] { return NevrCfgGetFlat("nevr_http_uri"); };
+  const struct {
+    const char* key;
+    const char* expected;
+  } cases[] = {
+      {"loginservice_host", "ws://127.0.0.1:53748/login"},   {"login_host", "ws://127.0.0.1:53748/login"},
+      {"configservice_host", "ws://127.0.0.1:53748/config"}, {"config_host", "ws://127.0.0.1:53748/config"},
+      {"matchingservice_host", "ws://127.0.0.1:53748"},      {"serverdb_host", "ws://127.0.0.1:53748"},
+  };
+  for (const auto& c : cases) {
+    const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+        true, c.key, socketResult, http,
+        [&c](const char* r, const char* t) { return NevrCfgRedirect(r, t, 1, 53748, c.key); });
+    EXPECT_STREQ(chosen, c.expected) << c.key;
+  }
+  // Tagging a role records that a socket asking for it is on its way.
+  EXPECT_TRUE(nevr_socket_role::GlobalAdvertisement().Has(nevr_socket_role::Role::Login));
+  EXPECT_TRUE(nevr_socket_role::GlobalAdvertisement().Has(nevr_socket_role::Role::Config));
+  nevr_socket_role::GlobalAdvertisement().Reset();
+}
+
+TEST(DecideServiceRedirect, ADirectTargetIsNotGivenARequestTarget) {
+  SetConfigInputs();
+  nevr_socket_role::GlobalAdvertisement().Reset();
+  const char socketResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "loginservice_host", socketResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0, "loginservice_host"); });
+  EXPECT_STREQ(chosen, "ws://service.example:80/spr");
+  EXPECT_FALSE(nevr_socket_role::GlobalAdvertisement().Has(nevr_socket_role::Role::Login));
+}
+
+TEST(NevrCfgAutoRelayRole, TheRelayAddressOfALoginServiceKeyCarriesItsRequestTarget) {
+  SetConfigInputs();
+  nevr_socket_role::GlobalAdvertisement().Reset();
+  EXPECT_STREQ(NevrCfgAutoRelay(53748, "loginservice_host"), "ws://127.0.0.1:53748/login");
+  EXPECT_STREQ(NevrCfgAutoRelay(53748, "configservice_host"), "ws://127.0.0.1:53748/config");
+  EXPECT_STREQ(NevrCfgAutoRelay(53748, "matchingservice_host"), "ws://127.0.0.1:53748");
+  EXPECT_STREQ(NevrCfgAutoRelay(53748), "ws://127.0.0.1:53748");
+  nevr_socket_role::GlobalAdvertisement().Reset();
 }
 
 TEST(DecideUnconfiguredApiRedirect, TheGamesDefaultApiHostGoesToTheConfiguredHttpService) {

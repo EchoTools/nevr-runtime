@@ -7,6 +7,7 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/state_machine.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
@@ -39,20 +40,32 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/lifecycle/server_timestep.h"
+#include "runtime/lifecycle/cmdline_strip.h"
+#include "runtime/lifecycle/timestep_log.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
 #include "extension/module_interface.h"
 
 #include <cstdlib>
+#include <exception>
+#include <new>
 #include <atomic>
 #include <shellapi.h>
 
 namespace {
 
+// #515: what ApplyFlag did, for LogTimestepArgs.
+nevr_server_timestep::FlagRecord g_flagRecord;
+
+
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
+// The one exception is the plugins config.yaml marks `early: true` (#496), which
+// PreprocessCommandLineHook loads right after this: they serve game data the
+// original call reads, and must stay off the graphics path.
 // -server is needed for the config loader's fail-loud policy. -config-path is
 // needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
@@ -89,15 +102,22 @@ void PreflightRuntimeBootstrap() {
   // reaches the main menu normally.
   //
   // The bit is keyed on -windowed, not on -server: it is a client flag.  A
-  // -server run does not reach BeginMultiplayer (issue #45), and leaving the bit
-  // off does not change that.  Other client-only handling in the same family
-  // (windowed, no-VR, spectator-stream flags) has not been ruled out as a
-  // collision with server mode.
+  // -server run begins multiplayer after its login through the state machine
+  // (state_machine.cpp, issue #45: no menu runs on a server to begin it); this
+  // bit plays no part in that.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
   }
+
+  // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
+  // when the local config loads (config.cpp, LoadLocalConfigHook). ApplyFlag leaves a client alone.
+  UINT64* timestepFlags =
+      nevr_server_timestep::FieldAt(g_pGame, nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
+  const nevr_server_timestep::FlagOutcome flagOutcome =
+      nevr_server_timestep::ApplyFlag(g_isServer != FALSE, timestepFlags);
+  g_flagRecord.Store(flagOutcome);
 }
 
 }  // namespace
@@ -129,22 +149,54 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
   // the NOP is written here, before the first original call, rather than only from
   // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
-  // first original call (tools/tests/test_spectatorstream_order.py). Not established: that this
-  // is what lets a server start its lobby (#45 is neither confirmed nor refuted). Not part of
-  // this write: PatchEnableHeadless, PatchBypassOvrPlatform and PatchBlockOculusSDK run in
-  // RunDeferredRuntimeBootstrap, after the original call returns; whether any of them has to
-  // run earlier is not established. Server only: the client's first original call initializes
-  // D3D and is left alone (N146). This hook may be entered more than once, so the write is
-  // attempted on the first server entry only and its record is emitted once.
+  // first original call (tools/tests/test_spectatorstream_order.py). The NOP does not begin
+  // multiplayer: what begins it on a server is the call the state machine queues when the login
+  // completes (state_machine.cpp, #514). Not part of this write: PatchEnableHeadless,
+  // PatchBypassOvrPlatform and PatchBlockOculusSDK run in RunDeferredRuntimeBootstrap, after the
+  // original call returns; whether any of them has to run earlier is not established. Server only:
+  // the client's first original call initializes D3D and is left alone (N146). This hook may be
+  // entered more than once, so the write is attempted on the first server entry only and its
+  // record is emitted once.
   static std::atomic_bool s_spectatorStreamPatchAttempted{false};
   if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
     PatchSpectatorStreamCheck("pre-preprocess");
+  }
+  // #496: plugins marked `early: true` load here, once, before the original call: the
+  // game reads its manifests and opens its packages during it, before the graphics
+  // device exists (where the rest load), so a plugin that serves game data from
+  // elsewhere has to be in place now. Nothing marked early: nothing loads here.
+  static std::atomic_bool s_earlyPlugins{false};
+  if (!s_earlyPlugins.exchange(true, std::memory_order_acq_rel)) {
+    LoadPlugins(PluginPhase::Early);
   }
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   if (g_isServer) {
     RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
   }
   return result;
+}
+
+// #515: what happened to a server's time-step arguments, from what GameMainWrapperHook recorded and what
+// ApplyServerTimestep and ApplyFlag recorded, not from the configured rate. The level and text are
+// nevr_timestep_log::Decide (a tested pure function). It does not depend on boot.cpp's own reading of the
+// command line: the hook decides from the game's parser (see runtime/lifecycle/cmdline_strip.h),
+// CommandLineToArgvW differs on quotes. The game's own "CL Args: %s" line (NRadPhysics::InitGlobals,
+// echovr.exe 0x141548da0) still prints the original command line. It allocates inside a game-called hook, so
+// a failure is caught by type and logged, never allowed to leave.
+static void LogTimestepArgs() {
+  try {
+    const nevr_timestep_log::Inputs in = nevr_timestep_log::BuildInputs(
+        GetTimestepStripReport(), g_isServer != FALSE, nevr_cmdline::HasTimestepOption(GetCommandLineA()),
+        ServerStepWrite(), g_flagRecord.Load(), g_headlessTickRateHz);
+    for (const nevr_timestep_log::Line& line : nevr_timestep_log::Decide(in)) {
+      Log(line.level == nevr_timestep_log::Level::kWarning ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] %s", line.text.c_str());
+    }
+  } catch (const std::bad_alloc&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (out of memory)");
+  } catch (const std::exception&) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] time-step argument report failed (std::exception)");
+  }
 }
 
 void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
@@ -209,6 +261,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       ServerFatal("One or more boot hooks failed to install — server would be degraded: %s",
                   g_bootHookFailedCause[0] != '\0' ? g_bootHookFailedCause : "cause not recorded");
     }
+
+    // #592: the two game functions that begin multiplayer after the login are checked once, here;
+    // a mismatch exits the server now rather than leaving it logged in and idle after its login.
+    ValidateServerBringup();
   }
 
   // Load modules. Order matters — dependencies must load first.
@@ -332,12 +388,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // command line (runtime/hook/export_tracer.cpp), so no ordering with this parse can matter.
       if (i + 1 < argc) ++i;
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
-      // Deprecated — silently consume value arg if present
+      // #515: a server's time step is NEVR's. GameMainWrapperHook (crash_recovery.cpp) removed these
+      // arguments from the string the game parses, before the game read it; LogTimestepArgs reports it
+      // once, from what the hook recorded. Here the value is only consumed so it is not read as an option.
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] %ls is deprecated and ignored (fixed timestep is determined internally; "
-          "no CLI override exists)",
-          arg);
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.
@@ -367,6 +421,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   }
 
   LocalFree(argv);
+
+  LogTimestepArgs();
 
   // -server forces -headless unconditionally (set in the -server branch above).
   // The OR here is a safety net: if g_isHeadless was set to TRUE for any other

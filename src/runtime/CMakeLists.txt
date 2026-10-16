@@ -99,6 +99,10 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
+    "lifecycle/server_timestep.h"
+    "lifecycle/cmdline_strip.h"
+    "lifecycle/timestep_log.h"
+    "lifecycle/server_bringup.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
@@ -117,11 +121,13 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/socket_role.h"
     "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/pnsrad_load_queue.h"
     "patch/mic_provider.h"
     "patch/party_invite_gate.h"
     "patch/social_facade.h"
@@ -909,6 +915,13 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
+    # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
+    add_executable(test_socket_role tests/test_socket_role.cpp)
+    set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_socket_role PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
+
     # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
     # passed through. Header only on top of the self-check unit.
     add_executable(test_status_redirect_check
@@ -962,11 +975,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp)
-    set_source_files_properties(tests/test_early_quit_lockout.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_server_timestep.cpp (#511, header-only lifecycle/server_timestep.h) rides in this executable.
+    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp)
+    set_source_files_properties(tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp
+                                PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
+
+    # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
+    add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
+    set_source_files_properties(tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_strip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
     set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -975,9 +997,12 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
-    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
+    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) ride in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
+                   tests/test_server_bringup.cpp)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
+                               ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
@@ -994,7 +1019,17 @@ if(BUILD_TESTING)
     target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    # #504's timing fixture loads the stand-in pnsrad.dll that test_export_trace builds.
+    add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
+
+    # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
+    add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_boot_log_routing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_boot_log_routing PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_boot_log_routing DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
@@ -1145,6 +1180,18 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_onframe"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # #598: two builds of one fixture that logs through ctx->log, so a test can tell two plugins' ids apart.
+    foreach(_logging_suffix a b)
+      add_library(test_plugin_logging_${_logging_suffix} SHARED
+        tests/plugin_logging_test_dll.cpp)
+      target_compile_definitions(test_plugin_logging_${_logging_suffix} PRIVATE NEVR_PLUGIN_EXPORTS
+        TEST_PLUGIN_NAME="test-plugin-logging-${_logging_suffix}")
+      target_include_directories(test_plugin_logging_${_logging_suffix} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+      set_target_properties(test_plugin_logging_${_logging_suffix} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_logging_${_logging_suffix}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -1170,7 +1217,7 @@ if(BUILD_TESTING)
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
-      test_plugin_partial_init_fail test_plugin_info_keeper)
+      test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -1197,11 +1244,12 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
-    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
+    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
+    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

@@ -1,6 +1,9 @@
 #include "runtime/ext/plugin_loader.h"
 
 #include <algorithm>
+#include <cstring>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -13,6 +16,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
+#include "runtime/ext/plugin_log.h"             // #598: a plugin's log line, as the host writes it
 #include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
 
 struct LoadedPlugin {
@@ -28,9 +32,12 @@ struct LoadedPlugin {
   NvrPluginOnGameStateChange_fn on_state_change;
   NvrPluginShutdown_fn        shutdown;
   std::string                 path;
+  const char*                 id;  /* the config.yaml entry's name; see InternPluginId */
 };
 
-static std::vector<LoadedPlugin> g_plugins;
+// A deque: push_back never moves an element already stored, so the address GetLoadedPluginInfo hands
+// out for a plugin stays valid across every later load, whatever it adds.
+static std::deque<LoadedPlugin> g_plugins;
 
 // #60: what happened to each configured plugin at the last LoadPlugins(), in
 // config.yaml order. Written once at the end of LoadPlugins (boot thread), read
@@ -41,6 +48,43 @@ static std::vector<PluginManifestEntry> g_pluginReport;
 static void PublishPluginReport(std::vector<PluginManifestEntry> report) {
   std::lock_guard<std::mutex> lock(g_pluginReportMutex);
   g_pluginReport = std::move(report);
+}
+
+// N135 / #598: the host's name for a plugin (its config.yaml entry's `name`) as a string a plugin may keep
+// for the life of the process: ctx->plugin_id. A deque never moves a stored string, and the store is
+// never cleared, so the pointer outlives UnloadPlugins and stays valid for a plugin's Shutdown.
+static std::deque<std::string> g_pluginIds;
+
+static const char* InternPluginId(const std::string& name) {
+  for (const std::string& known : g_pluginIds) {
+    if (known == name) return known.c_str();
+  }
+  g_pluginIds.push_back(name);
+  return g_pluginIds.back().c_str();
+}
+
+// N135: ctx->log. The line goes through Log(), which is boot-aware: while the runtime boots under the
+// loader lock it reaches the boot tee, afterwards the game's log. The message is plain text and is
+// passed as an argument, never as the format.
+void HostPluginLog(const char* pluginId, uint32_t level, const char* message,
+                   const NevrLogField* fields, uint32_t fieldCount) {
+  const nevr_plugin_log::Formatted out = nevr_plugin_log::Format(pluginId, level, message, fields, fieldCount);
+  EchoVR::LogLevel hostLevel = EchoVR::LogLevel::Info;
+  switch (out.level) {
+    case NEVR_LOG_DEBUG:   hostLevel = EchoVR::LogLevel::Debug;   break;
+    case NEVR_LOG_INFO:    hostLevel = EchoVR::LogLevel::Info;    break;
+    case NEVR_LOG_WARNING: hostLevel = EchoVR::LogLevel::Warning; break;
+    case NEVR_LOG_ERROR:   hostLevel = EchoVR::LogLevel::Error;   break;
+  }
+  Log(hostLevel, "%s", out.line.c_str());
+}
+
+// The context one plugin sees: the caller's, with that plugin's id and the host log filled in.
+static NvrGameContext ContextFor(const NvrGameContext& base, const char* id) {
+  NvrGameContext ctx = base;
+  ctx.plugin_id = id != nullptr ? id : "";
+  ctx.log = HostPluginLog;
+  return ctx;
 }
 
 // N134 S8: query API — lets a plugin discover its neighbours at runtime.
@@ -58,9 +102,8 @@ const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   if (index < 0 || static_cast<size_t>(index) >= g_plugins.size()) return nullptr;
   // The plugin's own NvrLoadedPluginInfo. Not a cast of p.info: NvrPluginInfo is
   // padded to 32 bytes, so through it api_version read the padding and
-  // capabilities read api_version. Stable for the process lifetime: LoadPlugins
-  // reserves g_plugins before any init, so it never reallocates under a plugin
-  // that kept the pointer (and it never shrinks after load).
+  // capabilities read api_version. Stable for the process lifetime: g_plugins is a deque, so a
+  // later push_back never moves an entry whose pointer a plugin kept.
   return &g_plugins[index].loaded_info;
 }
 
@@ -97,11 +140,17 @@ static void FailPluginLoad(const PluginLoadItem& item, const std::string& reason
 
 namespace {
 
-// `file` names a DLL inside plugins/. The legacy `.\name.dll` spelling is
-// accepted, but no other path component belongs in a configured filename.
-bool PluginFileStaysInDirectory(const std::string& file) {
+// The legacy `.\name.dll` spelling names the same file as `name.dll`.
+std::string_view PluginFilename(const std::string& file) {
   std::string_view name(file);
   if (name.substr(0, 2) == ".\\") name.remove_prefix(2);
+  return name;
+}
+
+// `file` names a DLL inside plugins/. No other path component belongs in a
+// configured filename.
+bool PluginFileStaysInDirectory(const std::string& file) {
+  const std::string_view name = PluginFilename(file);
   if (name.empty() || name == "." || name == "..") return false;
   return name.find_first_of("\\/:") == std::string_view::npos &&
          name.find('\0') == std::string_view::npos;
@@ -144,11 +193,26 @@ class PluginLoadRun {
   size_t PlanSize() const { return plan.size(); }
   size_t EnabledCount() const { return enabledCount; }
 
-  // Pass 1: LoadLibrary + resolve exports for every plugin, collecting into a staging list. Init is
-  // deferred to pass 2 so we can stable-sort by capability priority (N134 S8): observers before
-  // modifiers, modifiers before engine-hookers. Within a priority band the config.yaml order is preserved.
-  void Stage() {
-    for (size_t planIndex = 0; planIndex < plan.size(); ++planIndex) StageOne(planIndex);
+  // The enabled entries `phase` loads (#496).
+  size_t PhaseCount(PluginPhase phase) const {
+    size_t n = 0;
+    for (const PluginLoadItem& item : plan) {
+      if (item.enabled && PluginInPhase(item, phase, earlyPassRan)) ++n;
+    }
+    return n;
+  }
+
+  // Pass 1: LoadLibrary + resolve exports for every plugin `phase` takes, collecting into a staging
+  // list. Init is deferred to pass 2 so we can stable-sort by capability priority (N134 S8): observers
+  // before modifiers, modifiers before engine-hookers. Within a priority band the config.yaml order is
+  // preserved. A run that did the early pass is kept for the normal one (#496), so that pass sees what
+  // the early one loaded: a repeat of its entries, the same module under another spelling, the report.
+  void Stage(PluginPhase phase) {
+    staged.clear();
+    for (size_t planIndex = 0; planIndex < plan.size(); ++planIndex) {
+      if (PluginInPhase(plan[planIndex], phase, earlyPassRan)) StageOne(planIndex);
+    }
+    if (phase == PluginPhase::Early) earlyPassRan = true;
   }
 
   // Pass 2: order the staged plugins and init each one.
@@ -158,14 +222,23 @@ class PluginLoadRun {
   }
 
   std::vector<PluginManifestEntry> TakeReport() { return std::move(report); }
+  std::vector<PluginManifestEntry> Report() const { return report; }
 
  private:
+  // A module an earlier pass of this run loaded and initialised (#496).
+  struct LoadedModule {
+    HMODULE hModule;
+    size_t  planIndex;
+  };
+
   std::vector<PluginLoadItem> plan;
   std::string pluginDir;
   std::vector<PluginManifestEntry> report;
   std::vector<size_t> heldBy;
   std::vector<StagedPlugin> staged;
+  std::vector<LoadedModule> loaded;
   size_t enabledCount = 0;
+  bool earlyPassRan = false;
 
   // A repeat of an entry is skipped (see below), but if the repeat is `required`
   // the plugin it names must still be fatal to lose: the requirement moves onto the
@@ -228,6 +301,7 @@ class PluginLoadRun {
   // True when the entry is skipped.
   bool SkipSuperseded(const PluginLoadItem& item, PluginManifestEntry& itemReport) {
     const char* filename = item.file.c_str();
+    const std::string_view name = PluginFilename(item.file);
   // N89: refuse plugins whose function is now BUILT IN to gamepatches. Loading
   // one makes two MinHook instances (gamepatches links extern/minhook, plugins
   // link the vcpkg port — separate static copies, separate hook tables) fight
@@ -240,7 +314,10 @@ class PluginLoadRun {
     static const char* kSupersededByBuiltin[] = {"log_filter.dll", "log-filter.dll"};
     bool superseded = false;
     for (const char* s : kSupersededByBuiltin) {
-      if (_stricmp(filename, s) == 0) { superseded = true; break; }
+      if (name.size() == strlen(s) && _strnicmp(name.data(), s, name.size()) == 0) {
+        superseded = true;
+        break;
+      }
     }
     if (superseded) {
       Log(EchoVR::LogLevel::Warning,
@@ -322,26 +399,31 @@ class PluginLoadRun {
     PluginManifestEntry& itemReport = report[planIndex];
     const char* filename = item.file.c_str();
   // The backstop for what the file-name check can't see: another spelling of the
-  // same path. LoadLibrary counted a reference for this call; give it back.
+  // same path, staged in this pass or loaded by an earlier one (#496). LoadLibrary
+  // counted a reference for this call; give it back.
   {
-    StagedPlugin* already = nullptr;
-    for (StagedPlugin& s : staged) {
-      if (s.hModule == hPlugin) { already = &s; break; }
+    long holder = -1;
+    for (const StagedPlugin& s : staged) {
+      if (s.hModule == hPlugin) { holder = static_cast<long>(s.planIndex); break; }
     }
-    if (already) {
+    for (const LoadedModule& m : loaded) {
+      if (holder < 0 && m.hModule == hPlugin) holder = static_cast<long>(m.planIndex);
+    }
+    if (holder >= 0) {
+      const PluginLoadItem& already = plan[static_cast<size_t>(holder)];
       FreeLibrary(hPlugin);
-      const bool carried = carryRequired(already->planIndex, item);
-      heldBy[planIndex] = resolveHolder(already->planIndex);
+      const bool carried = carryRequired(static_cast<size_t>(holder), item);
+      heldBy[planIndex] = resolveHolder(static_cast<size_t>(holder));
       const std::string carriedNote = carried
-          ? " This entry is required, so " + already->item.name + " is now required too."
+          ? " This entry is required, so " + already.name + " is now required too."
           : std::string();
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PLUGIN] SKIPPED %s (%s) — the same module as %s (%s), already loaded. "
           "This entry's args were ignored; %s's args apply.%s "
           "Remove one of the entries from config.yaml.",
-          item.name.c_str(), filename, already->item.name.c_str(), already->item.file.c_str(),
-          already->item.name.c_str(), carriedNote.c_str());
-      itemReport.error = "the same module as " + already->item.name;
+          item.name.c_str(), filename, already.name.c_str(), already.file.c_str(),
+          already.name.c_str(), carriedNote.c_str());
+      itemReport.error = "the same module as " + already.name;
       return true;
     }
   }
@@ -462,34 +544,33 @@ class PluginLoadRun {
 
   // Init each staged plugin in order; record the outcome in `report` and `g_plugins`.
   void InitStaged(const NvrGameContext& ctx) {
-  // A plugin may keep what get_plugin_info returned from inside its init: no
-  // push_back below may move the ones already loaded.
-  g_plugins.reserve(g_plugins.size() + staged.size());
   for (const StagedPlugin& s : staged) {
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
+    const char* pluginId = InternPluginId(s.item.name);
+    const NvrGameContext pluginCtx = ContextFor(ctx, pluginId);
     int result = 0;
     switch (s.initKind) {
-      case PluginInitKind::Ex:     result = s.initExFn(&ctx, s.item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: result = s.initFn(&ctx); break;
+      case PluginInitKind::Ex:     result = s.initExFn(&pluginCtx, s.item.args_json.c_str()); break;
+      case PluginInitKind::Legacy: result = s.initFn(&pluginCtx); break;
       case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
     if (result != 0) {
       // An unsuccessful init may already have installed detours or acquired
-      // resources. Give the plugin its documented cleanup call before unmapping
+      // resources. Give the plugin its shutdown callback before unmapping
       // its code. Without that export there is no safe way to prove cleanup;
       // retain the module reference until process exit.
       if (s.shutdownFn) {
         s.shutdownFn();
         FreeLibrary(s.hModule);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] %s: shutdown after failed init code=%d completed; module released",
+            s.item.file.c_str(), result);
       } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PLUGIN] %s: init failed without shutdown export — module retained until process exit",
             s.item.file.c_str());
       }
-      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
-                     report[s.planIndex]);
-      continue;
     }
 
     // N84: re-verify hooked addresses after this plugin's init may have installed its own detours.
@@ -504,13 +585,20 @@ class PluginLoadRun {
       }
     }
 
+    if (result != 0) {
+      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
+                     report[s.planIndex]);
+      continue;
+    }
+
     const NvrLoadedPluginInfo loadedInfo = {
         s.info.name, s.info.description,
         s.info.version_major, s.info.version_minor, s.info.version_patch,
         s.apiVersion, s.caps};
     g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps, loadedInfo,
                          s.initFn, s.onFrameFn,
-                         s.onStateChangeFn, s.shutdownFn, s.path});
+                         s.onStateChangeFn, s.shutdownFn, s.path, pluginId});
+    loaded.push_back({s.hModule, s.planIndex});
     {
       PluginManifestEntry& r = report[s.planIndex];
       r.loaded = true;
@@ -540,7 +628,12 @@ class PluginLoadRun {
 
 }  // namespace
 
-void LoadPlugins() {
+// #496: the run an early pass did, kept for the normal pass.
+static std::unique_ptr<PluginLoadRun> g_earlyRun;
+
+void LoadPlugins(PluginPhase phase) {
+  const bool early = phase == PluginPhase::Early;
+
   // Resolve plugins/ directory relative to echovr.exe (same dir as pnsradgameserver.dll)
   CHAR moduleDir[MAX_PATH] = {0};
   GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
@@ -549,24 +642,38 @@ void LoadPlugins() {
 
   std::string pluginDir = std::string(moduleDir) + "plugins\\";
 
-  // N134 S6: the plugin set is the ORDERED `plugins:` list in config.yaml, NOT a
-  // glob of the deployed directory. Config is authoritative — an absent/empty
-  // list loads NOTHING, and an orphan DLL left in plugins/ is ignored unless the
-  // config names it. This is a deliberate hardening over the old "load every
-  // *.dll found" discovery, whose failure mode was N89: a stale DLL silently
-  // taking over for an entire run because it happened to sit in the directory.
-  std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
-  if (plan.empty()) {
-    PublishPluginReport({});
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PLUGIN] no plugins configured in config.yaml — loading none");
-    return;
+  std::unique_ptr<PluginLoadRun> run = std::move(g_earlyRun);
+  if (!run) {
+    // N134 S6: the plugin set is the ORDERED `plugins:` list in config.yaml, NOT a
+    // glob of the deployed directory. Config is authoritative — an absent/empty
+    // list loads NOTHING, and an orphan DLL left in plugins/ is ignored unless the
+    // config names it. This is a deliberate hardening over the old "load every
+    // *.dll found" discovery, whose failure mode was N89: a stale DLL silently
+    // taking over for an entire run because it happened to sit in the directory.
+    std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
+    if (plan.empty()) {
+      if (early) return;  // the normal pass reports it
+      PublishPluginReport({});
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PLUGIN] no plugins configured in config.yaml — loading none");
+      return;
+    }
+    run = std::make_unique<PluginLoadRun>(std::move(plan), pluginDir);
   }
 
-  PluginLoadRun run(std::move(plan), pluginDir);
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PLUGIN] %zu plugin(s) configured, %zu enabled; loading in list order from %s",
-      run.PlanSize(), run.EnabledCount(), pluginDir.c_str());
+  const size_t phaseCount = run->PhaseCount(phase);
+  if (early) {
+    if (phaseCount == 0) return;  // no entry is marked early: the normal pass loads them all
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] early pass: %zu plugin(s) marked early; loading them before the game "
+        "reads its data, from %s",
+        phaseCount, pluginDir.c_str());
+  } else {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] %zu plugin(s) configured, %zu enabled; loading in list order from %s",
+        run->PlanSize(), run->EnabledCount(), pluginDir.c_str());
+  }
+  const size_t loadedBefore = g_plugins.size();
 
   // Build init context (shared; the per-plugin channel is args_json via InitEx).
   NvrGameContext ctx = {};
@@ -581,17 +688,25 @@ void LoadPlugins() {
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
 
-  run.Stage();
-  run.InitAll(ctx);
+  run->Stage(phase);
+  run->InitAll(ctx);
+
+  if (early) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] early pass complete: %zu/%zu loaded",
+        g_plugins.size() - loadedBefore, phaseCount);
+    PublishPluginReport(run->Report());  // a copy: the normal pass fills in its entries
+    g_earlyRun = std::move(run);
+    return;
+  }
 
   // Denominator (enabled entries) lets an operator tell "5 enabled, 5 loaded"
   // (healthy) from "5 enabled, 3 loaded" (2 silently missing) without
   // scrolling back through Warning lines to count. Disabled entries are not
   // missing, so they are not in the denominator.
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin load complete: %zu/%zu loaded",
-      g_plugins.size(), run.EnabledCount());
+      g_plugins.size(), run->EnabledCount());
 
-  PublishPluginReport(run.TakeReport());
+  PublishPluginReport(run->TakeReport());
 }
 
 void UnloadPlugins() {
@@ -601,16 +716,16 @@ void UnloadPlugins() {
     }
     FreeLibrary(it->hModule);
   }
-  // Release the storage as well: the next load starts from capacity 0, so it is the reserve in
-  // LoadPlugins (not leftover capacity from an earlier load) that keeps kept info pointers valid.
-  std::vector<LoadedPlugin>().swap(g_plugins);
+  g_plugins.clear();
+  g_earlyRun.reset();
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 
 void TickPlugins(const NvrGameContext* ctx) {
   for (auto& p : g_plugins) {
     if (p.on_frame) {
-      p.on_frame(ctx);
+      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      p.on_frame(&pluginCtx);
     }
   }
 }
@@ -618,7 +733,8 @@ void TickPlugins(const NvrGameContext* ctx) {
 void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
   for (auto& p : g_plugins) {
     if (p.on_state_change) {
-      p.on_state_change(ctx, old_state, new_state);
+      const NvrGameContext pluginCtx = ContextFor(*ctx, p.id);
+      p.on_state_change(&pluginCtx, old_state, new_state);
     }
   }
 }
@@ -652,6 +768,7 @@ void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
 
 void TestHook_ClearPlugins() {
   g_plugins.clear();
+  g_earlyRun.reset();
   PublishPluginReport({});
 }
 
