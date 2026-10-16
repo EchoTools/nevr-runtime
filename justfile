@@ -1569,18 +1569,18 @@ verify:
         exit 1
     fi
 
-    # --- N129: the DLL-load hardening must report per-hook failures --------------
-    # DllLoadHook (N75/N89 search-path hardening) installs its four LoadLibrary
-    # hooks OUTSIDE PatchDetour, so N126/N128's reporting doesn't cover it. It used
-    # to accumulate ok &= and log one "OK"/"PARTIAL", hiding which variant failed
-    # and why — the worst place to be vague, since a silently-unhooked LoadLibrary
-    # is a DLL-hijack gap. It must name the variant and the MH_STATUS on failure.
+    # --- N129: the DLL-load hooks must report per-hook failures ------------------
+    # DllLoadHook installs its four LoadLibrary hooks (they run the load filters,
+    # observers and callbacks the runtime registers; they restrict no search path)
+    # OUTSIDE PatchDetour, so N126/N128's reporting doesn't cover it. One "OK"/"PARTIAL"
+    # would hide which variant failed and why, and loads through an unhooked variant
+    # run no filter, observer or callback. It must name the variant and the MH_STATUS.
     N129_RC=0; N129_DL=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/dll_load_hook.cpp) || N129_RC=$?
     sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
     sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
     if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
         echo "verify: FAIL — N129 nevr_dll_load_hook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
-        echo "It would revert to a bare OK/PARTIAL that hides which search-path hook failed — a silent DLL-hijack gap." >&2
+        echo "It would revert to a bare OK/PARTIAL that hides which LoadLibrary hook failed, so loads through it would skip the load filters, observers and callbacks unseen." >&2
         exit 1
     fi
     if grep -qE 'bool ok = true;.*ok &=' <<<"$(tr '\n' ' ' <<<"$N129_DL")"; then
@@ -2822,7 +2822,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1145
+    python3 tools/verify_gtest_floor.py --floor 1146
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

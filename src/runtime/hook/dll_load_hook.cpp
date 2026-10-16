@@ -326,14 +326,14 @@ void AddPostLoadObserver(PostLoadObserver observer) {
 
 void Install() {
 #ifdef _WIN32
-    // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
-    // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
-    // one. A single "OK"/"PARTIAL" across all four variants would hide WHICH
-    // variant failed and WHY. In the one
-    // path where a silently-unhooked LoadLibrary is a hijack gap, that is the worst
-    // place to be vague. Report each variant and its MH_STATUS, mirroring N126/N128
-    // for the PatchDetour path. (This path does not go through PatchDetour, so it
-    // needs its own reporting — it was the last MinHook install site without it.)
+    // N129. These four hooks run, for every load through them, the load filters
+    // (AddLoadFilter), post-load observers (AddPostLoadObserver) and DLL-load
+    // callbacks (OnLoad) the runtime registers. They restrict no search path (N75's
+    // is the plugin loader's own load flags). A single "OK"/"PARTIAL" across all four
+    // variants would hide WHICH variant failed and WHY: loads through an unhooked
+    // variant run no filter, observer or callback. Report each variant and its
+    // MH_STATUS, mirroring N126/N128 for the PatchDetour path. (This path does not go
+    // through PatchDetour, so it needs its own reporting.)
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
@@ -365,8 +365,8 @@ void Install() {
                 *s.original = nullptr;
             }
             fprintf(stderr,
-                    "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
-                    "hardening inactive for this variant\n",
+                    "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — loads through this "
+                    "variant run no load filter, observer or callback\n",
                     s.name, MH_StatusToString(st));
         }
     }

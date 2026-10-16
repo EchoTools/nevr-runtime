@@ -334,6 +334,23 @@ TEST(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampolin
   nevr_dll_load_hook::Shutdown();
 }
 
+// #630: the failure line says what an unhooked variant loses (its loads run no filter, observer or callback)
+// and claims no search-path hardening, which these hooks never did.
+TEST(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
+  UseFakeHooks();
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  testing::internal::CaptureStderr();
+  nevr_dll_load_hook::Install();
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(err.find("hook FAILED name=LoadLibraryA reason=MH_ERROR_MEMORY_PROTECT — loads through this variant run "
+                     "no load filter, observer or callback"),
+            std::string::npos)
+      << err;
+  EXPECT_EQ(err.find("hardening"), std::string::npos) << err;
+  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+  nevr_dll_load_hook::Shutdown();
+}
+
 TEST(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
