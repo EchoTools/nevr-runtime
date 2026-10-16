@@ -39,6 +39,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/lifecycle/server_timestep.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
@@ -99,6 +100,14 @@ void PreflightRuntimeBootstrap() {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
+  }
+
+  // #511: a server runs on a fixed time step, so its headless loop is paced. The step itself is set
+  // when the local config loads (config.cpp, LoadLocalConfigHook).
+  if (g_isServer && g_pGame != nullptr) {
+    auto* timestepFlags = reinterpret_cast<UINT64*>(
+        reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_TIMESTEP_FLAGS_OFFSET);
+    *timestepFlags = nevr_server_timestep::WithFixedTimestep(*timestepFlags);
   }
 }
 
