@@ -5,6 +5,27 @@
 #include <cstring>
 
 #include "runtime/hook/process_memory.h"
+#include "runtime/patch/binary_bug_fixes.h"
+
+TEST(BusyWaitPatch, FailedInstallDoesNotMarkBytePatched) {
+  std::uint8_t byte = 0xC3;
+  bool patched = false;
+  const bool wrote = nevr_binary_bug_fixes::WriteBusyWaitByte(
+      &byte, &byte, patched, true,
+      [](void*, const std::uint8_t*, std::size_t) { return false; });
+  EXPECT_FALSE(wrote);
+  EXPECT_FALSE(patched);
+}
+
+TEST(BusyWaitPatch, FailedRestoreKeepsByteMarkedPatched) {
+  std::uint8_t byte = 0x40;
+  bool patched = true;
+  const bool wrote = nevr_binary_bug_fixes::WriteBusyWaitByte(
+      &byte, &byte, patched, false,
+      [](void*, const std::uint8_t*, std::size_t) { return false; });
+  EXPECT_FALSE(wrote);
+  EXPECT_TRUE(patched);
+}
 
 namespace {
 

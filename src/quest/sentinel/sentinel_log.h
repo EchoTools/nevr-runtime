@@ -15,6 +15,11 @@ namespace sentinel {
 // The app's external files directory (compile-time default, overridable at build time).
 const char* FilesDir();
 
+// One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8 (invalid bytes in
+// `message` are replaced). A `message` that is itself a JSON object is flattened into the line: its fields stay
+// fields, its `ts_ms` is dropped, its `level` is kept (else `level` names `level`); any other message becomes `msg`.
+std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, const std::string& message);
+
 // Writes `message` to logcat and the on-disk log. Open failures and write failures are each
 // reported once to logcat at error level; logcat keeps receiving every line.
 void Emit(nevr_quest::LogLevel level, const std::string& message);

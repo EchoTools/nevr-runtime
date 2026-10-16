@@ -41,10 +41,17 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
   const BYTE* site = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + offset);
   if (*site == expectedOpcode) {
     const BYTE jmp = 0xEB;
-    ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(&jmp), 1);
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
-        what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
+    DWORD error = ERROR_SUCCESS;
+    if (ProcessMemcpy(const_cast<BYTE*>(site), &jmp, 1, &error)) {
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
+          what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.HEADLESS] patch failed name=%s va=0x%llX error=%lu",
+          what, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(site)),
+          static_cast<unsigned long>(error));
+    }
   } else {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.HEADLESS] %s — prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
@@ -185,10 +192,17 @@ VOID PatchEnableHeadless(PVOID pGame) {
     const BYTE* gate = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT);
     if (*gate == HEADLESS_DX12_INIT_EXPECT) {
       const BYTE jmp = HEADLESS_DX12_INIT_PATCH;
-      ProcessMemcpy(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT, const_cast<BYTE*>(&jmp), 1);
-      Log(EchoVR::LogLevel::Debug,
-          "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
-          static_cast<unsigned long>(HEADLESS_DX12_INIT));
+      DWORD error = ERROR_SUCCESS;
+      if (ProcessMemcpy(const_cast<BYTE*>(gate), &jmp, 1, &error)) {
+        Log(EchoVR::LogLevel::Debug,
+            "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
+            static_cast<unsigned long>(HEADLESS_DX12_INIT));
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.HEADLESS] patch failed name=D3D12-device-init va=0x%llX error=%lu",
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(gate)),
+            static_cast<unsigned long>(error));
+      }
     } else {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.HEADLESS] D3D12-skip prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
@@ -407,17 +421,23 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterListen);
   if (g_isServer) {
     INT64 hashTablePtr = 0;
-    if (!nevr_broadcaster_guard::TryReadListenerTable(static_cast<std::uintptr_t>(arg1), hashTablePtr))
-      return -1;
-    if (hashTablePtr < 0x10000) {
+    const bool chainReadable = nevr_broadcaster_guard::TryReadListenerTable(
+        static_cast<std::uintptr_t>(arg1), hashTablePtr);
+    if (!chainReadable || hashTablePtr < 0x10000 ||
+        hashTablePtr > static_cast<INT64>(nevr_broadcaster_guard::kMaximumUserAddress)) {
       static volatile LONG guardCount = 0;
-      LONG c = InterlockedIncrement(&guardCount);
+      const LONG c = InterlockedIncrement(&guardCount);
       if (c <= 3) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] Entity lookup null-guard triggered (ptr+0x5e0=%p, count=%ld)", (void*)hashTablePtr, c);
+            "[NEVR.PATCH] broadcaster listen guard rejected reason=%s table=0x%llX count=%ld "
+            "va=0x140F80ED0 fn=CBroadcaster::Listen",
+            chainReadable ? "table_range" : "pointer_chain",
+            static_cast<unsigned long long>(hashTablePtr), c);
       } else if ((c % 100) == 0) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] entity lookup null-guard: %ld total trips (still occurring)", c);
+            "[NEVR.PATCH] broadcaster listen guard rejected count=%ld va=0x140F80ED0 "
+            "fn=CBroadcaster::Listen",
+            c);
       }
       return -1;
     }
@@ -465,20 +485,22 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     INT64 table = 0;
-    if (!nevr_broadcaster_guard::TryReadListenerTable(static_cast<std::uintptr_t>(arg1), table))
-      return;
-    if (table < 0x10000) {
+    const bool chainReadable = nevr_broadcaster_guard::TryReadListenerTable(
+        static_cast<std::uintptr_t>(arg1), table);
+    if (!chainReadable || table < 0x10000 ||
+        table > static_cast<INT64>(nevr_broadcaster_guard::kMaximumUserAddress)) {
       static volatile LONG guardCount = 0;
       const LONG c = InterlockedIncrement(&guardCount);
       if (c <= 3) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] broadcaster dispatch guard tripped — event dropped (listener table not ready): "
-            "table=0x%llX count=%ld va=0x140F87AA0 fn=CBroadcaster::ReceiveLocalEvent",
+            "[NEVR.PATCH] broadcaster dispatch guard rejected reason=%s table=0x%llX count=%ld "
+            "va=0x140F87AA0 fn=CBroadcaster::ReceiveLocalEvent",
+            chainReadable ? "table_range" : "pointer_chain",
             static_cast<unsigned long long>(table), c);
       } else if ((c % 100) == 0) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] broadcaster dispatch guard: %ld total trips (still occurring) — "
-            "events still being dropped",
+            "[NEVR.PATCH] broadcaster dispatch guard rejected count=%ld va=0x140F87AA0 "
+            "fn=CBroadcaster::ReceiveLocalEvent",
             c);
       }
       return;  // the AV 7beccee was written to prevent

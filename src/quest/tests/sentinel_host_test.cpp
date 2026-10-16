@@ -229,7 +229,7 @@ void DiskLogIsOneJsonObjectPerLine() {
 
 void FormatEscapesHostileMessages() {
   const std::string msg = std::string("quote\" backslash\\ newline\n esc\x1b[31m tab\t ") + "bad\xff" + "utf8";
-  const std::string line = nevr_quest::FormatDiskLogLine(nevr_quest::LogLevel::kWarn, 1234567890123LL, msg);
+  const std::string line = sentinel::FormatDiskLogLine(nevr_quest::LogLevel::kWarn, 1234567890123LL, msg);
   CHECK(!line.empty() && line.back() == '\n');
   CHECK(line.find('\n') == line.size() - 1);
   CHECK(line.find('\x1b') == std::string::npos);
@@ -239,6 +239,21 @@ void FormatEscapesHostileMessages() {
   CHECK(j.value("level", "") == "WARN" && j.value("ts_unix_ms", 0LL) == 1234567890123LL);
   const std::string back = j.value("msg", "");
   CHECK(back.find("quote\" backslash\\ newline\n esc\x1b[31m tab\t ") == 0);
+}
+
+void StructuredDiskLogIsFlat() {
+  const std::string line = sentinel::FormatDiskLogLine(
+      nevr_quest::LogLevel::kInfo, 1234567890123LL,
+      R"({"ts_ms":1234567890000,"level":"info","event":"obb_skip_install","result":"installed"})");
+  const nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
+  CHECK(j.is_object());
+  if (!j.is_object()) return;
+  CHECK(j.value("event", "") == "obb_skip_install");
+  CHECK(j.value("result", "") == "installed");
+  CHECK(j.value("level", "") == "info");
+  CHECK(j.value("tag", "") == "NEVR-Sentinel");
+  CHECK(j.value("ts_unix_ms", 0LL) == 1234567890123LL);
+  CHECK(!j.contains("ts_ms") && !j.contains("msg"));
 }
 
 void ReadConfigFileNeverBlocksOnNonRegularFiles() {
@@ -375,8 +390,8 @@ void TornRecordsStayOnTheirOwnLine() {
   };
   bool torn = false;
   int err = 0;
-  const std::string first = nevr_quest::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 1, "first record");
-  const std::string second = nevr_quest::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 2, "second record");
+  const std::string first = sentinel::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 1, "first record");
+  const std::string second = sentinel::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 2, "second record");
   CHECK(!sentinel::WriteRecord(-1, first, &torn, &err, tearThenSucceed) && torn && err == ENOSPC);
   CHECK(sentinel::WriteRecord(-1, second, &torn, &err, tearThenSucceed) && !torn);
   // The fragment is alone on its line and the next record parses.
@@ -693,6 +708,7 @@ int main() {
   NoLogLineCarriesAValue();
   DiskLogIsOneJsonObjectPerLine();
   FormatEscapesHostileMessages();
+  StructuredDiskLogIsFlat();
   ReadConfigFileNeverBlocksOnNonRegularFiles();
   WriteAllRetriesAndReportsFailure();
   sentinel::SetClockForTest(FakeNow);

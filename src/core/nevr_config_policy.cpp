@@ -21,6 +21,11 @@
 
 namespace nevr {
 
+std::string ConfigRejectionDetail(const NevrConfigError& error) {
+  return std::string("reason=") + ReasonToken(error.Kind()) + " line=" + std::to_string(error.Line()) +
+         " column=" + std::to_string(error.Column());
+}
+
 void LogUnsetBareVars(const NevrConfig& cfg) {
   for (const std::string& name : cfg.UnsetBareVars()) {
     Log(EchoVR::LogLevel::Warning,
@@ -36,16 +41,17 @@ NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_serve
     LogUnsetBareVars(cfg);
     return cfg;
   } catch (const NevrConfigError& e) {
+    const std::string detail = ConfigRejectionDetail(e);
     if (is_server) {
       // In a real server the registered handler routes this to ForceFatalExit
-      // (the N4 path); the unregistered fallback message-boxes + exits. Never
-      // reached by the unit test, which drives the client branch only.
-      FatalError(e.what(), "NEVR Config Error");
+      // (the N4 path); the unregistered fallback message-boxes + exits. The
+      // unit test captures this message with a registered handler.
+      FatalError(("[NEVR.CONFIG] config.yaml rejected path=" + path + " " + detail).c_str(), "NEVR Config Error");
     } else {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONFIG] %s — continuing with empty config (all config-driven "
+          "[NEVR.CONFIG] config.yaml rejected path=%s %s — continuing with empty config (all config-driven "
           "behavior uses defaults)",
-          e.what());
+          path.c_str(), detail.c_str());
     }
     return NevrConfig();  // empty
   }
