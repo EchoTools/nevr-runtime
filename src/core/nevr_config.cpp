@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <set>
+#include <string>
 #include <sstream>
 #include <utility>
 
@@ -114,23 +115,43 @@ std::optional<std::string> InterpolateScalar(const YAML::Node& n, UnsetSink unse
   return std::nullopt;
 }
 
+// The bound on a walk over the file's tree (kMaxConfigDepth, kMaxConfigNodes in nevr_config.h): one per load,
+// shared by every walk, so a file cannot spend the node budget twice. Passed down the call, not a global.
+struct WalkBudget {
+  std::size_t visited = 0;
+};
+
+// Count one visit of a node at `depth`; throws when the walk has gone too deep or too far. An alias makes the
+// tree a cycle or a DAG that expands to exponentially many visits, so both are checked on every visit.
+void EnterNode(WalkBudget& budget, std::size_t depth) {
+  if (depth > kMaxConfigDepth) {
+    throw NevrConfigError("config: nesting is deeper than " + std::to_string(kMaxConfigDepth) + " levels",
+                          NevrConfigErrorKind::kNestingTooDeep);
+  }
+  if (++budget.visited > kMaxConfigNodes) {
+    throw NevrConfigError("config: more than " + std::to_string(kMaxConfigNodes) + " nodes",
+                          NevrConfigErrorKind::kTooManyNodes);
+  }
+}
+
 // Read-only walk that interpolates every scalar and DISCARDS the result — its
 // sole purpose is to make a required ${VAR:?} that is unset fail LOUD at
 // load time (InterpolateString throws) and to collect unset bare ${VAR} names. It never mutates the tree: reassigning a
 // scalar in place during map iteration corrupts later sibling map entries in
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
-// lazily at read time (GetString etc.); this walk only validates.
-void ValidateInterpolation(const YAML::Node& node, UnsetSink unset) {
+// lazily at read time (GetString etc.); this walk only validates. Bounded by `budget`.
+void ValidateInterpolation(const YAML::Node& node, UnsetSink unset, WalkBudget& budget, std::size_t depth) {
+  EnterNode(budget, depth);
   switch (node.Type()) {
     case YAML::NodeType::Scalar:
       (void)InterpolateString(node.Scalar(), unset);  // may throw
       break;
     case YAML::NodeType::Sequence:
-      for (const auto& child : node) ValidateInterpolation(child, unset);
+      for (const auto& child : node) ValidateInterpolation(child, unset, budget, depth + 1);
       break;
     case YAML::NodeType::Map:
-      for (const auto& kv : node) ValidateInterpolation(kv.second, unset);
+      for (const auto& kv : node) ValidateInterpolation(kv.second, unset, budget, depth + 1);
       break;
     default:
       break;
@@ -188,14 +209,16 @@ void ValidateTopLevel(const YAML::Node& root) {
   }
 }
 
-void FlattenArgs(const YAML::Node& node, const std::string& prefix,
-                 std::map<std::string, std::string>& out) {
+// Bounded by `budget` like ValidateInterpolation; `depth` is the depth of `node` in the file's tree.
+void FlattenArgs(const YAML::Node& node, const std::string& prefix, std::map<std::string, std::string>& out,
+                 WalkBudget& budget, std::size_t depth) {
+  EnterNode(budget, depth);
   for (const auto& kv : node) {
     const std::string key =
         prefix.empty() ? kv.first.Scalar() : (prefix + "." + kv.first.Scalar());
     const YAML::Node value = kv.second;
     if (value.IsMap()) {
-      FlattenArgs(value, key, out);
+      FlattenArgs(value, key, out, budget, depth + 1);
     } else if (value.IsSequence()) {
       std::string joined;
       bool first = true;
@@ -212,7 +235,7 @@ void FlattenArgs(const YAML::Node& node, const std::string& prefix,
   }
 }
 
-void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
+void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out, WalkBudget& budget) {
   const YAML::Node plugins = ChildByKey(root, "plugins");
   if (!plugins.IsDefined() || plugins.IsNull()) return;
   if (!plugins.IsSequence()) throw NevrConfigError("config: 'plugins' must be a list", NevrConfigErrorKind::kBadPlugins);
@@ -242,7 +265,8 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
     if (targetN.IsScalar()) spec.target = InterpolateString(targetN.Scalar());
 
     const YAML::Node argsN = ChildByKey(entry, "args");
-    if (argsN.IsDefined() && argsN.IsMap()) FlattenArgs(argsN, "", spec.args);
+    // root map 0, `plugins` list 1, the entry 2, `args` 3.
+    if (argsN.IsDefined() && argsN.IsMap()) FlattenArgs(argsN, "", spec.args, budget, 3);
 
     out.push_back(std::move(spec));
   }
@@ -258,6 +282,8 @@ const char* ReasonToken(NevrConfigErrorKind kind) {
     case NevrConfigErrorKind::kUnknownTopLevelKey: return "unknown_top_level_key";
     case NevrConfigErrorKind::kBadPlugins: return "bad_plugins";
     case NevrConfigErrorKind::kUnsetRequiredVariable: return "unset_required_variable";
+    case NevrConfigErrorKind::kNestingTooDeep: return "nesting_too_deep";
+    case NevrConfigErrorKind::kTooManyNodes: return "too_many_nodes";
     case NevrConfigErrorKind::kOther: break;
   }
   return "invalid_config";
@@ -301,10 +327,11 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
 
   ValidateTopLevel(raw);
   std::set<std::string> unsetBare;
-  ValidateInterpolation(raw, &unsetBare);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  WalkBudget budget;
+  ValidateInterpolation(raw, &unsetBare, budget, 0);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
-  ParsePlugins(cfg.impl_->root, cfg.plugins_);
+  ParsePlugins(cfg.impl_->root, cfg.plugins_, budget);
   cfg.empty_ = false;
   return cfg;
 }

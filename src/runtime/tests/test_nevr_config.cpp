@@ -418,6 +418,7 @@ TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
   EXPECT_EQ(reasonOf("plugins:\n  - 3\n"), "bad_plugins");
   EXPECT_EQ(reasonOf("plugins:\n  - args: {}\n"), "bad_plugins");  // an entry with no name
   EXPECT_EQ(reasonOf("auth:\n  http_key: \"${NEVR_TEST_REASON_REQUIRED:?must be set}\"\n"), "unset_required_variable");
+  EXPECT_EQ(reasonOf("x-a: &a [*a]\n"), "nesting_too_deep");
   EXPECT_EQ(reasonOf("services:\n  serverdb: \"x\"\n"), "no error");
   EXPECT_STREQ(nevr::ReasonToken(nevr::NevrConfigErrorKind::kOther), "invalid_config");
   try {
@@ -426,6 +427,79 @@ TEST(NevrConfig, ErrorsCarryAStableReasonToken) {
   } catch (const nevr::NevrConfigError& e) {
     EXPECT_STREQ(nevr::ReasonToken(e.Kind()), "unreadable");
   }
+}
+
+// An alias can make the tree a cycle or expand it exponentially. The walks over it are bounded (kMaxConfigDepth,
+// kMaxConfigNodes) and a file that exceeds a bound is rejected with its own token. Unbounded, the cycles below end
+// the process (stack overflow in ValidateInterpolation) and the nested aliases run for seconds.
+namespace {
+
+std::string ReasonOf(const std::string& yaml) {
+  try {
+    nevr::NevrConfig::LoadFromString(yaml);
+  } catch (const nevr::NevrConfigError& e) {
+    return std::string(nevr::ReasonToken(e.Kind()));
+  }
+  return std::string("no error");
+}
+
+// `levels` mappings of ten references each to the level below: 10^levels visits when walked as a tree.
+std::string NestedAliases(int levels) {
+  std::string s = "x-a0: &a0 [\"lol\"]\n";
+  for (int i = 1; i <= levels; ++i) {
+    s += "x-a" + std::to_string(i) + ": &a" + std::to_string(i) + " [";
+    for (int j = 0; j < 10; ++j) s += (j ? ",*a" : "*a") + std::to_string(i - 1);
+    s += "]\n";
+  }
+  return s;
+}
+
+// `x-d: [[...[s]...]]` with `brackets` sequences: the scalar sits at depth brackets + 1.
+std::string NestedSequences(std::size_t brackets) {
+  return "x-d: " + std::string(brackets, '[') + "s" + std::string(brackets, ']') + "\n";
+}
+
+}  // namespace
+
+TEST(NevrConfig, ASelfReferencingSequenceIsRejectedNotWalkedForever) {
+  EXPECT_EQ(ReasonOf("x-a: &a [*a]\n"), "nesting_too_deep");
+}
+
+TEST(NevrConfig, ASelfReferencingMapIsRejectedNotWalkedForever) {
+  EXPECT_EQ(ReasonOf("x-a: &a {k: *a}\n"), "nesting_too_deep");
+}
+
+TEST(NevrConfig, ASelfReferencingPluginArgsMapIsRejected) {
+  EXPECT_EQ(ReasonOf("plugins:\n  - name: p\n    args: &a {k: *a}\n"), "nesting_too_deep");
+}
+
+TEST(NevrConfig, NestedAliasesThatExpandExponentiallyAreRejectedByTheNodeBudget) {
+  EXPECT_EQ(ReasonOf(NestedAliases(8)), "too_many_nodes");
+}
+
+TEST(NevrConfig, NestingAtTheDepthCapLoadsAndOneDeeperIsRejected) {
+  EXPECT_EQ(ReasonOf(NestedSequences(nevr::kMaxConfigDepth - 1)), "no error");
+  EXPECT_EQ(ReasonOf(NestedSequences(nevr::kMaxConfigDepth)), "nesting_too_deep");
+}
+
+TEST(NevrConfig, ADeepButLegalNestingStillLoads) {
+  EXPECT_EQ(ReasonOf(NestedSequences(32)), "no error");
+}
+
+TEST(NevrConfig, AMuchDeeperNestingIsRejectedByTheParserOrTheCap) {
+  const std::string reason = ReasonOf(NestedSequences(30000));
+  EXPECT_TRUE(reason == "yaml_syntax" || reason == "nesting_too_deep") << reason;
+}
+
+TEST(NevrConfig, TheNodeBudgetIsExactlyKMaxConfigNodes) {
+  // The root mapping and the sequence are two visits; each scalar is one.
+  const auto sequenceOf = [](std::size_t scalars) {
+    std::string s = "x-n: [";
+    for (std::size_t i = 0; i < scalars; ++i) s += i == 0 ? "0" : ",0";
+    return s + "]\n";
+  };
+  EXPECT_EQ(ReasonOf(sequenceOf(nevr::kMaxConfigNodes - 2)), "no error");
+  EXPECT_EQ(ReasonOf(sequenceOf(nevr::kMaxConfigNodes - 1)), "too_many_nodes");
 }
 
 // The parser logs nothing (the Quest builds it without the PC logger); the PC's callers log the unset-variable

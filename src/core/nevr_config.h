@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -31,10 +32,26 @@ enum class NevrConfigErrorKind {
   kUnknownTopLevelKey,
   kBadPlugins,
   kUnsetRequiredVariable,
+  kNestingTooDeep,
+  kTooManyNodes,
 };
 
+/// Bounds on the walks over a file's YAML tree, per load. An alias can make the tree a cycle (`x-a: &a [*a]`) or
+/// expand it exponentially (nested aliases of aliases), and a walk that follows it without a bound exhausts the
+/// stack or runs for minutes, in the Quest's constructor as well as on the PC. Exceeding either bound rejects the
+/// file (kNestingTooDeep, kTooManyNodes).
+///
+/// Depth: the root mapping is depth 0 and a scalar inside k nested sequences under a top-level key is depth k + 1.
+/// 64 is far deeper than a settings file nests (the sections hold scalars; only plugin `args` nest, by dotted
+/// key), and it keeps the walk to 64 frames where the unbounded walk overflowed the stack at 21,792 on a Linux host.
+inline constexpr std::size_t kMaxConfigDepth = 64;
+/// Nodes visited, counting each visit of an aliased node: 100,000 is three times what a 64 KiB file (the Quest's
+/// size cap) can hold as plain flow entries (`[a,a,a]` is 2 bytes a node, 32,768 nodes), while 434 bytes of nested
+/// aliases (8 levels of ten references) expand to 10^8 visits.
+inline constexpr std::size_t kMaxConfigNodes = 100000;
+
 /// A stable, value-free token for a kind: "unreadable", "yaml_syntax", "not_a_mapping", "unknown_top_level_key",
-/// "bad_plugins", "unset_required_variable", and "invalid_config" for kOther.
+/// "bad_plugins", "unset_required_variable", "nesting_too_deep", "too_many_nodes", and "invalid_config" for kOther.
 const char* ReasonToken(NevrConfigErrorKind kind);
 
 /// Thrown by the parsing entry points on ANY failure: file not readable, YAML

@@ -368,6 +368,45 @@ void TheSizeCapIsInclusive() {
   CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_large limit_bytes=65536 (embedded defaults stay)"));
 }
 
+// An alias can make the tree a cycle or expand it exponentially. The walks over it are bounded, so the file is
+// rejected by name; unbounded, the cycles end the process and the nested aliases run for seconds.
+std::string NestedAliases(int levels) {
+  std::string s = "x-a0: &a0 [\"lol\"]\n";
+  for (int i = 1; i <= levels; ++i) {
+    s += "x-a" + std::to_string(i) + ": &a" + std::to_string(i) + " [";
+    for (int j = 0; j < 10; ++j) s += (j ? ",*a" : "*a") + std::to_string(i - 1);
+    s += "]\n";
+  }
+  return s;
+}
+
+void AliasesThatLoopOrExplodeAreRejectedNotWalkedForever() {
+  const char* const nesting =
+      "config file=config.yaml rejected reason=nesting_too_deep (embedded defaults stay)";
+  LoadResult r = Load(Full(), "x-a: &a [*a]\n");
+  CHECK(r.fileRejected && EventsContain(r, nesting));
+  CHECK(DefaultsOnly(r.config.effective) && r.config.socketUri.source == Source::kEmbedded);
+  r = Load(Full(), "x-a: &a {k: *a}\n");
+  CHECK(r.fileRejected && EventsContain(r, nesting));
+  r = Load(Full(), "plugins:\n  - name: p\n    args: &a {k: *a}\n");
+  CHECK(r.fileRejected && EventsContain(r, nesting));
+  r = Load(Full(), NestedAliases(8));
+  CHECK(r.fileRejected);
+  CHECK(EventsContain(r, "config file=config.yaml rejected reason=too_many_nodes (embedded defaults stay)"));
+  CHECK(!EventsContain(r, "lol"));
+}
+
+void ADeepButLegalNestingStillLoads() {
+  const std::string deep = "services:\n  socket_uri: \"ws://file.example/x\"\nx-d: " + std::string(32, '[') + "s" +
+                           std::string(32, ']') + "\n";
+  const LoadResult r = Load(Full(), deep);
+  CHECK(!r.fileRejected && r.config.socketUri.source == Source::kFile);
+  CHECK(EventsContain(r, "config file=config.yaml loaded"));
+  // Far deeper than any cap: the parser's own limit or ours rejects it, never a crash.
+  const std::string tooDeep = std::string(30000, '[') + std::string(30000, ']') + "\n";
+  CHECK(Load(Full(), tooDeep).fileRejected);
+}
+
 void BadKeyValuesKeepTheDefault() {
   const LoadResult r = Load(Full(),
                             "services:\n  socket_uri: \"https://SECRETHOST-1/wrong-scheme\"\n"
@@ -522,6 +561,8 @@ int main() {
   AnUnknownKeyInsideAKnownSectionIsNotAnError();
   OversizedFileIsRejected();
   TheSizeCapIsInclusive();
+  AliasesThatLoopOrExplodeAreRejectedNotWalkedForever();
+  ADeepButLegalNestingStillLoads();
   BadKeyValuesKeepTheDefault();
   UriShapeValidation();
   AScalarOfAnyYamlTypeIsAValueLikeOnThePc();
