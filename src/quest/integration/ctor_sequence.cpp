@@ -134,21 +134,15 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterLoginPromptCounters, "bridge_and_login_off");
     }
-    // The OBB-mount skip (#319) is independent of every feature above.
-    bool obbCounters = false;
-    if (want.obbSkip) {
-      obbCounters = r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
-    } else {
-      r.Skip(StepId::kRegisterObbSkipCounters, "obb_skip_off");
-    }
+    // The OBB-mount skip (#319, #572) runs on every launch: no feature and no configuration turns it off.
+    const bool obbCounters =
+        r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
 
     // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
-    if (!want.obbSkip) {
-      r.Skip(StepId::kInstallObbSkip, "obb_skip_off");
-    } else if (!obbCounters) {
+    if (!obbCounters) {
       try {
         steps.InstallObbSkip(false);  // the hook's own rule logs that it installs nothing
       } catch (const std::exception&) {

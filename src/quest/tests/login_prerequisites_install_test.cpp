@@ -92,12 +92,12 @@ int main() {
   // and idempotent (second call re-logs nothing).
   nevr_quest_login::ResetPrerequisitesForTest();
   sentinel::ElfImage dummy{};  // base 0, no program headers: every slot resolution fails
-  const nevr_quest_login::PrerequisiteInstall r = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr);
+  const nevr_quest_login::PrerequisiteInstall r = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
   QCHECK(r.callbacks == 0 && r.accessors == 0 && r.requests == 0 && !r.substitute);
   QCHECK(g_sawPartial);
   QCHECK(!g_sawResidual);  // only a substituting install warns about residuals
   const int linesAfterFirst = g_lines;
-  const nevr_quest_login::PrerequisiteInstall r2 = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr);
+  const nevr_quest_login::PrerequisiteInstall r2 = nevr_quest_login::InstallLoginPrerequisites(dummy, &Ready, nullptr, nullptr);
   QCHECK(r2.accessors == 0 && !r2.substitute);
   QCHECK(g_lines == linesAfterFirst);
 
@@ -106,7 +106,7 @@ int main() {
   // "substitution_unavailable" -- the gate, not the unconfigured pass-through.
   nevr_quest_login::ResetPrerequisitesForTest();
   nevr_quest_login::OvrErrorApi api{&IsError, nullptr, nullptr, nullptr, &ErrMsg};
-  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/false, &Ready, nullptr);
+  nevr_quest_login::ConfigurePrerequisites(api, /*substitute=*/false, &Ready, nullptr, nullptr);
   g_sawPartial = false;
   int seen_is_error = 0;
   struct Ctx {

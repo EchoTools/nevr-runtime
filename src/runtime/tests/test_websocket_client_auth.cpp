@@ -19,6 +19,7 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketHandshakeKeyGen.h>
+#include <ixwebsocket/IXWebSocketMessage.h>
 
 #include <algorithm>
 #include <atomic>
@@ -26,8 +27,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -223,7 +227,75 @@ std::string UriFor(const ScriptedUpgradeServer& server) {
   return "ws://127.0.0.1:" + std::to_string(server.Port()) + "/nevr";
 }
 
+void DeliverForTest(WebSocketClient& client, ix::WebSocketMessageType type, const std::string& body,
+                    bool binary = false, int httpStatus = 0) {
+  ix::WebSocketErrorInfo error;
+  error.http_status = httpStatus;
+  auto message = std::make_unique<ix::WebSocketMessage>(type, body, body.size(), error,
+                                                         ix::WebSocketOpenInfo(), ix::WebSocketCloseInfo(), binary);
+  client.TestDeliverMessage(message);
+}
+
 }  // namespace
+
+TEST(WebSocketClientCallbackBoundary, ContainsConnectionHandlerExceptionAndAcceptsNextEvent) {
+  ClearLog();
+  WebSocketClient client;
+  client.SetConnectionHandler([](BOOL) { throw std::runtime_error("connection-secret-sentinel"); });
+  const std::string empty;
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Open, empty));
+  EXPECT_TRUE(client.IsConnected());
+  EXPECT_TRUE(LogContains("callback threw and was CONTAINED at=WebSocketClient::OnMessage"));
+  EXPECT_FALSE(LogContains("connection-secret-sentinel"));
+
+  int laterCalls = 0;
+  client.SetConnectionHandler([&](BOOL) { ++laterCalls; });
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Open, empty));
+  EXPECT_EQ(laterCalls, 1);
+}
+
+TEST(WebSocketClientCallbackBoundary, ContainsBearerRefreshExceptionAndAcceptsNextError) {
+  ClearLog();
+  WebSocketClient client;
+  client.TestSetBearerToken("original-token");
+  client.SetBearerTokenRefresher([]() -> std::string { throw std::runtime_error("token-secret-sentinel"); });
+  const std::string empty;
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Error, empty, false, 401));
+  EXPECT_TRUE(LogContains("callback threw and was CONTAINED at=WebSocketClient::OnMessage"));
+  EXPECT_FALSE(LogContains("token-secret-sentinel"));
+
+  client.SetBearerTokenRefresher([] { return std::string("replacement-token"); });
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Error, empty, false, 401));
+  EXPECT_TRUE(LogContains("Bearer token replaced after HTTP 401 refresh_count=1"));
+}
+
+TEST(WebSocketClientCallbackBoundary, QueueAppendExceptionReleasesLockForNextMessage) {
+  ClearLog();
+  WebSocketClient encoder;
+  const std::uint8_t payload = 0x42;
+  ASSERT_TRUE(encoder.Send(0x1234, &payload, 1));
+  const auto queued = encoder.TestCopyPendingMessages();
+  ASSERT_EQ(queued.size(), 1U);
+
+  WebSocketClient client;
+  client.TestSetBeforeReceiveEnqueue([] { throw std::bad_alloc(); });
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  EXPECT_TRUE(LogContains("callback threw and was CONTAINED at=WebSocketClient::OnMessage"));
+  EXPECT_TRUE(LogContains("failure=1"));
+
+  client.TestSetBeforeReceiveEnqueue({});
+  EXPECT_NO_THROW(DeliverForTest(client, ix::WebSocketMessageType::Message, queued.front(), true));
+  int received = 0;
+  client.SetMessageHandler([&](EchoVR::SymbolId id, VOID* bytes, UINT64 size) {
+    EXPECT_EQ(id, 0x1234U);
+    ASSERT_NE(bytes, nullptr);
+    ASSERT_EQ(size, 1U);
+    EXPECT_EQ(*static_cast<std::uint8_t*>(bytes), payload);
+    ++received;
+  });
+  client.ProcessReceivedMessages();
+  EXPECT_EQ(received, 1);
+}
 
 // The log sink is capped: a loop that logs on every pass ends the process instead of growing the sink until
 // memory runs out. The handler is replaced here to observe the overflow.
