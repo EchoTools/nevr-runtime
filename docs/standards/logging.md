@@ -356,8 +356,9 @@ std::cerr << "failed" << std::endl;
 `FormatJsonLogEntry` is declared in `src/core/logging.h` and defined in
 `src/core/logging.cpp`. It is called from
 nowhere in production (the only other reference is a test stub). `Log()` routes
-to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
-before the game logger exists.
+by boot phase: during the boot phase (Rule 12) it reports through the boot tee;
+after it, to the game's own `EchoVR::WriteLog`, falling back to
+`vfprintf(stderr)` only before the game logger exists.
 
 So nEVR lines go through the game's logger and appear in its stream, rather than
 being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
@@ -445,9 +446,19 @@ it was applied.
 
 ### Rule 12: Bootstrap log lines carry a level prefix
 
-Before the game logger is available, `nevr_boot_log_tee::TeeFprintf` is the
-only output mechanism. These lines SHALL embed their level in the format
-string so they are distinguishable from timestamped `Log()` output:
+The runtime boots under the DllMain loader lock, where the game's CLog is not
+usable. The boot phase runs from `nevr_boot_log_tee::Init()` to
+`nevr_boot_log_tee::Close()`, and in it `Log()` itself reports through the boot
+tee (stderr and `nevr-boot.jsonl`): `Init()` sets `Log()`'s boot sink
+(`SetBootLogSink` in `src/core/logging.h`) and `Close()` clears it. Code that
+runs both during boot and after it calls `Log()` and never branches on the
+phase.
+
+`Log()` in the boot phase puts the level after the subsystem tag
+(`[NEVR.PATCH] warn; hook FAILED ...`). A direct
+`nevr_boot_log_tee::TeeFprintf` call, for code that runs only in the boot
+phase, SHALL embed its level in the format string the same way, so boot lines
+are distinguishable from timestamped `Log()` output:
 
 ```cpp
 // BEFORE (no level — indistinguishable from any other bootstrap line)
@@ -457,10 +468,9 @@ nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n"
 nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks...\n");
 ```
 
-The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
-`Log()` becomes available. Once the game logger is initialized, all
-subsequent output SHALL use `Log()` — `TeeFprintf` is a bootstrap
-mechanism only.
+The level prefix (`debug;`, `info;`, `warn;`, `error;`) bridges the gap
+until the game logger is usable. After the boot phase, all output SHALL use
+`Log()`: `TeeFprintf` is a bootstrap mechanism only.
 
 ### Rule 13: INFO is summary, DEBUG is narrative
 
