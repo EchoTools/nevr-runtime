@@ -622,6 +622,111 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
+// #496: an entry marked early loads in the early pass, alone; the normal pass loads the
+// rest, the early one is not loaded again, and the report covers both passes.
+static PluginLoadItem EarlyItem(const char* name, const char* file) {
+  PluginLoadItem item{name, file, false, "", "{}"};
+  item.early = true;
+  return item;
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EarlyPassLoadsOnlyTheEntriesMarkedEarly) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back(EarlyItem("future-api", "test_plugin_future_api.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_onframe.dll"), nullptr) << "the early pass loaded a normal entry";
+  EXPECT_TRUE(TestLogContains("early pass: 1 plugin(s) marked early"));
+  EXPECT_TRUE(TestLogContains("early pass complete: 1/1 loaded"));
+  nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin load complete: 2/2 loaded"));
+  EXPECT_FALSE(TestLogContains("SKIPPED")) << "the normal pass took the early entry again";
+  manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), true);
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EarlyPassWithNothingMarkedEarlyLoadsNothing) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_FALSE(TestLogContains("early pass"));
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin load complete: 1/1 loaded"));
+}
+
+// The first entry for a file decides its pass, as for any repeat (#135): an early repeat
+// of a normal entry is skipped by the early pass and the plugin loads in the normal one.
+TEST_F(PluginLoaderDiagnosticTest, EarlyRepeatOfANormalEntryLoadsInTheNormalPass) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe-early", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-early (test_plugin_onframe.dll)"));
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+}
+
+// Another spelling of a module the early pass loaded is caught by the same-module check.
+TEST_F(PluginLoaderDiagnosticTest, ModuleTheEarlyPassLoadedIsNotLoadedAgainUnderAnotherSpelling) {
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe", "test_plugin_onframe.dll"));
+  g_testPluginLoadPlan.push_back({"onframe-dotted", ".\\test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-dotted"));
+  EXPECT_TRUE(TestLogContains("the same module as onframe"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
+}
+
+// #152 across the passes: a pointer an early plugin kept from get_plugin_info stays valid
+// when the normal pass loads more.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass) {
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe", "test_plugin_onframe.dll"));
+  g_testPluginLoadPlan.push_back(EarlyItem("keeper", "test_plugin_info_keeper.dll"));
+  g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 3);
+
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the normal pass moved what an early plugin kept";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
 // NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
