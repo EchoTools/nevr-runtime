@@ -40,6 +40,7 @@
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/server/serverdb_uri.h"
+#include "runtime/compat/friend_request_check.h"
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
@@ -609,6 +610,8 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     else nevr_party_share_check::OnClientMessage(sym, payload, static_cast<size_t>(len));
     // Self-check "party_member_leave" (#403): a PartyLeaveNotify the game client receives.
     if (fromServer) nevr_party_leave_check::OnServerMessage(sym, payload, static_cast<size_t>(len));
+    // Self-check "friend_request" (#405): an incoming friend request, a repeat of it, or its end.
+    if (fromServer) nevr_friend_request_check::OnServerMessage(sym, payload, static_cast<size_t>(len));
     if (fromServer && sym == nevr_evr_codec::kSymLoginSuccess) {
       // Self-checks may send from here on, as the user the service named (payload: session UUID, platform, account).
       if (len >= nevr_evr_codec::kUuidSize + 16) {
