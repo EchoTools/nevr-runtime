@@ -33,6 +33,7 @@ struct Config {
   bool substitute;
   ReadyFn ready;
   ResetFn reset;
+  HoldFn hold;
 };
 
 Config g_config;
@@ -376,12 +377,13 @@ bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept {
   return accessors_hooked == 8 && have_is_error;
 }
 
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset) noexcept {
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset, HoldFn hold) noexcept {
   StandIn::Generate();
   g_config.api = api;
   g_config.substitute = substitute && api.message_is_error != nullptr;
   g_config.ready = ready;
   g_config.reset = reset;
+  g_config.hold = hold;
   g_configured.store(true, std::memory_order_release);
 }
 
@@ -428,6 +430,7 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
                            {"result", "stand_in"},
                            {"reason", "local"},
                            {"accessor", "local"},
+                           {"ready", ready_now ? 1 : 0},  // 0: the reset above withdrew the stand-ins (#581)
                            {"ovr_error", -1},
                            {"error_code", 0},
                            {"http_code", 0},
@@ -608,7 +611,10 @@ std::uint64_t Request(Prerequisite which) noexcept {
 
 const void* OnPopMessage(const void* (*original)()) noexcept {
   // Frequency: once per game-loop pump iteration. Atomics only, no logging.
-  if (g_local_enabled.load(std::memory_order_acquire) && g_config.ready != nullptr && g_config.ready()) {
+  // Delivered unless the identity source holds the answers (#581): token auth has a token coming without the
+  // player. Not ready and not held, the game receives them, the not-ready reset withdraws the stand-ins, and
+  // its own UpdateInternal fails the login: the screen the sign-in code is written onto.
+  if (g_local_enabled.load(std::memory_order_acquire) && !(g_config.hold != nullptr && g_config.hold())) {
     for (;;) {
       const std::uint64_t n = g_next_deliver.load(std::memory_order_acquire);
       if (n > g_issued.load(std::memory_order_acquire)) break;  // nothing pending

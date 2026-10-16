@@ -820,6 +820,18 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/login_prompt_hook_test" -ldl
     timeout 120 "$out/login_prompt_hook_test"
+    # The whole no-credentials chain (#581): the real prerequisite handlers and the real prompt hook together,
+    # token auth awaiting the player -> the answers delivered -> the game's local failure -> the code written.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_prerequisites.cpp -o "$out/chain_login_prerequisites.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
+        src/quest/login/login_standin.cpp -o "$out/chain_login_standin.o"
+    "${cxx[@]}" -fno-exceptions -DNEVR_QUEST_TESTING -pthread src/quest/tests/login_signin_code_chain_test.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        "$out/chain_login_prerequisites.o" "$out/chain_login_standin.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_signin_code_chain_test" -ldl
+    timeout 120 "$out/login_signin_code_chain_test"
     # The OBB-mount skip (#319): the real handlers driven through the thunk entries, against a model of the
     # game's callback and wait loop.
     "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/obb_skip_hook_test.cpp \
@@ -1112,6 +1124,9 @@ verify:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
+    # The log names what it tested, so a pass is never re-run to prove it.
+    echo "verify: HEAD $(git rev-parse HEAD)"
+    echo "verify: tree $( [ -z "$(git status --porcelain)" ] && echo clean || echo DIRTY)"
     just build
     # `just build` filters its output through grep and always exits 0, so its exit
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
@@ -1127,7 +1142,6 @@ verify:
     just test-quest-redirect
     just test-quest-social
     just test-quest-integration
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_spectatorstream_order tools.tests.test_pnsrad_diag_deferral tools.tests.test_verify_mode_patch_ground_truth tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs tools.tests.test_naming tools.tests.test_naming_inventory tools.tests.test_server_hold tools.tests.test_check_quest_static_init tools.tests.test_quest_link_objects tools.tests.test_quest_standin_testonly tools.tests.test_check_pr_read_line tools.tests.test_pr_read_check_workflow tools.tests.test_abi_symbols -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1958,7 +1972,7 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
-    python3 -m unittest discover -s tools/tests -p 'test_*.py'
+    timeout -k 10 600 python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
@@ -2756,7 +2770,9 @@ _vcpkg-mingw:
         root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
         cd "$root"
         unset VCPKG_ROOT
-        ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
+        # Fixed PATH: the triplet passes PATH through (VCPKG_ENV_PASSTHROUGH), so the caller's PATH
+        # would be hashed into every package ABI and miss the shared binary cache.
+        env PATH=/usr/local/bin:/usr/bin ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
             --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
     fi

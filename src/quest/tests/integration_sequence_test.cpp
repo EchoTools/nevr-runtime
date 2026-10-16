@@ -22,6 +22,7 @@
 #include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/net/frame_tap.h"
+#include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/self_check.h"
@@ -652,6 +653,7 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   namespace gate = nevr_quest_login::attempt_gate;
   TokenIdentitySource source(nullptr);
   QCHECK(!source.Ready() && !gate::IsReady());
+  QCHECK(source.HoldsAnswers() && gate::HoldsAnswers());  // a new source is Starting: token auth is working, hold
   source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
   QCHECK(source.Ready() && gate::IsReady() && gate::LoginMayProceed());
   gate::Poison();  // an attempt's logging-in page was skipped
@@ -667,6 +669,109 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   QCHECK(!source.Ready() && !gate::IsReady());  // one flip, both readers
   TokenIdentitySource next(nullptr);            // a new source starts clean
   QCHECK(!next.Ready());
+  QCHECK(next.HoldsAnswers());
+}
+
+// #581: every observed state maps to one (ready, hold) pair, published together. Hold: a token is coming without
+// the player (starting, refreshing, expired, a failure the session retries, a ready snapshot whose token ran
+// out). Deliver (not ready, no hold): the player is awaited, or no token will come (a final failure, stopped, a
+// token without an account). Ready never holds.
+void TestIdentitySourcePublishesTheHoldWithTheReady() {
+  using nevr::quest_auth::Readiness;
+  namespace gate = nevr_quest_login::attempt_gate;
+  struct Row {
+    const char* what;
+    nevr::quest_auth::Snapshot snap;
+    bool ready;
+    bool hold;
+  };
+  nevr::quest_auth::Snapshot failedRetry = Snap(Readiness::Failed, "", 0, "p");
+  failedRetry.will_retry = true;
+  const Row rows[] = {
+      {"starting", Snap(Readiness::Starting, "", 0, "p"), false, true},
+      {"refreshing", Snap(Readiness::Refreshing, "", 0, "p"), false, true},
+      {"awaiting the player", Snap(Readiness::AwaitingUser, "", 0, "p"), false, false},
+      {"expired", Snap(Readiness::Expired, "", 0, "p"), false, true},
+      {"failed, will retry", failedRetry, false, true},
+      {"failed, final", Snap(Readiness::Failed, "", 0, "p"), false, false},
+      {"stopped", Snap(Readiness::Stopped, "", 0, "p"), false, false},
+      {"ready", Snap(Readiness::Ready, "tok", 4242, "p"), true, false},
+      {"ready, token ran out", Snap(Readiness::Ready, "", 4242, "p"), false, true},
+      {"ready, no account", Snap(Readiness::Ready, "tok", 0, "p"), false, false},
+  };
+  for (const Row& row : rows) {
+    TokenIdentitySource viaObserve(nullptr);
+    viaObserve.Observe(row.snap);
+    const nevr_quest_login::IdentitySource& base = viaObserve;
+    if (base.Ready() != row.ready || base.HoldsAnswers() != row.hold || gate::LoginMayProceed() != row.ready) {
+      std::fprintf(stderr, "Observe(%s): ready %d hold %d, want %d %d\n", row.what, base.Ready(), base.HoldsAnswers(),
+                   row.ready, row.hold);
+    }
+    QCHECK(base.Ready() == row.ready && base.HoldsAnswers() == row.hold && gate::LoginMayProceed() == row.ready);
+    QCHECK(TokenIdentitySource::HoldsFor(row.snap) == row.hold);
+    // Fetch publishes the same pair from the snapshot it read.
+    const nevr::quest_auth::Snapshot snap = row.snap;
+    TokenIdentitySource viaFetch([snap] { return snap; });
+    nevr_quest_login::Identity id;
+    static_cast<void>(viaFetch.Fetch(id));
+    if (viaFetch.Ready() != row.ready || viaFetch.HoldsAnswers() != row.hold) {
+      std::fprintf(stderr, "Fetch(%s): ready %d hold %d, want %d %d\n", row.what, viaFetch.Ready(),
+                   viaFetch.HoldsAnswers(), row.ready, row.hold);
+    }
+    QCHECK(viaFetch.Ready() == row.ready && viaFetch.HoldsAnswers() == row.hold);
+  }
+  // A Fetch with no snapshot function answers NotReady and does not hold.
+  TokenIdentitySource noSnapshot(nullptr);
+  nevr_quest_login::Identity id;
+  QCHECK(noSnapshot.Fetch(id) == nevr_quest_login::IdentityStatus::NotReady);
+  QCHECK(!noSnapshot.Ready() && !noSnapshot.HoldsAnswers());
+  // The default IdentitySource never holds.
+  struct Plain final : nevr_quest_login::IdentitySource {
+    nevr_quest_login::IdentityStatus Fetch(nevr_quest_login::Identity&) override {
+      return nevr_quest_login::IdentityStatus::NotReady;
+    }
+  } plain;
+  QCHECK(!plain.HoldsAnswers());
+  static_assert(noexcept(std::declval<const TokenIdentitySource&>().HoldsAnswers()), "HoldsAnswers must be noexcept");
+  static_assert(noexcept(TokenIdentitySource::HoldsFor(std::declval<const nevr::quest_auth::Snapshot&>())),
+                "HoldsFor must be noexcept");
+}
+
+std::vector<std::string> g_holdLines;
+void CaptureHoldLine(sentinel::LogLevel, const char* line) { g_holdLines.emplace_back(line); }
+
+// #581: one Info record each time the hold decision changes, and on the first poll. The poll calls it with
+// HoldsFor of each snapshot; a state change that leaves the decision alone logs nothing.
+void TestTheHoldDecisionIsLoggedOnEachChange() {
+  using nevr::quest_auth::Readiness;
+  g_holdLines.clear();
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureHoldLine);
+  int last = -1;
+  const auto poll = [&last](const nevr::quest_auth::Snapshot& snap, const char* name) {
+    TokenIdentitySource::ReportHold(TokenIdentitySource::HoldsFor(snap), name, &last);
+  };
+  poll(Snap(Readiness::Starting, "", 0, "player-name-secret"), "starting");  // first poll: logs
+  QCHECK(g_holdLines.size() == 1);
+  poll(Snap(Readiness::Starting, "", 0, "player-name-secret"), "starting");  // same decision: nothing
+  poll(Snap(Readiness::Refreshing, "", 0, "player-name-secret"), "refreshing");
+  QCHECK(g_holdLines.size() == 1);
+  poll(Snap(Readiness::AwaitingUser, "", 0, "player-name-secret"), "awaiting_user");  // held -> answered
+  QCHECK(g_holdLines.size() == 2);
+  poll(Snap(Readiness::Ready, "access-token-secret", 4242, "player-name-secret"), "ready");  // answered -> answered
+  QCHECK(g_holdLines.size() == 2);
+  poll(Snap(Readiness::Ready, "", 4242, "player-name-secret"), "ready");  // the token ran out: held again
+  QCHECK(g_holdLines.size() == 3);
+  sentinel::SetLogSink(previous);
+  if (g_holdLines.size() == 3) {
+    const auto has = [](const std::string& line, const char* part) { return line.find(part) != std::string::npos; };
+    QCHECK(has(g_holdLines[0], "\"event\":\"quest_login_answers\"") && has(g_holdLines[0], "\"mode\":\"held\"") &&
+           has(g_holdLines[0], "\"status\":\"starting\"") && has(g_holdLines[0], "\"level\":\"info\""));
+    QCHECK(has(g_holdLines[1], "\"mode\":\"answered\"") && has(g_holdLines[1], "\"status\":\"awaiting_user\""));
+    QCHECK(has(g_holdLines[2], "\"mode\":\"held\""));
+  }
+  for (const std::string& line : g_holdLines) {  // no token, nonce, user name or id
+    QCHECK(line.find("secret") == std::string::npos && line.find("4242") == std::string::npos);
+  }
 }
 
 // Dropped Unrequires are reported once per change, with the increase since the last report.
@@ -928,6 +1033,8 @@ int main() {
   TestIdentitySourceAnswers();
   TestLoginGateFollowsTheIdentityAnswer();
   TestIdentitySourcePublishesTheSharedAttemptGate();
+  TestIdentitySourcePublishesTheHoldWithTheReady();
+  TestTheHoldDecisionIsLoggedOnEachChange();
   TestDropReportsOnlyChanges();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
