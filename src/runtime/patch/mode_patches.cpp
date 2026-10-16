@@ -21,7 +21,6 @@
 #include "runtime/hook/process_memory.h"
 #include "runtime/patch/broadcaster_pointer_guard.h"
 #include "runtime/patch/checked_patch.h"
-#include "runtime/log/boot_log_tee.h"
 
 // ============================================================================
 // Headless graphics-gate skip helper
@@ -756,10 +755,8 @@ VOID PatchDisableWwise() {
 // this lets it enter "load lobby" and begin by itself. The site (FUN_140116720 + 0x81D) is
 // inside PreprocessCommandLine, so PreprocessCommandLineHook calls this before the original on a
 // server (#519). Validated against kSpectatorStreamExpected, written only on a match, and
-// recorded as one key=value line on every call.
-//
-// Callers run both under the DllMain loader lock window (boot) and after it, so the record
-// goes through the boot log tee while nevr_boot_log_tee::InBootPhase() and through Log() after.
+// recorded as one key=value line on every call. Callers run both in the boot phase and after it;
+// Log() routes the record by phase itself (the boot tee, then the game's CLog).
 nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
   uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
   static_assert(sizeof(nevr_checked_patch::kSpectatorStreamExpected) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
@@ -778,11 +775,7 @@ nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
                                                   reinterpret_cast<uintptr_t>(site), before, result);
   const bool ok = result == nevr_checked_patch::Result::Applied ||
                   result == nevr_checked_patch::Result::AlreadyApplied;
-  if (nevr_boot_log_tee::InBootPhase()) {
-    nevr_boot_log_tee::TeeFprintf("%s\n", record);
-  } else {
-    Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
-  }
+  Log(ok ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning, "%s", record);
   return result;
 }
 
