@@ -8,7 +8,7 @@ one DLL: the target split waits on the decision in "Open decision" below.
 
 The game statically imports `BugSplat64.dll`, so whatever carries that name loads
 before `WinMain` and is the file every install and every test deployment replaces.
-The NEVR runtime changes with every release; the part the game needs from that name
+The runtime changes with every release; the part the game needs from that name
 (nine `MiniDmpSender` methods, a place to write a minidump, a place to load the
 runtime from) does not. Keeping both in one DLL means every runtime change replaces
 the stable file, and a runtime that fails to load takes the crash reporter with it.
@@ -79,7 +79,7 @@ The harness runs under Wine in `just verify`. It has not run on native Windows.
 
 ### The host's own files
 
-The host writes under NEVR's own per-game folder, never the game's `EchoVR` folder:
+The host writes under its own per-game folder, never the game's `EchoVR` folder:
 
 - `%LOCALAPPDATA%\nevr\echovr\logs\nevr-bootstrap.jsonl`, then
   `%TEMP%\nevr\echovr\logs`, then the directory of `BugSplat64.dll`;
