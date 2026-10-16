@@ -609,8 +609,9 @@ your seat name, for example `claude-main` or `codex`.
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
   test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations also runs `python3 -m pytest tools/tests/test_verify_gtest_floor.py` and sets the floor
-  (`verify_gtest_floor.py --floor` in `justfile`) to the count it reports. Run the quick check on the
+  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) sets the floor
+  (`verify_gtest_floor.py --floor` in `justfile`) to the count `python3 tools/verify_gtest_floor.py --floor 0` prints
+  (`declarations=`), then runs `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Run the quick check on the
   PR's tip, in the build slice. CI runs only when started by hand.
 - **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
   reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
