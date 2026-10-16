@@ -2,6 +2,8 @@
 
 #include <android/log.h>
 
+#include <nlohmann/json.hpp>
+
 #include <cerrno>
 #include <cstring>
 #include <ctime>
@@ -50,6 +52,15 @@ class Lock {
   Lock(const Lock&) = delete;
   Lock& operator=(const Lock&) = delete;
 };
+
+const char* LevelName(nevr_quest::LogLevel level) {
+  switch (level) {
+    case nevr_quest::LogLevel::kInfo: return "INFO";
+    case nevr_quest::LogLevel::kWarn: return "WARN";
+    case nevr_quest::LogLevel::kError: break;
+  }
+  return "ERROR";
+}
 
 int Priority(nevr_quest::LogLevel level) {
   switch (level) {
@@ -236,6 +247,27 @@ bool WriteRecord(int fd, const std::string& line, bool* torn, int* err, WriteFn 
   return false;
 }
 
+std::string FormatDiskLogLine(nevr_quest::LogLevel level, long long unixMs, const std::string& message) {
+  // sax_parse into a DOM, not json::parse: parse() instantiates the callback parser, whose std::function drags
+  // std::bad_function_call's typeinfo into the .so as a default-visibility export (TestExportAllowlist).
+  nlohmann::json line;
+  nlohmann::detail::json_sax_dom_parser<nlohmann::json,
+                                        nlohmann::detail::iterator_input_adapter<std::string::const_iterator>>
+      dom(line, false);
+  if (!nlohmann::json::sax_parse(message, &dom)) line = nlohmann::json();
+  if (line.is_object()) {
+    line.erase("ts_ms");
+    if (!line.contains("level")) line["level"] = LevelName(level);
+  } else {
+    line = nlohmann::json::object();
+    line["level"] = LevelName(level);
+    line["msg"] = message;
+  }
+  line["ts_unix_ms"] = unixMs;
+  line["tag"] = NEVR_TAG;
+  return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+}
+
 void Emit(nevr_quest::LogLevel level, const std::string& message) {
   __android_log_write(Priority(level), NEVR_TAG, message.c_str());
 
@@ -248,7 +280,7 @@ void Emit(nevr_quest::LogLevel level, const std::string& message) {
     }
     if (!OpenDiskLog()) return;
   }
-  const std::string line = nevr_quest::FormatDiskLogLine(level, NowMs(), message);
+  const std::string line = FormatDiskLogLine(level, NowMs(), message);
   int err = 0;
   if (!WriteRecord(g_fd, line, &g_tornLine, &err, ::write)) {
     ReportDiskFailure("write failed", err, &g_writeFailureReported);

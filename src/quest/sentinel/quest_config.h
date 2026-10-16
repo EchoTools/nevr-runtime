@@ -95,12 +95,6 @@ struct LoadResult {
 LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText,
                          const std::string& filePath = kConfigFileName);
 
-const char* LevelName(LogLevel level);
-
-// One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8
-// (invalid bytes in `message` are replaced).
-std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message);
-
 // `<filesDir>/config.yaml` and `<filesDir>/nevr-quest.json`, tolerant of a trailing slash.
 std::string ConfigFilePath(const std::string& filesDir);
 std::string LegacyConfigFilePath(const std::string& filesDir);
