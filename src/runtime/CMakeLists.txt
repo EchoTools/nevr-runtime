@@ -756,6 +756,15 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_codec DISCOVERY_MODE PRE_TEST)
 
+    # CSymbol64Hash with plain `char` unsigned, as under the NDK's AArch64 clang (#657). A change to
+    # abi/symbol_hash.h that zero-extends a byte >= 0x80 passes with the default signed char and fails here.
+    add_executable(test_symbol_hash tests/test_symbol_hash.cpp)
+    set_source_files_properties(tests/test_symbol_hash.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_symbol_hash PRIVATE -funsigned-char)
+    target_include_directories(test_symbol_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_symbol_hash PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
+
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
     # rules, so it also builds and runs on its own.
     add_executable(test_legacy_session
