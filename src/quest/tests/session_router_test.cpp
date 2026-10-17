@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "abi/symbol_hash.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/session_router.h"
@@ -2077,6 +2078,159 @@ void TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap() {
   QCHECK(rig.router->GetStats().games == 9);
 }
 
+// ---- config reply matching keys (vectors from nakama's own code) -------------------------------------
+//
+// The expected values below were produced by running the service's functions unchanged: ToSymbol
+// (server/evr/core_packet.go with CalculateSymbolValue, core_hash.go) and encoding/json decoding of the
+// ConfigRequest {type, id} and ConfigErrorInfo {type, identifier} structs (server/evr/config_request.go,
+// config_failure.go), in a scratch Go module that holds verbatim copies of those functions; the nakama
+// repository was only read. ok is whether encoding/json decoded the text without error.
+
+struct SymbolVector {
+  std::string text;
+  uint64_t symbol;
+};
+const SymbolVector kSymbolVectors[] = {
+    {std::string("", 0), 0x0000000000000000ULL},
+    {std::string("main_menu", 9), 0x1509ee27440e1d7bULL},
+    {std::string("Main_Menu", 9), 0x1509ee27440e1d7bULL},
+    {std::string("MAIN_MENU", 9), 0x1509ee27440e1d7bULL},
+    {std::string("active_battle_pass_season", 25), 0x794e13955045c77eULL},
+    {std::string("active_store_entry", 18), 0x59db56abec422dc9ULL},
+    {std::string("active_store_featured_entry", 27), 0x554922b112d2f931ULL},
+    {std::string("x", 1), 0xd1d52cf94503a85eULL},
+    {std::string("unknown_type", 12), 0xd1ad72f8234f41f9ULL},
+    {std::string("0x82869f0b37eb4378", 18), 0x82869f0b37eb4378ULL},
+    {std::string("0x0000000000000000", 18), 0x0000000000000000ULL},
+    {std::string("0xFFFFFFFFFFFFFFFF", 18), 0xffffffffffffffffULL},
+    {std::string("0xabcdef0123456789", 18), 0xabcdef0123456789ULL},
+    {std::string("0XABCDEF0123456789", 18), 0xf0e2d8cdf22ca74dULL},
+    {std::string("0xZZZZZZZZZZZZZZZZ", 18), 0x0f14c3a68c0894eaULL},
+    {std::string("0x82869f0b37eb437", 17), 0x4939a90bbe8e6997ULL},
+    {std::string("0x82869f0b37eb43780", 19), 0xc8950adf7338f1bcULL},
+    {std::string("0x", 2), 0x313d0759bc6bdc32ULL},
+    {std::string("0x1", 3), 0xc8e8d0b1a8c0fabbULL},
+    {std::string("caf\303\251", 5), 0xe32dc7d9d889e779ULL},
+    {std::string("\377\376", 2), 0x313d0759bc6b13b4ULL},
+    {std::string("main menu", 9), 0x1509ee58440e1d7bULL},
+    {std::string("type\000id", 7), 0x2fc3968f5b145e8eULL},
+    {std::string("0x+123456789abcdef", 18), 0x62ba849bc1ce5820ULL},
+    {std::string("0x_123456789abcdef", 18), 0xba7effc0e5b634e8ULL},
+};
+
+struct KeyVector {
+  std::string json;
+  bool ok;
+  uint64_t type;
+  uint64_t id;
+};
+const KeyVector kRequestVectors[] = {
+    {std::string("{\"type\":\"main_menu\",\"id\":\"main_menu\"}", 37), true, 0x1509ee27440e1d7bULL, 0x1509ee27440e1d7bULL},
+    {std::string("{\"id\":\"b\",\"type\":\"a\"}", 21), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"Main_Menu\",\"id\":\"MAIN_MENU\"}", 37), true, 0x1509ee27440e1d7bULL, 0x1509ee27440e1d7bULL},
+    {std::string("{\"type\":\"a\\\"b\",\"id\":\"c\\\\d\"}", 27), true, 0xc8e8d0b1a891a0e8ULL, 0xc8e8d0b1a893deeeULL},
+    {std::string("{\"type\":\"Abc\",\"id\":\"\303\251\"}", 24), true, 0xc8e8d0b1a891e0e9ULL, 0x313d0759bc6b2fe3ULL},
+    {std::string("{\"type\":\"x\\/y\",\"id\":\"\\n\"}", 25), true, 0xc8e8d0b1a888adf3ULL, 0xd1d52cf94503a82cULL},
+    {std::string("{\"type\":\"a\",\"type\":\"b\",\"id\":\"c\"}", 32), true, 0xd1d52cf94503a844ULL, 0xd1d52cf94503a845ULL},
+    {std::string("{\"Type\":\"a\",\"ID\":\"b\"}", 21), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"TYPE\":\"a\",\"Id\":\"b\"}", 21), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"a\"}", 12), true, 0xd1d52cf94503a847ULL, 0x0000000000000000ULL},
+    {std::string("{\"type\":5,\"id\":\"b\"}", 19), false, 0x0000000000000000ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":null,\"id\":\"b\"}", 22), true, 0x0000000000000000ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"a\",\"type\":null,\"id\":\"b\"}", 33), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"a\",\"id\":\"b\",\"extra\":{\"type\":\"z\",\"list\":[1,2,{\"id\":\"q\"}]}}", 66), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"\360\237\230\200\",\"id\":\"s\"}", 24), true, 0xc8c33e48aa8ce650ULL, 0xd1d52cf94503a855ULL},
+    {std::string("{\"type\":\"\\ud83d\",\"id\":\"s\"}", 26), true, 0xc8e8d0b1a81f3d37ULL, 0xd1d52cf94503a855ULL},
+    {std::string("{\"type\":\"\\ude00\",\"id\":\"s\"}", 26), true, 0xc8e8d0b1a81f3d37ULL, 0xd1d52cf94503a855ULL},
+    {std::string("{\"type\":\"\\ud83dx\",\"id\":\"s\"}", 27), true, 0xc8c33e48b5acc3a8ULL, 0xd1d52cf94503a855ULL},
+    {std::string("{\"type\":\"a\377b\",\"id\":\"x\"}", 23), true, 0xe32dc7db565099b2ULL, 0xd1d52cf94503a85eULL},
+    {std::string("{\"type\":\"caf\303\251\",\"id\":\"x\"}", 25), true, 0xe32dc7d9d889e779ULL, 0xd1d52cf94503a85eULL},
+    {std::string("{\"type\":\"a\\u0000b\",\"id\":\"x\"}", 28), true, 0xc8e8d0b1a89182e8ULL, 0xd1d52cf94503a85eULL},
+    {std::string("{\"type\":\"0x82869f0b37eb4378\",\"id\":\"0x0000000000000001\"}", 55), true, 0x82869f0b37eb4378ULL, 0x0000000000000001ULL},
+    {std::string("{\"type\":\"\",\"id\":\"\"}", 19), true, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("{}", 2), true, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("  {  \"type\" : \"a\" ,  \"id\" : \"b\"  }  ", 36), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("not json", 8), false, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("{\"type\":\"a\",", 12), false, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("{\"type\":\"a\\q\",\"id\":\"b\"}", 23), false, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("{\"type\":\"a\012b\",\"id\":\"b\"}", 23), false, 0x0000000000000000ULL, 0x0000000000000000ULL},
+    {std::string("{\"id\":\"main_menu\",\"type\":\"main_menu\"} ", 38), true, 0x1509ee27440e1d7bULL, 0x1509ee27440e1d7bULL},
+};
+const KeyVector kFailureVectors[] = {
+    {std::string("{\"type\":\"main_menu\",\"identifier\":\"main_menu\",\"errorCode\":1,\"error\":\"resource not found\"}", 88), true, 0x1509ee27440e1d7bULL, 0x1509ee27440e1d7bULL},
+    {std::string("{\"identifier\":\"b\",\"type\":\"a\"}", 29), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"A\",\"identifier\":\"B\"}", 29), true, 0xd1d52cf94503a847ULL, 0xd1d52cf94503a844ULL},
+    {std::string("{\"type\":\"x\"}", 12), true, 0xd1d52cf94503a85eULL, 0x0000000000000000ULL},
+    {std::string("{\"type\":3,\"identifier\":\"b\"}", 27), false, 0x0000000000000000ULL, 0xd1d52cf94503a844ULL},
+};
+
+// ConfigSymbol is the service's ToSymbol: empty is 0, an 18-character "0x" + 16 hex digits string is that
+// number, anything else is the hash of the bytes as given with A-Z folded to lower case. Failure caught: the
+// game's CSymbol64 used as is for the empty string (it returns its seed) or for a hex-looking name.
+void TestConfigSymbolMatchesTheServicesToSymbol() {
+  const CaseScope scope("config symbol");
+  for (const SymbolVector& v : kSymbolVectors) {
+    const uint64_t got = nevr_evr_codec::ConfigSymbol(v.text);
+    if (got != v.symbol) std::fprintf(stderr, "config symbol vector %zu bytes: got 0x%016llx want 0x%016llx\n", v.text.size(),
+                                      static_cast<unsigned long long>(got), static_cast<unsigned long long>(v.symbol));
+    QCHECK(got == v.symbol);
+  }
+  QCHECK(nevr_evr_codec::ConfigSymbol("") == 0);
+  QCHECK(nevr_evr_codec::ConfigSymbol("0x82869f0b37eb4378") == 0x82869f0b37eb4378ULL);  // parsed, not hashed
+  QCHECK(nevr_evr_codec::ConfigSymbol("Main_Menu") == nevr_evr_codec::ConfigSymbol("main_menu"));  // folded
+  // For plain ASCII names the game's CSymbol64Hash agrees with it; the empty string and a hex-looking name are
+  // the cases it does not (it returns its seed, and hashes the digits).
+  QCHECK(EchoVR::CSymbol64Hash("main_menu") == nevr_evr_codec::ConfigSymbol("main_menu"));
+  QCHECK(EchoVR::CSymbol64Hash("Active_Store_Entry") == nevr_evr_codec::ConfigSymbol("Active_Store_Entry"));
+  QCHECK(EchoVR::CSymbol64Hash("") != nevr_evr_codec::ConfigSymbol(""));
+  QCHECK(EchoVR::CSymbol64Hash("0x82869f0b37eb4378") != nevr_evr_codec::ConfigSymbol("0x82869f0b37eb4378"));
+}
+
+// The key of a config request is what the service's decoder reads out of it, hashed the way the service
+// hashes it for the reply. Failure caught: a different escape, case, duplicate-key or null rule from the
+// service's, which would send a reply to the wrong socket or drop it.
+void TestConfigRequestKeyMatchesTheServicesDecoder() {
+  const CaseScope scope("config request key");
+  for (const KeyVector& v : kRequestVectors) {
+    for (const bool padded : {true, false}) {
+      const std::string payload = padded ? std::string(1, '\0') + v.json : v.json;
+      if (!padded && (v.json.empty() || v.json[0] != '{')) continue;
+      const std::optional<nevr_evr_codec::ConfigKey> key = nevr_evr_codec::ParseConfigRequestKey(payload);
+      QCHECK(key.has_value() == v.ok);
+      if (key.has_value() && v.ok) {
+        QCHECK(key->type == v.type);
+        QCHECK(key->id == v.id);
+      }
+    }
+  }
+  QCHECK(!nevr_evr_codec::ParseConfigRequestKey("").has_value());
+  QCHECK(!nevr_evr_codec::ParseConfigRequestKey("x").has_value());  // a pad byte and no JSON
+}
+
+// The key of a reply: the success carries the two symbols, the failure the two strings.
+void TestConfigReplyKeyIsTheRequestsTypeAndId() {
+  const CaseScope scope("config reply key");
+  using nevr_evr_codec::ConfigKey;
+  std::string success;
+  for (const uint64_t v : {0x1509ee27440e1d7bULL, 0x794e13955045c77eULL}) {
+    for (int i = 0; i < 8; ++i) success.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+  }
+  success += "zstd-resource-bytes";
+  const std::optional<ConfigKey> s = nevr_evr_codec::ParseConfigReplyKey(nevr_evr_codec::kSymConfigSuccess, success);
+  QCHECK(s.has_value() && s->type == 0x1509ee27440e1d7bULL && s->id == 0x794e13955045c77eULL);
+  for (const KeyVector& v : kFailureVectors) {
+    const std::string payload = std::string(16, '\0') + v.json;
+    const std::optional<ConfigKey> key = nevr_evr_codec::ParseConfigReplyKey(nevr_evr_codec::kSymConfigFailure, payload);
+    QCHECK(key.has_value() == v.ok);
+    if (key.has_value() && v.ok) {
+      QCHECK(key->type == v.type);
+      QCHECK(key->id == v.id);
+    }
+  }
+  QCHECK(!nevr_evr_codec::ParseConfigReplyKey(nevr_evr_codec::kSymConfigSuccess, "short").has_value());
+  QCHECK(!nevr_evr_codec::ParseConfigReplyKey(nevr_evr_codec::kSymLoginSuccess, success).has_value());
+}
+
 // A hinted role is final. A hinted config socket whose first frame is LogInRequestv2 stays config: the
 // contradiction is logged once, at Warning, and nothing is relabelled or taken over. The hinted login
 // socket keeps the exemption and the login replies, and the config socket still gets config replies.
@@ -2575,6 +2729,9 @@ int main() {
   TestHeldSessionQueuesConfigThenFlushesOnReady();
   TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames();
   TestTheNinthHintedMatchmakerIsRefused();
+  TestConfigSymbolMatchesTheServicesToSymbol();
+  TestConfigRequestKeyMatchesTheServicesDecoder();
+  TestConfigReplyKeyIsTheRequestsTypeAndId();
   TestAHintedConfigSocketThatSendsALoginStaysConfig();
   TestTheDemotedLoginConnectionRidesTheSessionAsAMatchmaker();
   TestFramesWaitBehindTheLoginBeingBuiltExceptConfigs();
