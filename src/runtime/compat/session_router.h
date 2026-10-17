@@ -223,8 +223,7 @@ struct Stats {
   // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
   // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
   uint64_t unmatchedEmbeddedUnrequires = 0;
-  // Config replies whose requesting socket had closed (or that no forwarded request is owed), dropped rather
-  // than sent to another socket.
+  // Config replies whose requesting socket had closed and that no live socket asked for, dropped.
   uint64_t configRepliesOrphaned = 0;
   // Config replies no open request asked for (its (type, id) matches none), dropped.
   uint64_t configRepliesUnmatched = 0;
@@ -337,7 +336,7 @@ class Router {
   void ForgetLoginUserLocked();
   void RecomputeActiveLocked();
   bool OnSessionLocked(GameId id) const;
-  GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, Effects& fx);
+  GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, bool* logged, Effects& fx);
   bool TakeUnrequireLocked(GameId target);
   void CountRequirementsLocked(Game& g, const std::string& frame);
   std::size_t LiveMatchmakersLocked() const;
@@ -361,8 +360,8 @@ class Router {
   RemoteId sessionRemote_ = kNoRemote;  // the remote config, login and matchmaker connections share
   GameId loginGame_ = kNoGame;          // the session's login connection (provisional or confirmed)
   GameId activeGame_ = kNoGame;         // the newest matchmaker connection on the session
-  // The config connections whose requests went to the session remote and are not answered yet, in the order
-  // they went out: the service answers a session's requests in order, so a config reply takes the front.
+  // The config requests that went to the session remote and have no reply yet, oldest first, each with the
+  // connection that sent it and the (type, id) the service will echo in its reply.
   struct ConfigRequestRecord {
     GameId owner = kNoGame;
     std::optional<nevr_evr_codec::ConfigKey> key;  // the request's (type, id); nullopt when its payload is unreadable

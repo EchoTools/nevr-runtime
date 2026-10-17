@@ -356,9 +356,9 @@ bool Router::TakeUnrequireLocked(GameId target) {
 //     (libpnsovr drops the login family on any other peer), and nowhere else if that connection is gone;
 //   * SNSConfigSuccessv2 / SNSConfigFailurev2: the connection that sent the OLDEST open config request with the
 //     reply's (type, id) (the service echoes the request's two strings, a success as symbols, a failure as the
-//     strings), so a request the service never answers does not shift the others' replies. Dropped, counted
-//     and logged when no open request has that key, or when its connection has closed: never handed to
-//     another socket;
+//     strings), so a request the service never answers does not shift the others' replies. When that request's
+//     connection has closed, a live connection's open request for the same key takes the reply (both entries go);
+//     with none, or when no open request has that key, the reply is dropped, counted and logged;
 //   * LobbyPingRequest, the ping the service starts itself: the matchmaker connection, and dropped, with its
 //     Unrequire, when there is none;
 //   * STcpConnectionUnrequireEvent: the connection that owes it (below), if that connection still has a
@@ -369,9 +369,11 @@ bool Router::TakeUnrequireLocked(GameId target) {
 // service goroutines interleave, so the queue holds a connection per paired message rather than guessing from
 // the message just before.
 // *quietDrop is set when the frame is dropped on purpose and counted (an Unrequire, a ping with no matchmaker,
-// a config reply nobody asked for or whose requester closed).
-GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, Effects& fx) {
+// a config reply nobody asked for or whose requester closed); *logged is set when the drop has already been
+// logged here, so the generic drop line is not written for it.
+GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, bool* logged, Effects& fx) {
   *quietDrop = false;
+  *logged = false;
   const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
   std::size_t embedded = 0;
   ForEachMessage(frame, [&embedded](uint64_t s, std::size_t index) {
@@ -404,21 +406,39 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
     if (request == configRequests_.end()) {
       ++configRepliesUnmatched_;
       *quietDrop = true;
+      *logged = true;
       Log(fx, LogLevel::Warning,
           Fmt("[router] config reply dropped: no open config request has its type and id: symbol=0x%016llx "
               "type=0x%016llx id=0x%016llx (%llu such replies in total)",
               Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_)));
     } else {
-      const GameId owner = request->owner;
+      GameId owner = request->owner;
+      if (!OnSessionLocked(owner)) {
+        // The oldest request with this key is a closed connection's, perhaps one the service never answered. A
+        // reply to a resource goes to a connection that asked for that resource, so a live connection's open
+        // request with the same key takes it, and both entries go: the stale one and the one it answered.
+        auto live = request + 1;
+        while (live != configRequests_.end() && !(live->key == key && OnSessionLocked(live->owner))) ++live;
+        if (live != configRequests_.end()) {
+          const GameId stale = owner;
+          owner = live->owner;
+          configRequests_.erase(live);
+          Log(fx, LogLevel::Info,
+              Fmt("[router] config reply type=0x%016llx id=0x%016llx goes to game=%llu: the oldest open request for it, "
+                  "game=%llu, has closed",
+                  Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(owner), Ull(stale)));
+        }
+      }
       configRequests_.erase(request);
       if (OnSessionLocked(owner)) {
         target = owner;
       } else {
         ++configRepliesOrphaned_;
         *quietDrop = true;
+        *logged = true;
         Log(fx, LogLevel::Warning,
-            Fmt("[router] config reply dropped: the connection that asked (game=%llu) has closed: symbol=0x%016llx "
-                "type=0x%016llx id=0x%016llx (%llu such replies in total)",
+            Fmt("[router] config reply dropped: the connection that asked (game=%llu) has closed and no other asked for "
+                "it: symbol=0x%016llx type=0x%016llx id=0x%016llx (%llu such replies in total)",
                 Ull(owner), Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesOrphaned_)));
       }
     }
@@ -517,9 +537,11 @@ void Router::PurgePendingLocked(GameId game) {
 
 // The role a connection that has sent nothing yet is given when the adapter has no hint: by connection order,
 // except that a connection opened while the session has no live login connection is that connection (the game
-// reconnected it). A count of 2 or more means a session exists (every end of the session sets the count back
-// to 1), and a matchmaker is given only while a login connection is attached to it, so an unhinted connection
-// is always on the session and a first frame can relabel it in place.
+// reconnected it). With no hinted connections (a wiring is all hinted or all unhinted) a count of 2 or more
+// means a session exists (every end of the session sets the count back to 1), and a matchmaker is given only
+// while a login connection is attached to it, so an unhinted connection is on the session and a first frame can
+// relabel it in place. Hinted matchmakers that opened first count too and hold standalone remotes, which is why
+// a wiring does not mix the two.
 Role Router::ProvisionalRoleLocked() const {
   if (connectionCount_ == 0) return Role::Config;
   if (connectionCount_ == 1) return Role::Login;
@@ -963,8 +985,9 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
       if (remoteTable_.count(remote) != 0) {
         GameId target = kNoGame;
         bool quietDrop = false;
+        bool alreadyLogged = false;
         if (remote == sessionRemote_) {
-          target = RouteSessionFrameLocked(frame, &quietDrop, fx);
+          target = RouteSessionFrameLocked(frame, &quietDrop, &alreadyLogged, fx);
         } else {
           for (const auto& entry : gameTable_) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
@@ -978,7 +1001,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
         }
         if (target == kNoGame && quietDrop) {
           const uint64_t dropped = droppedUnrequires_ + droppedRemoteFrames_;
-          if (dropped == 1 || dropped % 100 == 0) {
+          if (!alreadyLogged && (dropped == 1 || dropped % 100 == 0)) {
             Log(fx, LogLevel::Warning,
                 Fmt("[router] server->game frame dropped on purpose: remote=%llu symbol=0x%016llx (%llu total)",
                     Ull(remote), Ull(symbol), Ull(dropped)));

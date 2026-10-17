@@ -224,9 +224,12 @@ struct ConfigKey {
   bool operator==(const ConfigKey& other) const { return type == other.type && id == other.id; }
 };
 
-// The service's string to symbol conversion for a resource name, byte for byte: an empty string is 0, an
-// 18-character "0x" + 16 hex digits string is that number, and anything else is the CSymbol64 hash over the
-// bytes as given, upper-case A-Z folded to lower case and every byte taken unsigned.
+// The service's string to symbol conversion for a resource name (nakama server/evr ToSymbol), byte for byte: an
+// empty string is 0, an 18-character "0x" + 16 hex digits string is that number, and anything else is the
+// CSymbol64 hash over the bytes as given, upper-case A-Z folded to lower case and every byte taken unsigned (zero
+// extended). It reproduces the service because the service computes the reply symbols; it is not
+// EchoVR::CSymbol64Hash, which differs for "", "0x" + hex and bytes >= 0x80 (issue #657). If the service's hash
+// changes to match the game, this changes in the same release.
 uint64_t ConfigSymbol(std::string_view text);
 
 // The key of a config request payload; nullopt when the payload is not a pad byte and a JSON object whose

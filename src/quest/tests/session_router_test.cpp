@@ -1978,28 +1978,28 @@ void TestTheListOfOpenConfigRequestsIsBoundedAndSaysWhenItForgets() {
   QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 1);
 }
 
-// A config socket closes with its request in flight and a new one takes its place and asks for the same
-// resource. The reply to the old request is dropped and counted, never handed to the replacement; the Unrequire
-// after it goes to the same (closed) socket and is dropped; the replacement's own reply reaches it.
-void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
-  const CaseScope scope("closed config socket's reply");
+// A config socket closes with its request in flight and a new one takes its place and asks for the same resource.
+// The oldest open request for the reply's key is the closed socket's, but a reply to a resource goes to a socket
+// that asked for it, so the replacement's open request takes the reply and both entries go. If the closed socket's
+// reply was really in flight, the replacement has what it asked for, and the reply to its own request, which
+// finds no open request, is dropped and counted as unmatched. The Unrequires stay consistent: the first reply's
+// goes to the replacement (its count 1 -> 0), the second reply's is owed to nobody and is dropped.
+// Failure caught: the replacement starved by a stale entry (the reply taken and dropped), or a reply delivered twice.
+void TestAClosedConfigSocketsStaleEntryYieldsToItsReplacement() {
+  const CaseScope scope("stale entry yields");
   Rig rig;
   OpenThree(rig);
   const RemoteId session = SessionRemote(rig);
   rig.router->OnRemoteOpen(session);
   rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
-  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // in flight
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // in flight, or never answered
   rig.router->OnGameClose(1);
   rig.router->OnGameOpen(4);
   rig.router->OnGameFrame(4, ConfigRequestFor("main_menu"), true);  // the replacement's request, behind it
-  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
-  QCHECK(rig.games.Sent().empty());                                  // not handed to game 4
-  QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
-  rig.router->OnRemoteFrame(session, kUnrequire, true);              // the closed socket's: dropped
-  QCHECK(rig.games.Sent().empty());
-  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
-  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
-  rig.router->OnRemoteFrame(session, kUnrequire, true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // -> 4, both entries go
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                      // -> 4 (count 1 -> 0)
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // the reply to 4's own request: dropped
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                      // owed to nobody: dropped
   const std::vector<Delivery> expected = {
       {4, nevr_evr_codec::kSymConfigSuccess},
       {4, nevr_evr_codec::kSymConnectionUnrequire},
@@ -2007,7 +2007,128 @@ void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
   const std::vector<Delivery> got = Delivered(rig);
   QCHECK(got.size() == expected.size());
   for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 1);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+  QCHECK(rig.logs.Has("no open config request has its type and id"));
+}
+
+// The stale-entry hazard, measured over replacements: a config request the service never answers whose socket
+// closes leaves an open entry. Five replacement sockets each ask for the same resource once; the service answers
+// each one's request. Every one of them gets its reply (before the rule above, none did). Failure caught: a
+// stale entry starving every replacement that asks the same (type, id) until the session ends.
+void TestAStaleConfigEntryDoesNotStarveReplacementSockets() {
+  const CaseScope scope("stale entry rounds");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // the service drops this one
+  rig.router->OnGameClose(1);
+  GameId next = 3;
+  for (int round = 1; round <= 5; ++round) {
+    const GameId g = next++;
+    rig.router->OnGameOpen(g);
+    rig.router->OnGameFrame(g, ConfigRequestFor("main_menu"), true);
+    rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // answers this socket's request
+    int replies = 0;
+    for (const Delivery& d : Delivered(rig)) replies += (d.first == g && d.second == nevr_evr_codec::kSymConfigSuccess) ? 1 : 0;
+    QCHECK(replies == 1);
+    rig.router->OnGameClose(g);
+  }
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 0);
+}
+
+// Two requests for the same resource on one replacement socket: each reply is its own. The first reply takes the
+// stale entry's place, the second is the replacement's second request.
+void TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered() {
+  const CaseScope scope("stale entry two requests");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(3);
+  rig.router->OnGameFrame(3, ConfigRequestFor("main_menu"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("main_menu"), true);  // the same socket asks again
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
+  int replies = 0;
+  for (const Delivery& d : Delivered(rig)) replies += (d.first == 3 && d.second == nevr_evr_codec::kSymConfigSuccess) ? 1 : 0;
+  QCHECK(replies == 2);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+}
+
+// When no live socket has an open request for the key, the closed socket's reply is dropped and counted as
+// orphaned (there is nothing to hand it to), and the line says so once, without the generic drop line.
+void TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt() {
+  const CaseScope scope("orphan without a live asker");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(4);
+  rig.router->OnGameFrame(4, ConfigRequestFor("active_store_entry"), true);  // another resource
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_store_entry"), true);  // game 4's own is unharmed
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 4);
+}
+
+// A config reply dropped here is logged by the line that names it and not also by the generic "dropped on
+// purpose" line, whose total excludes config drops (with no other drops it would fire every time).
+void TestAConfigDropWritesOnlyItsOwnLine() {
+  const CaseScope scope("config drop one line");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // nobody asked: unmatched
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameClose(1);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // the asker closed: orphaned
+  int own = 0, generic = 0;
+  {
+    std::lock_guard<std::mutex> lock(rig.logs.mutex);
+    for (const auto& line : rig.logs.lines) {
+      if (line.second.find("config reply dropped") != std::string::npos) ++own;
+      if (line.second.find("dropped on purpose") != std::string::npos) ++generic;
+    }
+  }
+  QCHECK(own == 2);
+  QCHECK(generic == 0);
+}
+
+// The key is the type AND the id: two open requests of one type with different ids are told apart. Game 1 asks
+// for ("main_menu", "a"), game 3 for ("main_menu", "b"); the reply for "b" is game 3's although game 1's request
+// is older and has the same type. Failure caught: replies matched by type alone.
+void TestRequestsOfOneTypeWithDifferentIdsAreToldApart() {
+  const CaseScope scope("same type different id");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu", "a"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("main_menu", "b"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu", "b"), true);  // -> 3
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu", "a"), true);  // -> 1
+  const std::vector<Delivery> expected = {
+      {3, nevr_evr_codec::kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConfigSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
 }
 
 // SNSConfigFailurev2 is a config reply: it goes to the config socket, and its Unrequire after it.
@@ -3030,7 +3151,12 @@ int main() {
   TestAConfigReplyNobodyAskedForIsDroppedAndLogged();
   TestAnOrphanedConfigReplyIsLoggedEveryTime();
   TestTheListOfOpenConfigRequestsIsBoundedAndSaysWhenItForgets();
-  TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement();
+  TestAClosedConfigSocketsStaleEntryYieldsToItsReplacement();
+  TestAStaleConfigEntryDoesNotStarveReplacementSockets();
+  TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered();
+  TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt();
+  TestAConfigDropWritesOnlyItsOwnLine();
+  TestRequestsOfOneTypeWithDifferentIdsAreToldApart();
   TestConfigFailureGoesToTheConfigSocket();
   TestHeldSessionQueuesConfigThenFlushesOnReady();
   TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames();

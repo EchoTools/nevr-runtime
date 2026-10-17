@@ -444,6 +444,9 @@ bool ExtractStringFields(std::string_view json, const char* first, const char* s
 
 }  // namespace
 
+// The service's decoder (encoding/json) differs from this scanner on contrived input: nesting deeper than 32 levels
+// in an unrelated field, or a pad byte that is itself '{' (taken here as no pad byte). Such a request gets no key
+// (or a different one), and its reply, which carries the service's key, is dropped as unmatched.
 std::optional<ConfigKey> ParseConfigRequestKey(std::string_view payload) {
   if (payload.empty()) return std::nullopt;
   const std::string_view json = payload[0] == '{' ? payload : payload.substr(1);  // one pad byte first
