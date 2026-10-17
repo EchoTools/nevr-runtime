@@ -129,18 +129,15 @@ std::string g_path;
 std::atomic<unsigned> g_writes{0};
 std::atomic<bool> g_stop{false};
 unsigned g_waitForWrites = 0;
+useconds_t g_cutDelayUs = 0;
 
-// A payload that is recognisably whole: "N:" + 192 KiB of one letter + ":END".
-std::string Payload(unsigned n) {
-  return std::to_string(n) + ":" + std::string(192 * 1024, static_cast<char>('a' + n % 26)) + ":END";
+// Two payloads, each recognisably whole: a letter repeated 192 KiB, framed ":BEGIN:" ... ":END". Built once, so
+// the writer spends its time saving, not building.
+std::string g_payload[2];
+void BuildPayloads() {
+  for (int i = 0; i < 2; ++i) g_payload[i] = ":BEGIN:" + std::string(192 * 1024, static_cast<char>('a' + i)) + ":END";
 }
-
-bool Whole(const std::string& text) {
-  const std::size_t colon = text.find(':');
-  if (colon == std::string::npos || colon == 0) return false;
-  const unsigned n = static_cast<unsigned>(std::strtoul(text.substr(0, colon).c_str(), nullptr, 10));
-  return text == Payload(n);
-}
+bool Whole(const std::string& text) { return text == g_payload[0] || text == g_payload[1]; }
 
 std::string ReadAll(const std::string& path) {
   std::string out;
@@ -154,21 +151,24 @@ std::string ReadAll(const std::string& path) {
 }
 
 void* WriterThread(void*) {
-  for (unsigned n = 1; !g_stop.load(std::memory_order_acquire); ++n) {
+  for (unsigned n = 0; !g_stop.load(std::memory_order_acquire); ++n) {
     std::string error, warning;
-    if (nevr::quest_auth::AtomicWrite(g_path, Payload(n), error, warning)) g_writes.fetch_add(1, std::memory_order_release);
+    if (nevr::quest_auth::AtomicWrite(g_path, g_payload[n % 2], error, warning)) g_writes.fetch_add(1, std::memory_order_release);
   }
   return nullptr;
 }
 
-// The game's android_main stand-in: returns once the writer has saved a few times, so the end comes while
-// it is saving the next one.
+// The game's android_main stand-in: returns once the writer has saved a few times and a little longer (a different
+// delay each iteration), so the end lands at a different point of the next save: before it starts, in the middle
+// of the write, in the fsync, around the rename.
 void AndroidMainThatWaitsForTheWriter(AndroidAppOpaque*) {
   while (g_writes.load(std::memory_order_acquire) < g_waitForWrites) sched_yield();
+  usleep(g_cutDelayUs);
 }
 
 void ChildEndsTheProcessUnderTheWriter(unsigned iteration) {
-  g_waitForWrites = 2 + iteration % 5;
+  g_waitForWrites = 2 + iteration % 3;
+  g_cutDelayUs = static_cast<useconds_t>((iteration * 173) % 3000);  // 0 to 3 ms, spread over the iterations
   pthread_t writer;
   if (pthread_create(&writer, nullptr, &WriterThread, nullptr) != 0) _exit(3);
   pe::MainThunk::Reset();
@@ -184,8 +184,9 @@ void ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter() {
   QCHECK(dir != nullptr);
   if (dir == nullptr) return;
   g_path = std::string(dir) + "/.credentials.json";
+  BuildPayloads();
   int whole = 0;
-  for (unsigned i = 0; i < 25; ++i) {
+  for (unsigned i = 0; i < 60; ++i) {
     std::fflush(nullptr);
     const pid_t pid = fork();
     if (pid == 0) ChildEndsTheProcessUnderTheWriter(i);
@@ -196,11 +197,11 @@ void ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter() {
     if (Whole(text)) ++whole;
     else std::fprintf(stderr, "iteration %u: the saved file is torn (%zu bytes)\n", i, text.size());
   }
-  QCHECK(whole == 25);
+  QCHECK(whole == 60);
   // A temp file the cut left behind does not stop the next save.
   std::string error, warning;
-  QCHECK(nevr::quest_auth::AtomicWrite(g_path, Payload(7), error, warning));
-  QCHECK(ReadAll(g_path) == Payload(7));
+  QCHECK(nevr::quest_auth::AtomicWrite(g_path, g_payload[1], error, warning));
+  QCHECK(ReadAll(g_path) == g_payload[1]);
   std::string cleanup = "rm -rf '" + std::string(dir) + "'";
   QCHECK(std::system(cleanup.c_str()) == 0);
 }

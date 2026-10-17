@@ -49,7 +49,7 @@ across game code (`callback_thunk.h`, rules 1 and 5; the frame sensor follows di
 target and `fsync`s the directory; a stale temp from a cut is unlinked by the next write. A process ended mid-write therefore leaves
 the previous file whole; the newest token may be lost, exactly as in a crash, and is asked for again at the next sign-in. The log is
 append-only diagnostics, not sign-in state: a cut can truncate its last line, and logcat has the same line. So the exit waits for no
-in-flight write. `process_end_hook_test.cpp` ends a real process 25 times under a writer saving 192 KiB payloads the way the
+in-flight write. `process_end_hook_test.cpp` ends a real process 60 times under a writer saving 192 KiB payloads the way the
 credential cache is saved, and requires a whole file every time.
 
 ## Prediction
