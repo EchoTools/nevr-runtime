@@ -2065,6 +2065,29 @@ void TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered() {
   QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
 }
 
+// Several closed sockets' stale entries for one key sit ahead of a live socket's request. The reply goes to the
+// live socket (the stale ones are skipped, only the first is consumed), and the next reply for that key, which
+// finds the second stale entry and no live asker, is an orphan.
+void TestStaleEntriesAreSkippedToReachALiveRequest() {
+  const CaseScope scope("stale entries skipped");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameOpen(5);
+  rig.router->OnGameFrame(5, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameClose(1);
+  rig.router->OnGameClose(5);
+  rig.router->OnGameOpen(6);
+  rig.router->OnGameFrame(6, ConfigRequestFor("main_menu"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // -> 6; game 1's entry and 6's go
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 6);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // game 5's entry, nobody live asked
+  QCHECK(rig.games.Sent().size() == 1);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
+}
+
 // When no live socket has an open request for the key, the closed socket's reply is dropped and counted as
 // orphaned (there is nothing to hand it to), and the line says so once, without the generic drop line.
 void TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt() {
@@ -3155,6 +3178,7 @@ int main() {
   TestAStaleConfigEntryDoesNotStarveReplacementSockets();
   TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered();
   TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt();
+  TestStaleEntriesAreSkippedToReachALiveRequest();
   TestAConfigDropWritesOnlyItsOwnLine();
   TestRequestsOfOneTypeWithDifferentIdsAreToldApart();
   TestConfigFailureGoesToTheConfigSocket();
