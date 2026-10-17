@@ -25,7 +25,7 @@ have it, so please report anything odd (see "Report a bug").
 
 The first time, the game needs you to sign in:
 
-- Your browser opens the community sign-in page (`https://echovrce.com/login/device`). Sign in with
+- Your browser opens the community sign-in page (`https://echovrce.com/device`). Sign in with
   Discord there.
 - While it waits, the game window is titled **"Echo VR - sign in with Discord in your browser to
   continue"**. It waits up to 5 minutes.

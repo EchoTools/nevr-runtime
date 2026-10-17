@@ -3,6 +3,7 @@
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/lifecycle/quit_check.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/console_ctrl_policy.h"
 #include "runtime/lifecycle/veh_policy.h"
@@ -153,6 +154,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
     nevr_asset_cdn::StopBackgroundFetch();
     nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+    nevr_quit_check::OnGameLoopReturned(gameResult);  // self-check "pc_quit" (#392): sent now, nothing runs later
     return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).

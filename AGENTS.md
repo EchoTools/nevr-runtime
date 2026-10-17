@@ -273,6 +273,9 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
+- **Remove a worktree only behind the cwd check** (the "no process has its cwd inside" proof of "Ownership and cleanup"; `tools/reap_merged.py` runs the same check), in one command that removes nothing and fails when any process has its cwd inside, a shell of your own session included:
+  `W=$(realpath .claude/worktrees/<branch>); hits=$(for p in /proc/[0-9]*; do c=$(readlink "$p/cwd" 2>/dev/null) && case "$c" in "$W"|"$W"/*) echo "${p#/proc/} $c";; esac; done); if [ -n "$hits" ]; then echo "$hits"; false; else git worktree unlock "$W" 2>/dev/null; git worktree remove "$W"; fi`.
+  A check that only prints, followed by a removal, is not the check.
 
 ## Build Commands
 
@@ -610,10 +613,13 @@ your seat name, for example `claude-main` or `codex`.
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
   test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) sets the floor
-  (`verify_gtest_floor.py --floor` in `justfile`) to the count `python3 tools/verify_gtest_floor.py --floor 0` prints
-  (`declarations=`), then runs `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Run the quick check on the
-  PR's tip, in the build slice. CI runs only when started by hand.
+  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) runs
+  `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. The floor (`verify_gtest_floor.py --floor` in
+  `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
+  `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
+  `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
+  the count and says in its body which tests went and why. Run the quick check on the PR's tip, in the build slice.
+  CI runs only when started by hand.
 - **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
   reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
