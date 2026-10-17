@@ -395,7 +395,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
-| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled only into the test harnesses until the target split (ADR 0008) |
+| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled only into the test harnesses until the target split (ADR 0008) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |

@@ -154,16 +154,19 @@ game calls that wrapper once, on the main thread, with the command-line pointer.
 wrapper calls `0x1400CD550` (`GameMain`), which calls the run function in vtable slot
 `0x3F0` (`0x14050B6E0`), whose first call is vtable slot 0, `PreprocessCommandLine`.
 
-At the wrapper's entry the detour loads the runtime and calls its `initialize`, then
-returns `game_main(command_line)`. `game_main` runs `GameMain` under the runtime's
-`setjmp`, which the access-violation handler `longjmp`s back to (N125). The `setjmp` and
-the `longjmp` stay in `src/runtime/lifecycle/crash_recovery.cpp` beside each other, so
-the recovery arms: the wrapper is not yet on the stack when `initialize` runs. Everything
-the runtime hooks installs at the wrapper's entry, before `GameMain` reaches
-`PreprocessCommandLine`. `BuildCmdLineSyntaxDefinitions` is called from inside
-`PreprocessCommandLine` (`0x140503ADF`, in the first callee of `PreprocessCommandLine`), so
-it is installed in time as well. When no runtime is published the detour returns the
-original wrapper's result.
+After the split, at the wrapper's entry the detour loads the runtime and calls its
+`initialize`, then returns `game_main(command_line)`. `game_main` runs `GameMain` under the
+runtime's `setjmp`, which the access-violation handler `longjmp`s back to (N125). The
+recovery arms because the `setjmp` frame is the frame that calls `GameMain`: the host's
+detour calls `game_main` from the wrapper's entry, so that frame is live for the whole run
+and the `longjmp` returns into it. A detour installed later, by the runtime's `initialize`
+at the `PreprocessCommandLine` rendezvous, would never be entered, because the wrapper is
+already on the stack by then. The `setjmp` and the `longjmp` stay in
+`src/runtime/lifecycle/crash_recovery.cpp` beside each other. Everything the runtime hooks
+installs at the wrapper's entry, before `GameMain` reaches `PreprocessCommandLine`.
+`BuildCmdLineSyntaxDefinitions` is called from inside `PreprocessCommandLine`
+(`0x140503ADF`, in the first callee of `PreprocessCommandLine`), so it is installed in time
+as well. When no runtime is published the detour returns the original wrapper's result.
 
 The rule for library loads, and nothing more: no runtime hook acts on a library load before
 the wrapper's entry. The runtime's load filters, post-load observers and DLL-load
@@ -171,11 +174,24 @@ callbacks apply from the moment the runtime registers them.
 
 What the rendezvous leaves outside the runtime:
 
-- One game `CLog::PrintfImpl` call precedes the runtime and reaches the game's log without
-  the runtime's filter. Its text is not yet recorded; it is added after the next #575 game run.
-- On native Windows the runtime's vectored handler and console handler register at the wrapper's
-  entry. A fault before it is handled by the game's filter and the host's minidump. N82
-  keeps one vectored handler, the one in `crash_recovery.cpp`; the host registers none.
+- Game `CLog::PrintfImpl` calls made before the wrapper's entry reach the game's log
+  without the runtime's filter.
+- On native Windows the runtime's vectored handler and console handler register at the
+  wrapper's entry. A fault before it is handled by the game's filter and the host's
+  minidump. N82 says only that no handler other than the one in `crash_recovery.cpp` acts
+  on `EXCEPTION_BREAKPOINT`; other vectored handlers exist (`plugins/common/include/safe_memory.h`
+  adds one) and return `EXCEPTION_CONTINUE_SEARCH` for it. The host registers none.
+
+### The tree today
+
+The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it hooks
+the wrapper itself: `InstallGameMainHook` in `crash_recovery.cpp`, called from
+`initialize.cpp` in `DllMain`, detours the wrapper with `PatchDetour`, and
+`GameMainWrapperHook` holds the `setjmp`. The runtime has no `game_main` entry yet. The
+descriptor, the host units and their harnesses describe the target; the runtime's side of
+`game_main`, the removal of that hook and the move into `nevr.dll` come with the target
+split. Until then the harness runtimes are stand-ins whose `game_main` runs the original
+wrapper through the trampoline.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.
@@ -189,8 +205,10 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 - Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
   diagnostics, the crash capture and the loader) is compiled only into the test
   harnesses. The shipped `BugSplat64.dll` does not use it.
-- The runtime does not hook the main wrapper; the host's detour is the only hook on it. The
-  host context carries that hook's target and the first bytes found there after the host
-  enabled it, so the runtime can register the hook with HookGuard (N84).
+- After the split the runtime does not hook the main wrapper; the host's detour is the only
+  hook on it. The host context carries that hook's target and the first bytes found there
+  after the host enabled it, with a flag that says whether those bytes were read, so the
+  runtime can register the hook with HookGuard (N84) and does not register bytes that were
+  never read. The shipped DLL does not do this yet ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.
