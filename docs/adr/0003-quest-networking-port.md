@@ -459,8 +459,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
    no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
-   events go in; the router owns connection identity (config, login, matchmaker, all on one session
-   remote, at most `Limits::maxMatchmakerConnections` matchmakers live), frame order,
+   events go in; the router owns connection identity (config, login and matchmaker connections sharing one
+   session remote, at most `Limits::maxMatchmakerConnections` matchmakers live), frame order,
    size limits, bounded queues and
    backpressure, and, when a remote session ends, the close of every game socket on it plus
    forgetting the session so the next connection is a new login. The game transport, the remote
@@ -489,7 +489,9 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    to it once a login connection has been attached; a matchmaker that arrives before that, or with no
    session, keeps a remote of its own (`standaloneMatchmaker`), which is never the session. A connection
    closing never ends the session: it ends when its remote ends, and then every connection on it, config
-   included, is closed and the next connection is a new login. A connection's queued frames
+   included, is closed and the next connection is a new login. When a connection becomes the login connection
+   the previous one, if still open, rides the session as a matchmaker if the adapter did not name its role
+   and the matchmaker cap has room; otherwise (a hinted role is final) it is closed. A connection's queued frames
    (`Remote::pending`, never the outbox) leave the queue when it closes. With `Options::buildLogin` set,
    the login is injected when a login connection is attached to an open session that has sent none, at
    attach or at open, whichever comes second; the other connections' frames wait behind it, a config
@@ -522,11 +524,17 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    so frames interleave and the router queues, per paired message, the connection that message went to and
    gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,
    Unrequire, `SNSLoginSettings`], delivered whole to the login connection; an Unrequire inside a frame lowers
-   the count of the connection the frame goes to. `SNSConfigSuccessv2` and `SNSConfigFailurev2` go to the
-   config connection at the front of the session's FIFO of forwarded config requests (the service
-   answers a session's requests in order), and its Unrequire to the same connection; a reply whose
-   connection has closed is dropped and counted (`Stats::configRepliesOrphaned`), never handed to
-   another socket. `ChannelInfoResponse` goes to the login connection (the
+   the count of the connection the frame goes to. `SNSConfigSuccessv2` and `SNSConfigFailurev2` go to the connection that sent the oldest open config
+   request with the reply's type and id: the service echoes the request's two strings (the success as
+   `CSymbol64` symbols, the failure as the strings; `nevr_evr_codec::ConfigSymbol` is the service's string
+   to symbol conversion), so a request the service never answers (nakama drops a rate-limited message
+   without a reply) does not shift the replies after it. The Unrequire after a reply goes to the same
+   connection. A reply with no open request of that key, or whose requesting connection has closed, is
+   dropped, counted (`Stats::configRepliesUnmatched`, `Stats::configRepliesOrphaned`) and logged each time,
+   never handed to another socket. Open requests are kept per session up to 256; past that the oldest
+   unanswered one is forgotten, counted (`Stats::configRequestsEvicted`) and logged. A request payload
+   that is not a pad byte and a JSON object with string `type` and `id` has no key, and matches only a reply
+   with no key. `ChannelInfoResponse` goes to the login connection (the
    game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
    to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery
    sends one on the login session right after the login. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
@@ -1750,7 +1758,8 @@ is the loopback listener, because the redirect needs its port before the game re
 **Login.** The router is built without a login builder. The Quest game sends its own `LoginRequest`
 through `CNSUser::SendLogInRequest`, and the login rewrite has already put the NEVR token, the NEVR
 account id (the id the token carries), platform code 4 and the game's own HMD serial into it; the
-router relays it as the first frame of the login session. A second, injected `LoginRequest` would give
+router relays it in the order the game sent it (a config request sent earlier goes ahead of it). A second,
+injected `LoginRequest` would give
 the service two logins on one session while the game still waits for its reply. The remote upgrade
 carries the token session's JWT as its Bearer; with no JWT the remote session is not started.
 
