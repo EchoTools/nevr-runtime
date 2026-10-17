@@ -108,6 +108,8 @@ void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memor
 
 void EndProcess() noexcept { _exit(0); }
 
+bool InstallAt(const sentinel::GotTarget&, EnderFn) noexcept { return false; }  // placeholder, next commit
+
 bool Install() noexcept {
   g_ender.store(&EndProcess, std::memory_order_release);
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);

@@ -38,12 +38,17 @@ using EnderFn = void (*)() noexcept;
 
 inline constexpr unsigned kFlushBudgetMs = 500;
 
-// The callback of step 2 (null: none). Call before Install.
+// The callback of step 2 (null: none). It is read when android_main returns, so it may be set before or after Install.
 void SetBeforeExit(BeforeExitFn fn) noexcept;
 
 // Arms the handler and installs the thunk in libr15.so. One line {"event":"process_end_install",...} says what
-// was installed. True when the slot holds the thunk.
+// was installed. True when the slot holds the thunk. It is InstallAt on the pinned libr15 slot, ending with EndProcess.
 bool Install() noexcept;
+
+// The whole install, on any target: arms the handler (with `ender` as what ends the process), publishes the
+// after-return step and installs the thunk's entry in the target's slot. The production target is the pinned
+// libr15 slot; the host test installs it in a fixture library.
+bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept;
 
 // _exit(0).
 void EndProcess() noexcept;

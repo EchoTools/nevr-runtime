@@ -473,6 +473,33 @@ TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
   CHECK(log.find("SECRETCODE123") == std::string::npos);
 }
 
+TEST(flow_says_the_code_was_not_shown_when_the_platform_could_not_show_it) {
+  FlowRig rig;
+  rig.code_only = true;
+  rig.browser = 0;  // the sign-in screen could not show the code
+  rig.ui = 0;       // and the player dismissed the notice
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(!r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=0 (not shown)") != std::string::npos);
+  CHECK(log.find("device authorization stopped because the code could not be shown") != std::string::npos);
+  CHECK(log.find("browser") == std::string::npos);
+  CHECK(log.find("(failed)") == std::string::npos);
+}
+
+TEST(flow_keeps_the_browser_failure_wording_where_a_browser_is_opened) {
+  FlowRig rig;
+  rig.browser = 0;
+  rig.ui = 0;
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(!r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=0 (failed)") !=
+        std::string::npos);
+  CHECK(log.find("device authorization stopped because the browser could not be opened") != std::string::npos);
+  CHECK(log.find("code shown") == std::string::npos);
+}
+
 TEST(flow_keeps_the_browser_wording_where_a_browser_is_opened) {
   FlowRig rig;
   rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Verified)};

@@ -6,6 +6,7 @@
 //
 // Built and run by `just test-quest-hooks`.
 
+#include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/stat.h>
@@ -206,14 +207,52 @@ void ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter() {
   QCHECK(std::system(cleanup.c_str()) == 0);
 }
 
+// ---- the production install path ----------------------------------------------------------------------------
+
+std::string g_fixtureDir;
+
+// InstallAt on a fixture library whose android_main is called through a PLT slot, as libr15's glue calls it:
+// the slot must hold the thunk's entry, and a call through it must run the handler (the after-return step and
+// the ender), which only an armed handler with its after-return step published does.
+void InstallAtPatchesTheSlotAndTheHandlerRunsForACallThroughIt() {
+  Reset();
+  void* consumer = dlopen((g_fixtureDir + "/libpefx_consumer.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+  QCHECK(consumer != nullptr);
+  if (consumer == nullptr) return;
+  using CallFn = void (*)(void*);
+  using CountFn = int (*)();
+  using AppFn = void* (*)();
+  CallFn call = reinterpret_cast<CallFn>(dlsym(consumer, "pefx_call_android_main"));
+  void* provider = dlopen((g_fixtureDir + "/libpefx_provider.so").c_str(), RTLD_NOW | RTLD_NOLOAD);
+  QCHECK(call != nullptr && provider != nullptr);
+  if (call == nullptr || provider == nullptr) return;
+  CountFn calls = reinterpret_cast<CountFn>(dlsym(provider, "pefx_main_calls"));
+  AppFn lastApp = reinterpret_cast<AppFn>(dlsym(provider, "pefx_last_app"));
+
+  call(reinterpret_cast<void*>(0x11));  // not installed: the plain call
+  QCHECK(calls() == 1 && g_events.empty());
+
+  pe::SetBeforeExit(&RecordingBeforeExit);
+  const sentinel::GotTarget target{"libpefx_consumer.so", "android_main", sentinel::RelocKind::kJumpSlot};
+  QCHECK(pe::InstallAt(target, &RecordingEnder));
+  call(reinterpret_cast<void*>(0x22));
+  QCHECK(calls() == 2);                                  // the original still ran
+  QCHECK(lastApp() == reinterpret_cast<void*>(0x22));    // with the game's argument
+  QCHECK(g_events.size() == 2 && g_events[0] == "before_exit" && g_events[1] == "end");
+  QCHECK(pe::CurrentCounts().returned == 1);
+  dlclose(consumer);
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  g_fixtureDir = argc > 1 ? argv[1] : ".";
   AnAndroidMainReturnWithoutTheHookEndsNothing();
   TheHandlerCallsTheOriginalThenTheBeforeExitCallbackThenEndsOnce();
   WithoutACallbackTheProcessStillEnds();
   ACallbackThatNeverReturnsDoesNotKeepTheProcessAlive();
   EveryReturnEndsAgain();
+  InstallAtPatchesTheSlotAndTheHandlerRunsForACallThroughIt();
   ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "process_end_hook_test: %d check(s) failed\n", quest_test::Failures());
