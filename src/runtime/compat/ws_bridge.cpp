@@ -44,6 +44,7 @@
 #include "runtime/compat/party_leave_check.h"
 #include "runtime/compat/party_share_check.h"
 #include "runtime/compat/self_check.h"
+#include "runtime/compat/credential_cache_check.h"
 #include "runtime/compat/status_redirect_check.h"
 #include "core/logging.h"
 #include <exception>
@@ -808,6 +809,7 @@ static void LogSelfCheck(const nevr_self_check::LogRecord& record) {
 static void WireSelfChecks() {
   nevr_self_check::SetEnabled(true);  // on in every build, first and unconditional (#451)
   nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
+  nevr_credential_cache_check::Register(&nevr_credential_cache_check::ProcessProbe);  // #562
   nevr_self_check::SetSender(&SendFrameToServer);
   nevr_self_check::SetLogSink(&LogSelfCheck);
 #ifdef NEVR_PROJECT_VERSION
