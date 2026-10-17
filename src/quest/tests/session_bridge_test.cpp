@@ -516,7 +516,9 @@ void TestHeldSessionSurvivesUntilSignInThenRoutesByRole() {
   const std::string configWire = BuildFrame(Opcode::Binary, configReply);
   QCHECK(config.Read(configWire.size()) == configWire);
   loginConn->Push(ConfigSuccessFor("main_menu", "for-the-new-connection"));
-  QCHECK(config.Read(1, 300).empty());  // nothing more reaches it
+  bool configEof = false;
+  QCHECK(config.Read(1, 300, &configEof).empty());  // nothing more reaches it
+  QCHECK(!configEof);                               // and the socket is still open, not closed
   // An Unrequire inside a frame can reach the game with nothing outstanding; the bridge reports the count.
   const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')) +
                             nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "");

@@ -2011,6 +2011,8 @@ void TestAClosedConfigSocketsStaleEntryYieldsToItsReplacement() {
   QCHECK(rig.router->GetStats().configRepliesUnmatched == 1);
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
   QCHECK(rig.logs.Has("no open config request has its type and id"));
+  // The hand-over is logged at Info and names the socket that took the reply and the closed one it was owed to.
+  QCHECK(rig.logs.Has("goes to game=4: the oldest open request for it, game=1, has closed", static_cast<int>(LogLevel::Info)));
 }
 
 // The stale-entry hazard, measured over replacements: a config request the service never answers whose socket
