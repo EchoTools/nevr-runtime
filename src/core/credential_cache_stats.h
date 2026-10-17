@@ -18,10 +18,13 @@ struct Snapshot {
   std::uint64_t saved = 0;     // saves that wrote the cache
   std::uint64_t refused = 0;   // saves that wrote nothing
   std::uint64_t reused = 0;    // launches that used the cached credentials without a sign-in
-  std::uint64_t signIn = 0;    // launches with no usable cache: the device-code sign-in follows
+  std::uint64_t signInNoCache = 0;    // launches with no cache at all: the device-code sign-in follows
+  std::uint64_t signInUnusable = 0;   // launches with a cache that could not be used (refresh failed, both tokens expired)
   std::string lastProtection;  // how the last written cache was protected: host_mode_600 (Wine), dacl, mode_0600
   std::string lastRefusal;     // why the last refused save wrote nothing
 };
+
+enum class SignInReason { kNoCache, kCacheUnusable };
 
 namespace detail {
 struct State {
@@ -51,10 +54,11 @@ inline void NoteCacheReused() {
   std::lock_guard<std::mutex> lock(s.mutex);
   ++s.snap.reused;
 }
-inline void NoteSignInRequired() {
+inline void NoteSignInRequired(SignInReason reason) {
   detail::State& s = detail::S();
   std::lock_guard<std::mutex> lock(s.mutex);
-  ++s.snap.signIn;
+  if (reason == SignInReason::kNoCache) ++s.snap.signInNoCache;
+  else ++s.snap.signInUnusable;
 }
 inline Snapshot Get() {
   detail::State& s = detail::S();
