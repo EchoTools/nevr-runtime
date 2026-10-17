@@ -336,8 +336,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
   const int dllLoadHooksInstalled = nevr_dll_load_hook::Install();
   // The four hooks are required (boot_hook_policy.h). Install() has already logged each failing variant and its
-  // MH_STATUS; the PARTIAL line below carries the count and what it costs, and the verdict fails the boot, whose
-  // final line (boot.cpp, or "boot hooks installed ok=false") names the count as the cause.
+  // MH_STATUS; the PARTIAL line below carries the count and what it costs, and the verdict fails the boot. A server
+  // then refuses to start, and boot.cpp's refusal names the count as the cause; a client logs
+  // "boot hooks installed ok=false", which names no cause, so the count is on the PARTIAL line only.
   const nevr_boot_hook_policy::LoadLibraryVerdict dllLoadHooksVerdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(
       dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
   if (dllLoadHooksVerdict.complete) {
