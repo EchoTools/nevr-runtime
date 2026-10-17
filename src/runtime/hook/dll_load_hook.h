@@ -81,6 +81,10 @@ void SetMinHookOpsForTest(const MinHookOps* ops);
 /* The trampoline Install() holds for "LoadLibraryA"/"LoadLibraryW"/"LoadLibraryExA"/"LoadLibraryExW",
  * or nullptr when it holds none. */
 void* OriginalForTest(const char* name);
+
+/* Sets the four trampoline pointers OriginalForTest() reads to nullptr. Shutdown() only disables the
+ * hooks; after MH_Uninitialize() the pointers would otherwise still name freed trampolines. */
+void ResetTrampolinesForTest();
 #endif
 
 } // namespace nevr_dll_load_hook
