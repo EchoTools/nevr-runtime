@@ -92,6 +92,13 @@ void* OriginalForTest(const char* name) {
     return nullptr;
 }
 
+void ResetTrampolinesForTest() {
+    g_origLoadLibraryA = nullptr;
+    g_origLoadLibraryW = nullptr;
+    g_origLoadLibraryExA = nullptr;
+    g_origLoadLibraryExW = nullptr;
+}
+
 static MH_STATUS HookCreate(void* target, void* detour, void** original) {
     return g_hookOps.create(target, detour, original);
 }

@@ -29,6 +29,7 @@
 #endif
 
 #include "core/auth_token_model.h"
+#include "core/credential_cache_stats.h"
 #include "core/credential_write.h"
 
 // Get the directory containing the main executable.
@@ -155,13 +156,24 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.AUTH] Credentials not written to %s: %s; the previous cache is unchanged%s", path.c_str(),
             why.c_str(), isWine ? " (Wine: host permissions could not be set and verified)" : "");
+        nevr_credential_stats::NoteRefused(why);
         return false;
     }
     if (!nevr_credential_write::ReplaceCache(tempPath, path, &why)) {
         Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Credentials not written to %s: %s; the previous cache is unchanged",
             path.c_str(), why.c_str());
+        nevr_credential_stats::NoteRefused(why);
         return false;
     }
+    // The record that a launch persisted its sign-in (#562): the path and how the file is protected, never a token
+    // byte or a length. Under Wine the host mode was read back as 600 before the write and again before the replace.
+#ifdef _WIN32
+    const char* const protection = isWine ? "host_mode_600" : "dacl";
+#else
+    const char* const protection = "mode_0600";
+#endif
+    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Credentials written to %s protection=%s", path.c_str(), protection);
+    nevr_credential_stats::NoteSaved(protection);
     return true;
 }
 

@@ -708,6 +708,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_friend_request_check DISCOVERY_MODE PRE_TEST)
 
+    # The #562 self-check (compat/credential_cache_check.h): what the credential cache did in this process is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_credential_cache_check
+      tests/test_credential_cache_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_credential_cache_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_credential_cache_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_credential_cache_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_credential_cache_check DISCOVERY_MODE PRE_TEST)
+
     # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
     add_executable(test_socket_role tests/test_socket_role.cpp)
     set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -809,7 +822,7 @@ if(BUILD_TESTING)
     add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp)
     set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING NEVR_TEST_HOOKS)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
     # #504's timing fixture loads the stand-in pnsrad.dll that test_export_trace builds.
