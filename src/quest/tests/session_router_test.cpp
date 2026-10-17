@@ -2504,6 +2504,29 @@ void TestARelabelToLoginTriesTheLoginBuildAndOtherRelabelsDoNot() {
   QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 2);  // the injected one and game 1's own
 }
 
+// One login per session: a login that was sent is not sent again when a newer login connection takes the
+// session's login role over (the PC bridge hints every /login as login). Failure caught: a second LoginRequest
+// on a session that already logged in.
+void TestANewerLoginConnectionDoesNotSendASecondLogin() {
+  const CaseScope scope("one login per session");
+  int builds = 0;
+  Options o;
+  o.buildLogin = [&builds]() {
+    ++builds;
+    return std::optional<std::string>(kLogin);
+  };
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));  // attaches to the open session: the login is sent
+  QCHECK(builds == 1);
+  rig.router->OnGameOpen(3, Hinted(Role::Login));  // a newer /login takes the login role over
+  QCHECK(builds == 1);
+  QCHECK(CountUpstreamAnywhere(rig, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(Exempt(rig, 3));
+}
+
 // A hinted role is final. A hinted config socket whose first frame is LogInRequestv2 stays config: the
 // contradiction is logged once, at Warning, and nothing is relabelled or taken over. The hinted login
 // socket keeps the exemption and the login replies, and the config socket still gets config replies.
@@ -3020,6 +3043,7 @@ int main() {
   TestAReplacedLoginIsClosedWhenTheMatchmakerCapIsFull();
   TestAFailedLoginBuildIsRetriedOnlyForTheNextLoginConnection();
   TestARelabelToLoginTriesTheLoginBuildAndOtherRelabelsDoNot();
+  TestANewerLoginConnectionDoesNotSendASecondLogin();
   TestTheDemotedLoginConnectionRidesTheSessionAsAMatchmaker();
   TestFramesWaitBehindTheLoginBeingBuiltExceptConfigs();
   TestAClosedSocketsQueuedBytesDoNotCountAgainstTheLimit();
