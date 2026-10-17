@@ -110,22 +110,31 @@ HMODULE WINAPI BlockingModuleProbe(LPCSTR name) {
 
 VOID Log(EchoVR::LogLevel, const CHAR*, ...) {}
 
-// Every test in this file starts and ends from the same process state, whatever its assertions did:
-// DllLoadHook's registrations, filters and observers, the fake MinHook ops and module probe, MinHook's
-// own initialisation (a fatal ASSERT that skipped MH_Uninitialize made the next MH_Initialize return
-// MH_ERROR_ALREADY_INITIALIZED), and the hook guard's records. The guard keeps the first record it
-// finds for an address, so a record left by one test (a fake install records LoadLibraryW's unhooked
-// bytes) made IsOurDetour false for the next test that hooks LoadLibraryW for real (#633).
+// Each test leaves the process as it found it. TearDown resets what the tests in this file change, even
+// after a fatal ASSERT: the fake MinHook ops, the module probe, DllLoadHook's registrations, filters
+// and observers and its hooks (Shutdown), MinHook's initialisation (a fatal ASSERT that skipped
+// MH_Uninitialize made the next MH_Initialize return MH_ERROR_ALREADY_INITIALIZED), the four trampoline
+// pointers (Shutdown only disables the hooks, so they would name freed trampolines), and the hook
+// guard's records. The guard keeps the first record it finds for an address, so a record left by one
+// test (a fake install records LoadLibraryW's unhooked bytes) made IsOurDetour false for the next test
+// that hooks LoadLibraryW for real (#633). The first test starts from the process's clean state, and SetUp
+// fails a test that starts from anything else.
 class DllLoadHookIsolation : public testing::Test {
  protected:
-  void SetUp() override { ResetSharedState(); }
-  void TearDown() override { ResetSharedState(); }
+  // Checks, does not reset: a test that leaves a trampoline or a hook-guard record behind fails the next one here.
+  void SetUp() override {
+    for (const char* variant : {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"}) {
+      ASSERT_EQ(nevr_dll_load_hook::OriginalForTest(variant), nullptr) << variant << ": a trampoline outlived the previous test";
+    }
+    ASSERT_EQ(nevr_hook_guard::RecordedCount(), 0) << "a hook-guard record outlived the previous test";
+  }
 
- private:
-  static void ResetSharedState() {
+  void TearDown() override {
     nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+    nevr_dll_load_hook::SetModuleProbeForTest(nullptr);
     nevr_dll_load_hook::Shutdown();  // disables the hooks, then clears registrations, filters, observers
     MH_Uninitialize();               // MH_ERROR_NOT_INITIALIZED, ignored, when the test never initialised it
+    nevr_dll_load_hook::ResetTrampolinesForTest();
     nevr_hook_guard::ResetForTest();
   }
 };
@@ -163,7 +172,6 @@ TEST_F(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthers
   EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
 
   EXPECT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr) << "a load no filter matches must go through";
-
 }
 
 TEST_F(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
@@ -176,7 +184,6 @@ TEST_F(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
 }
 
 TEST_F(DllLoadHookFilter, ReportedNameOutlivesFilterVectorChanges) {
-  nevr_dll_load_hook::Shutdown();
   nevr_dll_load_hook::AddLoadFilter("original-filter", BlocksVersionDll);
   const char* by = nullptr;
   ASSERT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", &by));
@@ -244,7 +251,6 @@ TEST_F(DllLoadHookCallbacks, OnLoadClaimsItsOwnRegistrationAfterConcurrentAppend
   }
   g_probeCondition.notify_all();
   first.join();
-  nevr_dll_load_hook::SetModuleProbeForTest(nullptr);
   ASSERT_TRUE(entered) << "module probe did not reach the forced interleaving";
   EXPECT_EQ(g_immediateCalls.load(), 1);
   nevr_dll_load_hook::FireCallbacksForModule("nevr-pending-b.dll", reinterpret_cast<HMODULE>(0x1234));
@@ -299,7 +305,6 @@ const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA
 // create with MH_ERROR_ALREADY_CREATED and leaves the first install's trampoline in place; the
 // detours still call through it, so Install() must not clear it.
 TEST_F(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled) {
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   void* before[4];
@@ -501,6 +506,10 @@ std::wstring FixturePnsradPath() {
 }  // namespace
 
 TEST_F(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirstRead) {
+  // Everything this test reads is reset here, so an earlier run of it (--gtest_repeat) leaves nothing behind.
+  g_notifiedUnderLoaderLock = false;
+  g_fixturePatches = 0;
+  g_observerRuns = 0;
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   ASSERT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
