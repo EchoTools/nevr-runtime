@@ -4,8 +4,10 @@
 
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/lifecycle/boot_hook_policy.h"
 #include "runtime/patch/pnsrad_load_queue.h"
 #include "core/logging.h"
+#include "runtime/log/boot_log_tee.h"
 
 #include <MinHook.h>
 #include <gtest/gtest.h>
@@ -18,7 +20,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -107,8 +111,6 @@ HMODULE WINAPI BlockingModuleProbe(LPCSTR name) {
 }
 
 }  // namespace
-
-VOID Log(EchoVR::LogLevel, const CHAR*, ...) {}
 
 // Each test leaves the process as it found it. TearDown resets what the tests in this file change, even
 // after a fatal ASSERT: the fake MinHook ops, the module probe, DllLoadHook's registrations, filters
@@ -270,20 +272,24 @@ struct FakeHookState {
   MH_STATUS enableResult = MH_OK;
   MH_STATUS removeResult = MH_OK;
   bool writeTrampoline = true;
+  // When set, createResult and enableResult apply to this target only; every other target succeeds.
+  void* onlyTarget = nullptr;
 };
 FakeHookState g_fakeHooks;
 int g_trampolineStorage = 0;
 
-MH_STATUS WINAPI FakeCreate(LPVOID, LPVOID, LPVOID* original) {
+MH_STATUS WINAPI FakeCreate(LPVOID target, LPVOID, LPVOID* original) {
   ++g_fakeHooks.createCalls;
-  if (g_fakeHooks.createResult == MH_OK && g_fakeHooks.writeTrampoline && original != nullptr) {
+  const MH_STATUS result =
+      g_fakeHooks.onlyTarget == nullptr || g_fakeHooks.onlyTarget == target ? g_fakeHooks.createResult : MH_OK;
+  if (result == MH_OK && g_fakeHooks.writeTrampoline && original != nullptr) {
     *original = &g_trampolineStorage;  // MinHook writes the trampoline only on MH_OK
   }
-  return g_fakeHooks.createResult;
+  return result;
 }
-MH_STATUS WINAPI FakeEnable(LPVOID) {
+MH_STATUS WINAPI FakeEnable(LPVOID target) {
   ++g_fakeHooks.enableCalls;
-  return g_fakeHooks.enableResult;
+  return g_fakeHooks.onlyTarget == nullptr || g_fakeHooks.onlyTarget == target ? g_fakeHooks.enableResult : MH_OK;
 }
 MH_STATUS WINAPI FakeRemove(LPVOID target) {
   ++g_fakeHooks.removeCalls;
@@ -298,6 +304,37 @@ void UseFakeHooks() {
 }
 
 const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"};
+
+// What the boot tee wrote to nevr-boot.jsonl while `install` ran (#632). Install() runs inside the runtime's
+// boot phase, so its report must reach this file, not only stderr. The window is exact: from the file size
+// at Init() to the file size when `install` returns, so an absence assertion over it cannot be satisfied or
+// broken by what earlier runs appended to the shared, append-only file. The tee is closed on every path.
+struct BootTeeScope {
+  BootTeeScope() { nevr_boot_log_tee::Init(); }
+  ~BootTeeScope() { nevr_boot_log_tee::Close(); }
+  BootTeeScope(const BootTeeScope&) = delete;
+  BootTeeScope& operator=(const BootTeeScope&) = delete;
+};
+
+std::streamoff FileSizeOf(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  return in ? static_cast<std::streamoff>(in.tellg()) : 0;
+}
+
+template <typename Fn>
+std::string BootFileTextWrittenBy(Fn install) {
+  BootTeeScope tee;
+  const std::string path = nevr_boot_log_tee::Path();
+  if (path.empty()) return "<the boot tee could not resolve nevr-boot.jsonl>";
+  const std::streamoff start = FileSizeOf(path);
+  install();
+  const std::streamoff end = FileSizeOf(path);
+  std::ifstream in(path, std::ios::binary);
+  in.seekg(start);
+  std::string text(static_cast<std::size_t>(end - start), '\0');
+  in.read(&text[0], end - start);
+  return text;
+}
 
 }  // namespace
 
@@ -573,4 +610,84 @@ TEST_F(DllLoadHookPostLoad, ObserversWaitUntilTheCallingThreadReleasesTheLoaderL
   EXPECT_FALSE(nevr_dll_load_hook::LoaderLockHeldByThisThread());
   ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
   EXPECT_EQ(g_observerRuns.load(), 2);
+}
+
+// #632: the per-variant failure line, with its MH_STATUS, and the PARTIAL summary reach the boot file.
+TEST_F(DllLoadHookInstall, AFailedVariantAndThePartialSummaryReachTheBootFile) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryExW);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  testing::internal::CaptureStderr();
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExW reason=MH_ERROR_MEMORY_PROTECT"), std::string::npos)
+      << "boot file was:\n" << boot;
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_EQ(boot.find("LoadLibrary hooks OK"), std::string::npos) << boot;
+  EXPECT_NE(err.find("LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "the tee still writes stderr: " << err;
+}
+
+// #632: the failed-hook cleanup line is a report line too.
+TEST_F(DllLoadHookInstall, AFailedCleanupReachesTheBootFile) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryW);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  g_fakeHooks.removeResult = MH_ERROR_NOT_CREATED;
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; failed-hook cleanup FAILED name=LoadLibraryW reason=MH_ERROR_NOT_CREATED"),
+            std::string::npos)
+      << "boot file was:\n" << boot;
+}
+
+// #632: a full install says OK (4/4) in the boot file and no FAILED line.
+TEST_F(DllLoadHookInstall, AFullInstallSaysOkInTheBootFile) {
+  UseFakeHooks();
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] info; LoadLibrary hooks OK (4/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_EQ(boot.find("FAILED"), std::string::npos) << boot;
+}
+
+// #632: Install() returns how many of the four variants are hooked, so the caller can say what happened.
+TEST_F(DllLoadHookInstall, InstallReturnsTheNumberOfVariantsHooked) {
+  UseFakeHooks();
+  EXPECT_EQ(nevr_dll_load_hook::Install(), nevr_dll_load_hook::kLoadLibraryVariantCount);
+  EXPECT_EQ(nevr_dll_load_hook::kLoadLibraryVariantCount, 4);
+}
+
+TEST_F(DllLoadHookInstall, InstallReturnsThreeWhenOneVariantFailsToEnable) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryExA);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  EXPECT_EQ(nevr_dll_load_hook::Install(), 3);
+}
+
+TEST_F(DllLoadHookInstall, InstallReturnsZeroWhenEveryCreateFails) {
+  UseFakeHooks();
+  g_fakeHooks.createResult = MH_ERROR_NOT_EXECUTABLE;
+  EXPECT_EQ(nevr_dll_load_hook::Install(), 0);
+}
+
+// #632, ruled by Spritz: the four LoadLibrary hooks are REQUIRED. A partial install fails the boot (a server then
+// refuses to start, a client's last boot line says ok=false) and records the count as its cause. The verdict is
+// a pure function so it runs here; InitializeAfterGameImageGuard cannot run in a GTest, so
+// tools/tests/test_runtime_lifecycle_invariants.py pins that initialize.cpp acts on it.
+TEST(DllLoadHookBootVerdict, TheLoadLibraryHooksAreRequired) {
+  EXPECT_TRUE(nevr_boot_hook_policy::kLoadLibraryHooksRequired);
+}
+
+TEST(DllLoadHookBootVerdict, AFullInstallFailsNothingAndRecordsNoCause) {
+  const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(4, 4);
+  EXPECT_TRUE(verdict.complete);
+  EXPECT_FALSE(verdict.failsBoot);
+  EXPECT_STREQ(verdict.cause, "");
+}
+
+TEST(DllLoadHookBootVerdict, APartialInstallFailsTheBootAndNamesTheCount) {
+  for (int installed = 0; installed < 4; ++installed) {
+    const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(installed, 4);
+    EXPECT_FALSE(verdict.complete) << installed;
+    EXPECT_TRUE(verdict.failsBoot) << installed;
+    const std::string expected = "LoadLibrary hooks " + std::to_string(installed) + "/4 installed";
+    EXPECT_EQ(std::string(verdict.cause), expected);
+  }
 }

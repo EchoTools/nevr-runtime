@@ -70,6 +70,24 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         self.assertIn("FAIL", row(result.stdout, "B03"))
         self.assertIn("FAIL", row(result.stdout, "S20"))
 
+    def test_a_partial_loadlibrary_hook_install_scores_fail_and_a_full_one_passes(self):
+        # #632: B09 had no fail pattern, so a partial install scored ABSENT. A partial install also ends the boot
+        # with ok=false (the hooks are required), which B03 scores FAIL.
+        partial = (
+            "[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExA reason=MH_ERROR_MEMORY_PROTECT\n"
+            "[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)\n"
+            "[NEVR.PATCH] warn; dll load hooks PARTIAL (3/4): loads through an unhooked variant\n"
+            "[NEVR.PATCH] boot hooks installed ok=false\n"
+        )
+        result = score(partial, group="boot")
+        self.assertIn("FAIL", row(result.stdout, "B09"))
+        self.assertIn("FAIL", row(result.stdout, "B03"))
+        self.assertNotEqual(result.returncode, 0)
+        full = score("[NEVR.DLLHOOK] info; LoadLibrary hooks OK (4/4)\n[NEVR.PATCH] info; dll load hooks installed\n"
+                     "[NEVR.PATCH] boot hooks installed ok=true\n", group="boot")
+        self.assertIn("PASS", row(full.stdout, "B09"))
+        self.assertIn("PASS", row(full.stdout, "B03"))
+
     def test_missing_login_marker_remains_absent(self):
         result = score("[NEVR.PATCH] boot hooks installed ok=true\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
