@@ -608,9 +608,9 @@ TEST_F(DllLoadHookInstall, AFailedVariantAndThePartialSummaryReachTheBootFile) {
   testing::internal::CaptureStderr();
   const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
   const std::string err = testing::internal::GetCapturedStderr();
-  EXPECT_NE(boot.find("[NEVR.DLLHOOK] hook FAILED name=LoadLibraryExW reason=MH_ERROR_MEMORY_PROTECT"), std::string::npos)
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExW reason=MH_ERROR_MEMORY_PROTECT"), std::string::npos)
       << "boot file was:\n" << boot;
-  EXPECT_NE(boot.find("[NEVR.DLLHOOK] LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "boot file was:\n" << boot;
   EXPECT_EQ(boot.find("LoadLibrary hooks OK"), std::string::npos) << boot;
   EXPECT_NE(err.find("LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "the tee still writes stderr: " << err;
 }
@@ -622,7 +622,7 @@ TEST_F(DllLoadHookInstall, AFailedCleanupReachesTheBootFile) {
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
   g_fakeHooks.removeResult = MH_ERROR_NOT_CREATED;
   const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
-  EXPECT_NE(boot.find("[NEVR.DLLHOOK] failed-hook cleanup FAILED name=LoadLibraryW reason=MH_ERROR_NOT_CREATED"),
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; failed-hook cleanup FAILED name=LoadLibraryW reason=MH_ERROR_NOT_CREATED"),
             std::string::npos)
       << "boot file was:\n" << boot;
 }
@@ -631,7 +631,7 @@ TEST_F(DllLoadHookInstall, AFailedCleanupReachesTheBootFile) {
 TEST_F(DllLoadHookInstall, AFullInstallSaysOkInTheBootFile) {
   UseFakeHooks();
   const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
-  EXPECT_NE(boot.find("[NEVR.DLLHOOK] LoadLibrary hooks OK (4/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] info; LoadLibrary hooks OK (4/4)"), std::string::npos) << "boot file was:\n" << boot;
   EXPECT_EQ(boot.find("FAILED"), std::string::npos) << boot;
 }
 

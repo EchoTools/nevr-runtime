@@ -341,10 +341,10 @@ static VOID InitializeAfterGameImageGuard() {
   const nevr_boot_hook_policy::LoadLibraryVerdict dllLoadHooksVerdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(
       dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
   if (dllLoadHooksVerdict.complete) {
-    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
+    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] info; dll load hooks installed\n");
   } else {
     nevr_boot_log_tee::TeeFprintf(
-        "[NEVR.PATCH] dll load hooks PARTIAL (%d/%d): loads through an unhooked LoadLibrary variant run no load "
+        "[NEVR.PATCH] warn; dll load hooks PARTIAL (%d/%d): loads through an unhooked LoadLibrary variant run no load "
         "filter, observer or callback; the hooks are required, a server will refuse to start\n",
         dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
   }

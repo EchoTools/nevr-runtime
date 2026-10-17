@@ -249,10 +249,11 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                  r"nevr_boot_hook_policy::JudgeLoadLibraryHooks\(\s*" + count +
                  r", nevr_dll_load_hook::kLoadLibraryVariantCount\);",
                  "verdict must be JudgeLoadLibraryHooks(count, kLoadLibraryVariantCount)").group(1)
-        need(r"if \(" + v + r"\.complete\) \{ nevr_boot_log_tee::TeeFprintf\(\"\[NEVR\.PATCH\] (?:info; )?"
+        need(r"if \(" + v + r"\.complete\) \{ nevr_boot_log_tee::TeeFprintf\(\"\[NEVR\.PATCH\] info; "
              r"dll load hooks installed\\n\"\); \} else \{",
              "'dll load hooks installed' must be the complete branch only")
         self.assertEqual(source.count("dll load hooks installed"), 1)
+        need(r"\[NEVR\.PATCH\] warn; dll load hooks PARTIAL", "the PARTIAL line must carry warn; after its tag (logging.md Rule 12)")
         need(r"dll load hooks PARTIAL \(%d/%d\).*?\\n\", " + count + r", nevr_dll_load_hook::kLoadLibraryVariantCount\);",
              "PARTIAL arguments must be the installed count, then kLoadLibraryVariantCount")
         need(r"if \(" + v + r"\.failsBoot\) \{ g_bootHookFailed = true; NoteBootHookFailureCause\(" + v +

@@ -369,7 +369,7 @@ int Install() {
             if (created == MH_OK) {
                 const MH_STATUS cleanup = HookRemove(s.target);
                 if (cleanup != MH_OK) {
-                    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] failed-hook cleanup FAILED name=%s reason=%s\n",
+                    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] warn; failed-hook cleanup FAILED name=%s reason=%s\n",
                                                   s.name, MH_StatusToString(cleanup));
                 }
                 *s.original = nullptr;
@@ -378,14 +378,15 @@ int Install() {
             const char* effect = created == MH_ERROR_ALREADY_CREATED
                                      ? "a hook created earlier stays in place"
                                      : "loads through this variant run no load filter, observer or callback";
-            nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — %s\n", s.name,
+            nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] warn; hook FAILED name=%s reason=%s — %s\n", s.name,
                                           MH_StatusToString(st), effect);
         }
     }
 
     // Keep "LoadLibrary hooks OK" as a substring on full success (smoke row B09),
     // and always report the count so PARTIAL is never a bare word without a number.
-    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] LoadLibrary hooks %s (%d/%d)\n",
+    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] %s; LoadLibrary hooks %s (%d/%d)\n",
+                                  okCount == kLoadLibraryVariantCount ? "info" : "warn",
                                   okCount == kLoadLibraryVariantCount ? "OK" : "PARTIAL", okCount,
                                   kLoadLibraryVariantCount);
     return okCount;
