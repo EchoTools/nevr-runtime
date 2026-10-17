@@ -413,6 +413,10 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
               Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_)));
     } else {
       GameId owner = request->owner;
+      // Both entries are erased by position, the later one first. Erasing a deque element that is neither the
+      // first nor the last invalidates every iterator into it, so no iterator is used after the first erase.
+      const std::ptrdiff_t requestIndex = request - configRequests_.begin();
+      std::ptrdiff_t liveIndex = -1;
       if (!OnSessionLocked(owner)) {
         // The oldest request with this key is a closed connection's, perhaps one the service never answered. A
         // reply to a resource goes to a connection that asked for that resource, so a live connection's open
@@ -422,14 +426,19 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
         if (live != configRequests_.end()) {
           const GameId stale = owner;
           owner = live->owner;
-          configRequests_.erase(live);
+          liveIndex = live - configRequests_.begin();
           Log(fx, LogLevel::Info,
               Fmt("[router] config reply type=0x%016llx id=0x%016llx goes to game=%llu: the oldest open request for it, "
                   "game=%llu, has closed",
                   Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(owner), Ull(stale)));
         }
       }
-      configRequests_.erase(request);
+      if (liveIndex >= 0) {
+        configRequests_.erase(configRequests_.begin() + std::max(requestIndex, liveIndex));
+        configRequests_.erase(configRequests_.begin() + std::min(requestIndex, liveIndex));
+      } else {
+        configRequests_.erase(configRequests_.begin() + requestIndex);
+      }
       if (OnSessionLocked(owner)) {
         target = owner;
       } else {

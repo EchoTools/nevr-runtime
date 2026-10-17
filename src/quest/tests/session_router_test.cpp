@@ -2088,6 +2088,82 @@ void TestStaleEntriesAreSkippedToReachALiveRequest() {
   QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
 }
 
+// The stale entry is not the last one and the live entry is not either: the list holds seven entries when the
+// reply arrives, and the stale entry has an older open request ahead of it (one the service never answered, from a
+// socket that is still open). The hand-over erases two entries of the list. Failure caught: the second erase
+// reaching the wrong entry, so the older socket's open request is the one dropped (its reply then finds nothing
+// and is dropped as unmatched) and the stale entry survives to orphan the next reply for its key.
+void TestAHandOverBehindAnOlderOpenRequestErasesTheStaleEntryAndTheLiveOne() {
+  const CaseScope scope("stale entry behind an older request");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameOpen(9);
+  rig.router->OnGameFrame(9, ConfigRequestFor("x_resource"), true);     // older, open, another resource
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);      // the stale one after the close
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(3);
+  rig.router->OnGameFrame(3, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("active_battle_pass_season"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("active_store_entry"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("active_store_featured_entry"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("extra_one"), true);
+  // Entries: [9:x_resource, 1:main_menu (closed), 3:main_menu, 3:bp, 3:store, 3:featured, 3:extra].
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);   // -> 3; entries 1 and 3's main_menu go
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                      // -> 3
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("x_resource"), true);  // -> 9, whose request is still open
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                      // -> 9
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);   // nobody has a main_menu request open
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                      // owed to nobody: dropped
+  const std::vector<Delivery> expected = {
+      {3, nevr_evr_codec::kSymConfigSuccess},
+      {3, nevr_evr_codec::kSymConnectionUnrequire},
+      {9, nevr_evr_codec::kSymConfigSuccess},
+      {9, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 1);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+}
+
+// The shape a reopened config socket produces: the stale entry, then the replacement's request for the same
+// resource, then its requests for the other three. The live entry has entries after it, and every one of the
+// four replies and its Unrequire reaches the replacement. Failure caught: a hand-over that erases through an
+// iterator the first erase invalidated (undefined behaviour; the standard library's checked mode aborts on it).
+void TestAHandOverWithEntriesAfterTheLiveOneAnswersEveryResource() {
+  const CaseScope scope("stale entry then four resources");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // never answered
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(3);
+  const char* const names[] = {"main_menu", "active_battle_pass_season", "active_store_entry", "active_store_featured_entry"};
+  for (const char* name : names) rig.router->OnGameFrame(3, ConfigRequestFor(name), true);
+  for (const char* name : names) {
+    rig.router->OnRemoteFrame(session, ConfigSuccessFor(name), true);
+    rig.router->OnRemoteFrame(session, kUnrequire, true);
+  }
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == 8);
+  for (std::size_t i = 0; i < got.size(); ++i) {
+    QCHECK(got[i].first == 3);
+    QCHECK(got[i].second == (i % 2 == 0 ? nevr_evr_codec::kSymConfigSuccess : nevr_evr_codec::kSymConnectionUnrequire));
+  }
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 0);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
 // A session end forgets the open config requests: they were the lost session's, and the service of the next
 // session never saw them. A reply for the same resource on the new session, which nobody asked for there, is
 // unmatched, not a closed socket's orphan. Failure caught: requests of an ended session kept in the list.
@@ -3204,6 +3280,8 @@ int main() {
   TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered();
   TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt();
   TestStaleEntriesAreSkippedToReachALiveRequest();
+  TestAHandOverBehindAnOlderOpenRequestErasesTheStaleEntryAndTheLiveOne();
+  TestAHandOverWithEntriesAfterTheLiveOneAnswersEveryResource();
   TestASessionEndForgetsTheOpenConfigRequests();
   TestAConfigDropWritesOnlyItsOwnLine();
   TestRequestsOfOneTypeWithDifferentIdsAreToldApart();

@@ -704,6 +704,11 @@ test-quest-router:
     "${cxx[@]}" src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
         src/quest/tests/session_router_test.cpp -o "$out/session_router_test"
     "$out/session_router_test"
+    # The router test again with the standard library's checked containers: an erase through an iterator the
+    # container invalidated aborts there, where an unchecked build only gives wrong answers.
+    "${cxx[@]}" -D_GLIBCXX_DEBUG src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/tests/session_router_test.cpp -o "$out/session_router_test_checked"
+    "$out/session_router_test_checked"
     "${cxx[@]}" src/quest/net/ws_wire.cpp src/quest/tests/ws_wire_test.cpp -o "$out/ws_wire_test"
     "$out/ws_wire_test"
     "${cxx[@]}" src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp \
