@@ -10,13 +10,16 @@
  * One GOT hook on libr15's android_main slot. The handler calls the original, and when it returns:
  *   1. logs {"event":"android_main_returned","action":"ending_process","exit_code":0};
  *   2. runs the before-exit callback (SetBeforeExit) on a helper thread and waits for it at most
- *      kFlushBudgetMs; the integration registers the self-check report and flush there, so the result reaches the
- *      remote log when the login is up. A callback that does not return in time is left behind;
+ *      kFlushBudgetMs; the integration registers the self-check report and flush there. The Info line the report
+ *      writes is the record. The remote string is best effort: Flush only queues the frame on the connection's worker
+ *      (ConnectorRemoteTransport::Send), the game has usually closed the login connection while it shut down
+ *      (session_bridge.cpp: Close clears the login gate), and _exit does not wait for the worker. A callback that
+ *      does not return in time is left behind;
  *   3. ends the process with _exit(0), as libr15's own failure paths end it with exit(0). _exit runs no static
  *      destructors: our threads and leaked objects are live.
  * The state our Quest code saves (the credential cache, device_login.txt) is written by AtomicWrite
  * (auth/atomic_write.cpp: temp file, fsync, rename, directory fsync), so a process ended mid-write leaves the
- * previous file whole; process_end_hook_test.cpp ends a process under a writer 25 times to show it.
+ * previous file whole; process_end_hook_test.cpp ends a process under a writer 60 times to show it.
  *
  * Steps 1-3 run after the call into the game and are reached from the handler only through function pointers,
  * so no personality-bearing frame is live across game code (callback_thunk.h, rules 1 and 5). The handler

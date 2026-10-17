@@ -48,7 +48,8 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
       std::string(ops.shows_code_only ? "[NEVR.AUTH] code shown url=" : "[NEVR.AUTH] browser open requested url=") +
           login_url + "?code=<" +
           std::to_string(code.size()) + " chars masked> open_result=" + std::to_string(browserResult) +
-          (browserResult <= kBrowserOpenAcceptedAbove ? " (failed)" : " (accepted)"));
+          (browserResult <= kBrowserOpenAcceptedAbove ? (ops.shows_code_only ? " (not shown)" : " (failed)")
+                                                      : (ops.shows_code_only ? " (shown)" : " (accepted)")));
   int uiResult = 1;
   if (browserResult <= kBrowserOpenAcceptedAbove) {
     uiResult = ops.show_open_failure(code, login_url, browserResult);
@@ -61,7 +62,8 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
 
   const bool expiredAfterBrowserOrUi = ops.now() >= deadline;
   if (browserResult <= kBrowserOpenAcceptedAbove && uiResult == 0) {
-    log(LogLevel::Error, "[NEVR.AUTH] device authorization stopped because the browser could not be opened");
+    log(LogLevel::Error, std::string("[NEVR.AUTH] device authorization stopped because the ") +
+                             (ops.shows_code_only ? "code could not be shown" : "browser could not be opened"));
     end = FlowEnd::BrowserFailed;
     return none;
   }

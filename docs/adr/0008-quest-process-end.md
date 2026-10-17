@@ -25,8 +25,13 @@ when it returns, for any reason:
 
 1. logs `{"event":"android_main_returned","action":"ending_process","exit_code":0}`;
 2. runs the before-exit callback on a helper thread and waits for it at most 500 ms. The integration registers
-   `ReportAndroidMainReturned` there: it reports the self-check `android_main_returned` and flushes the unit once, so the result
-   reaches the remote log when the login is up (the sentinel line is the record when it is not, or when the flush is late);
+   `ReportAndroidMainReturned` there: it reports the self-check `android_main_returned` (its Info line, `self_check` in the
+   sentinel's log, is the record) and flushes the unit once. The remote string is **best effort**, and the ADR does not promise it:
+   `ConnectorRemoteTransport::Send` only queues the frame for the connection's worker (`net/remote_ws.cpp`), the game has usually
+   closed the login connection while it shut down (`SessionBridge`'s `Close` clears the login gate, `net/session_bridge.cpp`, so
+   `SendToLogin` refuses), and `_exit` does not wait for the worker. Waiting for the queue to drain would need a new "frame
+   written" signal through the router's transport interface, and still would not help when the login connection is already
+   closed, so it is not built;
 3. ends the process with `_exit(0)`, as libr15's own failure paths end it with `exit(0)` (`0x1a6f124`, `0x1a70d08`). `_exit` runs no
    static destructors: our threads and leaked objects are live.
 
@@ -54,14 +59,19 @@ credential cache is saved, and requires a whole file every time.
 
 ## Prediction
 
-First launch of a fresh install (storage permission not yet granted), pid A: the logs are today's up to `APP_CMD_DESTROY`, with
-`install_process_end` among the constructor steps (`steps_ok` 19 where it was 18) and the sign-in lines saying `code shown`; then one
-`NEVR-Sentinel` `android_main_returned` line, the process dies, and no pid A line follows. The relaunch after the grant starts a new
-pid B with a `sentinel_ctor`, the `Hardcoded project path (rad15 => rad15) for android` warning, no `X509_STORE_new failed`, no
-`Initialization Error`, no `wm_finish_activity ... app-request`, and `Displayed ... MainActivity`. A relaunch with no `Start proc`,
-or a pid A line after `android_main_returned`, falsifies it.
+First launch of a fresh install (storage permission not yet granted), pid A. Required lines: the constructor's
+`{"event":"process_end_install","result":"installed"}` and `install_process_end` ok (`steps_ok` 19 where it was 18); the sign-in lines
+saying `code shown`. Then, after `APP_CMD_DESTROY`, the `NEVR-Sentinel` line `android_main_returned` with
+`"action":"ending_process"` and the Info line of the self-check `android_main_returned` (a second pid A line, written by the
+report); the process dies. Nothing from pid A follows the self-check line, and no pid A line is later than about 600 ms after the
+`android_main_returned` line (the callback's 500 ms bound plus the exit). The relaunch after the grant starts a new pid B with a
+`sentinel_ctor`, the `Hardcoded project path (rad15 => rad15) for android` warning, no `X509_STORE_new failed`, no
+`Initialization Error`, no `wm_finish_activity ... app-request`, and `Displayed ... MainActivity`. A relaunch with no `Start proc`, a
+missing `process_end_install` `installed` line, or a pid A line later than the window above, falsifies it.
 
 ## Not claimed
 
 That the first launch works (it needs the permission), that no other path keeps a process alive (four exit and kill sites in libr15
-are not traced to their callers), and what the platform does with an activity-less process.
+are not traced to their callers), and what the platform does with an activity-less process.; and whether Horizon applies the permission grant after the requesting process (pid A) has died while the
+GrantPermissionsActivity is still up (stock: the dialog starts at 14:06:52.379 and the grants are logged at 14:06:55-56). If it does not,
+the relaunch after the grant still fails its permission check and #640 is the fix; sprockee's headset run decides it.

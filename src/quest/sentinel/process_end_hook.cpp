@@ -108,19 +108,19 @@ void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memor
 
 void EndProcess() noexcept { _exit(0); }
 
-bool InstallAt(const sentinel::GotTarget&, EnderFn) noexcept { return false; }  // placeholder, next commit
-
-bool Install() noexcept {
-  g_ender.store(&EndProcess, std::memory_order_release);
+bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept {
+  g_ender.store(ender, std::memory_order_release);
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);
   g_after.store(&AfterReturn, std::memory_order_release);
   MainThunk::Arm(kMainHook);
-  const sentinel::GotStatus status = sentinel::InstallThunk<MainThunk>(g_hook, sentinel::pinned::LibR15AndroidMain());
+  const sentinel::GotStatus status = sentinel::InstallThunk<MainThunk>(g_hook, target);
   const bool ok = status == sentinel::GotStatus::kOk;
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "process_end_install",
                       {{"result", ok ? "installed" : "failed"}, {"status", sentinel::GotStatusName(status)}});
   return ok;
 }
+
+bool Install() noexcept { return InstallAt(sentinel::pinned::LibR15AndroidMain(), &EndProcess); }
 
 void ArmForTest(EnderFn ender, unsigned budgetMs) noexcept {
   g_ender.store(ender, std::memory_order_release);

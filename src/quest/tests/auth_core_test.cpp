@@ -468,7 +468,7 @@ TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
   CHECK(r.verified);
   const std::string log = rig.log.All();
   CHECK(log.find("Device authorization started; code shown") != std::string::npos);
-  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (shown)") != std::string::npos);
   CHECK(log.find("browser") == std::string::npos);
   CHECK(log.find("SECRETCODE123") == std::string::npos);
 }
