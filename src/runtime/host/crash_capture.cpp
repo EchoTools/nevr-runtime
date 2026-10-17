@@ -19,11 +19,13 @@ namespace {
 volatile LONG g_capturing = 0;
 volatile LONG g_dump_counter = 0;
 
-// Test seams (null / 0 in production): a probe run while the guard is held, and
+#if defined(NEVR_HOST_TESTING)
+// Test seams, absent from the shipped host: a probe run while the guard is held, and
 // a flag forcing WriteDumpTo to fail after opening the file (simulating a
 // full-disk or write failure for the crash harness).
 CaptureProbeFn g_capture_probe = nullptr;
 volatile LONG g_fail_writes = 0;
+#endif
 
 // Bounded wide sprintf into a fixed buffer; returns false on truncation.
 bool FormatDumpName(wchar_t* out, std::size_t out_size, const wchar_t* dir, DWORD pid,
@@ -54,11 +56,13 @@ void CrashCapture::Exit() noexcept {
   InterlockedExchange(&g_capturing, 0);
 }
 
+#if defined(NEVR_HOST_TESTING)
 void CrashCapture::SetCaptureProbe(CaptureProbeFn probe) noexcept { g_capture_probe = probe; }
 
 void CrashCapture::SetFailWrites(bool fail) noexcept {
   InterlockedExchange(&g_fail_writes, fail ? 1 : 0);
 }
+#endif
 
 void CrashCapture::Prepare(HMODULE host_module, BootstrapDiagnostics* diagnostics) {
   diagnostics_ = diagnostics;
@@ -106,7 +110,9 @@ bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) noexcept {
 
   // Test seam: while the reentrancy guard is held, let the harness raise a
   // nested fault to prove the next Capture is suppressed (no recursion or deadlock).
+#if defined(NEVR_HOST_TESTING)
   if (g_capture_probe != nullptr) g_capture_probe();
+#endif
 
   bool captured = false;
   const HMODULE dbghelp = GetModuleHandleW(kDbgHelpModule);
@@ -178,6 +184,7 @@ CrashCapture::Outcome CrashCapture::WriteDumpTo(const Attempt& attempt,
   // Test seam: simulate a full-disk or write failure by failing after the file is
   // opened (the path that MiniDumpWriteDump returning FALSE also exercises), so
   // Capture falls through to the text diagnostic.
+#if defined(NEVR_HOST_TESTING)
   if (g_fail_writes != 0) {
     CloseHandle(file);
     DeleteFileW(outcome.path);
@@ -185,6 +192,7 @@ CrashCapture::Outcome CrashCapture::WriteDumpTo(const Attempt& attempt,
     outcome.win32_error = ERROR_DISK_FULL;
     return outcome;
   }
+#endif
 
   MINIDUMP_EXCEPTION_INFORMATION exception_info = {};
   exception_info.ThreadId = GetCurrentThreadId();

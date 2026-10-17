@@ -35,8 +35,8 @@ using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
                                           PMINIDUMP_CALLBACK_INFORMATION);
 
 // Invoked once by Capture while the atomic reentrancy guard is held, before any
-// dump work. Null in production; the child-process crash harness installs it to
-// raise a nested fault and prove the guard suppresses recursion (no deadlock).
+// dump work. Only the test build can install one (CrashCapture::SetCaptureProbe); the child-process
+// crash harness uses it to raise a nested fault and prove the guard suppresses recursion (no deadlock).
 using CaptureProbeFn = void (*)();
 
 class CrashCapture {
@@ -54,12 +54,14 @@ class CrashCapture {
   bool TryEnter() noexcept;
   void Exit() noexcept;
 
-  // Test seams, no-ops in production (defaults null / false). The child-process
+#if defined(NEVR_HOST_TESTING)
+  // Test seams, compiled only under NEVR_HOST_TESTING (tools/verify_host_seams.py). The child-process
   // crash harness uses them to inject a nested fault (SetCaptureProbe) and to
   // simulate a full-disk or write failure (SetFailWrites) without touching the
   // crash-safe capture body.
   static void SetCaptureProbe(CaptureProbeFn probe) noexcept;
   static void SetFailWrites(bool fail) noexcept;
+#endif
 
   static constexpr const wchar_t* kDbgHelpModule = L"dbghelp.dll";
   static constexpr const char* kMiniDumpWriteDumpProc = "MiniDumpWriteDump";

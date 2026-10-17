@@ -368,6 +368,9 @@ test-auth-unit:
     cmake --build --preset {{ preset }} --target test_runtime_abi
     cmake --build --preset {{ preset }} --target test_bootstrap_attach
     cmake --build --preset {{ preset }} --target test_host_json --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_rendezvous --target test_host_crash --target test_rendezvous
+    # The host units carry no test seam when NEVR_HOST_TESTING is not defined: each is compiled again
+    # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
+    python3 tools/verify_host_seams.py "build/{{ preset }}"
     cmake --build --preset {{ preset }} --target test_export_trace
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then

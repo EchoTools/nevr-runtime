@@ -1,88 +1,114 @@
 """The host units' test seams cannot ship (docs/adr/0008).
 
 src/runtime/host/ carries seams a test needs (a CreateEventW that fails, a record builder that
-throws, an output sink). They exist only under NEVR_HOST_TESTING, which only the test-only library
-nevr_host_core defines. The target that builds the host into BugSplat64.dll must not define it, so
-the seams are not in the shipped file.
+throws, an output sink, a nested-fault probe). They exist only under NEVR_HOST_TESTING, which only the
+test-only library nevr_host_core defines. The target that builds the host into BugSplat64.dll must not
+define it, so the seams are not in the shipped file.
+
+The check that looks at what is compiled is tools/verify_host_seams.py: it compiles each host unit
+without the define with the build's own flags and reads the object with nm. It needs the MinGW compiler
+and a configured build, so `just test-auth-unit` runs it. This file tests the parts that need neither:
+the scan for a stray definition, the flag stripper, the symbol filter, and the real tree.
 """
 
 import re
-import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-HOST = REPO / "src" / "runtime" / "host"
-DEFINE = "NEVR_HOST_TESTING"
-SEAM_NAMES = (
-    "TestSeams", "Seams()", "SetEmitLoadFailureForTest", "g_fail_emit_for_test", "SetEmitSinkForTest",
-    "g_emit_sink", "ResetActiveForTest", "SetInstallEventForTest", "claimed_", "JournalClaimed",
-    "EmitSink", "Context() const", "RecordPause", "SetRecordPauseForTest", "g_record_pause",
-)
+sys.path.insert(0, str(REPO / "tools"))
+
+import verify_host_seams as seams  # noqa: E402
+
+DEFINE = seams.DEFINE
+CMAKE = "src/runtime/CMakeLists.txt"
+ALLOWED_LINE = "    target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)\n"
 
 
-def code_lines(path):
-    """(line number, text) for the lines that are code: block and line comments dropped."""
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
-    for number, line in enumerate(text.splitlines(), 1):
-        yield number, re.sub(r"//.*", "", line)
+class StrayDefinitionTest(unittest.TestCase):
+    def offenders(self, files):
+        return seams.stray_definitions(files)
 
-
-def lines_outside_testing_blocks(path):
-    """Code lines of `path` that are not inside an `#if defined(NEVR_HOST_TESTING)` branch."""
-    stack = []  # one entry per open conditional: True when this branch is the testing one
-    for number, line in code_lines(path):
-        directive = re.match(r"\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
-        if directive:
-            kind, rest = directive.groups()
-            if kind in ("if", "ifdef", "ifndef"):
-                stack.append(kind != "ifndef" and DEFINE in rest)
-            elif kind == "elif":
-                stack[-1] = DEFINE in rest
-            elif kind == "else":
-                stack[-1] = False
-            elif kind == "endif":
-                stack.pop()
-            continue
-        if not any(stack):
-            yield number, line
-
-
-class HostTestSeamsTest(unittest.TestCase):
-    def test_every_seam_is_inside_a_testing_block(self):
-        offenders = []
-        for path in sorted(HOST.glob("*.[ch]*")):
-            for number, line in lines_outside_testing_blocks(path):
-                for name in SEAM_NAMES:
-                    if name in line:
-                        offenders.append(f"{path.name}:{number}: {name}: {line.strip()}")
-        self.assertEqual(offenders, [], "a test seam is compiled without NEVR_HOST_TESTING")
-
-    def test_the_helpers_read_the_seams_only_under_the_define(self):
-        text = (HOST / "runtime_rendezvous.cpp").read_text(encoding="utf-8")
-        for helper in ("FailEventCreate", "FailHookBytesRead", "InstallWaitMs"):
-            body = re.search(rf"\n(?:bool|DWORD) {helper}\(\) \{{(.*?)\n\}}", text, re.S).group(1)
-            self.assertTrue(re.search(rf"#if defined\({DEFINE}\).*Seams\(\).*#else.*#endif", body, re.S), helper)
-
-    def test_only_the_test_library_defines_it(self):
-        files = subprocess.run(["git", "-C", str(REPO), "grep", "-l", DEFINE], capture_output=True,
-                               text=True).stdout.split()
-        allowed_sources = {
-            p for p in files
-            if p.startswith("src/runtime/host/") or p.startswith("src/runtime/tests/")
-            or p == "tools/tests/test_host_test_seams.py"
-        }
-        others = sorted(set(files) - allowed_sources)
-        self.assertEqual(others, ["src/runtime/CMakeLists.txt"], "who else mentions NEVR_HOST_TESTING")
-        cmake = (REPO / "src" / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
-        defining = [m.start() for m in re.finditer(rf"target_compile_definitions\(([A-Za-z0-9_]+)[^)]*{DEFINE}", cmake)]
-        self.assertEqual(len(defining), 1)
-        target = re.search(rf"target_compile_definitions\(([A-Za-z0-9_]+)[^)]*{DEFINE}", cmake).group(1)
-        self.assertEqual(target, "nevr_host_core")
+    def test_the_real_tree_defines_it_in_one_place(self):
+        self.assertEqual(self.offenders(seams.tracked_text_files()), [])
+        cmake = (REPO / CMAKE).read_text(encoding="utf-8")
+        self.assertEqual(len(re.findall(rf"target_compile_definitions\(nevr_host_core PUBLIC {DEFINE}\)", cmake)), 1)
         # ... and that library is created inside the BUILD_TESTING block.
         before = cmake[:cmake.index("add_library(nevr_host_core")]
         self.assertGreater(before.rfind("if(BUILD_TESTING)"), before.rfind("endif()"))
+
+    def test_the_allowed_line_and_the_tests_of_the_define_pass(self):
+        files = {
+            CMAKE: ALLOWED_LINE + f"# a comment about {DEFINE}\n",
+            "src/runtime/host/x.cpp": f"#if defined({DEFINE})\nint seam;\n#endif\n#ifdef {DEFINE}\n#endif\n"
+                                      f"// {DEFINE} in a comment\n",
+        }
+        self.assertEqual(self.offenders(files), [])
+
+    def test_every_other_spelling_is_reported(self):
+        spellings = {
+            "header define": ("src/runtime/host/game_targets.h", f"#define {DEFINE} 1\n"),
+            "add_compile_definitions": (CMAKE, f"add_compile_definitions({DEFINE})\n"),
+            "target_compile_definitions elsewhere": (CMAKE, f"target_compile_definitions(nevr_runtime PRIVATE {DEFINE})\n"),
+            "add_compile_options": ("CMakeLists.txt", f"add_compile_options(-D{DEFINE})\n"),
+            "a flag in a preset": ("CMakePresets.json", f'"CMAKE_CXX_FLAGS": "-D{DEFINE}"\n'),
+            "a flag in a script": ("tools/build.sh", f"CXXFLAGS=-D{DEFINE} make\n"),
+            "a second nevr_host_core line": (CMAKE, ALLOWED_LINE + ALLOWED_LINE.replace("PUBLIC", "PRIVATE")),
+        }
+        for label, (path, text) in spellings.items():
+            with self.subTest(label):
+                self.assertNotEqual(self.offenders({path: text}), [], label)
+
+
+class CompileCommandTest(unittest.TestCase):
+    def test_the_define_is_removed_in_every_spelling(self):
+        argv = ["g++", f"-D{DEFINE}", "-DOTHER", "-D", DEFINE, f"-D{DEFINE}=1", "-c", "x.cpp"]
+        stripped, removed = seams.strip_define(argv)
+        self.assertEqual(removed, 3)
+        self.assertEqual(stripped, ["g++", "-DOTHER", "-c", "x.cpp"])
+
+    def test_a_command_outside_the_host_and_the_tests_must_not_carry_it(self):
+        def entry(source, output):
+            return {"file": str(REPO / source), "output": output, "command": f"g++ -D{DEFINE} -c {source}"}
+        self.assertEqual(seams.stray_define_commands([
+            entry("src/runtime/host/crash_capture.cpp", "src/runtime/CMakeFiles/nevr_host_core.dir/host/crash_capture.cpp.obj"),
+            entry("src/runtime/lifecycle/game_image_guard.cpp",
+                  "src/runtime/CMakeFiles/nevr_host_core.dir/lifecycle/game_image_guard.cpp.obj"),
+            entry("src/runtime/tests/test_host_json.cpp", "src/runtime/CMakeFiles/test_host_json.dir/x.obj"),
+        ]), [])
+        stray = seams.stray_define_commands([
+            entry("src/runtime/lifecycle/boot.cpp", "src/runtime/CMakeFiles/nevr_runtime.dir/lifecycle/boot.cpp.obj"),
+            entry("src/runtime/host/crash_capture.cpp", "src/runtime/CMakeFiles/nevr_runtime.dir/host/crash_capture.cpp.obj"),
+        ])
+        self.assertEqual(len(stray), 2)
+
+
+class SeamSymbolTest(unittest.TestCase):
+    NM = (
+        "0000000000000000 T nevr_host::DestinationName(nevr_host::DiagnosticDestination)\n"
+        "00000000000007c0 T nevr_host::BootstrapDiagnostics::PrepareForTest(wchar_t const*)\n"
+        "0000000000000000 b nevr_host::(anonymous namespace)::g_fail_writes\n"
+        "0000000000000008 b nevr_host::(anonymous namespace)::g_capture_probe\n"
+        "                 U SetEvent\n"
+        "                 U InstallWaitProbe\n"
+    )
+
+    def test_a_defined_seam_is_found_and_an_import_is_not(self):
+        found = seams.seam_symbols(self.NM)
+        self.assertEqual(len(found), 3)
+        self.assertTrue(all("U " not in line for line in found))
+
+    def test_a_clean_object_has_none(self):
+        self.assertEqual(seams.seam_symbols(self.NM.splitlines()[0]), [])
+
+
+class HelpersReadSeamsOnlyUnderTheDefineTest(unittest.TestCase):
+    def test_the_helpers_read_the_seams_only_under_the_define(self):
+        text = (REPO / "src" / "runtime" / "host" / "runtime_rendezvous.cpp").read_text(encoding="utf-8")
+        for helper in ("FailEventCreate", "FailHookBytesRead", "InstallWaitMs"):
+            body = re.search(rf"\n(?:bool|DWORD) {helper}\(\) \{{(.*?)\n\}}", text, re.S).group(1)
+            self.assertTrue(re.search(rf"#if defined\({DEFINE}\).*Seams\(\).*#else.*#endif", body, re.S), helper)
 
 
 if __name__ == "__main__":

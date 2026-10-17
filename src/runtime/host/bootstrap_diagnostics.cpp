@@ -149,6 +149,7 @@ void BootstrapDiagnostics::Prepare(HMODULE host_module) {
   CreateLogMutex();
 }
 
+#if defined(NEVR_HOST_TESTING)
 void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
                                           const wchar_t* host_dir) {
   primary_ready_ = false;
@@ -172,7 +173,6 @@ void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const w
   CreateLogMutex();
 }
 
-#if defined(NEVR_HOST_TESTING)
 void BootstrapDiagnostics::ResetLogLockForTest() {
   g_log_lock_unreliable.store(false);
   g_log_mutex_creations.store(0);

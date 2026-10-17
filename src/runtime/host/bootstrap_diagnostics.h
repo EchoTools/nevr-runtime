@@ -93,12 +93,6 @@ class BootstrapDiagnostics {
   /// directories and create the log mutex (once per process). No allocation, no I/O.
   void Prepare(HMODULE host_module);
 
-  /// Test seam: set the three directories directly instead of reading the environment
-  /// and the module path. An empty string leaves that destination unavailable. Also creates the log
-  /// mutex and clears the "lock timed out" mark, as Prepare does at attach.
-  void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
-                      const wchar_t* host_dir);
-
   /// Store one attach step. `actual` (optional, kGameMainWrapperPrologueSize long) is the
   /// prologue found at the target, kept so a mismatch can be explained. `detail` is the
   /// MH_STATUS of a hook-install step and `stage` the MinHook call it belongs to.
@@ -143,6 +137,12 @@ class BootstrapDiagnostics {
   std::size_t JournalSize() const { return journal_count_.load(); }
   std::size_t JournalDropped() const { return dropped_.load(); }
 #if defined(NEVR_HOST_TESTING)
+  /// Test seam: set the three directories directly instead of reading the environment
+  /// and the module path. An empty string leaves that destination unavailable. Also creates the log
+  /// mutex and clears the "lock timed out" mark, as Prepare does at attach.
+  void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
+                      const wchar_t* host_dir);
+
   /// Close the log mutex and forget it, clear the timed-out mark and zero the creation count, so a
   /// test can show what an append does when Prepare has already run.
   static void ResetLogLockForTest();
