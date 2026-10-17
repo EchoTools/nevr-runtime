@@ -62,8 +62,9 @@ inline bool ProcessProbe(nevr_self_check::Observation* out) {
     out->pass = true;
     return true;
   }
-  if (now.signIn > said.signIn) {
-    said.signIn = now.signIn;
+  if (now.signInNoCache + now.signInUnusable > said.signInNoCache + said.signInUnusable) {
+    said.signInNoCache = now.signInNoCache;
+    said.signInUnusable = now.signInUnusable;
     out->observed = "cache not reused sign_in_required";
     out->pass = true;
     return true;
@@ -75,6 +76,9 @@ inline bool ProcessProbe(nevr_self_check::Observation* out) {
 inline nevr_self_check::CheckId Register(nevr_self_check::Probe probe) {
   return nevr_self_check::Register({kName, kExpected, probe});
 }
+
+/// Registers the check(s) with the unit (placeholder: one check, filled in by the next commit).
+inline void Register() { (void)Register(&ProcessProbe); }
 
 /// Test hook: forget what has been said.
 inline void ResetForTest() {

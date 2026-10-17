@@ -1128,7 +1128,7 @@ void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
         // No cached credentials — run device auth now, before game connections start.
         s_authAttempted = true;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-        nevr_credential_stats::NoteSignInRequired();  // #562
+        nevr_credential_stats::NoteSignInRequired(nevr_credential_stats::SignInReason::kNoCache);  // #562 (placeholder: the reason is split in the next commit)
         (void)PublishAuthSnapshot(nullptr, AuthReadiness::AwaitingUser);
         if (!RunDeviceAuthFlowOffBootstrapThread(*s_auth)) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
