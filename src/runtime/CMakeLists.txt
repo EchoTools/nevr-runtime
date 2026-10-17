@@ -682,6 +682,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_leave_check DISCOVERY_MODE PRE_TEST)
 
+    # The #392 self-check (lifecycle/quit_check.h): the client's game loop returning is one
+    # self-check result. Header only on top of the self-check unit .
+    add_executable(test_quit_check
+      tests/test_quit_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_quit_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_quit_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_quit_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_quit_check DISCOVERY_MODE PRE_TEST)
+
     # The #405 self-check (compat/friend_request_check.h): each friend request that arrives, repeats or ends is one
     # self-check result. Header only on top of the self-check unit and the party symbol table.
     add_executable(test_friend_request_check
