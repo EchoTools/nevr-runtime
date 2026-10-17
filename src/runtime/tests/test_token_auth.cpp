@@ -15,6 +15,8 @@
 #include <vector>
 
 #include "core/auth_token.h"
+#include "core/credential_cache_stats.h"
+#include "runtime/tests/digest_for_test.h"
 #include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
 #include "core/signin_dialog_lifecycle.h"
@@ -1474,6 +1476,98 @@ TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
   EXPECT_FALSE(saved);
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+namespace {
+std::vector<std::string> g_cacheLog;
+void CaptureCacheLog(EchoVR::LogLevel, const CHAR* message) { g_cacheLog.push_back(message); }
+}  // namespace
+
+// The digests used below are checked against the published test vectors, so the secrets test cannot pass on a wrong hash.
+TEST(DigestForTest, MatchesThePublishedVectors) {
+  EXPECT_EQ(nevr_test_digest::Sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  EXPECT_EQ(nevr_test_digest::Sha1Hex("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+  EXPECT_EQ(nevr_test_digest::Sha256Hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(nevr_test_digest::Sha1Hex(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+}
+
+namespace {
+// What a log line must never carry about a secret: its bytes, its length as a number, or a digest of it (L3 of the
+// #562 review). `allowed` is text the line is meant to contain (the path), removed before the digits are scanned.
+void ExpectNothingOfTheSecret(const std::string& line, const std::string& secret, const std::string& allowed) {
+  EXPECT_EQ(line.find(secret), std::string::npos) << "the secret reached the log: " << line;
+  for (std::size_t n = 6; n <= 8 && n <= secret.size(); ++n) {  // every piece of 6 to 8 bytes: longer ones contain them
+    for (std::size_t at = 0; at + n <= secret.size(); ++at) {
+      EXPECT_EQ(line.find(secret.substr(at, n)), std::string::npos) << "a piece of the secret reached the log: " << line;
+    }
+  }
+  std::string scanned = line;
+  for (std::size_t at = scanned.find(allowed); !allowed.empty() && at != std::string::npos; at = scanned.find(allowed))
+    scanned.erase(at, allowed.size());
+  const std::string length = std::to_string(secret.size());
+  for (std::size_t i = 0; i < scanned.size();) {
+    if (scanned[i] < '0' || scanned[i] > '9') { ++i; continue; }
+    std::size_t j = i;
+    while (j < scanned.size() && scanned[j] >= '0' && scanned[j] <= '9') ++j;
+    EXPECT_NE(scanned.substr(i, j - i), length) << "the secret's length reached the log: " << line;
+    i = j;
+  }
+  for (const std::string& digest : {nevr_test_digest::Sha256Hex(secret), nevr_test_digest::Sha1Hex(secret)}) {
+    std::string upper = digest;
+    for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (const std::string& d : {digest, upper}) {
+      EXPECT_EQ(line.find(d.substr(0, 16)), std::string::npos) << "a digest of the secret reached the log: " << line;
+    }
+  }
+}
+}  // namespace
+
+// #562: a save that wrote the cache is counted and logged at Info with the path and how the file is protected,
+// and never with a token byte, its length or a digest of it. (Wine: the host mode was read back as 600.)
+TEST_F(CredentialsDirFixture, ASavedCacheIsCountedAndLoggedWithPathAndProtectionButNothingOfTheToken) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  g_cacheLog.clear();
+  const std::string token = "sekret-refresh-value-for-the-test-31";  // 36 characters: a length no path digit run equals
+  SetBootLogSink(&CaptureCacheLog);
+  const bool saved = SaveAuthToken(TokenWith(token), exe_dir_);
+  SetBootLogSink(nullptr);
+  ASSERT_TRUE(saved);
+
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 1u);
+  EXPECT_EQ(snap.refused, 0u);
+  EXPECT_FALSE(snap.lastProtection.empty());
+  const bool wine = nevr_system_info::Get().IsWine();
+  EXPECT_EQ(snap.lastProtection, wine ? "host_mode_600" : "dacl");
+
+  bool found = false;
+  for (const std::string& line : g_cacheLog) {
+    if (line.find("[NEVR.AUTH] Credentials written to ") != std::string::npos) {
+      found = true;
+      EXPECT_NE(line.find(path.string()), std::string::npos) << line;
+      EXPECT_NE(line.find(std::string("protection=") + snap.lastProtection), std::string::npos) << line;
+    }
+    ExpectNothingOfTheSecret(line, token, path.string());
+  }
+  EXPECT_TRUE(found) << "no Info line says the cache was written";
+}
+
+// #562: a save that wrote nothing is counted with its reason.
+TEST_F(CredentialsDirFixture, ARefusedSaveIsCountedWithItsReason) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+  EXPECT_FALSE(saved);
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 0u);
+  EXPECT_EQ(snap.refused, 1u);
+  EXPECT_NE(snap.lastRefusal.find("host mode is 644, not 600"), std::string::npos) << snap.lastRefusal;
 }
 
 // #563: a write that fails part-way must leave the previous token exactly as it was.
