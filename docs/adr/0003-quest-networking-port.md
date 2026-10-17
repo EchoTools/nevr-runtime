@@ -525,16 +525,27 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,
    Unrequire, `SNSLoginSettings`], delivered whole to the login connection; an Unrequire inside a frame lowers
    the count of the connection the frame goes to. `SNSConfigSuccessv2` and `SNSConfigFailurev2` go to the connection that sent the oldest open config
-   request with the reply's type and id: the service echoes the request's two strings (the success as
-   `CSymbol64` symbols, the failure as the strings; `nevr_evr_codec::ConfigSymbol` is the service's string
-   to symbol conversion), so a request the service never answers (nakama drops a rate-limited message
-   without a reply) does not shift the replies after it. The Unrequire after a reply goes to the same
-   connection. A reply with no open request of that key, or whose requesting connection has closed, is
-   dropped, counted (`Stats::configRepliesUnmatched`, `Stats::configRepliesOrphaned`) and logged each time,
-   never handed to another socket. Open requests are kept per session up to 256; past that the oldest
-   unanswered one is forgotten, counted (`Stats::configRequestsEvicted`) and logged. A request payload
-   that is not a pad byte and a JSON object with string `type` and `id` has no key, and matches only a reply
-   with no key. `ChannelInfoResponse` goes to the login connection (the
+   request with the reply's type and id: the service echoes the request's two strings (the success as two
+   symbols, the failure as the strings), so a request the service never answers (nakama drops a rate-limited
+   message without a reply) does not shift the replies after it. The Unrequire after a reply goes to the same
+   connection. When the oldest open request for that key belongs to a connection that has closed, a live
+   connection's open request for the same key takes the reply and both entries go: the key already guarantees a
+   reply never reaches a connection that asked for another resource, so a closed connection's stale entry (a
+   request the service dropped) must not starve a replacement that asks for the same resource. If the closed
+   connection's reply was really in flight, the replacement has what it asked for, and the reply to its own
+   request finds no open request and is dropped like any reply nobody asked for (the Unrequires stay
+   consistent: the first reply's Unrequire lowers the replacement's count, the second is owed to nobody and is
+   dropped). With no live connection waiting on that key, or no open request of that key, the reply is dropped,
+   counted (`Stats::configRepliesOrphaned`, `Stats::configRepliesUnmatched`) and logged each time. Open
+   requests are kept per session up to 256; past that the oldest unanswered one is forgotten, counted
+   (`Stats::configRequestsEvicted`) and logged. A request payload that is not a pad byte and a JSON object with
+   string `type` and `id` has no key, and matches only a reply with no key.
+   `nevr_evr_codec::ConfigSymbol` reproduces the service's `ToSymbol` (nakama `server/evr/core_packet.go`), zero
+   extension of bytes included, because the service computes the reply symbols: it is not `EchoVR::CSymbol64Hash`,
+   which differs for the empty string (0 here, its seed there), for an 18-character `0x` + 16 hex digits string
+   (parsed here) and for bytes >= 0x80 (sign extension there; issue #657). If the service's hash changes to match
+   the game, `ConfigSymbol` changes in the same release.
+   `ChannelInfoResponse` goes to the login connection (the
    game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
    to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery
    sends one on the login session right after the login. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
