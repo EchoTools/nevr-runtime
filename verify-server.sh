@@ -19,6 +19,7 @@
 #   noflag     -server -noconsole             (drops the -headless token)
 #   upnp       default + -upnp                (flag path to g_upnpEnabled, not config)
 #   notelem    default + -notelemetry         (telemetry explicitly disabled)
+#   timestep   default + -fixedtimestep -timestep 120  (the time-step options a server strips, #515)
 #
 # It deploys into the game install of the main checkout (NEVR_GAME_ROOT overrides), takes the same
 # one-run-at-a-time lock as launch-client.sh, and puts every file it deployed back on exit, including
@@ -28,7 +29,7 @@
 # and the run looks hung. Read the files after it exits.
 set -uo pipefail
 
-RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag|upnp|notelem] [seconds]}"
+RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag|upnp|notelem|timestep] [seconds]}"
 FLAGSET="${2:-default}"
 RUN_SECONDS="${3:-100}"
 
@@ -54,7 +55,10 @@ case "$FLAGSET" in
   # R5: telemetry is gated on telemetry_uri in config, not on a flag. This flagset
   # exists so the disabled path is exercised deliberately rather than by omission.
   notelem) ARGS=(-server -headless -noconsole -notelemetry) ;;
-  *) echo "unknown flag-set: $FLAGSET (use default, noflag, upnp or notelem)" >&2; exit 2 ;;
+  # #515: the time-step options GameMainWrapperHook removes from a server's command line before the game
+  # parses it. The run's log shows the removal line, the tick-rate line and the clock read-back.
+  timestep) ARGS=(-server -headless -noconsole -fixedtimestep -timestep 120) ;;
+  *) echo "unknown flag-set: $FLAGSET (use default, noflag, upnp, notelem or timestep)" >&2; exit 2 ;;
 esac
 
 MIN_SECONDS="${NEVR_VERIFY_MIN_SECONDS:-45}"

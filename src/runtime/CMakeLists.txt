@@ -100,6 +100,8 @@ set(PATCHES_HEADERS
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
     "lifecycle/server_timestep.h"
+    "lifecycle/cmdline_strip.h"
+    "lifecycle/timestep_log.h"
     "lifecycle/server_bringup.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
@@ -667,6 +669,45 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
 
+    # The #403 self-check (compat/party_leave_check.h): each SNSPartyLeaveNotify the game client receives is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_party_leave_check
+      tests/test_party_leave_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_party_leave_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_party_leave_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_leave_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_party_leave_check DISCOVERY_MODE PRE_TEST)
+
+    # The #392 self-check (lifecycle/quit_check.h): the client's game loop returning is one
+    # self-check result. Header only on top of the self-check unit .
+    add_executable(test_quit_check
+      tests/test_quit_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_quit_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_quit_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_quit_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_quit_check DISCOVERY_MODE PRE_TEST)
+
+    # The #405 self-check (compat/friend_request_check.h): each friend request that arrives, repeats or ends is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_friend_request_check
+      tests/test_friend_request_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_friend_request_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_friend_request_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_friend_request_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_friend_request_check DISCOVERY_MODE PRE_TEST)
+
     # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
     add_executable(test_socket_role tests/test_socket_role.cpp)
     set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -734,6 +775,13 @@ if(BUILD_TESTING)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
+
+    # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
+    add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
+    set_source_files_properties(tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_strip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
     set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

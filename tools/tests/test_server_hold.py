@@ -25,7 +25,7 @@ class ServerHoldExits(unittest.TestCase):
         """#102 (b): after GameMain returns on a server, the wrapper exits through
         PerformGracefulShutdown instead of holding."""
         body = wrapper_body()
-        after_loop = body.split("GameMain(arg1);", 1)[1]
+        after_loop = body.split("GameMain(gameArg);", 1)[1]
         server_tail = after_loop.split("return gameResult;", 1)[1]
         self.assertIn("PerformGracefulShutdown(requested ? 0 : 1)", server_tail)
         self.assertRegex(server_tail, r"requested\s*=\s*ConsoleShutdownPending\(\)")
@@ -34,7 +34,7 @@ class ServerHoldExits(unittest.TestCase):
         """#102 (a): the post-crash hold polls ConsoleShutdownPending() and then exits with code 1
         (a crashed server that was stopped is still a crash). The test reads source patterns only; it does not run the DLL."""
         body = wrapper_body()
-        crash_branch = body.split("GameMain(arg1);", 1)[0]
+        crash_branch = body.split("GameMain(gameArg);", 1)[0]
         self.assertRegex(crash_branch, r"while\s*\(\s*!\s*ConsoleShutdownPending\(\)\s*\)")
         self.assertIn("PerformGracefulShutdown(1)", crash_branch)
         self.assertNotIn("PerformGracefulShutdown(0)", crash_branch)

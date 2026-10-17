@@ -3,6 +3,7 @@
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/lifecycle/quit_check.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/console_ctrl_policy.h"
 #include "runtime/lifecycle/veh_policy.h"
@@ -17,8 +18,12 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <exception>
+#include <new>
+#include <string>
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/cmdline_strip.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -51,6 +56,57 @@ static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
 typedef INT64 GameMainFunc(INT64 arg1);
 static GameMainFunc* GameMain = nullptr;
 
+// #515: what GameMainWrapperHook did to the game's command line, for boot.cpp's log line. Written once,
+// before GameMain, then published by g_stripReportReady.
+static TimestepStripReport g_stripReport;
+static std::atomic<bool> g_stripReportReady{false};
+
+TimestepStripReport GetTimestepStripReport() {
+  if (!g_stripReportReady.load(std::memory_order_acquire)) return TimestepStripReport{};
+  return g_stripReport;
+}
+
+// #515: arg1 is the ANSI command line the game parses in Main_ (GetCommandLineA, passed in RCX). A
+// server's time step is NEVR's, so -fixedtimestep and -timestep <value> come out before the game reads
+// them. Only this early is it effective: Main_ builds its CMainArgs from this string, before
+// PreprocessCommandLine. -server comes from the same string (g_isServer is not set yet). PrepareForGame
+// makes the whole decision; the buffer is static so it outlives Main_'s parse. A client, or a command
+// line with nothing to remove, gets arg1 back unchanged. This allocates while echovr.exe calls it, so a
+// failure falls back to arg1 (the game then sees the original string) and is logged and recorded. Its
+// std::string and report die when it returns: GameMainWrapperHook calls GameMain with only trivial locals
+// alive, because the VEH longjmps out of GameMain.
+static INT64 PrepareGameArgument(INT64 arg1) {
+  static std::string s_serverCommandLine;
+  INT64 gameArg = arg1;
+  TimestepStripReport report;
+  try {
+    // Everything that can throw runs before gameArg or g_stripReport is touched, so a throw leaves the
+    // game the original string, exactly as the Warning below says (#515 review).
+    const nevr_cmdline::HandOff handOff =
+        nevr_cmdline::PrepareForGame(reinterpret_cast<const char*>(arg1), s_serverCommandLine);
+    report.tokensRemoved = handOff.tokensRemoved;
+    report.residual = handOff.residual;
+    report.options = handOff.optionsText;
+    gameArg = reinterpret_cast<INT64>(handOff.commandLine);
+  } catch (const std::bad_alloc&) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (out of memory); the game gets the original command line");
+  } catch (const std::exception& e) {
+    gameArg = arg1;
+    report = nevr_timestep_log::FailedReport();
+    // Only the length of what(): exception text is not logged (docs/standards/logging.md, Rule 4).
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] time-step argument removal failed (std::exception, %zu bytes of text); the game gets the "
+        "original command line",
+        std::char_traits<char>::length(e.what()));
+  }
+  g_stripReport = std::move(report);
+  g_stripReportReady.store(true, std::memory_order_release);
+  return gameArg;
+}
+
 static INT64 GameMainWrapperHook(INT64 arg1) {
   // Set up the recovery point on this thread. The VEH checks server mode and
   // thread identity at exception time.
@@ -81,8 +137,12 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
+  // #515: what the game parses (the time-step arguments of a server removed). Done in a helper so no
+  // non-trivial local is alive across GameMain, which the VEH longjmps out of.
+  const INT64 gameArg = PrepareGameArgument(arg1);
+
   // Run the game main loop
-  const INT64 gameResult = GameMain(arg1);
+  const INT64 gameResult = GameMain(gameArg);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
@@ -94,6 +154,7 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
     // Stop the CDN fetch thread now: at DLL_PROCESS_DETACH a still-joinable thread is too late (#340).
     nevr_asset_cdn::StopBackgroundFetch();
     nevr_export_tracer::Shutdown();  // the export tracer's last drain and summary (a no-op when it is off)
+    nevr_quit_check::OnGameLoopReturned(gameResult);  // self-check "pc_quit" (#392): sent now, nothing runs later
     return gameResult;
   }
   // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
