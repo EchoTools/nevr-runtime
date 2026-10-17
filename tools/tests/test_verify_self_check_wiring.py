@@ -12,7 +12,8 @@ SCRIPT = REPO / "tools" / "verify_self_check_wiring.py"
 COPY = ["src/runtime/compat/ws_bridge.cpp", "src/quest/integration/production_steps.cpp",
         "src/runtime/lifecycle/config.cpp", "src/runtime/lifecycle/crash_recovery.cpp", "src/quest/redirect/service_redirector.cpp",
         "src/quest/integration/self_check_wiring.cpp", "src/quest/sentinel/quest_config.h",
-        "src/runtime/compat/self_check.h", "CMakeLists.txt"]
+        "src/runtime/compat/self_check.h", "src/core/auth_token.h", "src/modules/token-auth/src/token_auth.cpp",
+        "CMakeLists.txt"]
 
 
 def run(root: Path) -> subprocess.CompletedProcess:
@@ -140,6 +141,21 @@ class SelfCheckWiringGateTest(unittest.TestCase):
         root = self.tree()
         self.edit(root, "src/runtime/lifecycle/crash_recovery.cpp", "nevr_quit_check::OnGameLoopReturned(gameResult);", "")
         self.assertEqual(run(root).returncode, 1)
+
+    def test_a_credential_cache_check_that_is_not_fed_or_registered_fails(self):
+        for rel, old in (
+            ("src/runtime/compat/ws_bridge.cpp",
+             "nevr_credential_cache_check::Register(&nevr_credential_cache_check::ProcessProbe);"),
+            ("src/core/auth_token.h", "nevr_credential_stats::NoteSaved(protection);"),
+            ("src/core/auth_token.h", "nevr_credential_stats::NoteRefused(why);"),
+            ("src/modules/token-auth/src/token_auth.cpp", "nevr_credential_stats::NoteCacheReused();"),
+            ("src/modules/token-auth/src/token_auth.cpp", "nevr_credential_stats::NoteSignInRequired();"),
+        ):
+            root = self.tree()
+            self.edit(root, rel, old, "")
+            if old.endswith("NoteRefused(why);"):  # SaveAuthToken refuses in two places: take both out
+                self.edit(root, rel, old, "")
+            self.assertEqual(run(root).returncode, 1, (rel, old))
 
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()
