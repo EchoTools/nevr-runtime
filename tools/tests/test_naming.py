@@ -164,15 +164,19 @@ class NamingTest(unittest.TestCase):
                 i += 1
             return quotes % 2 == 1
 
+        # One pattern for every old name, tried only on lines that hold `::` or `namespace`.
+        olds = "|".join(re.escape(old) for old in RENAMED_NAMESPACES)
+        pattern = re.compile(r"(?<![A-Za-z0-9_:])(" + olds + r")::|\bnamespace\s+(" + olds + r")\b")
         stray = {}
         for path, text in project_files():
             if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")):
                 continue
             for n, line in enumerate(text.split("\n"), start=1):
-                for old in RENAMED_NAMESPACES:
-                    for m in re.finditer(r"(?<![A-Za-z0-9_:])" + old + r"::|\bnamespace\s+" + old + r"\b", line):
-                        if not in_string(line, m.start()):
-                            stray.setdefault(path, []).append("%d:%s" % (n, old))
+                if "::" not in line and "namespace" not in line:
+                    continue
+                for m in pattern.finditer(line):
+                    if not in_string(line, m.start()):
+                        stray.setdefault(path, []).append("%d:%s" % (n, m.group(1) or m.group(2)))
         self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
     def test_every_namespace_is_nevr_or_the_games(self):
