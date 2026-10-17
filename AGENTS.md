@@ -609,10 +609,13 @@ your seat name, for example `claude-main` or `codex`.
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
   test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) sets the floor
-  (`verify_gtest_floor.py --floor` in `justfile`) to the count `python3 tools/verify_gtest_floor.py --floor 0` prints
-  (`declarations=`), then runs `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Run the quick check on the
-  PR's tip, in the build slice. CI runs only when started by hand.
+  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) runs
+  `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. The floor (`verify_gtest_floor.py --floor` in
+  `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
+  `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
+  `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
+  the count and says in its body which tests went and why. Run the quick check on the PR's tip, in the build slice.
+  CI runs only when started by hand.
 - **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
   reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
