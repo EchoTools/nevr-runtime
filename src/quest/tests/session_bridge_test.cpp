@@ -156,7 +156,11 @@ struct Client {
         if (eof != nullptr) *eof = true;
         break;
       }
-      if (n < 0) break;
+      if (n < 0) {
+        // A read error (a reset close is ECONNRESET) ends the stream as a close does.
+        if (eof != nullptr) *eof = true;
+        break;
+      }
       out.append(buf, static_cast<std::size_t>(n));
     }
     return out;
