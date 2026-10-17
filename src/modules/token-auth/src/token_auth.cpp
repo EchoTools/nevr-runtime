@@ -87,7 +87,7 @@ static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/device";
 class DeviceAuth {
 public:
     void Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey);
-    bool TryLoadCachedToken();
+    bool TryLoadCachedToken(nevr_credential_stats::SignInReason* whyNot = nullptr);
     bool RunDeviceAuthFlow(bool is_server);
     // Sleeps wait on `cancel` and the flow stops once it is requested (nullptr: plain sleeps).
     bool RunDeviceAuthFlow(bool is_server, nevr_token_auth::AuthCancellation* cancel,
@@ -149,12 +149,17 @@ bool DeviceAuth::IsAuthenticated() const {
     return !m_token.empty() && static_cast<uint64_t>(time(nullptr)) < m_tokenExpiry;
 }
 
-bool DeviceAuth::TryLoadCachedToken() {
+bool DeviceAuth::TryLoadCachedToken(nevr_credential_stats::SignInReason* whyNot) {
+    // #562: why a false return was false: no cache at all, or one that was present and could not be used.
+    if (whyNot != nullptr) *whyNot = nevr_credential_stats::SignInReason::kCacheUnusable;
     auto auth = LoadCachedAuthToken();
     // The access token is deliberately NOT persisted to disk — only the
     // refresh token is saved.  Check for either token before bailing so
     // the refresh path below is reachable when only the refresh token exists.
-    if (auth.token.empty() && auth.refresh_token.empty()) return false;
+    if (auth.token.empty() && auth.refresh_token.empty()) {
+        if (whyNot != nullptr) *whyNot = nevr_credential_stats::SignInReason::kNoCache;
+        return false;
+    }
 
     if (auth.HasValidToken()) {
         m_token = auth.token;
@@ -1119,7 +1124,8 @@ void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
     s_auth->Configure(cfg.url, cfg.httpKey, cfg.serverKey);
 
     // Try cached token first (with refresh if expired)
-    if (s_auth->TryLoadCachedToken()) {
+    nevr_credential_stats::SignInReason whyNoCache = nevr_credential_stats::SignInReason::kNoCache;
+    if (s_auth->TryLoadCachedToken(&whyNoCache)) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Using cached credentials -- no login needed");
         nevr_credential_stats::NoteCacheReused();  // #562: the credential_cache self-check says so
         s_authAttempted = true;
@@ -1128,7 +1134,7 @@ void nevr_token_auth::Init(uintptr_t /*base_addr*/, bool is_server) {
         // No cached credentials — run device auth now, before game connections start.
         s_authAttempted = true;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-        nevr_credential_stats::NoteSignInRequired(nevr_credential_stats::SignInReason::kNoCache);  // #562 (placeholder: the reason is split in the next commit)
+        nevr_credential_stats::NoteSignInRequired(whyNoCache);  // #562: no cache, or one that could not be used
         (void)PublishAuthSnapshot(nullptr, AuthReadiness::AwaitingUser);
         if (!RunDeviceAuthFlowOffBootstrapThread(*s_auth)) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
