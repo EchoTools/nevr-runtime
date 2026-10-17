@@ -129,11 +129,15 @@ local server). The mutex covers both. `BootstrapDiagnostics::Prepare` creates it
 process, at attach (`CreateMutexW`, a kernel32 call; that it is safe under the loader lock is an
 inference, not a measurement); an append only loads that handle and never creates it, so the
 crash callback creates no mutex. With no handle (`CreateMutexW` failed) appends run without the
-lock, and the failure is journalled as a `log_mutex` attach step. The wait is bounded (500 ms) and the
-mutex is recursive for its owner. The first wait that times out marks the lock unreliable and
-every later append in the process writes without waiting, so a holder that never releases
-costs one crash at most one 500 ms wait in total (a crash writes up to four records), and the
-record is never blocked: it is written without the lock. The append that marks the lock
+lock, and the failure is journalled as a `log_mutex` attach step. Each wait is bounded (500 ms) and
+the mutex is recursive for its owner. A wait that times out or fails marks the lock unreliable and
+every later append in the process writes without waiting, so a holder that never releases costs a
+crash one 500 ms wait. A wait that ends with the lock acquired is not capped per process: a crash
+writes up to four records, and a holder that releases inside every wait costs up to four waits of
+at most 500 ms each. No per-process budget exists on purpose: it would stop serializing appends
+after waits that succeeded, which is the ordinary contended case (a client and a local server
+sharing a prefix). In every case the record is not blocked: it is written, without the lock when
+the wait did not end owned. The append that marks the lock
 unreliable also writes one `host_log_lock` record saying so.
 
 Two builders produce those lines. `nlohmann::json` builds the records written after
@@ -152,8 +156,8 @@ reporter, so the host never loads it. It tries the three crash directories in or
 holds an atomic re-entry guard that is cleared on return, and falls back to a
 fixed-size text file when no dump can be written. No logger or runtime load is involved.
 Its records go through `BootstrapDiagnostics::AppendLine`, which opens and creates the log
-file and its directories, and waits on the log mutex above (at most one 500 ms wait per
-process); it creates no mutex. Whether `CreateFileW`, `CreateMutexW` or `MiniDumpWriteDump`
+file and its directories, and waits on the log mutex above (bounded as described there); it
+creates no mutex. Whether `CreateFileW`, `CreateMutexW` or `MiniDumpWriteDump`
 allocate has not been measured. `src/runtime/tests/host_crash` faults a child process through the
 real mangled export, with `nevr.dll` absent, ABI-incompatible, entry-less,
 failing in `initialize` and compatible, with each destination blocked in turn, and

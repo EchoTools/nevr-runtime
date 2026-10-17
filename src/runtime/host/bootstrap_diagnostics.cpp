@@ -103,9 +103,10 @@ void ReportBuildFailure(const char* event, const char* what) noexcept {
 // unserialized, and Prepare journalled why).
 std::atomic<HANDLE> g_log_mutex{nullptr};
 
-// Set by the first append whose wait on the mutex does not end owned. Later appends in the process
-// write without waiting, so a holder that never releases costs one wait per process, not one per
-// record (a crash writes up to four records).
+// Set by the first append whose wait on the mutex does not end owned (it timed out or failed). Later
+// appends in the process write without waiting, so a holder that never releases costs one wait, not
+// one per record. Waits that end owned are not counted: each is bounded by kBootstrapLogLockWaitMs and
+// there is no per-process budget.
 std::atomic<bool> g_log_lock_unreliable{false};
 
 #if defined(NEVR_HOST_TESTING)
@@ -436,8 +437,8 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   if (file == INVALID_HANDLE_VALUE) return false;
 
   // Serialize the write only, with the mutex Prepare() created (none: the write is unserialized).
-  // The wait is at most kBootstrapLogLockWaitMs, and only the first wait that times out in the
-  // process pays it: after that the lock is treated as unreliable and appends write without it.
+  // Each wait is at most kBootstrapLogLockWaitMs. The first wait that does not end owned marks the
+  // lock unreliable, and from then on appends in the process write without waiting.
   HANDLE lock = g_log_mutex.load(std::memory_order_acquire);
   bool locked = false;
   bool marked_unreliable = false;

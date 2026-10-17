@@ -18,9 +18,9 @@
 // No NEVR logger and no runtime load here: the process is faulting. The records are built in a
 // fixed stack buffer by JsonLine and appended through BootstrapDiagnostics::AppendLine. That call
 // opens and creates the log file and the crash directories (CreateFileW, CreateDirectoryW), and
-// waits on the log mutex that attach created (it creates no mutex) for at most one
-// kBootstrapLogLockWaitMs in the whole process. Whether those calls, or MiniDumpWriteDump,
-// allocate is not measured. The reentrancy guard below is an atomic flag, not a lock.
+// waits on the log mutex that attach created (it creates no mutex). Each wait is bounded by
+// kBootstrapLogLockWaitMs, and a wait that times out makes later appends skip the wait; waits that end
+// owned are not capped per process. Whether those calls, or MiniDumpWriteDump, allocate is not measured. The reentrancy guard below is an atomic flag, not a lock.
 
 #include "runtime/host/bootstrap_diagnostics.h"
 

@@ -174,20 +174,28 @@ TEST(HostCrashCapture, ANestedCaptureIsSuppressedAndRecorded) {
 // A crash before the first flush is the first write in the process. The capture only uses the log
 // mutex that attach created: it creates none.
 TEST(HostCrashCapture, TheCaptureCreatesNoLogMutexWhenItIsTheFirstToWrite) {
-  const std::wstring local = MakeTempDir(L"local");
-  Prepared prepared(local, MakeTempDir(L"temp"));
-  BootstrapDiagnostics::ResetLogLockForTest();
-  const auto exists = [] {
-    HANDLE found = OpenMutexW(SYNCHRONIZE, FALSE, nevr_host::kBootstrapLogMutexName);
+  // A name of this test's own, so no other process in the wineserver can make it fail or pass.
+  wchar_t name[128] = {};
+  swprintf(name, 128, L"Local\\nevr-test-log-capture-%lu-%llu", static_cast<unsigned long>(GetCurrentProcessId()),
+           static_cast<unsigned long long>(GetTickCount64()));
+  const auto exists = [&name] {
+    HANDLE found = OpenMutexW(SYNCHRONIZE, FALSE, name);
     if (found != nullptr) CloseHandle(found);
     return found != nullptr;
   };
-  ASSERT_FALSE(exists()) << "another process holds the production log mutex: run one test process at a time";
+  BootstrapDiagnostics::ResetLogLockForTest();
+  BootstrapDiagnostics::SetLogMutexNameForTest(name);
+  const std::wstring local = MakeTempDir(L"local");
+  Prepared prepared(local, MakeTempDir(L"temp"));
+  EXPECT_TRUE(exists()) << "attach did not create the log mutex";
+  BootstrapDiagnostics::ResetLogLockForTest();  // the crash comes before any attach created it
+  ASSERT_FALSE(exists());
   ASSERT_TRUE(prepared.capture.TryEnter());
   EXPECT_FALSE(prepared.capture.Capture(nullptr));
   prepared.capture.Exit();
   EXPECT_FALSE(exists()) << "the crash path created the log mutex";
   EXPECT_EQ(CrashRecords(local).size(), 1u);
+  BootstrapDiagnostics::SetLogMutexNameForTest(nullptr);
   prepared.diagnostics.Prepare(GetModuleHandleW(nullptr));  // leave the process attached for later tests
 }
 

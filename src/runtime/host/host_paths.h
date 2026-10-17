@@ -19,9 +19,10 @@ inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
 // recursive for the thread that owns it (a crash inside an append can still write its record) and
 // has a timed wait, so a holder that never releases never blocks a write: the line is written
 // without the lock. The mutex is created once, by BootstrapDiagnostics::Prepare at attach, never by
-// an append. The first wait that times out costs kBootstrapLogLockWaitMs; it marks the lock
-// unreliable and every later append in the process writes without waiting, so one crash (up to four
-// records) costs at most that one wait.
+// an append. Each append's wait is bounded by kBootstrapLogLockWaitMs. A wait that times out (or fails)
+// marks the lock unreliable, and every later append in the process writes without waiting. A wait that
+// ends with the lock acquired is not capped per process: a crash of up to four records can wait four
+// times, each at most kBootstrapLogLockWaitMs, if a holder releases inside every wait.
 inline constexpr wchar_t kBootstrapLogMutexName[] = L"Local\\nevr-host-bootstrap-log";
 inline constexpr unsigned long kBootstrapLogLockWaitMs = 500;
 

@@ -21,10 +21,12 @@
 //   - RecordAttach() stores one step in a fixed journal. No heap, no I/O, no lock:
 //     safe under the loader lock. Nothing is written until FlushAttachJournal().
 //   - AppendLine() opens (and creates) the log file, writes once and closes, from the crash
-//     callback too. It creates no mutex: it waits on the one Prepare() created, for at most
-//     kBootstrapLogLockWaitMs, and only the first wait that times out in the process pays it (later
-//     appends write without the lock, after one host_log_lock record). Whether the file calls or the
-//     wait allocate is not measured. No logger.
+//     callback too. It creates no mutex: it waits on the one Prepare() created. Each wait is bounded by
+//     kBootstrapLogLockWaitMs; a wait that times out or fails marks the lock unreliable (one
+//     host_log_lock record) and later appends in the process write without waiting. A wait that
+//     ends owned is not capped per process: with a holder that releases inside every wait, a
+//     crash of up to four records waits up to four times. Whether the file calls or the wait
+//     allocate is not measured. No logger.
 //   - Emit(), FlushAttachJournal() build records with nlohmann::json and so run
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.
@@ -124,8 +126,8 @@ class BootstrapDiagnostics {
   DiagnosticDestination Emit(const nlohmann::json& record) noexcept;
 
   /// Append an already-formatted line (ends in '\n'), also from the crash callback. It creates no
-  /// mutex and waits on the log mutex for one kBootstrapLogLockWaitMs at most per process (see the file
-  /// comment).
+  /// mutex; its wait on the log mutex is bounded by kBootstrapLogLockWaitMs, and a wait that does not end
+  /// owned makes later appends skip the wait (see the file comment).
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
