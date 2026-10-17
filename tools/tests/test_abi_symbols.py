@@ -330,6 +330,12 @@ class AbiSymbolsTest(unittest.TestCase):
         for text, value in [("serverdb", 0x25e886012ced8064), ("rwd_tint_0000", 0x74d228d09dc5dc86),
                             ("NEVRProtobufJSONMessageV1", 0xc6b3710cd9c4ef47), ("main", 0xc8c33e48377217be)]:
             self.assertEqual(g.csymbol64_hash(text), value, "CSymbol64(%r)" % text)
+        # A byte >= 0x80 is sign-extended before the table XOR (echovr.exe 0x1400ce199 MOVSX; libr15.so 0x11cc760
+        # sxtb), and a str is hashed as its UTF-8 bytes, as the game's byte strings are (#657).
+        for text, value in [(b"caf\xc3\xa9", 0xcd0714df62754f5f), ("caf\u00e9", 0xcd0714df62754f5f),
+                            (b"\xff\xfe", 0x1f17d45f0697bb92), ("main_menu", 0x1509ee27440e1d7b),
+                            (b"MAIN_MENU", 0x1509ee27440e1d7b), ("", 0xFFFFFFFFFFFFFFFF)]:
+            self.assertEqual(g.csymbol64_hash(text), value, "CSymbol64(%r)" % (text,))
 
     def test_the_header_holds_exactly_the_constants_this_test_names(self):
         want = self.expected()

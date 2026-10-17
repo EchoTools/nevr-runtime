@@ -60,11 +60,19 @@ def gen_cs64_table() -> List[int]:
 CS64_TABLE = gen_cs64_table()
 
 
-def csymbol64_hash(s: str, seed: int = 0xFFFFFFFFFFFFFFFF) -> int:
-    for ch in s:
-        c = ord(ch)
+def csymbol64_hash(s, seed: int = 0xFFFFFFFFFFFFFFFF) -> int:
+    """CSymbol64 of a byte string (src/abi/symbol_hash.h).
+
+    The game hashes bytes and sign-extends each one to 64 bits before the table XOR (echovr.exe 0x1400ce199
+    MOVSX; libr15.so 0x11cc760 sxtb). A str is hashed as its UTF-8 bytes; it used to be hashed per code point
+    with no sign extension, which gave the service's value, not the game's, for any non-ASCII name (#657).
+    """
+    data = s.encode("utf-8") if isinstance(s, str) else bytes(s)
+    for c in data:
         if 0x41 <= c <= 0x5A:
             c += 0x20
+        if c >= 0x80:
+            c |= 0xFFFFFFFFFFFFFF00
         seed = c ^ CS64_TABLE[(seed >> 56) & 0xFF] ^ ((seed << 8) & 0xFFFFFFFFFFFFFFFF)
     return seed
 
