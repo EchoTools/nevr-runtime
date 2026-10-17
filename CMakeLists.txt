@@ -90,6 +90,13 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ccache refuses a compile that carries CMake's C++20 module-scan flags (-fmodules-ts, -fmodule-mapper, -fdeps-*): it counts it
+# uncacheable (unsupported_compiler_option). No source here is a module, so a build that goes through a ccache launcher skips the scan;
+# a build without one is unchanged.
+if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "ccache")
+  set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 # MSVC-specific settings
 if(MSVC)
   # Add LTO for Release
