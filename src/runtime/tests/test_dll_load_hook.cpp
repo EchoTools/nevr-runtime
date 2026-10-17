@@ -118,7 +118,7 @@ VOID Log(EchoVR::LogLevel, const CHAR*, ...) {}
 // guard's records. The guard keeps the first record it finds for an address, so a record left by one
 // test (a fake install records LoadLibraryW's unhooked bytes) made IsOurDetour false for the next test
 // that hooks LoadLibraryW for real (#633). The first test starts from the process's clean state, and SetUp
-// fails a test that starts from anything else.
+// fails a test that starts with a trampoline or a hook-guard record left behind.
 class DllLoadHookIsolation : public testing::Test {
  protected:
   // Checks, does not reset: a test that leaves a trampoline or a hook-guard record behind fails the next one here.
@@ -509,7 +509,6 @@ TEST_F(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFir
   // Everything this test reads is reset here, so an earlier run of it (--gtest_repeat) leaves nothing behind.
   g_notifiedUnderLoaderLock = false;
   g_fixturePatches = 0;
-  g_observerRuns = 0;
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   ASSERT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
