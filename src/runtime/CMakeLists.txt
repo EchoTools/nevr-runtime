@@ -315,6 +315,256 @@ if(BUILD_TESTING)
     target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
 
+    # The host <-> runtime descriptor (core/runtime_abi.h): header-only validators that BugSplat64.dll
+    # runs on nevr.dll's descriptor, and nevr.dll on the host's context.
+    add_executable(test_runtime_abi tests/test_runtime_abi.cpp)
+    set_source_files_properties(tests/test_runtime_abi.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
+
+    # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
+    # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
+    # recorder, the minidump capture, the runtime load/validate state machine and the
+    # GameMainWrapper rendezvous. It is a static library of its own so the tests
+    # drive the objects the host links and not a copy. Built only for the tests until the
+    # target split links it into BugSplat64.dll.
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_library(nevr_host_core STATIC
+      host/bootstrap_diagnostics.cpp
+      host/crash_capture.cpp
+      host/host_entry.cpp
+      host/runtime_load.cpp
+      host/runtime_rendezvous.cpp
+      lifecycle/game_image_guard.cpp)
+    target_compile_options(nevr_host_core PRIVATE -Werror)
+    target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    # The host units carry test seams (RuntimeRendezvous::Seams, SetEmitLoadFailureForTest, the emit
+    # sink) that exist only under NEVR_HOST_TESTING. This library is built for the tests alone; the
+    # target that builds the host into BugSplat64.dll must not define it
+    # (tools/tests/test_host_test_seams.py).
+    target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
+
+    # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
+    # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
+    # The host (the production host units behind a shim, built as BugSplat64.dll) validates the game image and the
+    # real GameMainWrapper prologue and installs ONE MinHook detour from
+    # DLL_PROCESS_ATTACH; it loads the versioned runtime (core/runtime_abi.h) on
+    # the first rendezvous call. test_bootstrap_attach.exe drives twelve
+    # dynamic-load child scenarios; test_bootstrap_attach_static.exe imports the
+    # host statically, as echovr.exe does, so attach runs before main.
+    set(BOOTSTRAP_ATTACH_DIR "${CMAKE_BINARY_DIR}/bin/bootstrap-attach")
+    set(BOOTSTRAP_ATTACH_FIXTURE_DIR "${BOOTSTRAP_ATTACH_DIR}/fixtures")
+
+    function(bootstrap_attach_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    # The host of the gate is the production host units (nevr_host_core) behind a shim DllMain.
+    add_library(test_bootstrap_attach_host SHARED tests/bootstrap_attach/host_shim.cpp)
+    target_link_libraries(test_bootstrap_attach_host PRIVATE nevr_host_core)
+    set_target_properties(test_bootstrap_attach_host PROPERTIES
+      PREFIX "" OUTPUT_NAME "BugSplat64")
+    bootstrap_attach_output(test_bootstrap_attach_host "${BOOTSTRAP_ATTACH_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    function(add_bootstrap_attach_fixture target fixture_dir)
+      add_library(${target} SHARED tests/bootstrap_attach/runtime_probe.cpp)
+      target_link_libraries(${target} PRIVATE minhook)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      bootstrap_attach_output(${target} "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_good good)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_bad_version bad-version
+      BOOTSTRAP_PROBE_BAD_VERSION)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_init_failure init-failure
+      BOOTSTRAP_PROBE_INIT_FAILURE)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_reenter_init reenter-init
+      BOOTSTRAP_PROBE_REENTER_INIT)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_slow_init slow-init
+      BOOTSTRAP_PROBE_SLOW_INIT)
+
+    add_library(test_bootstrap_attach_runtime_missing_entry SHARED
+      tests/bootstrap_attach/runtime_missing_entry.cpp)
+    set_target_properties(test_bootstrap_attach_runtime_missing_entry PROPERTIES
+      PREFIX "" OUTPUT_NAME "nevr")
+    bootstrap_attach_output(test_bootstrap_attach_runtime_missing_entry
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
+
+    set(BOOTSTRAP_BAD_IMAGE
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr.dll")
+    add_custom_command(OUTPUT "${BOOTSTRAP_BAD_IMAGE}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach/runtime_bad_image.txt"
+        "${BOOTSTRAP_BAD_IMAGE}"
+      DEPENDS tests/bootstrap_attach/runtime_bad_image.txt
+      VERBATIM)
+    add_custom_target(test_bootstrap_attach_bad_image ALL
+      DEPENDS "${BOOTSTRAP_BAD_IMAGE}")
+
+    add_executable(test_bootstrap_attach_static tests/bootstrap_attach/attach_test.cpp)
+    target_compile_definitions(test_bootstrap_attach_static PRIVATE BOOTSTRAP_PROBE_STATIC_IMPORT)
+    target_link_libraries(test_bootstrap_attach_static PRIVATE test_bootstrap_attach_host
+      nlohmann_json::nlohmann_json)
+    bootstrap_attach_output(test_bootstrap_attach_static "${BOOTSTRAP_ATTACH_DIR}")
+
+    add_executable(test_bootstrap_attach tests/bootstrap_attach/attach_test.cpp)
+    target_link_libraries(test_bootstrap_attach PRIVATE nlohmann_json::nlohmann_json)
+    bootstrap_attach_output(test_bootstrap_attach "${BOOTSTRAP_ATTACH_DIR}")
+    add_dependencies(test_bootstrap_attach
+      test_bootstrap_attach_host
+      test_bootstrap_attach_static
+      test_bootstrap_attach_runtime_good
+      test_bootstrap_attach_runtime_bad_version
+      test_bootstrap_attach_runtime_init_failure
+      test_bootstrap_attach_runtime_reenter_init
+      test_bootstrap_attach_runtime_slow_init
+      test_bootstrap_attach_runtime_missing_entry
+      test_bootstrap_attach_bad_image)
+
+    add_executable(test_host_json tests/test_host_json.cpp)
+    set_source_files_properties(tests/test_host_json.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_json PRIVATE -Werror)
+    target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
+    target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)
+    target_link_libraries(test_bootstrap_diagnostics PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_bootstrap_diagnostics DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_crash_capture tests/test_host_crash_capture.cpp)
+    target_compile_options(test_host_crash_capture PRIVATE -Werror)
+    target_link_libraries(test_host_crash_capture PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_crash_capture DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_runtime_load tests/test_host_runtime_load.cpp)
+    target_compile_options(test_host_runtime_load PRIVATE -Werror)
+    target_link_libraries(test_host_runtime_load PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_runtime_load DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_rendezvous tests/test_host_rendezvous.cpp)
+    target_compile_options(test_host_rendezvous PRIVATE -Werror)
+    target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_minidump tests/test_host_minidump.cpp)
+    target_compile_options(test_host_minidump PRIVATE -Werror)
+    target_include_directories(test_host_minidump PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_host_minidump PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_minidump DISCOVERY_MODE PRE_TEST)
+
+    # Crash harness: a BugSplat64.dll shim (the production host objects behind the real
+    # mangled createReport export, plus runtime-load test seams) and child scenarios that
+    # fault through it.
+    set(HOST_CRASH_DIR "${CMAKE_BINARY_DIR}/bin/host-crash")
+    set(HOST_CRASH_FIXTURE_DIR "${HOST_CRASH_DIR}/fixtures")
+
+    function(host_crash_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_host_crash_shim SHARED
+      tests/host_crash/shim.cpp
+      "tests/host_crash/shim.def")
+    target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
+
+    function(add_host_crash_fixture target fixture_dir)
+      add_library(${target} SHARED tests/host_crash/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      host_crash_output(${target} "${HOST_CRASH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_host_crash_fixture(test_host_crash_runtime_good good)
+    add_host_crash_fixture(test_host_crash_runtime_bad_version bad-version
+      HOST_CRASH_BAD_VERSION)
+    add_host_crash_fixture(test_host_crash_runtime_init_failure init-failure
+      HOST_CRASH_INIT_FAILURE)
+
+    add_library(test_host_crash_runtime_missing_entry SHARED
+      tests/host_crash/runtime_missing_entry.cpp)
+    set_target_properties(test_host_crash_runtime_missing_entry PROPERTIES
+      PREFIX "" OUTPUT_NAME "nevr")
+    host_crash_output(test_host_crash_runtime_missing_entry
+      "${HOST_CRASH_FIXTURE_DIR}/missing-entry")
+
+    add_executable(test_host_crash tests/host_crash/host_crash_test.cpp)
+    target_link_libraries(test_host_crash PRIVATE nlohmann_json::nlohmann_json)
+    host_crash_output(test_host_crash "${HOST_CRASH_DIR}")
+    add_dependencies(test_host_crash
+      test_host_crash_shim
+      test_host_crash_runtime_good
+      test_host_crash_runtime_bad_version
+      test_host_crash_runtime_init_failure
+      test_host_crash_runtime_missing_entry)
+
+    # Early GameMainWrapper rendezvous harness for the BugSplat64.dll / nevr.dll
+    # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Decision: the rendezvous is
+    # the game's main wrapper"). The host shim (BugSplat64.dll) calls the production host
+    # entry points: one detour from DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on
+    # the first call. test_rendezvous.exe drives valid / missing / reenter / bad-prologue
+    # child scenarios plus the NEVR_SetGameModule external contract.
+    set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
+    set(RENDEZVOUS_FIXTURE_DIR "${RENDEZVOUS_DIR}/fixtures")
+
+    function(rendezvous_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_rendezvous_host SHARED tests/rendezvous/host_shim.cpp)
+    target_link_libraries(test_rendezvous_host PRIVATE nevr_host_core)
+    set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    rendezvous_output(test_rendezvous_host "${RENDEZVOUS_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    function(add_rendezvous_fixture target fixture_dir)
+      add_library(${target} SHARED tests/rendezvous/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      rendezvous_output(${target} "${RENDEZVOUS_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_rendezvous_fixture(test_rendezvous_runtime_good good)
+    add_rendezvous_fixture(test_rendezvous_runtime_reenter reenter-init
+      RENDEZVOUS_PROBE_REENTER_INIT)
+
+    add_executable(test_rendezvous tests/rendezvous/rendezvous_test.cpp)
+    target_link_libraries(test_rendezvous PRIVATE nlohmann_json::nlohmann_json)
+    rendezvous_output(test_rendezvous "${RENDEZVOUS_DIR}")
+    add_dependencies(test_rendezvous
+      test_rendezvous_host
+      test_rendezvous_runtime_good
+      test_rendezvous_runtime_reenter)
+
     # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
     # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
     add_executable(test_export_trace
