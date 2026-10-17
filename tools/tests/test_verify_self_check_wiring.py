@@ -141,6 +141,12 @@ class SelfCheckWiringGateTest(unittest.TestCase):
         self.edit(root, "src/runtime/lifecycle/crash_recovery.cpp", "nevr_quit_check::OnGameLoopReturned(gameResult);", "")
         self.assertEqual(run(root).returncode, 1)
 
+    def test_a_process_end_report_that_is_not_registered_fails(self):
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp",
+                  "nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);", "")
+        self.assertEqual(run(root).returncode, 1)
+
     def test_losing_the_quest_wiring_fails(self):
         root = self.tree()
         self.edit(root, "src/quest/integration/production_steps.cpp", "ApplySelfCheck(&config.tap,", "(void)(&config.tap,")
