@@ -177,6 +177,19 @@ std::vector<nlohmann::json> Records(BootstrapDiagnostics& diagnostics, const std
   return records;
 }
 
+// What is in the file now, without flushing anything first.
+std::vector<nlohmann::json> RecordsOnDisk(const std::wstring& local) {
+  const std::string text = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
+  std::vector<nlohmann::json> records;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    records.push_back(nlohmann::json::parse(text.substr(start, end - start)));
+    start = end + 1;
+  }
+  return records;
+}
+
 const nlohmann::json* Step(const std::vector<nlohmann::json>& records, const char* step) {
   for (const nlohmann::json& record : records) {
     if (record.value("step", "") == step) return &record;
@@ -297,7 +310,8 @@ TEST(HostRendezvousInstall, ADetourEnteredWithoutAHookReturnsZeroAndLeavesARecor
   RuntimeRendezvous rendezvous;
   rendezvous.Prepare(GetModuleHandleW(nullptr), GetModuleHandleW(nullptr), diagnostics);
   EXPECT_EQ(RuntimeRendezvous::GameMainWrapperDetour(0x1234), 0);
-  const auto records = Records(diagnostics, local);
+  // On disk without anything else flushing: nothing follows this return, so the detour flushes it.
+  const auto records = RecordsOnDisk(local);
   const nlohmann::json* defect = Step(records, "detour_entry");
   ASSERT_NE(defect, nullptr);
   EXPECT_EQ(defect->at("outcome"), "defect");

@@ -65,6 +65,7 @@ enum class AttachNote : std::uint32_t {
   kInstallWaitTimeout = 4,       // install_wait: the install did not finish in time
   kDetourWithoutHook = 5,        // detour_entry: entered with no trampoline published
   kDuplicateSetGameModule = 6,   // set_game_module: already called once
+  kSetGameModuleAfterAttach = 7, // set_game_module: DllMain already attached to the process image
 };
 
 /// The MinHook call a hook-install step reached (the one that failed, or enable on success).
@@ -134,9 +135,15 @@ class BootstrapDiagnostics {
   std::size_t JournalFlushed() const { return flushed_upto_.load(); }
   std::size_t JournalSize() const { return journal_count_.load(); }
   std::size_t JournalDropped() const { return dropped_.load(); }
+#if defined(NEVR_HOST_TESTING)
   /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
   /// flush has returned; more means an entry was claimed twice.
   std::size_t JournalClaimed() const { return claimed_.load(); }
+
+  /// Replace the output: every record Emit would write goes to `sink` instead. Null restores the file.
+  using EmitSink = void (*)(const nlohmann::json& record);
+  static void SetEmitSinkForTest(EmitSink sink);
+#endif
 
  private:
   struct JournalEntry {
@@ -147,6 +154,9 @@ class BootstrapDiagnostics {
     AttachNote note;
     bool has_actual;
     unsigned char actual[kGameMainWrapperPrologueSize];
+    // Stored last, with release ordering: RecordAttach reserves a slot before it fills it, so a flush
+    // must not read an entry until this says it is complete.
+    std::atomic<std::uint32_t> ready;
   };
 
   void EmitJournalEntry(const JournalEntry& entry);
@@ -164,7 +174,9 @@ class BootstrapDiagnostics {
   JournalEntry journal_[kJournalCapacity] = {};
   std::atomic<std::size_t> journal_count_{0};
   std::atomic<std::size_t> flushed_upto_{0};
+#if defined(NEVR_HOST_TESTING)
   std::atomic<std::size_t> claimed_{0};
+#endif
   std::atomic<std::size_t> dropped_{0};           // entries the full journal had no room for
   std::atomic<std::size_t> dropped_reported_{0};  // the total the last overflow record carried
 };

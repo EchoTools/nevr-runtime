@@ -497,9 +497,11 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
 }
 
 int RunSetGameModuleUnsupported() {
-  // Load the shim (its DllMain installs on the supported synthetic image), then
-  // call NEVR_SetGameModule with the test executable — an unsupported module. The
-  // guard must terminate with the stable code.
+  // Call NEVR_SetGameModule with the test executable — an unsupported module. The guard must
+  // terminate with the stable code.
+  // Launcher mode: the host did not attach to this process image, so NEVR_SetGameModule is the first
+  // decision about the game image (after a direct-import attach it is refused instead).
+  g_launcher_mode = 1;
   const std::wstring host_path = ExecutableDirectory() + L"BugSplat64.dll";
   HMODULE host = LoadLibraryW(host_path.c_str());
   Require(host != nullptr, "host shim failed to load");
@@ -537,6 +539,14 @@ int RunSetGameModuleSupported() {
   return 0;
 }
 
+// The records the host has written so far to this child's LOCALAPPDATA, as the parent will read them.
+std::vector<nlohmann::json> RecordsOnDisk() {
+  wchar_t local[MAX_PATH] = {};
+  const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+  Require(length != 0 && length < MAX_PATH, "the scenario's LOCALAPPDATA is not set");
+  return ReadHostRecords(std::wstring(local, length));
+}
+
 int RunSetGameModuleTwice() {
   // A second NEVR_SetGameModule is refused and recorded: it neither prepares the host again nor
   // journals the image check a second time.
@@ -550,9 +560,31 @@ int RunSetGameModuleTwice() {
   Require(set_game_module != nullptr, "NEVR_SetGameModule export did not resolve");
   set_game_module(reinterpret_cast<HMODULE>(g_image));
   set_game_module(reinterpret_cast<HMODULE>(g_image));
+  // The refusal is on disk now, before anything else could flush it: the second call flushes itself.
+  Require(Find(RecordsOnDisk(), "host_attach", "set_game_module", "refused") >= 0,
+          "a refused NEVR_SetGameModule was not flushed by the call that refused it");
   CallTarget(kCommandLine);
   ValidateDispatch(Snapshot(), true, 0);
   std::printf("rendezvous test: PASS: NEVR_SetGameModule called twice\n");
+  return 0;
+}
+
+int RunSetGameModuleAfterAttach() {
+  // The host attached to this (synthetic) game image from DllMain, so NEVR_SetGameModule has nothing
+  // left to decide: it is refused and recorded, and the image check is not journalled again.
+  g_image = BuildGameImage(false);
+  Require(g_image != nullptr, "could not build the synthetic game image");
+  const std::wstring host_path = ExecutableDirectory() + L"BugSplat64.dll";
+  HMODULE host = LoadLibraryW(host_path.c_str());
+  Require(host != nullptr, "host shim failed to load");
+  const auto set_game_module = reinterpret_cast<void (*)(HMODULE)>(GetProcAddress(host, "NEVR_SetGameModule"));
+  Require(set_game_module != nullptr, "NEVR_SetGameModule export did not resolve");
+  set_game_module(reinterpret_cast<HMODULE>(g_image));
+  Require(Find(RecordsOnDisk(), "host_attach", "set_game_module", "refused") >= 0,
+          "NEVR_SetGameModule after a direct-import attach was not refused and flushed");
+  CallTarget(kCommandLine);
+  ValidateDispatch(Snapshot(), true, 0);
+  std::printf("rendezvous test: PASS: NEVR_SetGameModule after a direct-import attach\n");
   return 0;
 }
 
@@ -671,6 +703,24 @@ int RunSuite() {
             "the first NEVR_SetGameModule's install and load were not recorded");
   }
 
+  {
+    StageRuntimeFixture(root, L"good");
+    const std::wstring dir = base + L"\\set-game-module-after-attach";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --set-game-module-after-attach",
+             "set-game-module-after-attach", 0);
+    const std::vector<nlohmann::json> records = ReadHostRecords(dir);
+    int images = 0;
+    for (const nlohmann::json& record : records) images += record.value("step", "") == "image_check" ? 1 : 0;
+    Require(images == 1, "NEVR_SetGameModule after a direct-import attach journalled the image check again");
+    const int refused = Find(records, "host_attach", "set_game_module", "refused");
+    Require(refused >= 0 && records[static_cast<std::size_t>(refused)].at("reason") == "attached_at_dll_main" &&
+                records[static_cast<std::size_t>(refused)].at("next") == "ignored",
+            "NEVR_SetGameModule after a direct-import attach was not recorded as refused");
+  }
+
   std::printf("rendezvous test: PASS: all %llu scenarios + NEVR_SetGameModule contract\n",
               static_cast<unsigned long long>(sizeof(scenarios) / sizeof(scenarios[0])));
   return 0;
@@ -691,6 +741,9 @@ int main(int argc, char** argv) {
   }
   if (argc == 2 && std::strcmp(argv[1], "--set-game-module-twice") == 0) {
     return RunSetGameModuleTwice();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--set-game-module-after-attach") == 0) {
+    return RunSetGameModuleAfterAttach();
   }
   if (argc != 1) {
     Fail("usage: test_rendezvous.exe [--child <scenario> | --set-game-module-unsupported | "

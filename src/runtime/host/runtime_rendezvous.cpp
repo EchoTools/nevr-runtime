@@ -8,10 +8,39 @@
 
 namespace nevr_host {
 
+#if defined(NEVR_HOST_TESTING)
 RuntimeRendezvous::TestSeams& RuntimeRendezvous::Seams() {
   static TestSeams seams;
   return seams;
 }
+#endif
+
+namespace {
+
+// Production behaviour is the constants; the test targets can change them through the seams.
+bool FailEventCreate() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_event_create;
+#else
+  return false;
+#endif
+}
+bool FailHookBytesRead() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_hook_bytes_read;
+#else
+  return false;
+#endif
+}
+DWORD InstallWaitMs() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().install_wait_ms;
+#else
+  return RuntimeRendezvous::kInstallWaitMs;
+#endif
+}
+
+}  // namespace
 
 RuntimeRendezvous::InstallWait RuntimeRendezvous::AwaitInstall() {
   const HANDLE install_done = install_done_.load(std::memory_order_acquire);
@@ -20,7 +49,7 @@ RuntimeRendezvous::InstallWait RuntimeRendezvous::AwaitInstall() {
             AttachNote::kInstallWaitUnavailable);
     return InstallWait::kUnavailable;
   }
-  if (WaitForSingleObject(install_done, Seams().install_wait_ms) != WAIT_OBJECT_0) {
+  if (WaitForSingleObject(install_done, InstallWaitMs()) != WAIT_OBJECT_0) {
     Journal(AttachStep::kInstallWait, AttachOutcome::kFailed, 0, nullptr, HookStage::kNone,
             AttachNote::kInstallWaitTimeout);
     return InstallWait::kTimeout;
@@ -44,7 +73,9 @@ RuntimeRendezvous* g_active_rendezvous = nullptr;
 
 }  // namespace
 
+#if defined(NEVR_HOST_TESTING)
 void RuntimeRendezvous::ResetActiveForTest() { g_active_rendezvous = nullptr; }
+#endif
 
 void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
                                 BootstrapDiagnostics& diagnostics) {
@@ -84,7 +115,7 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
   Journal(AttachStep::kPrologueCheck, AttachOutcome::kAccepted, 0, actual);
 
   // Created before the jump can go live; signalled by every way out of here.
-  HANDLE install_done = Seams().fail_event_create ? nullptr : CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE install_done = FailEventCreate() ? nullptr : CreateEventW(nullptr, TRUE, FALSE, nullptr);
   install_done_.store(install_done, std::memory_order_release);
   struct SignalOnExit {
     HANDLE event;
@@ -137,7 +168,7 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
   const bool read_call = ReadProcessMemory(GetCurrentProcess(), target, context_.wrapper_hook_bytes,
                                            sizeof(context_.wrapper_hook_bytes), &got) != FALSE &&
                          got == sizeof(context_.wrapper_hook_bytes);
-  const bool read_ok = read_call && !Seams().fail_hook_bytes_read;  // the seam: a read that came back unusable
+  const bool read_ok = read_call && !FailHookBytesRead();  // the seam: a read that came back unusable
   if (!read_ok) std::memset(context_.wrapper_hook_bytes, 0, sizeof(context_.wrapper_hook_bytes));
   MemoryBarrier();
   context_.wrapper_hook_bytes_valid = read_ok ? 1u : 0u;
@@ -186,6 +217,8 @@ std::int64_t RuntimeRendezvous::GameMainWrapperDetour(std::int64_t command_line)
   if (self->original_ == nullptr) {
     self->Journal(AttachStep::kDetourEntry, AttachOutcome::kFailed, 0, nullptr, HookStage::kNone,
                   AttachNote::kDetourWithoutHook);
+    // Nothing else will report it: this thread returns 0 into the game and no load follows.
+    if (self->diagnostics_ != nullptr) self->diagnostics_->FlushAttachJournal();
     return 0;
   }
 

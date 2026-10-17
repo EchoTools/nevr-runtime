@@ -338,6 +338,11 @@ if(BUILD_TESTING)
       lifecycle/game_image_guard.cpp)
     target_compile_options(nevr_host_core PRIVATE -Werror)
     target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    # The host units carry test seams (RuntimeRendezvous::Seams, SetEmitLoadFailureForTest, the emit
+    # sink) that exist only under NEVR_HOST_TESTING. This library is built for the tests alone; the
+    # target that builds the host into BugSplat64.dll must not define it
+    # (tools/tests/test_host_test_seams.py).
+    target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
     target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
 
     # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split

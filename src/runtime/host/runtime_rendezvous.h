@@ -72,17 +72,22 @@ class RuntimeRendezvous {
   // Test seam: whether Install has already published a trampoline.
   bool Installed() const { return original_ != nullptr; }
 
-  // Test seams: the context Install built, and the three things a test must be able to make fail
-  // or run short. All default to production behaviour.
+#if defined(NEVR_HOST_TESTING)
+  // Test seams, compiled only into the test targets (NEVR_HOST_TESTING): the context Install built, and the
+  // things a test must be able to make fail or run short. All default to production behaviour.
   struct TestSeams {
     bool fail_event_create = false;     // CreateEventW "fails": no install event
     bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
-    DWORD install_wait_ms = 5000;       // how long AwaitInstall waits
+    DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
   };
   static TestSeams& Seams();
   const NevrHostContext& Context() const { return context_; }
   void SetInstallEventForTest(HANDLE event) { install_done_.store(event, std::memory_order_release); }
   static void ResetActiveForTest();
+#endif
+
+  // How long a detour thread waits for the install to finish journalling.
+  static constexpr DWORD kInstallWaitMs = 5000;
 
  private:
   // The InitOnce body: load/validate/initialize the runtime exactly once. A

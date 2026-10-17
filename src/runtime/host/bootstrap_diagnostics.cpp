@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -89,6 +90,19 @@ void ReportBuildFailure(const char* event, const char* what) noexcept {
   if (length != 0) WriteFile(stderr_handle, buffer, static_cast<DWORD>(length), &written, nullptr);
 }
 
+// The log's mutex, created on first use and kept for the process: no allocation, so it is safe in
+// the crash callback. Null when it cannot be created (appends then run unserialized).
+HANDLE LogMutex() noexcept {
+  static std::atomic<HANDLE> mutex{nullptr};
+  HANDLE existing = mutex.load(std::memory_order_acquire);
+  if (existing != nullptr) return existing;
+  HANDLE created = CreateMutexW(nullptr, FALSE, kBootstrapLogMutexName);
+  if (created == nullptr) return nullptr;
+  if (mutex.compare_exchange_strong(existing, created)) return created;
+  CloseHandle(created);
+  return existing;
+}
+
 }  // namespace
 
 const char* DestinationName(DiagnosticDestination destination) noexcept {
@@ -151,11 +165,13 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   entry.note = note;
   entry.has_actual = actual != nullptr;
   if (actual != nullptr) std::memcpy(entry.actual, actual, kGameMainWrapperPrologueSize);
+  entry.ready.store(1, std::memory_order_release);
 }
 
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
   const std::size_t count = journal_count_.load();
   for (std::size_t at = 0; at < count && at < kJournalCapacity; ++at) {
+    if (journal_[at].ready.load(std::memory_order_acquire) == 0) continue;
     if (journal_[at].outcome != AttachOutcome::kAccepted) return true;
     if (journal_[at].note == AttachNote::kHookBytesUnread) return true;
   }
@@ -163,19 +179,31 @@ bool BootstrapDiagnostics::AttachDegraded() const noexcept {
 }
 
 void BootstrapDiagnostics::FlushAttachJournal() noexcept {
-  std::size_t count = journal_count_.load();
-  if (count > kJournalCapacity) count = kJournalCapacity;
-  // Each step is written once, ever. The written mark only moves forward: a flush that read an older
-  // count never pulls it back over entries another flush has already written.
+  // Claim the entries from the written mark up to the first one that is not complete yet. RecordAttach
+  // reserves a slot before it fills it, so the count can run ahead of what is written: an entry is
+  // emitted only once its ready flag says so, and the claim stops at the first gap so the mark never
+  // skips one. A later flush picks up what was still being written. The mark only moves forward: a
+  // flush that read an older mark never pulls it back over entries another flush has already written.
   std::size_t from = flushed_upto_.load();
-  while (from < count && !flushed_upto_.compare_exchange_weak(from, count)) {
+  std::size_t end = from;
+  for (;;) {
+    std::size_t count = journal_count_.load();
+    if (count > kJournalCapacity) count = kJournalCapacity;
+    end = from;
+    while (end < count && journal_[end].ready.load(std::memory_order_acquire) != 0) ++end;
+    if (end <= from) break;
+    if (flushed_upto_.compare_exchange_weak(from, end)) break;  // claimed [from, end)
   }
-  if (from < count) claimed_.fetch_add(count - from);
-  for (std::size_t at = from; at < count; ++at) {
-    try {
-      EmitJournalEntry(journal_[at]);
-    } catch (const std::exception& error) {
-      ReportBuildFailure("host_attach", error.what());
+  if (from < end) {
+#if defined(NEVR_HOST_TESTING)
+    claimed_.fetch_add(end - from);
+#endif
+    for (std::size_t at = from; at < end; ++at) {
+      try {
+        EmitJournalEntry(journal_[at]);
+      } catch (const std::exception& error) {
+        ReportBuildFailure("host_attach", error.what());
+      }
     }
   }
   // Entries the full journal had no room for: one record with the running total, whenever it grew.
@@ -226,6 +254,10 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
         record["reason"] = "already_called";
         record["next"] = "ignored";
         break;
+      case AttachNote::kSetGameModuleAfterAttach:
+        record["reason"] = "attached_at_dll_main";
+        record["next"] = "ignored";
+        break;
       case AttachNote::kNone:
       case AttachNote::kInstallWaitSignalled:
         break;
@@ -248,7 +280,21 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
   }
 }
 
+#if defined(NEVR_HOST_TESTING)
+namespace {
+std::atomic<BootstrapDiagnostics::EmitSink> g_emit_sink{nullptr};
+}  // namespace
+
+void BootstrapDiagnostics::SetEmitSinkForTest(EmitSink sink) { g_emit_sink.store(sink); }
+#endif
+
 DiagnosticDestination BootstrapDiagnostics::Emit(const nlohmann::json& record) noexcept {
+#if defined(NEVR_HOST_TESTING)
+  if (const EmitSink sink = g_emit_sink.load()) {
+    sink(record);
+    return DiagnosticDestination::kPrimary;
+  }
+#endif
   try {
     return EmitChecked(record);
   } catch (const std::exception& error) {
@@ -321,9 +367,18 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
 
+  // Serialize the write only. Wait at most kBootstrapLogLockWaitMs; a wait that ends otherwise
+  // writes without the lock rather than not at all.
+  HANDLE lock = LogMutex();
+  bool locked = false;
+  if (lock != nullptr) {
+    const DWORD waited = WaitForSingleObject(lock, kBootstrapLogLockWaitMs);
+    locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
+  }
   DWORD written = 0;
   const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
   FlushFileBuffers(file);
+  if (locked) ReleaseMutex(lock);
   CloseHandle(file);
   return ok != FALSE && written == length;
 }

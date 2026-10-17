@@ -71,8 +71,10 @@ RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_err
 // string) is replaced by a fixed-buffer marker line carrying the outcome and what failed.
 void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
 
-// Test seam: make the record builder throw, to reach the marker line.
+#if defined(NEVR_HOST_TESTING)
+// Test seam (compiled only into the test targets): make the record builder throw, to reach the marker line.
 void SetEmitLoadFailureForTest(bool fail) noexcept;
+#endif
 
 class RuntimeLoader {
  public:

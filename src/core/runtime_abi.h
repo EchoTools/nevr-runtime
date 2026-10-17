@@ -177,6 +177,8 @@ inline Status ValidateHostContext(const NevrHostContext* host) noexcept {
 
 /// True when the host's hook record may be registered with HookGuard: the writer's size covers
 /// the flag and the flag says the host read the bytes. False for an unread or malformed record.
+/// Only meaningful for a context ValidateHostContext accepted: it does not re-check the header,
+/// the target or the flag's range, so call it after that returned kOk.
 inline bool HookRecordUsable(const NevrHostContext* host) noexcept {
   return host != nullptr &&
          DescriptorCovers(&host->header, offsetof(NevrHostContext, wrapper_hook_bytes_valid) +

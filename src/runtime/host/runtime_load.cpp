@@ -149,15 +149,19 @@ RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_err
   return result;
 }
 
+#if defined(NEVR_HOST_TESTING)
 namespace {
 std::atomic<bool> g_fail_emit_for_test{false};
 }  // namespace
 
 void SetEmitLoadFailureForTest(bool fail) noexcept { g_fail_emit_for_test.store(fail); }
+#endif
 
 void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
   try {
+#if defined(NEVR_HOST_TESTING)
     if (g_fail_emit_for_test.load()) throw std::runtime_error("record builder failed (test seam)");
+#endif
     nlohmann::json record;
     record["event"] = "runtime_load";
     record["outcome"] = result.OutcomeName();

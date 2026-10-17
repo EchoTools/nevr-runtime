@@ -122,6 +122,13 @@ unavailable, failed). A line that fits no directory goes to `stderr`; a record i
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not
 truncated.
 
+Each append to the file holds a named mutex (`Local\nevr-host-bootstrap-log`) for the write
+only. Under Wine a `FILE_APPEND_DATA` write is not atomic, and concurrent appenders overwrote
+each other's lines, within one process and across two that share a prefix (a client and a
+local server). The mutex covers both. The wait is bounded (500 ms) and the mutex is recursive
+for its owner, so a crash inside an append, or a holder that never releases, delays the crash
+record by at most the wait and never blocks it: it is then written without the lock.
+
 Two builders produce those lines. `nlohmann::json` builds the records written after
 attach has returned. `nevr_host::JsonLine` (`src/runtime/host/host_json.h`) builds them
 in a caller-owned fixed buffer for the crash callback, which cannot allocate; every
@@ -192,10 +199,12 @@ The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, an
 the wrapper itself: `InstallGameMainHook` in `crash_recovery.cpp`, called from
 `initialize.cpp` in `DllMain`, detours the wrapper with `PatchDetour`, and
 `GameMainWrapperHook` holds the `setjmp`. The runtime has no `game_main` entry yet. The
-descriptor, the host units and their harnesses describe the target; the runtime's side of
-`game_main`, the removal of that hook and the move into `nevr.dll` come with the target
-split. Until then the harness runtimes are stand-ins whose `game_main` runs the original
-wrapper through the trampoline.
+descriptor, the host units and their harnesses describe the target. The flip comes first: the
+runtime adopts the host contract inside the one DLL, so `initialize` runs from the host's
+detour at the wrapper's entry, `game_main` replaces `GameMainWrapperHook`, and the runtime
+stops hooking the wrapper. The split follows: the runtime moves into `nevr.dll`. Until the
+flip the harness runtimes are stand-ins whose `game_main` runs the original wrapper through
+the trampoline.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.
@@ -209,11 +218,16 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 - Until the target split, `src/runtime/host/` (the entry points, the rendezvous, the
   diagnostics, the crash capture and the loader) is compiled only into the test
   harnesses. The shipped `BugSplat64.dll` does not use it.
-- After the split the runtime does not hook the main wrapper; the host's detour is the only
+- After the flip the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
   after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
   bytes were read. A context whose bytes were not read is accepted, because refusing to start
   over a HookGuard registration would take every runtime fix with it; the runtime registers
-  the hook only when `HookRecordUsable` says the record is usable. The host module is required. The shipped DLL does not do this yet ("The tree today").
+  the hook only when `HookRecordUsable` says the record is usable. When it says no, the
+  runtime logs a Warning in its own log, registers nothing for the wrapper (HookGuard then
+  cannot verify that hook, and the log says so) and keeps running; it does not register
+  zeros. `HookRecordUsable` does not re-check the header, the target or the flag's range, so
+  it is called only on a context `ValidateHostContext` accepted. The host module is required.
+  The shipped DLL does none of this yet ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.

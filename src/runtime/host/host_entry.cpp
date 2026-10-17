@@ -12,6 +12,7 @@ RuntimeRendezvous g_rendezvous;
 CrashCapture g_capture;
 HMODULE g_host_module = nullptr;
 std::atomic<bool> g_set_game_module_called{false};
+std::atomic<bool> g_attached_at_dll_main{false};
 
 void* RendezvousTarget(HMODULE game_module) {
   return reinterpret_cast<unsigned char*>(game_module) + kGameMainWrapperRva;
@@ -40,10 +41,19 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   g_diagnostics.Prepare(host_module);
   g_capture.Prepare(host_module, &g_diagnostics);
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary
+  g_attached_at_dll_main.store(true);  // the process image is checked (and hooked, or refused) here
   InstallRendezvous(game_module);
 }
 
 void SetGameModule(HMODULE game_module) noexcept {
+  // After a direct-import attach the image was already checked: a call now would prepare the host
+  // again and journal the image check a second time.
+  if (g_attached_at_dll_main.load()) {
+    g_diagnostics.RecordAttach(AttachStep::kSetGameModule, AttachOutcome::kRejected, 0, nullptr,
+                               HookStage::kNone, AttachNote::kSetGameModuleAfterAttach);
+    g_diagnostics.FlushAttachJournal();
+    return;
+  }
   // Once only: a second call would prepare the host again and journal the image check twice.
   if (g_set_game_module_called.exchange(true)) {
     g_diagnostics.RecordAttach(AttachStep::kSetGameModule, AttachOutcome::kRejected, 0, nullptr,

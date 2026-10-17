@@ -5,6 +5,7 @@
 
 #include "runtime/host/bootstrap_diagnostics.h"
 
+#include "runtime/host/host_paths.h"
 #include "runtime/host/path_buffer.h"
 #include "runtime/host/game_targets.h"
 
@@ -14,7 +15,9 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <cstdio>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -413,6 +416,23 @@ TEST(BootstrapDiagnostics, TheWaitDefectAndRefusalRecordsSayWhatHappenedAndWhatH
   EXPECT_EQ(records[4].at("outcome"), "refused");
   EXPECT_EQ(records[4].at("reason"), "already_called");
   EXPECT_EQ(records[4].at("next"), "ignored");
+  // degraded_action says the host runs the original only: true of a rejected image or prologue or a
+  // failed install, not of a wait that timed out, a defect report or a refused second call.
+  for (const nlohmann::json& record : records) EXPECT_FALSE(record.contains("degraded_action")) << record.dump();
+}
+
+TEST(BootstrapDiagnostics, ARejectedTargetStepStillSaysTheHostRunsTheOriginalOnly) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 9, nullptr,
+                           nevr_host::HookStage::kCreate);
+  diagnostics.FlushAttachJournal();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 3u);
+  for (const nlohmann::json& record : records) EXPECT_EQ(record.at("degraded_action"), "run_original_only");
 }
 
 TEST(BootstrapDiagnostics, AnUnreadHookRecordIsOnTheInstallRecordAndDegradesTheAttach) {
@@ -499,4 +519,243 @@ TEST(HostPathBuffer, DirOfModuleEndsInABackslash) {
   wchar_t tiny[4] = {};
   EXPECT_FALSE(nevr_host::DirOfModule(tiny, 4, GetModuleHandleW(nullptr)));
   EXPECT_EQ(tiny[0], L'\0');
+}
+
+// --- the log file under concurrent appenders ---------------------------------------------------
+
+namespace {
+
+struct AppendJob {
+  BootstrapDiagnostics* diagnostics;
+  int thread;
+  int lines;
+  const char* prefix;
+};
+
+DWORD WINAPI AppendLines(void* raw) {
+  const auto* job = static_cast<const AppendJob*>(raw);
+  for (int at = 0; at < job->lines; ++at) {
+    char line[48];
+    const int length = std::snprintf(line, sizeof(line), "%s-T%02d-L%05d\n", job->prefix, job->thread, at);
+    job->diagnostics->AppendLine(line, static_cast<std::size_t>(length));
+  }
+  return 0;
+}
+
+// Runs `threads` appenders of `lines` lines each; returns the number of complete lines in the file and
+// how many of them are distinct.
+void AppendConcurrently(BootstrapDiagnostics& diagnostics, int threads, int lines, const char* prefix) {
+  std::vector<AppendJob> jobs(static_cast<std::size_t>(threads));
+  std::vector<HANDLE> handles;
+  for (int t = 0; t < threads; ++t) {
+    jobs[static_cast<std::size_t>(t)] = AppendJob{&diagnostics, t, lines, prefix};
+    handles.push_back(CreateThread(nullptr, 0, &AppendLines, &jobs[static_cast<std::size_t>(t)], 0, nullptr));
+  }
+  WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), TRUE, 120000);
+  for (HANDLE handle : handles) CloseHandle(handle);
+}
+
+struct LineCount {
+  std::size_t lines = 0;
+  std::size_t distinct = 0;
+};
+
+LineCount CountLines(const std::string& text) {
+  LineCount count;
+  std::set<std::string> distinct;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
+    ++count.lines;
+    distinct.insert(text.substr(start, end - start));
+    start = end + 1;
+  }
+  count.distinct = distinct.size();
+  return count;
+}
+
+}  // namespace
+
+TEST(BootstrapDiagnostics, ConcurrentAppendersToOneFileLoseNoLine) {
+  for (const int threads : {1, 2, 4, 8}) {
+    const std::wstring local = MakeTempDir(L"local");
+    BootstrapDiagnostics diagnostics;
+    diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+    constexpr int kLines = 300;
+    AppendConcurrently(diagnostics, threads, kLines, "A");
+    const LineCount count = CountLines(ReadAll(local + kLogsFile));
+    EXPECT_EQ(count.lines, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
+    EXPECT_EQ(count.distinct, static_cast<std::size_t>(threads * kLines)) << threads << " threads";
+  }
+}
+
+// The same test as a helper for a second process: it appends only when the parent asks through
+// the environment, so the normal run of this binary skips it.
+TEST(BootstrapDiagnostics, AppendHelperForTheTwoProcessTest) {
+  wchar_t dir[MAX_PATH] = {};
+  wchar_t id[16] = {};
+  if (GetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", dir, MAX_PATH) == 0) GTEST_SKIP() << "helper process only";
+  GetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", id, 16);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(dir, nullptr, nullptr);
+  char prefix[16] = {};
+  std::snprintf(prefix, sizeof(prefix), "P%ls", id);
+  AppendConcurrently(diagnostics, 4, 100, prefix);
+}
+
+TEST(BootstrapDiagnostics, TwoProcessesAppendingToOneFileLoseNoLine) {
+  const std::wstring local = MakeTempDir(L"local");
+  SetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", local.c_str());
+  wchar_t self[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameW(nullptr, self, MAX_PATH), 0u);
+  HANDLE children[2] = {};
+  for (int child = 0; child < 2; ++child) {
+    SetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", child == 0 ? L"1" : L"2");
+    std::wstring command = L"\"" + std::wstring(self) +
+                           L"\" --gtest_filter=BootstrapDiagnostics.AppendHelperForTheTwoProcessTest";
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process = {};
+    ASSERT_NE(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup,
+                             &process),
+              FALSE);
+    CloseHandle(process.hThread);
+    children[child] = process.hProcess;
+  }
+  EXPECT_EQ(WaitForMultipleObjects(2, children, TRUE, 120000), WAIT_OBJECT_0);
+  for (HANDLE child : children) CloseHandle(child);
+  SetEnvironmentVariableW(L"NEVR_TEST_APPEND_DIR", nullptr);
+  SetEnvironmentVariableW(L"NEVR_TEST_APPEND_ID", nullptr);
+  const LineCount count = CountLines(ReadAll(local + kLogsFile));
+  EXPECT_EQ(count.lines, 800u);
+  EXPECT_EQ(count.distinct, 800u);
+}
+
+// --- the log lock, and a flush that must not read an entry before it is written -----------------
+
+namespace {
+
+DWORD WINAPI HoldLogLock(void* raw) {
+  HANDLE* handles = static_cast<HANDLE*>(raw);  // [0] ready, [1] release
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, nevr_host::kBootstrapLogMutexName);
+  WaitForSingleObject(mutex, 5000);
+  SetEvent(handles[0]);
+  WaitForSingleObject(handles[1], 10000);
+  ReleaseMutex(mutex);
+  CloseHandle(mutex);
+  return 0;
+}
+
+}  // namespace
+
+// A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
+TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheLogLock) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
+
+  const auto start = std::chrono::steady_clock::now();
+  const char line[] = "{\"event\":\"blocked\"}\n";
+  const DiagnosticDestination where = diagnostics.AppendLine(line, sizeof(line) - 1);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  SetEvent(handles[1]);
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(handles[0]);
+  CloseHandle(handles[1]);
+
+  EXPECT_EQ(where, DiagnosticDestination::kPrimary);
+  EXPECT_LT(elapsed.count(), 4000);  // bounded, not the holder's 10 s
+  EXPECT_GE(elapsed.count(), 300);   // it did wait for the lock first
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+}
+
+// A crash inside an append runs the crash callback on the thread that holds the lock: the mutex is
+// recursive for its owner, so that record is written at once instead of waiting for itself.
+TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, nevr_host::kBootstrapLogMutexName);
+  ASSERT_NE(mutex, nullptr);
+  ASSERT_EQ(WaitForSingleObject(mutex, 5000), WAIT_OBJECT_0);
+  const auto start = std::chrono::steady_clock::now();
+  const char line[] = "{\"event\":\"crash_while_holding\"}\n";
+  diagnostics.AppendLine(line, sizeof(line) - 1);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  ReleaseMutex(mutex);
+  CloseHandle(mutex);
+  EXPECT_LT(elapsed.count(), 200);
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+}
+
+namespace {
+
+std::mutex g_sink_lock;
+std::vector<nlohmann::json>* g_sink_records = nullptr;
+
+void CollectingSink(const nlohmann::json& record) {
+  std::lock_guard<std::mutex> guard(g_sink_lock);
+  if (g_sink_records != nullptr) g_sink_records->push_back(record);
+}
+
+struct ScopedSink {
+  explicit ScopedSink(std::vector<nlohmann::json>* records) {
+    g_sink_records = records;
+    BootstrapDiagnostics::SetEmitSinkForTest(&CollectingSink);
+  }
+  ~ScopedSink() {
+    BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
+    g_sink_records = nullptr;
+  }
+};
+
+struct FlushState {
+  BootstrapDiagnostics* diagnostics;
+  volatile LONG stop;
+};
+
+DWORD WINAPI FlushUntilStopped(void* raw) {
+  auto* state = static_cast<FlushState*>(raw);
+  while (InterlockedCompareExchange(&state->stop, 0, 0) == 0) state->diagnostics->FlushAttachJournal();
+  return 0;
+}
+
+}  // namespace
+
+// RecordAttach reserves a slot before it fills it. A flush that trusts the count emits a slot that is
+// still empty: a record whose step is "unknown", and the real one lost.
+TEST(BootstrapDiagnostics, AFlushNeverEmitsAnEntryBeforeItIsWritten) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  const unsigned char bytes[nevr_host::kGameMainWrapperPrologueSize] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+  for (int round = 0; round < 2000; ++round) {
+    records.clear();
+    BootstrapDiagnostics diagnostics;
+    diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+    FlushState state{&diagnostics, 0};
+    HANDLE flushers[4];
+    for (HANDLE& flusher : flushers) flusher = CreateThread(nullptr, 0, &FlushUntilStopped, &state, 0, nullptr);
+    for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity; ++at) {
+      diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed,
+                               static_cast<std::uint32_t>(1000 + at), bytes, nevr_host::HookStage::kCreate);
+    }
+    InterlockedExchange(&state.stop, 1);
+    WaitForMultipleObjects(4, flushers, TRUE, 20000);
+    for (HANDLE flusher : flushers) CloseHandle(flusher);
+    diagnostics.FlushAttachJournal();
+
+    std::set<int> seen;
+    for (const nlohmann::json& record : records) {
+      ASSERT_EQ(record.value("step", ""), "hook_install") << "round " << round << ": " << record.dump();
+      seen.insert(record.at("mh_status").get<int>());
+    }
+    ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity) << "round " << round;
+    ASSERT_EQ(seen.size(), BootstrapDiagnostics::kJournalCapacity) << "round " << round;
+  }
 }
