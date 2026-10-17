@@ -95,17 +95,31 @@ void ReportBuildFailure(const char* event, const char* what) noexcept {
   if (length != 0) WriteFile(stderr_handle, buffer, static_cast<DWORD>(length), &written, nullptr);
 }
 
-// The log's mutex, created on first use and kept for the process: no allocation, so it is safe in
-// the crash callback. Null when it cannot be created (appends then run unserialized).
-HANDLE LogMutex() noexcept {
-  static std::atomic<HANDLE> mutex{nullptr};
-  HANDLE existing = mutex.load(std::memory_order_acquire);
-  if (existing != nullptr) return existing;
+// The log's mutex. It is created once, by CreateLogMutex() from Prepare() (host attach, kernel32 only,
+// the one kernel object), and kept for the process. The append path, which the crash callback also
+// runs, only loads the handle: it never creates it, so nothing in the crash callback creates or
+// allocates anything. Null when Prepare() has not run or could not create it (appends then run
+// unserialized).
+std::atomic<HANDLE> g_log_mutex{nullptr};
+
+// Set by the first append whose wait on the mutex does not end owned. Later appends in the process
+// write without waiting, so a holder that never releases costs one wait per process, not one per
+// record (a crash writes up to four records).
+std::atomic<bool> g_log_lock_unreliable{false};
+
+#if defined(NEVR_HOST_TESTING)
+std::atomic<std::size_t> g_log_mutex_creations{0};
+#endif
+
+void CreateLogMutex() noexcept {
+  if (g_log_mutex.load(std::memory_order_acquire) != nullptr) return;
+#if defined(NEVR_HOST_TESTING)
+  g_log_mutex_creations.fetch_add(1);
+#endif
   HANDLE created = CreateMutexW(nullptr, FALSE, kBootstrapLogMutexName);
-  if (created == nullptr) return nullptr;
-  if (mutex.compare_exchange_strong(existing, created)) return created;
-  CloseHandle(created);
-  return existing;
+  if (created == nullptr) return;
+  HANDLE expected = nullptr;
+  if (!g_log_mutex.compare_exchange_strong(expected, created)) CloseHandle(created);
 }
 
 }  // namespace
@@ -130,6 +144,9 @@ void BootstrapDiagnostics::Prepare(HMODULE host_module) {
   if (local_ok) primary_ready_ = AppendPath(primary_dir_, MAX_PATH, local_app_data_, kLogsSubdirectory);
   if (temp_ok) fallback_ready_ = AppendPath(fallback_dir_, MAX_PATH, temp_, kLogsSubdirectory);
   host_dir_ready_ = DirOfModule(host_dir_, MAX_PATH, host_module);
+  // The log's mutex is created here, at attach, and never inside an append: a crash callback that is
+  // the first to write must not have to create it. CreateMutexW is kernel32 (AGENTS.md N43).
+  CreateLogMutex();
 }
 
 void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
@@ -151,7 +168,21 @@ void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const w
       host_dir_ready_ = true;
     }
   }
+  g_log_lock_unreliable.store(false);  // a test starts with a lock that has not yet timed out
+  CreateLogMutex();
 }
+
+#if defined(NEVR_HOST_TESTING)
+void BootstrapDiagnostics::ResetLogLockForTest() {
+  g_log_lock_unreliable.store(false);
+  g_log_mutex_creations.store(0);
+  HANDLE old = g_log_mutex.exchange(nullptr);
+  if (old != nullptr) CloseHandle(old);
+}
+
+std::size_t BootstrapDiagnostics::LogMutexCreations() { return g_log_mutex_creations.load(); }
+bool BootstrapDiagnostics::LogLockUnreliable() { return g_log_lock_unreliable.load(); }
+#endif
 
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
                                         std::uint32_t detail, const unsigned char* actual,
@@ -372,13 +403,15 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
 
-  // Serialize the write only. Wait at most kBootstrapLogLockWaitMs; a wait that ends otherwise
-  // writes without the lock rather than not at all.
-  HANDLE lock = LogMutex();
+  // Serialize the write only, with the mutex Prepare() created (none: the write is unserialized).
+  // The wait is at most kBootstrapLogLockWaitMs, and only the first wait that times out in the
+  // process pays it: after that the lock is treated as unreliable and appends write without it.
+  HANDLE lock = g_log_mutex.load(std::memory_order_acquire);
   bool locked = false;
-  if (lock != nullptr) {
+  if (lock != nullptr && !g_log_lock_unreliable.load()) {
     const DWORD waited = WaitForSingleObject(lock, kBootstrapLogLockWaitMs);
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
+    if (!locked) g_log_lock_unreliable.store(true);
   }
   DWORD written = 0;
   const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);

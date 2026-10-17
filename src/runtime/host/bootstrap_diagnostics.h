@@ -13,11 +13,16 @@
 //
 // What may run where:
 //   - Prepare() copies two environment values and the host directory into fixed
-//     buffers. No heap, no I/O, no directory creation: safe under the loader lock.
+//     buffers and creates the log's named mutex (one CreateMutexW call, kernel32). No heap in this
+//     code, no I/O, no directory creation: safe under the loader lock (AGENTS.md N43 allows kernel32
+//     calls there). The mutex is created here and nowhere else; no append creates it.
 //   - RecordAttach() stores one step in a fixed journal. No heap, no I/O, no lock:
 //     safe under the loader lock. Nothing is written until FlushAttachJournal().
-//   - AppendLine() opens, writes once and closes. No heap, no locks, no logger:
-//     safe in the crash callback.
+//   - AppendLine() opens, writes once and closes. It allocates nothing and creates nothing: it
+//     waits on the log mutex Prepare() created (a wait is a WaitForSingleObject call), for at most kBootstrapLogLockWaitMs, and only the
+//     first wait that times out in the process pays it (later appends write without the lock). A
+//     crash record therefore costs at most that one wait in total. No logger: safe in the crash
+//     callback.
 //   - Emit(), FlushAttachJournal() build records with nlohmann::json and so run
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.
@@ -84,12 +89,13 @@ enum class AttachOutcome : std::uint32_t {
 
 class BootstrapDiagnostics {
  public:
-  /// Copy %LOCALAPPDATA%, %TEMP% and the directory of `host_module` and compute the
-  /// three log directories. No allocation, no I/O.
+  /// Copy %LOCALAPPDATA%, %TEMP% and the directory of `host_module`, compute the three log
+  /// directories and create the log mutex (once per process). No allocation, no I/O.
   void Prepare(HMODULE host_module);
 
   /// Test seam: set the three directories directly instead of reading the environment
-  /// and the module path. An empty string leaves that destination unavailable.
+  /// and the module path. An empty string leaves that destination unavailable. Also creates the log
+  /// mutex and clears the "lock timed out" mark, as Prepare does at attach.
   void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
                       const wchar_t* host_dir);
 
@@ -119,13 +125,14 @@ class BootstrapDiagnostics {
   /// kDropped.
   DiagnosticDestination Emit(const nlohmann::json& record) noexcept;
 
-  /// Append an already-formatted line (ends in '\n'). Crash-safe.
+  /// Append an already-formatted line (ends in '\n'). Crash-safe: it creates and allocates nothing
+  /// and waits on the log mutex at most once per process (see the file comment).
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
   static constexpr std::size_t kJournalCapacity = 8;
 
-  // Test seams.
+  // Read-only accessors.
   const wchar_t* PrimaryDir() const { return primary_dir_; }
   const wchar_t* FallbackDir() const { return fallback_dir_; }
   const wchar_t* HostDir() const { return host_dir_; }
@@ -136,6 +143,16 @@ class BootstrapDiagnostics {
   std::size_t JournalSize() const { return journal_count_.load(); }
   std::size_t JournalDropped() const { return dropped_.load(); }
 #if defined(NEVR_HOST_TESTING)
+  /// Close the log mutex and forget it, clear the timed-out mark and zero the creation count, so a
+  /// test can show what an append does when Prepare has already run.
+  static void ResetLogLockForTest();
+
+  /// How many times the process called CreateMutexW for the log mutex since the last reset.
+  static std::size_t LogMutexCreations();
+
+  /// True once an append's wait on the log mutex timed out.
+  static bool LogLockUnreliable();
+
   /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
   /// flush has returned; more means an entry was claimed twice.
   std::size_t JournalClaimed() const { return claimed_.load(); }

@@ -17,8 +17,11 @@ inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
 // atomic under Wine: concurrent appenders overwrite each other's lines, within a process and across
 // two processes that share a prefix (a client and a local server). A named mutex covers both, is
 // recursive for the thread that owns it (a crash inside an append can still write its record) and
-// has a timed wait, so a holder that never releases delays a write by at most
-// kBootstrapLogLockWaitMs and never blocks it: the line is then written without the lock.
+// has a timed wait, so a holder that never releases never blocks a write: the line is written
+// without the lock. The mutex is created once, by BootstrapDiagnostics::Prepare at attach, never by
+// an append. The first wait that times out costs kBootstrapLogLockWaitMs; it marks the lock
+// unreliable and every later append in the process writes without waiting, so one crash (up to four
+// records) costs at most that one wait.
 inline constexpr wchar_t kBootstrapLogMutexName[] = L"Local\\nevr-host-bootstrap-log";
 inline constexpr unsigned long kBootstrapLogLockWaitMs = 500;
 

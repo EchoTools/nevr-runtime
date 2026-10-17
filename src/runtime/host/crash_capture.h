@@ -15,8 +15,10 @@
 //   - records every decision as one JSON line through BootstrapDiagnostics::AppendLine
 //     (dump written, destination failed and why, capture suppressed, capture failed).
 //
-// No NEVR logger, no locks, no heap, no runtime load here: the process is
-// faulting. The records are built in a fixed stack buffer by JsonLine.
+// No NEVR logger, no heap, no runtime load here: the process is faulting. The records are built
+// in a fixed stack buffer by JsonLine and appended through BootstrapDiagnostics::AppendLine, which
+// waits on the log mutex that attach created (it creates nothing) for at most one
+// kBootstrapLogLockWaitMs in the whole process. The reentrancy guard below is an atomic flag, not a lock.
 
 #include "runtime/host/bootstrap_diagnostics.h"
 

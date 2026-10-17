@@ -694,6 +694,57 @@ TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
   EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
 }
 
+// The mutex is created at attach (Prepare), once, and never by an append: the crash callback is an
+// append, and it must not be the first to create a kernel object.
+TEST(BootstrapDiagnostics, PrepareCreatesTheLogMutexOnceAndAnAppendNeverCreatesIt) {
+  BootstrapDiagnostics::ResetLogLockForTest();
+  BootstrapDiagnostics attached;
+  attached.Prepare(GetModuleHandleW(nullptr));
+  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 1u);
+  attached.Prepare(GetModuleHandleW(nullptr));
+  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 1u) << "a second Prepare created a second mutex";
+
+  // Nothing has attached in this process (the log mutex is forgotten), and the first write is an
+  // append, as a crash before the first flush is.
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  BootstrapDiagnostics::ResetLogLockForTest();
+  const char line[] = "{\"event\":\"first_write_is_a_crash\"}\n";
+  EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
+  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 0u) << "an append created the log mutex";
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);  // later tests start from an attached state
+}
+
+// One crash writes up to four records. With a holder that never releases, the first record waits and
+// the lock is then marked unreliable: the rest write at once, so the whole crash costs one wait.
+TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverReleases) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
+
+  const auto start = std::chrono::steady_clock::now();
+  const char line[] = "{\"event\":\"crash_dump\"}\n";
+  for (int record = 0; record < 4; ++record) diagnostics.AppendLine(line, sizeof(line) - 1);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  const bool unreliable = BootstrapDiagnostics::LogLockUnreliable();
+  SetEvent(handles[1]);
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(handles[0]);
+  CloseHandle(handles[1]);
+
+  EXPECT_TRUE(unreliable);
+  EXPECT_GE(elapsed.count(), 300);  // the first record did wait
+  EXPECT_LT(elapsed.count(), 900);  // four waits would be about 2000
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 4u);
+}
+
 namespace {
 
 std::mutex g_sink_lock;

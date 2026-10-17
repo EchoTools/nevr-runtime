@@ -36,8 +36,9 @@ void InstallRendezvous(HMODULE game_module) noexcept {
 
 void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode) noexcept {
   g_host_module = host_module;
-  // Fixed memory only under the loader lock: the diagnostic and crash paths. No
-  // directory creation, no file I/O, no runtime load.
+  // Fixed memory and one kernel32 call under the loader lock: the diagnostic and crash paths, and
+  // the log mutex (created in Prepare, so no crash callback has to). No directory creation, no
+  // file I/O, no runtime load.
   g_diagnostics.Prepare(host_module);
   g_capture.Prepare(host_module, &g_diagnostics);
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary
