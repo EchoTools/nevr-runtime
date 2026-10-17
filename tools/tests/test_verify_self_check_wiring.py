@@ -145,11 +145,11 @@ class SelfCheckWiringGateTest(unittest.TestCase):
     def test_a_credential_cache_check_that_is_not_fed_or_registered_fails(self):
         for rel, old in (
             ("src/runtime/compat/ws_bridge.cpp",
-             "nevr_credential_cache_check::Register(&nevr_credential_cache_check::ProcessProbe);"),
+             "nevr_credential_cache_check::Register();"),
             ("src/core/auth_token.h", "nevr_credential_stats::NoteSaved(protection);"),
             ("src/core/auth_token.h", "nevr_credential_stats::NoteRefused(why);"),
             ("src/modules/token-auth/src/token_auth.cpp", "nevr_credential_stats::NoteCacheReused();"),
-            ("src/modules/token-auth/src/token_auth.cpp", "nevr_credential_stats::NoteSignInRequired();"),
+            ("src/modules/token-auth/src/token_auth.cpp", "nevr_credential_stats::NoteSignInRequired(whyNoCache);"),
         ):
             root = self.tree()
             self.edit(root, rel, old, "")
