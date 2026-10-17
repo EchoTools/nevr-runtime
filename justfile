@@ -4,6 +4,16 @@
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
 
+# Shared compiler cache: used when ccache is installed, ignored when it is not (CI and release builds are unchanged).
+# NEVR_CCACHE= (set, empty) configures a fresh tree without it.
+# CMake reads the launcher variables on a build tree's first configure, so an existing tree keeps the choice it was configured with.
+# base_dir is the main checkout, so every worktree under it hashes the same relative include paths.
+export CMAKE_C_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
+export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
+export CCACHE_CONFIGPATH := justfile_directory() / "tools/ccache.conf"
+export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
+export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
+
 # Show available recipes (default)
 default:
     @just --list
