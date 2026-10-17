@@ -578,6 +578,40 @@ void TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender() {
   nevr_self_check::ResetForTest();
 }
 
+// Self-check "android_main_returned" (#621): called by the process-end hook just before the process goes, it must
+// put its result on the login connection by itself (it is the last chance), and log it whatever the connection does.
+void TestAndroidMainReturnedIsSentAtOnceAndLogged() {
+  static std::vector<std::string> sent;
+  static std::vector<std::string> logged;
+  sent.clear();
+  logged.clear();
+  nevr_self_check::ResetForTest();
+  quest_net::FrameTapSinks sinks;
+  nevr_quest::integration::SelfCheckHooks hooks;
+  hooks.sender = [](const std::string& frame) { sent.push_back(frame); return true; };
+  hooks.log = [](const nevr_self_check::LogRecord& r) { logged.push_back(r.name + " " + r.observed); };
+  hooks.build = "5.0.0";
+  nevr_quest::integration::ApplySelfCheck(&sinks, hooks);
+
+  // Before the login: logged, nothing sent (the unit never sends without a user).
+  nevr_quest::integration::ReportAndroidMainReturned();
+  QCHECK(sent.empty());
+  QCHECK(logged.size() == 1 && logged[0] == "android_main_returned ending_process exit_code=0");
+
+  quest_net::FrameTap tap(sinks);
+  tap.ServerToGame(nevr_evr_codec::BuildLoginSuccess(5, 0x2222ULL));
+  sent.clear();
+  logged.clear();
+  nevr_quest::integration::ReportAndroidMainReturned();  // no Flush by the caller
+  QCHECK(logged.size() == 1);
+  QCHECK(sent.size() == 1);  // it left by itself
+  if (sent.size() == 1) {
+    QCHECK(sent[0].find("android_main_returned") != std::string::npos);
+    QCHECK(sent[0].find("ending_process exit_code=0") != std::string::npos);
+  }
+  nevr_self_check::ResetForTest();
+}
+
 void TestPostLoadGiveUpEndsOnlyThatAction() {
   int dummy = 0;
   ResetPostLoad(&ThrowingLogin, &FakeMatchmaking, Settle::kGiveUp, Settle::kRetryLater);
@@ -1076,6 +1110,7 @@ int main() {
   TestMatchmakingReloadProbeWaitsForTheActionAndThenSpeaksOnce();
   TestMatchmakingReloadProbeFailsWhenTheActionGaveUp();
   TestApplySelfCheckWiresTheDebugQueryTheUserAndTheSender();
+  TestAndroidMainReturnedIsSentAtOnceAndLogged();
   TestPostLoadGiveUpEndsOnlyThatAction();
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();

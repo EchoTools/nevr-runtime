@@ -1,6 +1,7 @@
 #include "quest/integration/self_check_wiring.h"
 
 #include <atomic>
+#include <exception>
 #include <functional>
 #include <string>
 #include <utility>
@@ -22,6 +23,16 @@ void ApplySelfCheck(quest_net::FrameTapSinks* tap, const SelfCheckHooks& hooks) 
   nevr_self_check::SetSender(hooks.sender);
   nevr_self_check::SetLogSink(hooks.log);
   nevr_self_check::SetBuild(hooks.build != nullptr ? hooks.build : "");
+}
+
+void ReportAndroidMainReturned() noexcept {
+  try {
+    const nevr_self_check::CheckId id = nevr_self_check::Register(
+        {"android_main_returned", "the process ends when the game's android_main returns", nullptr});
+    (void)id;  // placeholder, filled in by the next commit
+  } catch (const std::exception&) {
+    // The unit builds strings; a failure to allocate one loses the result, never the process end.
+  }
 }
 
 namespace {

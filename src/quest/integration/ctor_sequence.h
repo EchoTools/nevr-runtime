@@ -26,6 +26,8 @@
 //                                    configuration says, right after the clock hook so it is in place before
 //                                    libr15 runs CSysFile::Init. Its counters are registered with the others
 //                                    (step 3).
+//      InstallProcessEnd             the process ends when the game's android_main returns (#621): one libr15
+//                                    slot, on every launch, right after the OBB skip; no counters
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social

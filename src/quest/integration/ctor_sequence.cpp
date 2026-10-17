@@ -154,6 +154,9 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Run(StepId::kInstallObbSkip, [&] { return steps.InstallObbSkip(true); });
     }
 
+    // The process ends when the game's android_main returns (#621): every launch, no feature, no counters.
+    r.Run(StepId::kInstallProcessEnd, [&] { return steps.InstallProcessEnd(); });
+
     bool tokenOk = false;
     if (wantTokenAuth) {
       tokenOk = r.Run(StepId::kStartTokenAuth, [&] { return steps.StartTokenAuth(); });
