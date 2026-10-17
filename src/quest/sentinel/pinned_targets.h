@@ -40,6 +40,7 @@ inline constexpr const char* kSetDelimitedErrorMessageSymbol =
 inline constexpr const char* kNetGameUpdateSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame6UpdateEy";
 inline constexpr const char* kMountObbSymbol = "AStorageManager_mountObb";
 inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMountedObbPath";
+inline constexpr const char* kAndroidMainSymbol = "android_main";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -115,6 +116,16 @@ using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, G
 inline constexpr std::int32_t kObbStateMounted = 1;
 // The data root the game already falls back to when no OBB path was recorded (GetDataRootDir, above).
 inline constexpr const char* kObbFallbackDataRoot = "/storage/emulated/0/readyatdawn";
+
+// android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
+// through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
+// ignores the result and then runs its teardown. android_main shuts the engine down after Main returns and, when
+// app->destroyRequested (+0x64) is 0, asks the activity to finish (ANativeActivity_finish, 0xf787b0) and pumps
+// the looper until the destroy; it then returns. Nothing on that path ends the process.
+struct AndroidAppOpaque;
+using AndroidMainSig = void(AndroidAppOpaque* app);
+struct LibR15AndroidMainTag {};
+using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSig>;
 
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
@@ -253,6 +264,12 @@ inline GotTarget LibR15SetDelimitedErrorMessage() {
 // JUMP_SLOT 0x36e05f8).
 inline GotTarget LibR15NetGameUpdate() {
   return {kLibR15, kNetGameUpdateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e05f8ULL};
+}
+
+// libr15.so's slot for android_main, defined in libr15 itself (JUMP_SLOT 0x36eb4c8, `readelf -rW` on the pinned
+// image: `R_AARCH64_JUMP_SLOT 0xf784c4 android_main`).
+inline GotTarget LibR15AndroidMain() {
+  return {kLibR15, kAndroidMainSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36eb4c8ULL};
 }
 
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
