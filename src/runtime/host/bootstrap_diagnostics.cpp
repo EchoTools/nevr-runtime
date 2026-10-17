@@ -170,6 +170,7 @@ void BootstrapDiagnostics::FlushAttachJournal() noexcept {
   std::size_t from = flushed_upto_.load();
   while (from < count && !flushed_upto_.compare_exchange_weak(from, count)) {
   }
+  if (from < count) claimed_.fetch_add(count - from);
   for (std::size_t at = from; at < count; ++at) {
     try {
       EmitJournalEntry(journal_[at]);

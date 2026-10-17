@@ -134,6 +134,9 @@ class BootstrapDiagnostics {
   std::size_t JournalFlushed() const { return flushed_upto_.load(); }
   std::size_t JournalSize() const { return journal_count_.load(); }
   std::size_t JournalDropped() const { return dropped_.load(); }
+  /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
+  /// flush has returned; more means an entry was claimed twice.
+  std::size_t JournalClaimed() const { return claimed_.load(); }
 
  private:
   struct JournalEntry {
@@ -161,6 +164,7 @@ class BootstrapDiagnostics {
   JournalEntry journal_[kJournalCapacity] = {};
   std::atomic<std::size_t> journal_count_{0};
   std::atomic<std::size_t> flushed_upto_{0};
+  std::atomic<std::size_t> claimed_{0};
   std::atomic<std::size_t> dropped_{0};           // entries the full journal had no room for
   std::atomic<std::size_t> dropped_reported_{0};  // the total the last overflow record carried
 };

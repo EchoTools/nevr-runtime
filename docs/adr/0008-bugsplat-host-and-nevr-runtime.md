@@ -110,7 +110,11 @@ The host writes under its own per-game folder, never the game's `EchoVR` folder:
 Every record is one JSON object per line with `tag` (`NEVR.HOST`), `ts` (UTC),
 `pid` and `event`. The events are `host_attach` (one per decision: `image_check`,
 `prologue_check`, `hook_install`; the last two carry the target's `rva` and expected and
-actual prologue, and `hook_install` the MinHook `stage` and `mh_status`), `runtime_load`
+actual prologue, and `hook_install` the MinHook `stage` and `mh_status`, and
+`hook_bytes: unread` when the hook is live but its first bytes could not be read;
+`install_wait`: `signalled`, or `unavailable` / `timeout` with what the load does next;
+`detour_entry`, a defect; `set_game_module`, a second call refused; `journal`, how many
+decisions a full journal dropped), `runtime_load`
 (outcome, path, Win32 error, expected and actual ABI, ABI status, init code, degraded
 action, and `loader_lock_held`, which the host reads from the PEB) and `crash_dump`
 (written, or each destination that failed and why, suppressed re-entry, dbghelp
@@ -207,8 +211,9 @@ Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
   harnesses. The shipped `BugSplat64.dll` does not use it.
 - After the split the runtime does not hook the main wrapper; the host's detour is the only
   hook on it. The host context carries that hook's target and the first bytes found there
-  after the host enabled it, with a flag that says whether those bytes were read, so the
-  runtime can register the hook with HookGuard (N84) and does not register bytes that were
-  never read. The shipped DLL does not do this yet ("The tree today").
+  after the host enabled it, with a flag (`wrapper_hook_bytes_valid`) that says whether those
+  bytes were read. A context whose bytes were not read is accepted, because refusing to start
+  over a HookGuard registration would take every runtime fix with it; the runtime registers
+  the hook only when `HookRecordUsable` says the record is usable. The host module is required. The shipped DLL does not do this yet ("The tree today").
 - The host's `DllMain` validates the image and the wrapper's prologue, installs the one
   detour and journals each decision. It loads nothing and does no file I/O.

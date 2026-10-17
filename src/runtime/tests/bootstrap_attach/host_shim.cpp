@@ -50,6 +50,12 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
                                          : reinterpret_cast<GameImageFn>(
                                                GetProcAddress(exe, kGameImageExport));
   HMODULE game = game_image == nullptr ? nullptr : game_image();
+  const auto no_event = exe == nullptr ? nullptr
+                                       : reinterpret_cast<NoInstallEventFn>(
+                                             GetProcAddress(exe, kNoInstallEventExport));
+  if (no_event != nullptr && no_event() != 0) {
+    nevr_host::RuntimeRendezvous::Seams().fail_event_create = true;
+  }
   nevr_host::OnProcessAttach(module, game, false);
 
   if (nevr_host::Rendezvous().Installed()) {

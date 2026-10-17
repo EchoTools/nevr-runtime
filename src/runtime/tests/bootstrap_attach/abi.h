@@ -81,6 +81,10 @@ inline constexpr char kSecondTargetExport[] = "BootstrapProbeSecondTarget";
 /// Test-only: milliseconds the host's DllMain stays open after the hook is live,
 /// so a racing thread is guaranteed to enter the detour under the loader lock.
 inline constexpr char kAttachHoldExport[] = "BootstrapProbeAttachHoldMs";
+/// Test-only: 1 makes the host shim make CreateEventW "fail" for the install event, so the load
+/// proceeds without waiting for the install (install_wait: unavailable).
+inline constexpr char kNoInstallEventExport[] = "BootstrapProbeNoInstallEvent";
+using NoInstallEventFn = DWORD (*)();
 using RecordEventFn = void (*)(LONG event, std::uint64_t payload);
 using GameImageFn = HMODULE (*)();
 using SecondTargetFn = std::uint64_t (*)(std::uint64_t);

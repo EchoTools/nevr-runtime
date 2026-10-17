@@ -134,11 +134,10 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
   // before the install event is signalled, so a detour thread (which waits for the event before
   // it touches the context) sees them. The flag is written last; 0 says the bytes mean nothing.
   SIZE_T got = 0;
-  const bool read_ok =
-      !Seams().fail_hook_bytes_read &&
-      ReadProcessMemory(GetCurrentProcess(), target, context_.wrapper_hook_bytes,
-                        sizeof(context_.wrapper_hook_bytes), &got) != FALSE &&
-      got == sizeof(context_.wrapper_hook_bytes);
+  const bool read_call = ReadProcessMemory(GetCurrentProcess(), target, context_.wrapper_hook_bytes,
+                                           sizeof(context_.wrapper_hook_bytes), &got) != FALSE &&
+                         got == sizeof(context_.wrapper_hook_bytes);
+  const bool read_ok = read_call && !Seams().fail_hook_bytes_read;  // the seam: a read that came back unusable
   if (!read_ok) std::memset(context_.wrapper_hook_bytes, 0, sizeof(context_.wrapper_hook_bytes));
   MemoryBarrier();
   context_.wrapper_hook_bytes_valid = read_ok ? 1u : 0u;

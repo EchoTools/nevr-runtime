@@ -75,6 +75,7 @@ enum ImageKind : LONG { kImageSupported = 0, kImageWrongTimestamp = 1, kImageWro
 volatile LONG g_image_kind = kImageSupported;
 BYTE* g_image = nullptr;
 volatile LONG g_attach_hold_ms = 0;
+volatile LONG g_no_install_event = 0;
 constexpr SIZE_T kImageSize = 0x118000;
 // A value that needs all 64 bits: a truncated argument or result changes it.
 constexpr std::int64_t kCommandLine = 0x1234'5678'9ABC'DEF0;
@@ -156,6 +157,10 @@ BYTE* BuildGameImage(LONG kind) {
 }
 
 }  // namespace
+
+extern "C" __declspec(dllexport) DWORD BootstrapProbeNoInstallEvent() {
+  return static_cast<DWORD>(g_no_install_event);
+}
 
 extern "C" __declspec(dllexport) DWORD BootstrapProbeAttachHoldMs() {
   return static_cast<DWORD>(g_attach_hold_ms);
@@ -292,6 +297,7 @@ struct Expectation {
   const char* load_record = "loaded";  // the runtime_load record's outcome (hooked scenarios)
   bool static_import = false;
   bool load_may_precede_return = false;  // hammer: a racing thread may trigger the load
+  bool no_install_event = false;  // the load cannot wait for the install: records may land after the load's
   bool call_parked_inside_attach = false;  // held attach: a call must be in flight across DllMain's exit
   enum class Lone { kNone, kAtLeastOne, kExactlyOne, kEveryCall } lone = Lone::kNone;
   bool second_hook_called = false;
@@ -435,6 +441,29 @@ void ValidateHostRecords(const Expectation& expect) {
     return;
   }
   Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
+  if (expect.no_install_event) {
+    // The load did not wait for the install, so the install record can land after the load's: all five
+    // must still be there (the load flushes the journal again), in whatever order the race gave.
+    Require(CountRecords(records, "host_attach", "image_check") == 1 &&
+                CountRecords(records, "host_attach", "prologue_check") == 1 &&
+                CountRecords(records, "host_attach", "hook_install") == 1 &&
+                CountRecords(records, "runtime_load", "") == 1,
+            "a run without an install event lost a decision");
+    bool unavailable = false;
+    for (const nlohmann::json& record : records) {
+      unavailable = unavailable || (record.value("step", "") == "install_wait" &&
+                                    record.value("outcome", "") == "unavailable" &&
+                                    record.value("next", "") ==
+                                        "load_proceeds_unsynchronized_and_the_journal_is_flushed_again_after_load");
+    }
+    Require(unavailable, "the missing install event was not recorded as unavailable with its next step");
+    for (const nlohmann::json& record : records) {
+      if (record.value("event", "") != "runtime_load") continue;
+      Require(record.value("outcome", "") == expect.load_record && record.at("loader_lock_held") == false,
+              "the runtime_load record of a run without an install event is wrong");
+    }
+    return;
+  }
   Require(records[0].value("step", "") == "image_check" && records[0].value("outcome", "") == "accepted" &&
               records[1].value("step", "") == "prologue_check" &&
               records[1].value("outcome", "") == "accepted" &&
@@ -678,8 +707,12 @@ int RunChildScenario(const std::string& mode) {
     expect.lone = Expectation::Lone::kExactlyOne;
   } else if (mode == "concurrent-first") {
     expect.min_threads_parked_in_load = 2;
-  } else if (mode == "hammer-attach" || mode == "hammer-held-attach") {
+  } else if (mode == "hammer-attach" || mode == "hammer-held-attach" || mode == "hammer-no-install-event") {
     expect.load_may_precede_return = true;
+    if (mode == "hammer-no-install-event") {
+      expect.no_install_event = true;
+      InterlockedExchange(&g_no_install_event, 1);
+    }
     expect.lone = Expectation::Lone::kAtLeastOne;
     if (mode == "hammer-held-attach") {
       expect.call_parked_inside_attach = true;
@@ -697,7 +730,7 @@ int RunChildScenario(const std::string& mode) {
   HANDLE heartbeat = CreateThread(nullptr, 0, &HeartbeatThread, nullptr, 0, nullptr);
   Require(heartbeat != nullptr, "could not create heartbeat thread");
   std::vector<HANDLE> hammers;
-  if (mode == "hammer-attach" || mode == "hammer-held-attach") {
+  if (mode == "hammer-attach" || mode == "hammer-held-attach" || mode == "hammer-no-install-event") {
     for (int index = 0; index < kHammerThreads; ++index) {
       HANDLE thread = CreateThread(nullptr, 0, &HammerThread,
                                    reinterpret_cast<void*>(static_cast<std::uintptr_t>(index)), 0, nullptr);
@@ -737,7 +770,7 @@ int RunChildScenario(const std::string& mode) {
     CallTarget(kCommandLine);
   } else {
     CallTarget(kCommandLine);
-    RunWorkers(4, mode == "valid" || mode == "hammer-attach" || mode == "hammer-held-attach" ? 100 : 25,
+    RunWorkers(4, mode == "valid" || mode == "hammer-attach" || mode == "hammer-held-attach" || mode == "hammer-no-install-event" ? 100 : 25,
                false);
   }
   if (expect.dispatched) {
@@ -820,6 +853,7 @@ int RunSuite() {
       {"concurrent-first", L"slow-init"},
       {"hammer-attach", L"good"},
       {"hammer-held-attach", L"good"},
+      {"hammer-no-install-event", L"good"},
       {"reentrant-init", L"reenter-init"},
       {"bad-timestamp", L"good"},
       {"bad-prologue", L"good"},
