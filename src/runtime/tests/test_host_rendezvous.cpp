@@ -164,30 +164,25 @@ struct RendezvousSandbox {
   }
 };
 
-std::vector<nlohmann::json> Records(BootstrapDiagnostics& diagnostics, const std::wstring& local) {
-  diagnostics.FlushAttachJournal();
-  const std::string text = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
-  std::vector<nlohmann::json> records;
-  std::size_t start = 0;
-  while (start < text.size()) {
-    const std::size_t end = text.find('\n', start);
-    records.push_back(nlohmann::json::parse(text.substr(start, end - start)));
-    start = end + 1;
-  }
-  return records;
-}
-
-// What is in the file now, without flushing anything first.
+// What is in the file now, without flushing anything first. Only a line that ends in a newline is a
+// record: the writer ends every record with one, so a last line without it is a write cut short and is
+// not read.
 std::vector<nlohmann::json> RecordsOnDisk(const std::wstring& local) {
   const std::string text = ReadAll(local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl");
   std::vector<nlohmann::json> records;
   std::size_t start = 0;
   while (start < text.size()) {
     const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) break;
     records.push_back(nlohmann::json::parse(text.substr(start, end - start)));
     start = end + 1;
   }
   return records;
+}
+
+std::vector<nlohmann::json> Records(BootstrapDiagnostics& diagnostics, const std::wstring& local) {
+  diagnostics.FlushAttachJournal();
+  return RecordsOnDisk(local);
 }
 
 const nlohmann::json* Step(const std::vector<nlohmann::json>& records, const char* step) {
@@ -198,6 +193,20 @@ const nlohmann::json* Step(const std::vector<nlohmann::json>& records, const cha
 }
 
 }  // namespace
+
+// A last line with no newline (a write cut short) ends the read; it is not looped over.
+TEST(HostRendezvousRecords, ALastLineWithoutANewlineEndsTheReadInsteadOfLoopingForever) {
+  const std::wstring local = MakeTempDir();
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  const char complete[] = "{\"event\":\"complete\"}\n";
+  const char cut[] = "{\"event\":\"cut_short\"}";  // parses, has no newline
+  diagnostics.AppendLine(complete, sizeof(complete) - 1);
+  diagnostics.AppendLine(cut, sizeof(cut) - 1);
+  const std::vector<nlohmann::json> records = RecordsOnDisk(local);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].at("event"), "complete");
+}
 
 TEST(HostRendezvousInstall, ReadsTheHookBytesAfterEnableAndMarksThemValid) {
   RendezvousSandbox sandbox;

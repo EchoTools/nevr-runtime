@@ -838,6 +838,27 @@ DWORD WINAPI RecordOne(void* raw) {
 
 }  // namespace
 
+namespace {
+
+// Releases, joins and closes the paused recorder on every exit from the test, a failed ASSERT
+// included: the thread is inside RecordAttach on the test's own `diagnostics`, so it must be done
+// before that goes out of scope. Declare it after `diagnostics` and the RecordJob (it is destroyed first).
+struct PausedRecorder {
+  HANDLE thread = nullptr;
+  ~PausedRecorder() {
+    SetEvent(g_release_event);
+    if (thread != nullptr) {
+      WaitForSingleObject(thread, INFINITE);
+      CloseHandle(thread);
+    }
+    BootstrapDiagnostics::SetRecordPauseForTest(nullptr);
+    CloseHandle(g_reserved_event);
+    CloseHandle(g_release_event);
+  }
+};
+
+}  // namespace
+
 // Deterministic form of the race above: an entry that is reserved and half written is not emitted, and
 // the mark does not skip it; once it is complete a later flush writes it, with its own fields.
 TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilItIsComplete) {
@@ -853,8 +874,9 @@ TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilIt
   RecordOne(&first);  // complete: the pause is not armed
   InterlockedExchange(&g_pause_armed, 1);
   RecordJob second{&diagnostics, 1001};
-  HANDLE thread = CreateThread(nullptr, 0, &RecordOne, &second, 0, nullptr);
-  ASSERT_NE(thread, nullptr);
+  PausedRecorder paused;
+  paused.thread = CreateThread(nullptr, 0, &RecordOne, &second, 0, nullptr);
+  ASSERT_NE(paused.thread, nullptr);
   ASSERT_EQ(WaitForSingleObject(g_reserved_event, 10000), WAIT_OBJECT_0);
 
   diagnostics.FlushAttachJournal();  // entry 0 is complete; entry 1 is reserved and half written
@@ -863,14 +885,10 @@ TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilIt
   EXPECT_EQ(diagnostics.JournalFlushed(), 1u);
 
   SetEvent(g_release_event);
-  WaitForSingleObject(thread, 10000);
-  CloseHandle(thread);
-  BootstrapDiagnostics::SetRecordPauseForTest(nullptr);
+  WaitForSingleObject(paused.thread, 10000);
   diagnostics.FlushAttachJournal();
   ASSERT_EQ(records.size(), 2u);
   EXPECT_EQ(records[1].at("step"), "hook_install");
   EXPECT_EQ(records[1].at("mh_status"), 1001);
   EXPECT_EQ(records[1].at("stage"), "create");
-  CloseHandle(g_reserved_event);
-  CloseHandle(g_release_event);
 }
