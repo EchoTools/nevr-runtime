@@ -43,11 +43,12 @@ Export ownership, from the callers in the repository, `plugins/` and `src/extens
 ### The runtime descriptor
 
 `src/core/runtime_abi.h` defines it. `nevr.dll` exports one function,
-`NEVR_GetRuntimeApi`, that returns a `NevrRuntimeApi` (`initialize`,
-`preprocess_before`, `preprocess_after`). The host validates the major version, the
-minimum `struct_size` and every required entry before it calls anything, and hands
-the runtime a `NevrHostContext` that carries the game module and the trampoline of
-the original `PreprocessCommandLine`. Only C types cross. `test_runtime_abi` pins the
+`NEVR_GetRuntimeApi`, that returns a `NevrRuntimeApi` (`initialize`, `game_main`). The
+host validates the major version, the minimum `struct_size` and every required entry
+before it calls anything, and hands the runtime a `NevrHostContext` that carries the game
+module, the trampoline of the original `GameMainWrapper`, and a record of the host's hook
+on it: the target address and the first 16 bytes found there after the host enabled the
+hook. Only C types cross. `test_runtime_abi` pins the
 layout and the rejections, including a descriptor shorter than the header, which the
 validator must not read past.
 
@@ -82,13 +83,14 @@ The production path is `src/runtime/host/host_entry.cpp`, which the host's `DllM
 and its exports call (`OnProcessAttach`, `SetGameModule`, `CreateReport`,
 `OnCrashReporterConstructed`), and `runtime_rendezvous.cpp` (the detour,
 `InitOnce`-guarded load, the dispatch). `src/runtime/tests/rendezvous` drives those
-objects behind a `BugSplat64.dll` shim: server, repeated server call, client, missing
-runtime, same-thread re-entry from `initialize` and a wrong prologue, then
-`NEVR_SetGameModule` with a supported and an unsupported module. Each child asserts the
-ordered `host_attach` and `runtime_load` records, that `preprocess_before` ran before the
-original and `preprocess_after` after it, and that the server globals are set before the
-original runs and the deferred server bootstrap runs once after it. The runtime in that
-harness is a stand-in that emulates those semantics; it is not `nevr.dll`.
+objects behind a `BugSplat64.dll` shim: a valid runtime, a missing runtime, same-thread
+re-entry from `initialize` and a wrong prologue, then `NEVR_SetGameModule` with a
+supported and an unsupported module. Each child asserts the ordered `host_attach` and
+`runtime_load` records; for a valid runtime that `initialize` ran once and `game_main`
+once, with the exact command line and the exact result going back to the caller; and for a
+missing runtime that the original wrapper ran once. The runtime in that harness is a
+stand-in whose `game_main` runs the original wrapper through the trampoline; it is not
+`nevr.dll`.
 
 ### The host's own files
 
@@ -101,8 +103,10 @@ The host writes under its own per-game folder, never the game's `EchoVR` folder:
 
 Every record is one JSON object per line with `tag` (`NEVR.HOST`), `ts` (UTC),
 `pid` and `event`. The events are `host_attach` (one per decision: `image_check`,
-`prologue_check`, `hook_install`), `runtime_load` (outcome, path, Win32 error,
-expected and actual ABI, ABI status, init code, degraded action) and `crash_dump`
+`prologue_check`, `hook_install`; the last two carry the target's `rva` and expected and
+actual prologue, and `hook_install` the MinHook `stage` and `mh_status`), `runtime_load`
+(outcome, path, Win32 error, expected and actual ABI, ABI status, init code, degraded
+action, and `loader_lock_held`, which the host reads from the PEB) and `crash_dump`
 (written, or each destination that failed and why, suppressed re-entry, dbghelp
 unavailable, failed). A line that fits no directory goes to `stderr`; a record is never
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not

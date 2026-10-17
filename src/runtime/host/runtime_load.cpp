@@ -1,5 +1,6 @@
 #include "runtime/host/runtime_load.h"
 
+#include "runtime/host/loader_lock.h"
 #include "runtime/host/path_buffer.h"
 
 #include <nlohmann/json.hpp>
@@ -149,6 +150,7 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
   record["outcome"] = result.OutcomeName();
   record["degraded_action"] = result.DegradedAction();
   record["path_ok"] = result.path_ok;
+  record["loader_lock_held"] = result.loader_lock_held;
   if (result.path_ok) record["path"] = ToUtf8(result.path);
   record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
   const bool descriptor_read = DescriptorRead(result.outcome);
@@ -187,6 +189,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_ = RuntimeLoadResult{};
   result_.path_ok = path_ok_;
   CopyPath(result_.path, MAX_PATH, path_);
+  const bool loader_lock_held = LoaderLockHeldByThisThread();
 
   HMODULE module = nullptr;
   DWORD load_error = 0;
@@ -224,6 +227,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
 
   result_ = ClassifyLoad(path_ok_, path_, load_error, module, has_entry, api, abi_status,
                          init_code);
+  result_.loader_lock_held = loader_lock_held;
   EmitLoadDiagnostic(diagnostics, result_);
   return result_;
 }

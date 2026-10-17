@@ -22,7 +22,7 @@
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.
 
-#include "runtime/host/preprocess_target.h"
+#include "runtime/host/game_targets.h"
 
 #include <windows.h>
 
@@ -47,8 +47,16 @@ const char* DestinationName(DiagnosticDestination destination) noexcept;
 /// One decision the host makes while attaching, in the order it makes them.
 enum class AttachStep : std::uint32_t {
   kImageCheck = 1,     // is the process image a supported echovr.exe
-  kPrologueCheck = 2,  // does PreprocessCommandLine still start with the pinned bytes
+  kPrologueCheck = 2,  // does GameMainWrapper still start with the pinned bytes
   kHookInstall = 3,    // MinHook initialize, create and enable
+};
+
+/// The MinHook call a hook-install step reached (the one that failed, or enable on success).
+enum class HookStage : std::uint32_t {
+  kNone = 0,
+  kInitialize = 1,  // MH_Initialize
+  kCreate = 2,      // MH_CreateHook
+  kEnable = 3,      // MH_EnableHook
 };
 
 enum class AttachOutcome : std::uint32_t {
@@ -68,14 +76,16 @@ class BootstrapDiagnostics {
   void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
                       const wchar_t* host_dir);
 
-  /// Store one attach step. `actual` (optional, kPreprocessPrologueSize long) is the
-  /// prologue found at the target, kept so a mismatch can be explained.
+  /// Store one attach step. `actual` (optional, kGameMainWrapperPrologueSize long) is the
+  /// prologue found at the target, kept so a mismatch can be explained. `detail` is the
+  /// MH_STATUS of a hook-install step and `stage` the MinHook call it belongs to.
   void RecordAttach(AttachStep step, AttachOutcome outcome, std::uint32_t detail = 0,
-                    const unsigned char* actual = nullptr) noexcept;
+                    const unsigned char* actual = nullptr,
+                    HookStage stage = HookStage::kNone) noexcept;
 
   /// Write every recorded attach step not yet written (a call with nothing new is a
   /// no-op). Called after
-  /// attach returns: from the first PreprocessCommandLine call, and from the host
+  /// attach returns: from the first GameMainWrapper call, and from the host
   /// entry points that fire without the detour (the crash-reporter constructor and
   /// NEVR_SetGameModule), so a failed attach is reported when the game constructs its
   /// crash reporter even though no detour exists to trigger it earlier.
@@ -112,8 +122,9 @@ class BootstrapDiagnostics {
     AttachStep step;
     AttachOutcome outcome;
     std::uint32_t detail;
+    HookStage stage;
     bool has_actual;
-    unsigned char actual[kPreprocessPrologueSize];
+    unsigned char actual[kGameMainWrapperPrologueSize];
   };
 
   void EmitJournalEntry(const JournalEntry& entry);

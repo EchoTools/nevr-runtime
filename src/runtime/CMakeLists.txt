@@ -414,7 +414,7 @@ if(BUILD_TESTING)
     # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
     # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
     # recorder, the minidump capture, the runtime load/validate state machine and the
-    # PreprocessCommandLine rendezvous. It is a static library of its own so the tests
+    # GameMainWrapper rendezvous. It is a static library of its own so the tests
     # drive the objects the host links and not a copy. Built only for the tests until the
     # target split links it into BugSplat64.dll.
     find_package(nlohmann_json CONFIG REQUIRED)
@@ -515,12 +515,12 @@ if(BUILD_TESTING)
       test_host_crash_runtime_init_failure
       test_host_crash_runtime_missing_entry)
 
-    # Early PreprocessCommandLine rendezvous harness for the BugSplat64.dll / nevr.dll
-    # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Early bootstrap"). The host
-    # shim (BugSplat64.dll) calls the production host entry points: one detour from
-    # DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on the first call.
-    # test_rendezvous.exe drives server / server-twice / client / missing / reenter /
-    # bad-prologue child scenarios plus the NEVR_SetGameModule external contract.
+    # Early GameMainWrapper rendezvous harness for the BugSplat64.dll / nevr.dll
+    # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Decision: the rendezvous is
+    # the game's main wrapper"). The host shim (BugSplat64.dll) calls the production host
+    # entry points: one detour from DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on
+    # the first call. test_rendezvous.exe drives valid / missing / reenter / bad-prologue
+    # child scenarios plus the NEVR_SetGameModule external contract.
     set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
     set(RENDEZVOUS_FIXTURE_DIR "${RENDEZVOUS_DIR}/fixtures")
 

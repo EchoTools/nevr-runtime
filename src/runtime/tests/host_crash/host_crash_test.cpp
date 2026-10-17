@@ -10,7 +10,8 @@
 // expected destination, names the faulting thread and process, and carries the
 // deliberate access violation. It proves the fallback chain (%LOCALAPPDATA% -> %TEMP%
 // -> host directory), the total-failure path (no dump, no hang), a second crash while
-// reporting, and a failed write.
+// reporting, and a failed write. The runtime-absent scenarios are the crash path of a
+// fault raised before GameMainWrapper's entry, where the runtime has not loaded yet.
 //
 // It also parses every JSON record the host wrote and asserts the decisions in them:
 // the runtime-load outcome, each destination that failed and why, the destination that
@@ -304,6 +305,9 @@ void ValidateRecords(const Scenario& scenario, const std::vector<nlohmann::json>
   Require(loads[0].at("degraded_action") ==
               (std::strcmp(scenario.load_outcome, "loaded") == 0 ? "dispatch" : "run_original_only"),
           "runtime_load record names the wrong degraded action");
+  // The load runs on the harness's own thread, outside the loader lock, and the record says so.
+  Require(loads[0].contains("loader_lock_held") && loads[0].at("loader_lock_held") == false,
+          "runtime_load record does not report that the loader lock was not held");
 
   // A fault raised inside the unhandled-exception filter is not dispatched to the filter
   // again: the OS ends the process. The nested capture the guard exists for therefore

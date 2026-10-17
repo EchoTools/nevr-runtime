@@ -6,7 +6,7 @@
 #include "runtime/host/bootstrap_diagnostics.h"
 
 #include "runtime/host/path_buffer.h"
-#include "runtime/host/preprocess_target.h"
+#include "runtime/host/game_targets.h"
 
 #include <gtest/gtest.h>
 
@@ -205,12 +205,13 @@ TEST(BootstrapDiagnostics, TheAttachJournalIsWrittenInOrderWithTheDecisionsThatM
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
 
-  unsigned char actual[nevr_host::kPreprocessPrologueSize];
-  for (std::size_t at = 0; at < sizeof(actual); ++at) actual[at] = nevr_host::kPreprocessPrologue[at];
-  actual[7] = 0xb2;  // the lea displacement moved: a different build of the game
+  unsigned char actual[nevr_host::kGameMainWrapperPrologueSize];
+  for (std::size_t at = 0; at < sizeof(actual); ++at) actual[at] = nevr_host::kGameMainWrapperPrologue[at];
+  actual[7] = 0x25;  // the SIB byte moved: a different build of the game
   diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected, 0, actual);
-  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 9);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 9, actual,
+                           nevr_host::HookStage::kCreate);
   EXPECT_TRUE(diagnostics.AttachDegraded());
 
   // Nothing is written until the flush: recording is for the loader-lock path.
@@ -223,17 +224,66 @@ TEST(BootstrapDiagnostics, TheAttachJournalIsWrittenInOrderWithTheDecisionsThatM
   EXPECT_EQ(records[0].at("step"), "image_check");
   EXPECT_EQ(records[0].at("outcome"), "accepted");
   EXPECT_FALSE(records[0].contains("degraded_action"));
+  EXPECT_FALSE(records[0].contains("rva"));
 
   EXPECT_EQ(records[1].at("step"), "prologue_check");
   EXPECT_EQ(records[1].at("outcome"), "mismatch");
   EXPECT_EQ(records[1].at("degraded_action"), "run_original_only");
-  EXPECT_EQ(records[1].at("rva"), "0x116720");
-  EXPECT_EQ(records[1].at("expected_prologue"), "405557488d6c24b14881eca8000000488bf9");
-  EXPECT_EQ(records[1].at("actual_prologue"), "405557488d6c24b24881eca8000000488bf9");
+  EXPECT_EQ(records[1].at("rva"), "0xcd510");
+  EXPECT_EQ(records[1].at("expected_prologue"), "4883ec3848c744242000000000");
+  EXPECT_EQ(records[1].at("actual_prologue"), "4883ec3848c744252000000000");
 
+  // The hook install carries the same target facts, the MinHook stage that failed and its status.
   EXPECT_EQ(records[2].at("step"), "hook_install");
   EXPECT_EQ(records[2].at("outcome"), "failed");
+  EXPECT_EQ(records[2].at("stage"), "create");
   EXPECT_EQ(records[2].at("mh_status"), 9);
+  EXPECT_EQ(records[2].at("rva"), "0xcd510");
+  EXPECT_EQ(records[2].at("expected_prologue"), "4883ec3848c744242000000000");
+  EXPECT_EQ(records[2].at("actual_prologue"), "4883ec3848c744252000000000");
+}
+
+TEST(BootstrapDiagnostics, AnInstalledHookIsOneRecordNamingTheEnableStageAndStatusOk) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted, 0,
+                           nevr_host::kGameMainWrapperPrologue);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kAccepted, 0,
+                           nevr_host::kGameMainWrapperPrologue, nevr_host::HookStage::kEnable);
+  EXPECT_FALSE(diagnostics.AttachDegraded());
+  diagnostics.FlushAttachJournal();
+
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 2u);
+  int installs = 0;
+  for (const nlohmann::json& record : records) installs += record.at("step") == "hook_install" ? 1 : 0;
+  EXPECT_EQ(installs, 1);
+  EXPECT_EQ(records[1].at("outcome"), "enabled");
+  EXPECT_EQ(records[1].at("stage"), "enable");
+  EXPECT_EQ(records[1].at("mh_status"), 0);
+  EXPECT_EQ(records[1].at("rva"), "0xcd510");
+  EXPECT_EQ(records[1].at("actual_prologue"), records[1].at("expected_prologue"));
+  EXPECT_EQ(records[1].at("expected_prologue"), "4883ec3848c744242000000000");
+}
+
+TEST(BootstrapDiagnostics, EachMinHookStageHasItsOwnName) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 1, nullptr,
+                           nevr_host::HookStage::kInitialize);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 2, nullptr,
+                           nevr_host::HookStage::kCreate);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, 3, nullptr,
+                           nevr_host::HookStage::kEnable);
+  diagnostics.FlushAttachJournal();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[0].at("stage"), "initialize");
+  EXPECT_EQ(records[1].at("stage"), "create");
+  EXPECT_EQ(records[2].at("stage"), "enable");
+  EXPECT_FALSE(records[0].contains("actual_prologue"));
 }
 
 TEST(BootstrapDiagnostics, AFlushWritesEachStepOnceAndPicksUpLaterSteps) {

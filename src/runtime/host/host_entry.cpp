@@ -11,7 +11,7 @@ CrashCapture g_capture;
 HMODULE g_host_module = nullptr;
 
 void* RendezvousTarget(HMODULE game_module) {
-  return reinterpret_cast<unsigned char*>(game_module) + kPreprocessRva;
+  return reinterpret_cast<unsigned char*>(game_module) + kGameMainWrapperRva;
 }
 
 // Validate the image, then install the one detour. Every decision is recorded in

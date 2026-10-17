@@ -416,7 +416,7 @@ test-auth-unit:
     done
     # The two child-process harnesses (their own PASS/FAIL lines are the evidence): a deliberate
     # fault through the real createReport export for ten destination and runtime scenarios, and the
-    # PreprocessCommandLine rendezvous with the NEVR_SetGameModule launcher contract.
+    # GameMainWrapper rendezvous with the NEVR_SetGameModule launcher contract.
     for bin in "build/{{ preset }}/bin/host-crash/test_host_crash.exe" "build/{{ preset }}/bin/rendezvous/test_rendezvous.exe"; do
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: host harness not found: $bin" >&2
@@ -2871,7 +2871,7 @@ verify:
     # that needs an explicit sensor update and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1213
+    python3 tools/verify_gtest_floor.py --floor 1220
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

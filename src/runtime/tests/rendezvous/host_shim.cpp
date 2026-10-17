@@ -7,11 +7,11 @@
 //     so the test can prove NEVR_SetGameModule does the full install itself.
 //
 //   - DLL_PROCESS_ATTACH prepares the diagnostics and the capture, validates the game
-//     image and installs ONE PreprocessCommandLine detour; it loads nothing else (no
+//     image and installs ONE GameMainWrapper detour; it loads nothing else (no
 //     nevr.dll load in attach);
-//   - the first PreprocessCommandLine call (after attach) loads the sibling nevr.dll
-//     through RuntimeLoader::Load and dispatches preprocess_before -> original ->
-//     preprocess_after, degrading to original-only on any failure;
+//   - the first GameMainWrapper call (after attach) loads the sibling nevr.dll
+//     through RuntimeLoader::Load, calls initialize and returns game_main's result,
+//     degrading to the original wrapper on any failure;
 //   - NEVR_SetGameModule is the launcher-mode external contract.
 // An attach failure is journalled in fixed memory; nevr_host_test_FlushDeferred stands
 // for the crash-reporter constructor, the trigger that reports it when no detour exists.
@@ -73,7 +73,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
     if (nevr_host::Rendezvous().Installed()) {
       Record(kHostHookEnabled,
              static_cast<std::uint64_t>(*(reinterpret_cast<const unsigned char*>(game) +
-                                          nevr_host::kPreprocessRva)));
+                                          nevr_host::kGameMainWrapperRva)));
     } else {
       Record(kHostHookFailed);
     }

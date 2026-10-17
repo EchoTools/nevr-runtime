@@ -7,6 +7,7 @@
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
+#include "runtime/host/loader_lock.h"
 
 #include <gtest/gtest.h>
 
@@ -28,8 +29,7 @@ using nevr_host::EmitLoadDiagnostic;
 using nevr_host::ResolveRuntimePath;
 
 std::int32_t Initialize(const NevrHostContext*) { return 0; }
-void Before(void*) {}
-void After(void*, std::uint64_t) {}
+std::int64_t GameMain(std::int64_t command_line) { return command_line; }
 
 NevrRuntimeApi ValidApi() {
   NevrRuntimeApi api{};
@@ -37,8 +37,7 @@ NevrRuntimeApi ValidApi() {
   api.header.abi_major = nevr_runtime_abi::kMajor;
   api.header.abi_minor = nevr_runtime_abi::kMinor;
   api.initialize = &Initialize;
-  api.preprocess_before = &Before;
-  api.preprocess_after = &After;
+  api.game_main = &GameMain;
   return api;
 }
 
@@ -291,4 +290,158 @@ TEST(HostRuntimeLoad, APathThatDoesNotFitYieldsNoPathAndAnEmptyBuffer) {
   EXPECT_EQ(path[0], L'\0');
   EXPECT_FALSE(ResolveRuntimePath(GetModuleHandleW(nullptr), nullptr, 8));
   EXPECT_FALSE(ResolveRuntimePath(GetModuleHandleW(nullptr), path, 0));
+}
+
+// --- loader_lock_held: the PEB loader-lock owner, measured by the host itself ---------------
+
+namespace {
+
+using LdrLockFn = LONG(NTAPI*)(ULONG flags, ULONG* disposition, PVOID* cookie);
+using LdrUnlockFn = LONG(NTAPI*)(ULONG flags, PVOID cookie);
+
+// Holds the process loader lock on this thread for the scope, the way DllMain's callers do.
+class ScopedLoaderLock {
+ public:
+  ScopedLoaderLock() {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    lock_ = reinterpret_cast<LdrLockFn>(GetProcAddress(ntdll, "LdrLockLoaderLock"));
+    unlock_ = reinterpret_cast<LdrUnlockFn>(GetProcAddress(ntdll, "LdrUnlockLoaderLock"));
+    if (lock_ != nullptr && unlock_ != nullptr) {
+      ULONG disposition = 0;
+      held_ = lock_(0, &disposition, &cookie_) >= 0 && disposition == 1;
+    }
+  }
+  ~ScopedLoaderLock() {
+    if (held_) unlock_(0, cookie_);
+  }
+  bool Held() const { return held_; }
+
+ private:
+  LdrLockFn lock_ = nullptr;
+  LdrUnlockFn unlock_ = nullptr;
+  PVOID cookie_ = nullptr;
+  bool held_ = false;
+};
+
+}  // namespace
+
+// Nothing is asserted (and so nothing printed) while the lock is held: a failure message written
+// under the loader lock can hang the test instead of failing it. Facts are read inside the
+// scope and judged after it.
+TEST(HostLoaderLock, IsFalseOutsideTheLockAndTrueWhileThisThreadHoldsIt) {
+  const bool before = nevr_host::LoaderLockHeldByThisThread();
+  bool acquired = false;
+  bool inside = false;
+  {
+    ScopedLoaderLock lock;
+    acquired = lock.Held();
+    inside = nevr_host::LoaderLockHeldByThisThread();
+  }
+  const bool after = nevr_host::LoaderLockHeldByThisThread();
+  EXPECT_FALSE(before);
+  ASSERT_TRUE(acquired);
+  EXPECT_TRUE(inside);
+  EXPECT_FALSE(after);
+}
+
+// A thread cannot start while the loader lock is held (thread attach takes it), so the other
+// thread is started first and parked on an event; it answers through a second event, because
+// its exit would also wait for the lock.
+namespace {
+
+struct OtherThread {
+  HANDLE ready = nullptr;
+  HANDLE go = nullptr;
+  HANDLE answered = nullptr;
+  bool held = true;
+};
+
+DWORD WINAPI AskFromOtherThread(void* raw) {
+  auto* state = static_cast<OtherThread*>(raw);
+  SetEvent(state->ready);  // past thread attach: the loader lock may be taken now
+  WaitForSingleObject(state->go, 10000);
+  state->held = nevr_host::LoaderLockHeldByThisThread();
+  SetEvent(state->answered);
+  return 0;
+}
+
+}  // namespace
+
+TEST(HostLoaderLock, AnotherThreadHoldingTheLockIsNotThisThreadHoldingIt) {
+  OtherThread state;
+  state.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  state.go = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  state.answered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  ASSERT_NE(state.go, nullptr);
+  ASSERT_NE(state.answered, nullptr);
+  HANDLE thread = CreateThread(nullptr, 0, &AskFromOtherThread, &state, 0, nullptr);
+  ASSERT_NE(thread, nullptr);
+  ASSERT_EQ(WaitForSingleObject(state.ready, 10000), WAIT_OBJECT_0);
+  bool acquired = false;
+  bool mine = false;
+  DWORD answered = WAIT_FAILED;
+  {
+    ScopedLoaderLock lock;
+    acquired = lock.Held();
+    mine = nevr_host::LoaderLockHeldByThisThread();
+    SetEvent(state.go);
+    answered = WaitForSingleObject(state.answered, 10000);
+  }
+  EXPECT_TRUE(acquired);
+  EXPECT_TRUE(mine);
+  EXPECT_EQ(answered, WAIT_OBJECT_0);
+  EXPECT_FALSE(state.held);  // this thread owned the lock, the other one did not
+  WaitForSingleObject(thread, 10000);
+  CloseHandle(thread);
+  CloseHandle(state.ready);
+  CloseHandle(state.go);
+  CloseHandle(state.answered);
+}
+
+// The runtime_load record says whether the runtime was loaded under the loader lock, so a
+// log shows the rendezvous ran outside it. Measured by Load itself, not passed in.
+TEST(HostRuntimeLoad, LoadRecordsWhetherTheLoaderLockWasHeld) {
+  // kernel32's directory has no nevr.dll: the load ends at "runtime absent" without a LoadLibrary.
+  HMODULE not_the_host = GetModuleHandleW(L"kernel32.dll");
+  nevr_host::RuntimeLoader loader;
+  loader.Prepare(not_the_host);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(L"", L"", L"");
+  NevrHostContext host{};
+
+  const RuntimeLoadResult outside = loader.Load(host, diagnostics);
+
+  RuntimeLoadResult inside;
+  bool acquired = false;
+  {
+    ScopedLoaderLock lock;
+    acquired = lock.Held();
+    inside = loader.Load(host, diagnostics);
+  }
+  EXPECT_EQ(outside.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
+  EXPECT_FALSE(outside.loader_lock_held);
+  ASSERT_TRUE(acquired);
+  EXPECT_EQ(inside.outcome, RuntimeLoadOutcome::kRuntimeAbsent);
+  EXPECT_TRUE(inside.loader_lock_held);
+}
+
+TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
+  result.loader_lock_held = false;
+  EmitLoadDiagnostic(diagnostics, result);
+  result.loader_lock_held = true;
+  EmitLoadDiagnostic(diagnostics, result);
+
+  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  const std::size_t split = text.find('\n');
+  ASSERT_NE(split, std::string::npos);
+  const nlohmann::json first = nlohmann::json::parse(text.substr(0, split));
+  const nlohmann::json second = nlohmann::json::parse(text.substr(split + 1));
+  EXPECT_EQ(first.at("loader_lock_held"), false);
+  EXPECT_EQ(second.at("loader_lock_held"), true);
 }

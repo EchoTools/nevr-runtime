@@ -19,8 +19,7 @@ std::int32_t Initialize(const NevrHostContext*) {
 #endif
 }
 
-void Before(void*) {}
-void After(void*, std::uint64_t) {}
+std::int64_t GameMain(std::int64_t command_line) { return command_line; }
 
 const NevrRuntimeApi kApi = {
     {
@@ -34,8 +33,7 @@ const NevrRuntimeApi kApi = {
         0,
     },
     &Initialize,
-    &Before,
-    &After,
+    &GameMain,
 };
 
 }  // namespace

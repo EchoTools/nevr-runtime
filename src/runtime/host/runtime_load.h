@@ -6,7 +6,9 @@
 // System32 search flags), validates the descriptor from core/runtime_abi.h
 // (major version, minimum struct size, required entries), and initializes it.
 // Every outcome, loaded or not, emits a bootstrap diagnostic; a failure degrades
-// to running the original game function without ever calling a null pointer.
+// to running the original game wrapper without ever calling a null pointer. The
+// descriptor is valid only when it carries every required entry (initialize and
+// game_main).
 
 #include "core/runtime_abi.h"
 #include "runtime/host/bootstrap_diagnostics.h"
@@ -42,6 +44,9 @@ struct RuntimeLoadResult {
   HMODULE module = nullptr;
   wchar_t path[MAX_PATH] = {};
   bool path_ok = false;
+  // Whether the loading thread owned the process loader lock when the load began (measured
+  // by Load, from the PEB). False at the rendezvous; the record says so.
+  bool loader_lock_held = false;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;

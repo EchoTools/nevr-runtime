@@ -3,7 +3,7 @@
 #include "runtime/host/host_json.h"
 #include "runtime/host/host_paths.h"
 #include "runtime/host/path_buffer.h"
-#include "runtime/host/preprocess_target.h"
+#include "runtime/host/game_targets.h"
 
 #include <nlohmann/json.hpp>
 
@@ -35,6 +35,16 @@ const char* OutcomeName(AttachStep step, AttachOutcome outcome) noexcept {
       return step == AttachStep::kPrologueCheck ? "mismatch" : "rejected";
     case AttachOutcome::kFailed:
       return "failed";
+  }
+  return "unknown";
+}
+
+const char* StageName(HookStage stage) noexcept {
+  switch (stage) {
+    case HookStage::kNone: return "none";
+    case HookStage::kInitialize: return "initialize";
+    case HookStage::kCreate: return "create";
+    case HookStage::kEnable: return "enable";
   }
   return "unknown";
 }
@@ -109,8 +119,8 @@ void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const w
 }
 
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
-                                        std::uint32_t detail,
-                                        const unsigned char* actual) noexcept {
+                                        std::uint32_t detail, const unsigned char* actual,
+                                        HookStage stage) noexcept {
   const std::size_t slot = journal_count_.fetch_add(1);
   if (slot >= kJournalCapacity) {
     journal_count_.store(kJournalCapacity);  // saturate: the first entries are the ones kept
@@ -120,8 +130,9 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   entry.step = step;
   entry.outcome = outcome;
   entry.detail = detail;
+  entry.stage = stage;
   entry.has_actual = actual != nullptr;
-  if (actual != nullptr) std::memcpy(entry.actual, actual, kPreprocessPrologueSize);
+  if (actual != nullptr) std::memcpy(entry.actual, actual, kGameMainWrapperPrologueSize);
 }
 
 bool BootstrapDiagnostics::AttachDegraded() const noexcept {
@@ -154,16 +165,18 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
     if (entry.outcome != AttachOutcome::kAccepted) {
       record["degraded_action"] = "run_original_only";
     }
-    if (entry.step == AttachStep::kHookInstall && entry.outcome == AttachOutcome::kFailed) {
+    if (entry.step == AttachStep::kHookInstall) {
+      if (entry.stage != HookStage::kNone) record["stage"] = StageName(entry.stage);
       record["mh_status"] = entry.detail;
     }
-    if (entry.step == AttachStep::kPrologueCheck) {
+    // The target the step is about: its rva, the bytes the host pinned and the bytes it found.
+    if (entry.step == AttachStep::kPrologueCheck || entry.step == AttachStep::kHookInstall) {
       char rva[24];
-      snprintf(rva, sizeof(rva), "0x%llx", static_cast<unsigned long long>(kPreprocessRva));
+      snprintf(rva, sizeof(rva), "0x%llx", static_cast<unsigned long long>(kGameMainWrapperRva));
       record["rva"] = rva;
-      record["expected_prologue"] = HexBytes(kPreprocessPrologue, kPreprocessPrologueSize);
+      record["expected_prologue"] = HexBytes(kGameMainWrapperPrologue, kGameMainWrapperPrologueSize);
       if (entry.has_actual) {
-        record["actual_prologue"] = HexBytes(entry.actual, kPreprocessPrologueSize);
+        record["actual_prologue"] = HexBytes(entry.actual, kGameMainWrapperPrologueSize);
       }
     }
     Emit(record);

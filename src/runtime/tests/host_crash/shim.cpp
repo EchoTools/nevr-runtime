@@ -21,7 +21,7 @@ namespace {
 
 nevr_host::RuntimeLoader g_loader;
 
-std::uint64_t DummyOriginalPreprocess(void*) { return 0; }
+std::int64_t DummyOriginalWrapper(std::int64_t) { return 0; }
 
 // Reentrancy probe: installed via CrashCapture::SetCaptureProbe and run while the
 // host's atomic guard is held. It records its invocation count to a file (crash-safe:
@@ -81,7 +81,8 @@ extern "C" std::uint32_t nevr_host_test_LoadRuntime() {
   host.header.abi_minor = nevr_runtime_abi::kMinor;
   host.host_module = GetModuleHandleW(L"BugSplat64.dll");
   host.game_module = GetModuleHandleW(nullptr);
-  host.original_preprocess = &DummyOriginalPreprocess;
+  host.original_game_main_wrapper = &DummyOriginalWrapper;
+  host.wrapper_hook_target = reinterpret_cast<const void*>(&DummyOriginalWrapper);
   g_loader.Load(host, nevr_host::Diagnostics());
   return static_cast<std::uint32_t>(g_loader.Result().outcome);
 }

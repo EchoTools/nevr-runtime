@@ -1,25 +1,27 @@
 #pragma once
 
 // Shared protocol for the early-rendezvous harness
-// (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Early bootstrap").
+// (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Decision: the rendezvous is the
+// game's main wrapper").
 //
 // Three binaries speak it:
 //   - the test executable (rendezvous_test.cpp) — stands in for echovr.exe. It
-//     owns the event recorder and a synthetic game image whose
-//     PreprocessCommandLine carries the REAL echovr.exe prologue at the REAL RVA;
+//     owns the event recorder and a synthetic game image whose GameMainWrapper
+//     carries the REAL echovr.exe prologue at the REAL RVA;
 //   - the host shim (host_shim.cpp, built as BugSplat64.dll) — calls the production
 //     host entry points (runtime/host/host_entry.h): validate the image, install ONE
-//     detour from DLL_PROCESS_ATTACH, load nothing there; on the first call the host
-//     loads the sibling nevr.dll through RuntimeLoader::Load and dispatches;
+//     detour from DLL_PROCESS_ATTACH, load nothing there; on the wrapper's first call
+//     the host loads the sibling nevr.dll through RuntimeLoader::Load, then calls the
+//     runtime's initialize and game_main;
 //   - runtime fixtures (runtime_fixture.cpp, built as nevr.dll) — implement
-//     core/runtime_abi.h and record what they are called with, emulating the
-//     runtime-side server/client preflight + deferred-bootstrap semantics.
+//     core/runtime_abi.h and record what they are called with. Their game_main runs
+//     the original wrapper through the host's trampoline, standing in for GameMain.
 //
 // The prologue and RVA are shared with the production host
-// (runtime/host/preprocess_target.h) rather than re-declared here.
+// (runtime/host/game_targets.h) rather than re-declared here.
 
 #include "core/runtime_abi.h"
-#include "runtime/host/preprocess_target.h"
+#include "runtime/host/game_targets.h"
 
 #include <windows.h>
 
@@ -28,15 +30,15 @@
 
 namespace nevr_rendezvous_probe {
 
-/// The synthetic original returns this for `game`, so any argument or result
-/// altered anywhere on the path is visible.
+/// The synthetic original returns this for `command_line`, so any argument or result
+/// altered anywhere on the path is visible. Full 64-bit values on purpose.
 inline constexpr std::uint64_t kResultMask = 0x5EED5EED5EED5EEDull;
-inline std::uint64_t ExpectedResult(const void* game) {
-  return reinterpret_cast<std::uintptr_t>(game) ^ kResultMask;
+inline std::int64_t ExpectedResult(std::int64_t command_line) {
+  return static_cast<std::int64_t>(static_cast<std::uint64_t>(command_line) ^ kResultMask);
 }
 
-/// Game pointer the runtime fixture passes on its nested same-thread re-entry call.
-inline constexpr std::uintptr_t kReentryGame = 0x7A12'0000;
+/// Argument the runtime fixture passes on its nested same-thread re-entry call.
+inline constexpr std::int64_t kReentryArgument = 0x7A12'0000'0000'1234;
 
 enum Event : LONG {
   kHostAttachEnter = 1,
@@ -44,15 +46,15 @@ enum Event : LONG {
   kHostHookFailed = 3,
   kHostAttachExit = 4,    // payload: 1 if nevr.dll was loaded at attach exit
   kRuntimeDllAttach = 5,
-  kRuntimeInitialized = 6,  // payload: host-supplied original trampoline
-  kRuntimeBefore = 7,       // payload: game
-  kOriginal = 8,            // payload: game (recorded INSIDE the original body)
-  kRuntimeAfter = 9,        // payload: result
-  kRuntimeServerDetected = 10,  // preflight parsed -server BEFORE the original
-  kRuntimeClientDetected = 11,  // preflight parsed no -server BEFORE the original
-  kRuntimeDeferred = 12,        // post phase ran the deferred server bootstrap
-  kCallIssued = 13,             // payload: game
-  kBadResult = 14,              // payload: game whose result was wrong
+  kRuntimeInitialized = 6,      // payload: host-supplied original wrapper trampoline
+  kRuntimeGameMainEnter = 7,    // payload: command_line
+  kOriginal = 8,                // payload: command_line (recorded INSIDE the original body)
+  kRuntimeGameMainExit = 9,     // payload: result
+  kRuntimeHookTarget = 10,      // payload: the host context's wrapper_hook_target
+  kRuntimeHookBytes = 11,       // payload: the first 8 bytes of wrapper_hook_bytes
+  kRuntimeHookMismatch = 12,    // the record's 16 bytes differ from the live bytes at the target
+  kCallIssued = 13,             // payload: command_line
+  kBadResult = 14,              // payload: command_line whose result was wrong
   kEventLimit = 15,
 };
 
