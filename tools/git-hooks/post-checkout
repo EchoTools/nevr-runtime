@@ -12,7 +12,7 @@
 # printed or logged, and the hook always exits 0: a failed copy never fails the checkout.
 #
 # Logging: one line on stderr naming each path by outcome, and one JSON line per run appended to
-# `<common git dir>/logs/nevr-post-checkout.jsonl` with `ts`, `worktree` and per path
+# `<common git dir>/nevr-logs/post-checkout.jsonl` (not `logs/`: git keeps its reflogs there) with `ts`, `worktree` and per path
 # `copied|present|absent_in_main|failed|rejected`.
 #
 # Install once per clone with `just install-hooks`.
@@ -73,7 +73,7 @@ for i in "${!paths[@]}"; do
 done
 echo "nevr-post-checkout: worktree=$top${summary:- (nothing listed)}" >&2
 
-log_dir="$common_dir/logs"
+log_dir="$common_dir/nevr-logs"
 args=()
 for i in "${!paths[@]}"; do
     args+=("${paths[$i]}" "${outcomes[$i]}")
@@ -86,7 +86,7 @@ entry = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="
          "paths": [{"path": rest[i], "outcome": rest[i + 1]} for i in range(0, len(rest), 2)]}
 with open(log, "a", encoding="utf-8") as f:
     f.write(json.dumps(entry) + "\n")
-' "$log_dir/nevr-post-checkout.jsonl" "$top" "${args[@]+"${args[@]}"}") 2>/dev/null; then
-    echo "nevr-post-checkout: could not write $log_dir/nevr-post-checkout.jsonl" >&2
+' "$log_dir/post-checkout.jsonl" "$top" "${args[@]+"${args[@]}"}") 2>/dev/null; then
+    echo "nevr-post-checkout: could not write $log_dir/post-checkout.jsonl" >&2
 fi
 exit 0

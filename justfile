@@ -47,7 +47,7 @@ worktree-setup:
     tools/vcpkg_root.sh
 
 # Link the tracked post-checkout hook into this clone's hooks directory, once per clone: a new linked worktree
-# then gets the gitignored files .worktreeinclude lists (.mcp.json and the local Claude settings). Never overwrites
+# then gets the gitignored files .worktreeinclude lists (.mcp.json and the local Claude settings). Never overwrites a different hook.
 install-hooks:
     tools/install-git-hooks.sh
 

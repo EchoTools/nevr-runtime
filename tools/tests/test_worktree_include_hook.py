@@ -21,7 +21,7 @@ HOOK = REPO / "tools/git-hooks/post-checkout"
 INSTALLER = REPO / "tools/install-git-hooks.sh"
 CANARY = "CANARY-7f3a9c-do-not-print"
 INCLUDE = ".mcp.json\n.claude/settings.local.json\n"
-LOG_REL = "logs/nevr-post-checkout.jsonl"
+LOG_REL = "nevr-logs/post-checkout.jsonl"
 
 
 def mode(path: pathlib.Path) -> int:
@@ -147,6 +147,18 @@ class HookTest(unittest.TestCase):
         self.assertTrue((wt / ".mcp.json").is_file())
         for text in (res.stdout, res.stderr, again.stdout, again.stderr, fx.log.read_text()):
             self.assertNotIn(CANARY, text)
+
+    def test_log_stays_out_of_gits_reflog_directory(self) -> None:
+        fx = Fixture(self.root)
+        wt, res = fx.add_worktree()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        reflog_dir = fx.main / ".git/logs"
+        stray = [str(p) for p in reflog_dir.rglob("*") if "nevr" in p.name] if reflog_dir.exists() else []
+        self.assertEqual(stray, [], "the hook wrote under <common>/logs/, where git keeps reflogs")
+        listing = fx.git("reflog", "list", cwd=fx.main)
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        self.assertNotIn("nevr", listing.stdout)
+        self.assertTrue(fx.log.is_file(), "the hook wrote no log")
 
     def test_checkout_in_main_worktree_copies_nothing(self) -> None:
         fx = Fixture(self.root)
