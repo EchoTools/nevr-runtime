@@ -132,9 +132,10 @@ crash callback creates no mutex. With no handle (`CreateMutexW` failed) appends 
 lock, and the failure is journalled as a `log_mutex` attach step. Each wait is bounded (500 ms) and
 the mutex is recursive for its owner. A wait that times out or fails marks the lock unreliable and
 every later append in the process writes without waiting, so a holder that never releases costs a
-crash one 500 ms wait. A wait that ends with the lock acquired is not capped per process: a crash
-writes up to four records, and a holder that releases inside every wait costs up to four waits of
-at most 500 ms each. No per-process budget exists on purpose: it would stop serializing appends
+crash one 500 ms wait. A wait that ends with the lock acquired is not capped per process: with a
+holder that releases inside every wait, every destination an append opens waits once (at most
+500 ms), and a record whose write fails after its wait falls back to the next of up to three
+destinations and waits again, so a crash of up to four records can wait more than four times. No per-process budget exists on purpose: it would stop serializing appends
 after waits that succeeded, which is the ordinary contended case (a client and a local server
 sharing a prefix). In every case the record is not blocked: it is written, without the lock when
 the wait did not end owned. The append that marks the lock
