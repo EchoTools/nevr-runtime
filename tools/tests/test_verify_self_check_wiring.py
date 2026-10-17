@@ -10,7 +10,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools" / "verify_self_check_wiring.py"
 COPY = ["src/runtime/compat/ws_bridge.cpp", "src/quest/integration/production_steps.cpp",
-        "src/runtime/lifecycle/config.cpp", "src/runtime/lifecycle/crash_recovery.cpp", "src/quest/redirect/service_redirector.cpp",
+        "src/runtime/lifecycle/config.cpp", "src/runtime/lifecycle/crash_recovery.cpp", "src/quest/sentinel/entry.cpp",
+        "src/quest/redirect/service_redirector.cpp",
         "src/quest/integration/self_check_wiring.cpp", "src/quest/sentinel/quest_config.h",
         "src/runtime/compat/self_check.h", "CMakeLists.txt"]
 
@@ -136,9 +137,25 @@ class SelfCheckWiringGateTest(unittest.TestCase):
             self.edit(root, rel, old, "")
             self.assertEqual(run(root).returncode, 1, (rel, old))
 
+    def test_a_process_end_step_that_installs_nothing_fails(self):
+        for rel, old, new in (
+            ("src/quest/sentinel/entry.cpp", "return nevr_quest::process_end::Install();", "return true;"),
+            ("src/quest/integration/production_steps.cpp",
+             "const bool ok = nevr_quest::integration::InstallProcessEndHook();", "const bool ok = true;"),
+        ):
+            root = self.tree()
+            self.edit(root, rel, old, new)
+            self.assertEqual(run(root).returncode, 1, (rel, old))
+
     def test_a_pc_quit_check_that_is_not_called_fails(self):
         root = self.tree()
         self.edit(root, "src/runtime/lifecycle/crash_recovery.cpp", "nevr_quit_check::OnGameLoopReturned(gameResult);", "")
+        self.assertEqual(run(root).returncode, 1)
+
+    def test_a_process_end_report_that_is_not_registered_fails(self):
+        root = self.tree()
+        self.edit(root, "src/quest/integration/production_steps.cpp",
+                  "nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);", "")
         self.assertEqual(run(root).returncode, 1)
 
     def test_losing_the_quest_wiring_fails(self):

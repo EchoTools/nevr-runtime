@@ -28,6 +28,7 @@ const char* StepName(StepId id) {
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
+    case StepId::kInstallProcessEnd: return "install_process_end";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -152,6 +153,9 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Run(StepId::kInstallObbSkip, [&] { return steps.InstallObbSkip(true); });
     }
+
+    // The process ends when the game's android_main returns (#621): every launch, no feature, no counters.
+    r.Run(StepId::kInstallProcessEnd, [&] { return steps.InstallProcessEnd(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {

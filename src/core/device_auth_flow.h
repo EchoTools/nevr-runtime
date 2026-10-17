@@ -56,6 +56,9 @@ struct DeviceFlowOps {
   // True when the caller answers a code that runs out with a new one (the Quest session does):
   // the expiry and deadline lines then say so, at Info, instead of asking the player to restart.
   bool renews_expired_codes = false;
+  // True when the platform never opens a browser: the sign-in screen shows the code and the player types it on
+  // another device (Quest). The log then says "code shown", not "browser opening requested".
+  bool shows_code_only = false;
   // Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up; an
   // answered poll resets the run. The Windows module sets 5 (#202); 1 ends the wait on the first error.
   unsigned max_consecutive_poll_errors = 1;

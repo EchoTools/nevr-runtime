@@ -418,6 +418,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallProcessEnd() override {
+    const bool ok = nevr_quest::integration::InstallProcessEndHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallLoginPrompt(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -443,6 +449,8 @@ class ProductionSteps final : public Steps {
       hooks.log = &SelfCheckLog;
       hooks.build = NEVR_QUEST_PROJECT_VERSION;
       ApplySelfCheck(&config.tap, hooks);
+      // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
+      nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);
       nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
       nevr_self_check::Register({"matchmaking_reload_redirect",
                                  "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
