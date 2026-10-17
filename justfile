@@ -90,12 +90,14 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d by default; override with ANDROID_NDK_HOME.
+# The Quest configure lines clear the ccache launcher: that build embeds the worktree path in its debug info (no -ffile-prefix-map),
+# so an object cached from one worktree would put that worktree's path into another's .so.
 
 ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
 
 # Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
 configure-android:
-    cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
@@ -238,7 +240,7 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --build --preset mingw-dev
     )
     # Quest sentinel: its own build tree (build/android-dev).
-    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
