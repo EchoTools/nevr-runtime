@@ -73,6 +73,7 @@ enum class StepId : std::uint8_t {
   kStartReporter,
   kInstallClockHook,
   kInstallObbSkip,
+  kInstallProcessEnd,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -120,6 +121,8 @@ class Steps {
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
   // logs the skip and installs nothing). True when both slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
+  // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
+  virtual bool InstallProcessEnd() = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
