@@ -58,12 +58,21 @@ inline constexpr auto kCSymbol64Table = GenerateCSymbol64Table();
 // Case-insensitive: uppercase A-Z (0x41-0x5A) is converted to lowercase
 // before hashing, matching the binary's `(uint8_t)(c + 0xBF) <= 0x19` check.
 //
+// Bytes >= 0x80: the game sign-extends each byte to 64 bits before the table
+// XOR (echovr.exe 0x1400ce199 `MOVSX R8, DL`; libr15.so 0x11cc760 `sxtb x11,
+// w11`), so "caf\xc3\xa9" hashes to 0xcd0714df62754f5f and "\xff\xfe" to
+// 0x1f17d45f0697bb92.  The widening is spelled out because plain `char` is
+// signed under MinGW and the host g++ and unsigned under the NDK's AArch64
+// clang: a bare static_cast<uint64_t>(c) would zero-extend on Quest.
+// Empty or null input returns the seed.  constexpr so a build for any target
+// can static_assert the vectors (src/quest/tests/symbol_hash_test.cpp).
+//
 // Known results:
 //   "rwd_tint_0000"             -> 0x74d228d09dc5dc86
 //   "rwd_tint_0019"             -> 0x74d228d09dc5dd8f
 //   "serverdb"                  -> 0x25e886012ced8064
 //   "NEVRProtobufJSONMessageV1" -> 0xc6b3710cd9c4ef47
-inline uint64_t CSymbol64Hash(const char* str, uint64_t seed = kCSymbol64Seed) {
+constexpr uint64_t CSymbol64Hash(const char* str, uint64_t seed = kCSymbol64Seed) {
     if (!str || *str == '\0') return seed;
 
     for (const char* p = str; *p != '\0'; p++) {
@@ -76,7 +85,7 @@ inline uint64_t CSymbol64Hash(const char* str, uint64_t seed = kCSymbol64Seed) {
             c += 0x20;
         }
 
-        seed = static_cast<uint64_t>(c) ^
+        seed = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(c))) ^
                kCSymbol64Table[(seed >> 56) & 0xFF] ^
                (seed << 8);
     }

@@ -122,6 +122,10 @@ check-android-static-init: build-android
 test-android: check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
+    # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
+    # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
+    # start under qemu-user (TLS segment alignment), so nothing is run here.
+    "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -fsyntax-only src/quest/tests/symbol_hash_test.cpp
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -675,6 +679,10 @@ test-quest-shared: _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
     "$out/login_standin_test"
+    # CSymbol64Hash on bytes >= 0x80 (#657): the vectors are static_asserts and a run-time loop. The NDK compile
+    # of the same file is in test-android (plain char is unsigned there).
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test"
+    "$out/symbol_hash_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Shared EVR session router and the Quest loopback transport on the host. Plain g++, no NDK,
