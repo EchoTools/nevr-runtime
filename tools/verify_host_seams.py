@@ -16,7 +16,8 @@ nevr_host_core defines. This check looks at what is compiled, not at how the sou
      BUILD_TESTING=OFF configuration nevr_host_core is not created at all (it is inside if(BUILD_TESTING)), so
      there the define can only arrive through a CMake or flags line, which step 3 reads in every configuration;
   3. no tracked file spells the define in a way other than a gate line (`#if defined(NEVR_HOST_TESTING)` or
-     `#ifdef NEVR_HOST_TESTING`, nothing after it but a comment) or the one nevr_host_core
+     `#ifdef NEVR_HOST_TESTING`; comments are removed from the line first, then the bare directive must match
+     exactly, so `|| 1` between comments does not pass) or the one nevr_host_core
      target_compile_definitions line: #define or #cmakedefine (also in a .h.in), add_compile_definitions,
      target_compile_definitions elsewhere, add_compile_options, a -D in a script or a preset, and a gate that is
      always true (`|| 1`).
@@ -55,7 +56,7 @@ C_TEMPLATE_SUFFIXES = tuple(suffix + ".in" for suffix in C_SUFFIXES)
 # Files that name the define because they are this check; markdown only describes it.
 EXEMPT_FILES = {"tools/verify_host_seams.py", "tools/tests/test_host_test_seams.py"}
 EXEMPT_SUFFIXES = {".md"}
-GATE_LINE = re.compile(rf"^\s*#\s*(?:if\s+defined\s*\(\s*{DEFINE}\s*\)|ifdef\s+{DEFINE})\s*(?://.*|/\*.*\*/)?\s*$")
+GATE_LINE = re.compile(rf"^\s*#\s*(?:if\s+defined\s*\(\s*{DEFINE}\s*\)|ifdef\s+{DEFINE})\s*$")
 CMAKE_DEFINE_LINE = re.compile(rf"^\s*#\s*(?:cmakedefine01?|define)\b")
 LAUNCHERS = {"ccache", "sccache", "distcc", "icecc"}
 COMPILER_NAME = re.compile(r"(g\+\+|gcc|c\+\+|cc|clang\+\+|clang)(-[0-9.]+|-posix|-win32)?$")
@@ -170,6 +171,12 @@ def stray_define_commands(commands):
     return offenders
 
 
+def without_comments(line):
+    """The line with its block comments (each replaced by a space) and its trailing // comment removed. A /* that is
+    not closed on the line stays, so a gate line that continues into a comment does not match."""
+    return re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", " ", line))
+
+
 def is_c_file(path):
     return path.endswith(C_SUFFIXES) or path.endswith(C_TEMPLATE_SUFFIXES)
 
@@ -186,7 +193,7 @@ def stray_definitions(files):
             if is_c_file(path):
                 if code.startswith("//") or code.startswith("*") or code.startswith("/*"):
                     continue
-                if GATE_LINE.match(line):
+                if GATE_LINE.match(without_comments(line)):
                     continue
             elif code.startswith("#") and not CMAKE_DEFINE_LINE.match(line):  # a cmake / shell / python comment
                 continue

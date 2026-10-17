@@ -42,7 +42,8 @@ class StrayDefinitionTest(unittest.TestCase):
         files = {
             CMAKE: ALLOWED_LINE + f"# a comment about {DEFINE}\n",
             "src/runtime/host/x.cpp": f"#if defined({DEFINE})\nint seam;\n#endif\n#ifdef {DEFINE}\n#endif\n"
-                                      f"// {DEFINE} in a comment\n#if defined({DEFINE})  // the seams\n#endif\n",
+                                      f"// {DEFINE} in a comment\n#if defined({DEFINE})  // the seams\n#endif\n"
+                                      f"#if defined({DEFINE}) /* the seams */\n#endif\n",
         }
         self.assertEqual(self.offenders(files), [])
 
@@ -55,6 +56,10 @@ class StrayDefinitionTest(unittest.TestCase):
             "a flag in a preset": ("CMakePresets.json", f'"CMAKE_CXX_FLAGS": "-D{DEFINE}"\n'),
             "a flag in a script": ("tools/build.sh", f"CXXFLAGS=-D{DEFINE} make\n"),
             "a gate that is always true": ("src/runtime/host/runtime_rendezvous.h", f"#if defined({DEFINE}) || 1\n#endif\n"),
+            "an always-true condition between block comments": ("src/runtime/host/x.h",
+                                                                f"#if defined({DEFINE}) /* a */ || 1 /* b */\n#endif\n"),
+            "a condition that continues into a comment": ("src/runtime/host/x.h",
+                                                          f"#if defined({DEFINE}) /* a\n || 1 */\n#endif\n"),
             "a gate with a condition after it": ("src/runtime/host/x.h", f"#if defined({DEFINE}) && defined(X)\n#endif\n"),
             "an #elif": ("src/runtime/host/x.h", f"#elif defined({DEFINE})\n"),
             "a negated gate": ("src/runtime/host/x.h", f"#ifndef {DEFINE}\n#endif\n"),
