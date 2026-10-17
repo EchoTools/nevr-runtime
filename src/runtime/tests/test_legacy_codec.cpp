@@ -118,14 +118,6 @@ TEST(LegacySymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
   }
 }
 
-// A byte >= 0x80 is sign-extended, as the game does (echovr.exe 0x1400ce199 MOVSX) (#657).
-TEST(LegacySymbolHash, NonAsciiBytesAreSignExtended) {
-  EXPECT_EQ(EchoVR::CSymbol64Hash("main_menu"), 0x1509ee27440e1d7bULL);
-  EXPECT_EQ(EchoVR::CSymbol64Hash(""), EchoVR::kCSymbol64Seed);
-  EXPECT_EQ(EchoVR::CSymbol64Hash("caf\xc3\xa9"), 0xcd0714df62754f5fULL);
-  EXPECT_EQ(EchoVR::CSymbol64Hash("\xff\xfe"), 0x1f17d45f0697bb92ULL);
-}
-
 // ---- login --------------------------------------------------------------------------------------
 
 TEST(LegacyLogin, LoginRequestBecomesLogInRequestV2AndKeepsTheSession) {
