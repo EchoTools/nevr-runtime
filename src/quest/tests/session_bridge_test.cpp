@@ -431,7 +431,8 @@ std::string ConfigSuccessFor(const std::string& name, const std::string& resourc
 // window, answered to pings). The player signs in: the remote opens with the new token, the config request the
 // game queued goes first and its own login after it. The config connection then closes and the game opens a NEW
 // one: it reattaches to the same session (no second connect), its reply reaches it and not the login connection,
-// the old connection's reply is dropped, and the login session's profile reply reaches the login connection.
+// the closed connection's stale request yields to it (it gets the reply, and the second reply is dropped), and
+// the login session's profile reply reaches the login connection.
 void TestHeldSessionSurvivesUntilSignInThenRoutesByRole() {
   FakeConnector connector;
   Observed seen;
@@ -507,16 +508,15 @@ void TestHeldSessionSurvivesUntilSignInThenRoutesByRole() {
   QCHECK(bridge.DroppedUnrequires() == 0);
   loginConn->Push(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, ""));
   QCHECK(WaitFor([&] { return bridge.DroppedUnrequires() == 1; }));
-  // The service answers the closed connection's request first, then the new one's: the first reply is dropped,
-  // never handed to the replacement.
-  loginConn->Push(ConfigSuccessFor("main_menu", "for-the-closed-connection"));
-  const std::string configReply = ConfigSuccessFor("main_menu", "for-the-new-connection");
+  // The service answers the closed connection's request first, then the new one's. The closed connection's open
+  // request is the oldest for this resource, but the replacement asked for the same resource, so it takes the
+  // first reply; the reply to its own request then finds no open request and is dropped.
+  const std::string configReply = ConfigSuccessFor("main_menu", "for-the-closed-connection");
   loginConn->Push(configReply);
   const std::string configWire = BuildFrame(Opcode::Binary, configReply);
   QCHECK(config.Read(configWire.size()) == configWire);
-  bool configGotProfile = false;
-  config.Read(1, 200, &configGotProfile);
-  QCHECK(!configGotProfile);
+  loginConn->Push(ConfigSuccessFor("main_menu", "for-the-new-connection"));
+  QCHECK(config.Read(1, 300).empty());  // nothing more reaches it
   // An Unrequire inside a frame can reach the game with nothing outstanding; the bridge reports the count.
   const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')) +
                             nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "");
