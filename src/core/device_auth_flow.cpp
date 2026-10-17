@@ -33,7 +33,9 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
   }
 
   const DeviceFlowOps::Clock::time_point deadline = ops.now() + kDeviceAuthLifetime;
-  log(LogLevel::Info, "[NEVR.AUTH] Device authorization started; browser opening requested");
+  // Quest never opens a browser (the sign-in screen shows the code), so its lines say "code shown".
+  log(LogLevel::Info, std::string("[NEVR.AUTH] Device authorization started; ") +
+                          (ops.shows_code_only ? "code shown" : "browser opening requested"));
   log(LogLevel::Info, "[NEVR.AUTH] Device code expires in 5 minutes");
 
   std::string full_url = login_url + "?code=" + code;
@@ -43,7 +45,8 @@ DeviceFlowResult RunFlow(const DeviceFlowOps& ops, const std::string& login_url,
   // The code is a credential for this session, so the log says where the browser was sent and
   // what the open returned, with the code masked (ShellExecute reports success above 32).
   log(LogLevel::Info,
-      std::string("[NEVR.AUTH] browser open requested url=") + login_url + "?code=<" +
+      std::string(ops.shows_code_only ? "[NEVR.AUTH] code shown url=" : "[NEVR.AUTH] browser open requested url=") +
+          login_url + "?code=<" +
           std::to_string(code.size()) + " chars masked> open_result=" + std::to_string(browserResult) +
           (browserResult <= kBrowserOpenAcceptedAbove ? " (failed)" : " (accepted)"));
   int uiResult = 1;
