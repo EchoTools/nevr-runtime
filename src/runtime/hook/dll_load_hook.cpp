@@ -16,6 +16,7 @@
 
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/boot_log_tee.h"
 #include "core/hooking.h"
 
 #include <cstdio>
@@ -331,7 +332,7 @@ void AddPostLoadObserver(PostLoadObserver observer) {
     g_observers.push_back(observer);
 }
 
-void Install() {
+int Install() {
 #ifdef _WIN32
     // N129. These four hooks run the load filters (AddLoadFilter), post-load
     // observers (AddPostLoadObserver) and DLL-load callbacks (OnLoad) the runtime
@@ -341,6 +342,8 @@ void Install() {
     // loads through an unhooked variant run no filter, observer or callback. Report
     // each variant and its MH_STATUS, mirroring N126/N128 for the PatchDetour path.
     // (This path does not go through PatchDetour, so it needs its own reporting.)
+    // #632: Install() runs in the boot phase, under the loader lock (N36), so its report goes
+    // through the boot tee (stderr and nevr-boot.jsonl), and it returns the outcome for the caller.
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
         {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
@@ -366,8 +369,8 @@ void Install() {
             if (created == MH_OK) {
                 const MH_STATUS cleanup = HookRemove(s.target);
                 if (cleanup != MH_OK) {
-                    fprintf(stderr, "[NEVR.DLLHOOK] failed-hook cleanup FAILED name=%s reason=%s\n",
-                            s.name, MH_StatusToString(cleanup));
+                    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] failed-hook cleanup FAILED name=%s reason=%s\n",
+                                                  s.name, MH_StatusToString(cleanup));
                 }
                 *s.original = nullptr;
             }
@@ -375,16 +378,19 @@ void Install() {
             const char* effect = created == MH_ERROR_ALREADY_CREATED
                                      ? "a hook created earlier stays in place"
                                      : "loads through this variant run no load filter, observer or callback";
-            fprintf(stderr, "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — %s\n", s.name,
-                    MH_StatusToString(st), effect);
+            nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — %s\n", s.name,
+                                          MH_StatusToString(st), effect);
         }
     }
 
     // Keep "LoadLibrary hooks OK" as a substring on full success (smoke row B09),
     // and always report the count so PARTIAL is never a bare word without a number.
-    fprintf(stderr, "[NEVR.DLLHOOK] LoadLibrary hooks %s (%d/4)\n",
-            okCount == 4 ? "OK" : "PARTIAL", okCount);
-    fflush(stderr);
+    nevr_boot_log_tee::TeeFprintf("[NEVR.DLLHOOK] LoadLibrary hooks %s (%d/%d)\n",
+                                  okCount == kLoadLibraryVariantCount ? "OK" : "PARTIAL", okCount,
+                                  kLoadLibraryVariantCount);
+    return okCount;
+#else
+    return 0;
 #endif
 }
 

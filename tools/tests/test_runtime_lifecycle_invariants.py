@@ -228,6 +228,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotIn("veh installed", source,
                          "initialize.cpp hard-codes the veh boot line; take it from nevr_veh_policy::BootLine")
 
+    def test_dll_load_hooks_installed_line_is_gated_on_the_install_outcome(self):
+        # #632 (N127's shape): Install() returns how many LoadLibrary variants it hooked. The boot line
+        # says "installed" only for all of them; a partial install prints a line that names the count.
+        # InitializeAfterGameImageGuard cannot run in a GTest, so this pins the source.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        self.assertRegex(source, r"\bconst\s+int\s+(\w+)\s*=\s*nevr_dll_load_hook::Install\s*\(\s*\)\s*;")
+        outcome = re.search(r"\bconst\s+int\s+(\w+)\s*=\s*nevr_dll_load_hook::Install\s*\(\s*\)\s*;", source).group(1)
+        self.assertRegex(
+            source,
+            r"if\s*\(\s*" + outcome + r"\s*==\s*nevr_dll_load_hook::kLoadLibraryVariantCount\s*\)\s*\{\s*"
+            r"nevr_boot_log_tee::TeeFprintf\(\s*\"\[NEVR\.PATCH\] dll load hooks installed\\n\"\s*\)\s*;\s*\}\s*else\s*\{",
+            "the 'dll load hooks installed' line must be the 4/4 branch of an if/else on the Install() result")
+        self.assertEqual(source.count("dll load hooks installed"), 1)
+        self.assertRegex(source, r"dll load hooks PARTIAL \(%d/%d\)")
+
     def test_mic_provider_drops_stale_audio_at_the_first_game_read_and_caps_latency(self):
         # #95: the ring fills before the game's first read of a stream. The first MicRead drops that
         # backlog (MicAvailable polls do not), the overflow warning is for a game that read and then

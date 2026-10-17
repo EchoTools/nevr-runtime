@@ -333,8 +333,15 @@ static VOID InitializeAfterGameImageGuard() {
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
-  nevr_dll_load_hook::Install();
-  nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
+  const int dllLoadHooksInstalled = nevr_dll_load_hook::Install();
+  if (dllLoadHooksInstalled == nevr_dll_load_hook::kLoadLibraryVariantCount) {
+    nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
+  } else {
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.PATCH] dll load hooks PARTIAL (%d/%d): loads through an unhooked LoadLibrary variant run no load "
+        "filter, observer or callback\n",
+        dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
+  }
 
   // --- Headless graphics stubs (DXGI/D3D11 interception) ---
   // Register callbacks now so they fire when the game loads dxgi.dll/d3d11.dll.
