@@ -470,12 +470,15 @@ void ExpectHookedRecords(const std::vector<nlohmann::json>& records, const char*
   const int image = Find(records, "host_attach", "image_check", "accepted");
   const int prologue = Find(records, "host_attach", "prologue_check", "accepted");
   const int hook = Find(records, "host_attach", "hook_install", "enabled");
+  const int wait = Find(records, "host_attach", "install_wait", "signalled");
   const int load = Find(records, "runtime_load", "", load_outcome);
-  Require(image >= 0 && prologue >= 0 && hook >= 0 && load >= 0,
-          "a hooked run did not record its image, prologue, hook and runtime-load decisions");
-  Require(image < prologue && prologue < hook && hook < load,
+  Require(image >= 0 && prologue >= 0 && hook >= 0 && wait >= 0 && load >= 0,
+          "a hooked run did not record its image, prologue, hook, install-wait and runtime-load decisions");
+  Require(image < prologue && prologue < hook && hook < wait && wait < load,
           "the host's decisions were recorded out of order");
-  Require(records.size() == 4, "a hooked run recorded something other than its four decisions");
+  Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
+  Require(!records[static_cast<std::size_t>(hook)].contains("hook_bytes"),
+          "the install record says the hook bytes were unread");
   for (const int index : {prologue, hook}) {
     const nlohmann::json& found = records[static_cast<std::size_t>(index)];
     Require(found.at("rva") == "0xcd510" && found.at("expected_prologue") == "4883ec3848c744242000000000" &&
@@ -531,6 +534,25 @@ int RunSetGameModuleSupported() {
   const std::vector<EventRecord> events = Snapshot();
   ValidateDispatch(events, true, 0);
   std::printf("rendezvous test: PASS: NEVR_SetGameModule supported (launcher path)\n");
+  return 0;
+}
+
+int RunSetGameModuleTwice() {
+  // A second NEVR_SetGameModule is refused and recorded: it neither prepares the host again nor
+  // journals the image check a second time.
+  g_launcher_mode = 1;
+  g_image = BuildGameImage(false);
+  Require(g_image != nullptr, "could not build the synthetic game image");
+  const std::wstring host_path = ExecutableDirectory() + L"BugSplat64.dll";
+  HMODULE host = LoadLibraryW(host_path.c_str());
+  Require(host != nullptr, "host shim failed to load");
+  const auto set_game_module = reinterpret_cast<void (*)(HMODULE)>(GetProcAddress(host, "NEVR_SetGameModule"));
+  Require(set_game_module != nullptr, "NEVR_SetGameModule export did not resolve");
+  set_game_module(reinterpret_cast<HMODULE>(g_image));
+  set_game_module(reinterpret_cast<HMODULE>(g_image));
+  CallTarget(kCommandLine);
+  ValidateDispatch(Snapshot(), true, 0);
+  std::printf("rendezvous test: PASS: NEVR_SetGameModule called twice\n");
   return 0;
 }
 
@@ -627,6 +649,28 @@ int RunSuite() {
     ExpectHookedRecords(ReadHostRecords(dir), "loaded");
   }
 
+  {
+    StageRuntimeFixture(root, L"good");
+    const std::wstring dir = base + L"\\set-game-module-twice";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", dir.c_str());
+    SetEnvironmentVariableW(L"TEMP", dir.c_str());
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --set-game-module-twice", "set-game-module-twice", 0);
+    const std::vector<nlohmann::json> records = ReadHostRecords(dir);
+    int images = 0;
+    for (const nlohmann::json& record : records) {
+      images += record.value("step", "") == "image_check" ? 1 : 0;
+    }
+    Require(images == 1, "a second NEVR_SetGameModule journalled the image check again");
+    const int refused = Find(records, "host_attach", "set_game_module", "refused");
+    Require(refused >= 0 && records[static_cast<std::size_t>(refused)].at("reason") == "already_called" &&
+                records[static_cast<std::size_t>(refused)].at("next") == "ignored",
+            "a second NEVR_SetGameModule was not recorded as refused");
+    Require(Find(records, "host_attach", "hook_install", "enabled") >= 0 &&
+                Find(records, "runtime_load", "", "loaded") >= 0,
+            "the first NEVR_SetGameModule's install and load were not recorded");
+  }
+
   std::printf("rendezvous test: PASS: all %llu scenarios + NEVR_SetGameModule contract\n",
               static_cast<unsigned long long>(sizeof(scenarios) / sizeof(scenarios[0])));
   return 0;
@@ -644,6 +688,9 @@ int main(int argc, char** argv) {
   }
   if (argc == 2 && std::strcmp(argv[1], "--set-game-module-supported") == 0) {
     return RunSetGameModuleSupported();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--set-game-module-twice") == 0) {
+    return RunSetGameModuleTwice();
   }
   if (argc != 1) {
     Fail("usage: test_rendezvous.exe [--child <scenario> | --set-game-module-unsupported | "

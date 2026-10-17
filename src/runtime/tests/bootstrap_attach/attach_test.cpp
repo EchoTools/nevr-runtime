@@ -434,20 +434,22 @@ void ValidateHostRecords(const Expectation& expect) {
     }
     return;
   }
-  Require(records.size() == 4, "a hooked run recorded something other than its four decisions");
+  Require(records.size() == 5, "a hooked run recorded something other than its five decisions");
   Require(records[0].value("step", "") == "image_check" && records[0].value("outcome", "") == "accepted" &&
               records[1].value("step", "") == "prologue_check" &&
               records[1].value("outcome", "") == "accepted" &&
               records[2].value("step", "") == "hook_install" && records[2].value("outcome", "") == "enabled" &&
-              records[3].value("event", "") == "runtime_load",
+              records[3].value("step", "") == "install_wait" && records[3].value("outcome", "") == "signalled" &&
+              records[4].value("event", "") == "runtime_load",
           "the host's decisions were not recorded in order");
+  Require(!records[2].contains("hook_bytes"), "the install record says the hook bytes were unread");
   Require(records[2].at("rva") == "0xcd510" && records[2].at("stage") == "enable" &&
               records[2].at("mh_status") == 0 &&
               records[2].at("actual_prologue") == records[2].at("expected_prologue"),
           "the install record lacks the rva, the enable stage, MH_OK or the matching bytes");
-  Require(records[3].value("outcome", "") == expect.load_record,
+  Require(records[4].value("outcome", "") == expect.load_record,
           "the runtime_load record has an unexpected outcome");
-  Require(records[3].contains("loader_lock_held") && records[3].at("loader_lock_held") == false,
+  Require(records[4].contains("loader_lock_held") && records[4].at("loader_lock_held") == false,
           "the runtime_load record does not say the loader lock was not held");
 }
 

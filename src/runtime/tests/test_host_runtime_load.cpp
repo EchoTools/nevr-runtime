@@ -445,3 +445,28 @@ TEST(HostRuntimeLoad, TheLoadRecordCarriesLoaderLockHeld) {
   EXPECT_EQ(first.at("loader_lock_held"), false);
   EXPECT_EQ(second.at("loader_lock_held"), true);
 }
+
+// EmitLoadDiagnostic runs inside an InitOnce callback under the game's frames: a record that cannot be
+// built (allocation, a bad string) must come out as a fixed-buffer marker line, never as an exception.
+TEST(HostRuntimeLoad, ARecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kAbiRejected;
+  result.loader_lock_held = true;
+
+  nevr_host::SetEmitLoadFailureForTest(true);
+  EXPECT_NO_THROW(EmitLoadDiagnostic(diagnostics, result));
+  nevr_host::SetEmitLoadFailureForTest(false);
+
+  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  ASSERT_FALSE(text.empty());
+  const nlohmann::json marker = nlohmann::json::parse(text.substr(0, text.find('\n')));
+  EXPECT_EQ(marker.at("tag"), "NEVR.HOST");
+  EXPECT_EQ(marker.at("event"), "runtime_load");
+  EXPECT_EQ(marker.at("error"), "record_build_failed");
+  EXPECT_EQ(marker.at("outcome"), "abi_rejected");
+  EXPECT_EQ(marker.at("loader_lock_held"), true);
+  EXPECT_TRUE(marker.contains("what"));
+}

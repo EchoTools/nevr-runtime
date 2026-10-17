@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -310,15 +311,126 @@ TEST(BootstrapDiagnostics, AFlushWritesEachStepOnceAndPicksUpLaterSteps) {
   EXPECT_EQ(records[1].at("outcome"), "enabled");
 }
 
-TEST(BootstrapDiagnostics, TheJournalKeepsTheFirstEntriesWhenItOverflows) {
+TEST(BootstrapDiagnostics, TheJournalKeepsTheFirstEntriesAndCountsWhatItDropped) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
   for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity + 3; ++at) {
     diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
   }
+  EXPECT_TRUE(diagnostics.AttachDegraded());  // dropped decisions are a degraded attach
   diagnostics.FlushAttachJournal();
-  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), BootstrapDiagnostics::kJournalCapacity);
+
+  // The kept entries, then one record that says three were dropped.
+  std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity + 1);
+  EXPECT_EQ(records.back().at("event"), "host_attach");
+  EXPECT_EQ(records.back().at("step"), "journal");
+  EXPECT_EQ(records.back().at("outcome"), "overflow");
+  EXPECT_EQ(records.back().at("dropped"), 3);
+
+  // Nothing new dropped: nothing new written. A later drop is reported with the new total.
+  diagnostics.FlushAttachJournal();
+  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), BootstrapDiagnostics::kJournalCapacity + 1);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.FlushAttachJournal();
+  records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity + 2);
+  EXPECT_EQ(records.back().at("dropped"), 4);
+}
+
+// Two threads flushing while a third records: every entry is written exactly once. A flush that
+// moved the written mark backwards after a racing flush would write entries twice.
+TEST(BootstrapDiagnostics, ConcurrentFlushesWriteEachEntryExactlyOnce) {
+  for (int round = 0; round < 20; ++round) {
+    const std::wstring local = MakeTempDir(L"local");
+    BootstrapDiagnostics diagnostics;
+    diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+    struct Shared {
+      BootstrapDiagnostics* diagnostics;
+      volatile LONG stop;
+    } shared{&diagnostics, 0};
+    auto flusher = [](void* raw) -> DWORD {
+      auto* state = static_cast<Shared*>(raw);
+      while (InterlockedCompareExchange(&state->stop, 0, 0) == 0) state->diagnostics->FlushAttachJournal();
+      return 0;
+    };
+    HANDLE a = CreateThread(nullptr, 0, flusher, &shared, 0, nullptr);
+    HANDLE b = CreateThread(nullptr, 0, flusher, &shared, 0, nullptr);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity; ++at) {
+      diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed,
+                               static_cast<std::uint32_t>(at), nullptr, nevr_host::HookStage::kCreate);
+      Sleep(1);
+    }
+    InterlockedExchange(&shared.stop, 1);
+    WaitForSingleObject(a, 10000);
+    WaitForSingleObject(b, 10000);
+    CloseHandle(a);
+    CloseHandle(b);
+    diagnostics.FlushAttachJournal();
+    const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+    ASSERT_EQ(records.size(), BootstrapDiagnostics::kJournalCapacity) << "round " << round;
+    // Two flushers can write their ranges in either order; what must hold is no loss and no repeat.
+    std::set<int> seen;
+    for (const nlohmann::json& record : records) seen.insert(record.at("mh_status").get<int>());
+    EXPECT_EQ(seen.size(), BootstrapDiagnostics::kJournalCapacity) << "round " << round;
+  }
+}
+
+// The decisions that are not about the target: the install wait, the detour defect, a second
+// NEVR_SetGameModule, an unread hook record. Each is a record that says what happened and what the
+// host did next.
+TEST(BootstrapDiagnostics, TheWaitDefectAndRefusalRecordsSayWhatHappenedAndWhatHappensNext) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  using nevr_host::AttachNote;
+  diagnostics.RecordAttach(AttachStep::kInstallWait, AttachOutcome::kAccepted, 0, nullptr,
+                           nevr_host::HookStage::kNone, AttachNote::kInstallWaitSignalled);
+  EXPECT_FALSE(diagnostics.AttachDegraded());
+  diagnostics.RecordAttach(AttachStep::kInstallWait, AttachOutcome::kFailed, 0, nullptr,
+                           nevr_host::HookStage::kNone, AttachNote::kInstallWaitUnavailable);
+  diagnostics.RecordAttach(AttachStep::kInstallWait, AttachOutcome::kFailed, 0, nullptr,
+                           nevr_host::HookStage::kNone, AttachNote::kInstallWaitTimeout);
+  diagnostics.RecordAttach(AttachStep::kDetourEntry, AttachOutcome::kFailed, 0, nullptr,
+                           nevr_host::HookStage::kNone, AttachNote::kDetourWithoutHook);
+  diagnostics.RecordAttach(AttachStep::kSetGameModule, AttachOutcome::kRejected, 0, nullptr,
+                           nevr_host::HookStage::kNone, AttachNote::kDuplicateSetGameModule);
+  diagnostics.FlushAttachJournal();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 5u);
+  EXPECT_EQ(records[0].at("step"), "install_wait");
+  EXPECT_EQ(records[0].at("outcome"), "signalled");
+  EXPECT_FALSE(records[0].contains("next"));
+  EXPECT_EQ(records[1].at("outcome"), "unavailable");
+  EXPECT_EQ(records[1].at("next"), "load_proceeds_unsynchronized_and_the_journal_is_flushed_again_after_load");
+  EXPECT_EQ(records[2].at("outcome"), "timeout");
+  EXPECT_EQ(records[2].at("next"), "load_proceeds_unsynchronized_and_the_journal_is_flushed_again_after_load");
+  EXPECT_EQ(records[3].at("step"), "detour_entry");
+  EXPECT_EQ(records[3].at("outcome"), "defect");
+  EXPECT_EQ(records[3].at("next"), "returned_0_without_calling_the_original");
+  EXPECT_EQ(records[4].at("step"), "set_game_module");
+  EXPECT_EQ(records[4].at("outcome"), "refused");
+  EXPECT_EQ(records[4].at("reason"), "already_called");
+  EXPECT_EQ(records[4].at("next"), "ignored");
+}
+
+TEST(BootstrapDiagnostics, AnUnreadHookRecordIsOnTheInstallRecordAndDegradesTheAttach) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kAccepted, 0,
+                           nevr_host::kGameMainWrapperPrologue, nevr_host::HookStage::kEnable,
+                           nevr_host::AttachNote::kHookBytesUnread);
+  EXPECT_TRUE(diagnostics.AttachDegraded());
+  diagnostics.FlushAttachJournal();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].at("outcome"), "enabled");
+  EXPECT_EQ(records[0].at("hook_bytes"), "unread");
+  EXPECT_EQ(records[0].at("next"), "context_marks_the_hook_bytes_invalid");
 }
 
 TEST(BootstrapDiagnostics, AttachDegradedIsTrueForAnyRejectionOrFailureAndFalseOtherwise) {

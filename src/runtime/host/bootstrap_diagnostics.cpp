@@ -21,13 +21,29 @@ const char* StepName(AttachStep step) noexcept {
     case AttachStep::kImageCheck: return "image_check";
     case AttachStep::kPrologueCheck: return "prologue_check";
     case AttachStep::kHookInstall: return "hook_install";
+    case AttachStep::kInstallWait: return "install_wait";
+    case AttachStep::kDetourEntry: return "detour_entry";
+    case AttachStep::kSetGameModule: return "set_game_module";
+    case AttachStep::kJournal: return "journal";
   }
   return "unknown";
 }
 
 // The outcome token depends on the step: "accepted" for an image or prologue
 // check reads as "enabled" for the hook, and a rejected prologue is a "mismatch".
-const char* OutcomeName(AttachStep step, AttachOutcome outcome) noexcept {
+const char* OutcomeName(AttachStep step, AttachOutcome outcome, AttachNote note) noexcept {
+  switch (step) {
+    case AttachStep::kInstallWait:
+      if (outcome == AttachOutcome::kAccepted) return "signalled";
+      return note == AttachNote::kInstallWaitTimeout ? "timeout" : "unavailable";
+    case AttachStep::kDetourEntry: return "defect";
+    case AttachStep::kSetGameModule: return "refused";
+    case AttachStep::kJournal: return "overflow";
+    case AttachStep::kImageCheck:
+    case AttachStep::kPrologueCheck:
+    case AttachStep::kHookInstall:
+      break;
+  }
   switch (outcome) {
     case AttachOutcome::kAccepted:
       return step == AttachStep::kHookInstall ? "enabled" : "accepted";
@@ -120,10 +136,11 @@ void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const w
 
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
                                         std::uint32_t detail, const unsigned char* actual,
-                                        HookStage stage) noexcept {
+                                        HookStage stage, AttachNote note) noexcept {
   const std::size_t slot = journal_count_.fetch_add(1);
   if (slot >= kJournalCapacity) {
     journal_count_.store(kJournalCapacity);  // saturate: the first entries are the ones kept
+    dropped_.fetch_add(1);                   // and the rest are counted, then reported at the flush
     return;
   }
   JournalEntry& entry = journal_[slot];
@@ -131,6 +148,7 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   entry.outcome = outcome;
   entry.detail = detail;
   entry.stage = stage;
+  entry.note = note;
   entry.has_actual = actual != nullptr;
   if (actual != nullptr) std::memcpy(entry.actual, actual, kGameMainWrapperPrologueSize);
 }
@@ -139,17 +157,40 @@ bool BootstrapDiagnostics::AttachDegraded() const noexcept {
   const std::size_t count = journal_count_.load();
   for (std::size_t at = 0; at < count && at < kJournalCapacity; ++at) {
     if (journal_[at].outcome != AttachOutcome::kAccepted) return true;
+    if (journal_[at].note == AttachNote::kHookBytesUnread) return true;
   }
-  return false;
+  return dropped_.load() != 0;
 }
 
 void BootstrapDiagnostics::FlushAttachJournal() noexcept {
   std::size_t count = journal_count_.load();
   if (count > kJournalCapacity) count = kJournalCapacity;
-  const std::size_t from = flushed_upto_.exchange(count);  // each step is written once, ever
+  // Each step is written once, ever. The written mark only moves forward: a flush that read an older
+  // count never pulls it back over entries another flush has already written.
+  std::size_t from = flushed_upto_.load();
+  while (from < count && !flushed_upto_.compare_exchange_weak(from, count)) {
+  }
   for (std::size_t at = from; at < count; ++at) {
     try {
       EmitJournalEntry(journal_[at]);
+    } catch (const std::exception& error) {
+      ReportBuildFailure("host_attach", error.what());
+    }
+  }
+  // Entries the full journal had no room for: one record with the running total, whenever it grew.
+  const std::size_t dropped = dropped_.load();
+  std::size_t reported = dropped_reported_.load();
+  while (reported < dropped && !dropped_reported_.compare_exchange_weak(reported, dropped)) {
+  }
+  if (reported < dropped) {
+    try {
+      nlohmann::json record;
+      record["event"] = "host_attach";
+      record["step"] = StepName(AttachStep::kJournal);
+      record["outcome"] = OutcomeName(AttachStep::kJournal, AttachOutcome::kFailed, AttachNote::kNone);
+      record["dropped"] = dropped;
+      record["capacity"] = kJournalCapacity;
+      Emit(record);
     } catch (const std::exception& error) {
       ReportBuildFailure("host_attach", error.what());
     }
@@ -161,9 +202,32 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
     nlohmann::json record;
     record["event"] = "host_attach";
     record["step"] = StepName(entry.step);
-    record["outcome"] = OutcomeName(entry.step, entry.outcome);
-    if (entry.outcome != AttachOutcome::kAccepted) {
+    record["outcome"] = OutcomeName(entry.step, entry.outcome, entry.note);
+    const bool target_step = entry.step == AttachStep::kImageCheck ||
+                             entry.step == AttachStep::kPrologueCheck ||
+                             entry.step == AttachStep::kHookInstall;
+    if (target_step && entry.outcome != AttachOutcome::kAccepted) {
       record["degraded_action"] = "run_original_only";
+    }
+    switch (entry.note) {
+      case AttachNote::kHookBytesUnread:
+        record["hook_bytes"] = "unread";
+        record["next"] = "context_marks_the_hook_bytes_invalid";
+        break;
+      case AttachNote::kInstallWaitUnavailable:
+      case AttachNote::kInstallWaitTimeout:
+        record["next"] = "load_proceeds_unsynchronized_and_the_journal_is_flushed_again_after_load";
+        break;
+      case AttachNote::kDetourWithoutHook:
+        record["next"] = "returned_0_without_calling_the_original";
+        break;
+      case AttachNote::kDuplicateSetGameModule:
+        record["reason"] = "already_called";
+        record["next"] = "ignored";
+        break;
+      case AttachNote::kNone:
+      case AttachNote::kInstallWaitSignalled:
+        break;
     }
     if (entry.step == AttachStep::kHookInstall) {
       if (entry.stage != HookStage::kNone) record["stage"] = StageName(entry.stage);

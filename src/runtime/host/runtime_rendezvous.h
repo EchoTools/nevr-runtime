@@ -59,11 +59,30 @@ class RuntimeRendezvous {
   // runtime is published; a same-thread re-entry during load bypasses to the original.
   static std::int64_t GameMainWrapperDetour(std::int64_t command_line);
 
-  // The runtime module once it has loaded, else null.
-  HMODULE RuntimeModule() const { return runtime_module_.load(std::memory_order_acquire); }
+  // How the wait for the install ended.
+  enum class InstallWait { kSignalled, kUnavailable, kTimeout };
+
+  // Wait until Install has journalled its last decision, and journal how the wait ended
+  // (install_wait: signalled | unavailable | timeout). Unavailable (no event could be created)
+  // and timeout both let the load proceed unsynchronized; the caller flushes the journal again
+  // after the load so a late install record is still written. A detour thread calls this before
+  // it touches the host context, which Install finishes writing before it signals.
+  InstallWait AwaitInstall();
 
   // Test seam: whether Install has already published a trampoline.
   bool Installed() const { return original_ != nullptr; }
+
+  // Test seams: the context Install built, and the three things a test must be able to make fail
+  // or run short. All default to production behaviour.
+  struct TestSeams {
+    bool fail_event_create = false;     // CreateEventW "fails": no install event
+    bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
+    DWORD install_wait_ms = 5000;       // how long AwaitInstall waits
+  };
+  static TestSeams& Seams();
+  const NevrHostContext& Context() const { return context_; }
+  void SetInstallEventForTest(HANDLE event) { install_done_.store(event, std::memory_order_release); }
+  static void ResetActiveForTest();
 
  private:
   // The InitOnce body: load/validate/initialize the runtime exactly once. A
@@ -73,7 +92,8 @@ class RuntimeRendezvous {
   static BOOL CALLBACK LoadRuntimeOnce(PINIT_ONCE init_once, PVOID parameter, PVOID* context);
 
   void Journal(AttachStep step, AttachOutcome outcome, std::uint32_t detail = 0,
-               const unsigned char* actual = nullptr, HookStage stage = HookStage::kNone);
+               const unsigned char* actual = nullptr, HookStage stage = HookStage::kNone,
+               AttachNote note = AttachNote::kNone);
 
   HMODULE host_module_ = nullptr;
   HMODULE game_module_ = nullptr;
@@ -81,14 +101,14 @@ class RuntimeRendezvous {
   RuntimeLoader loader_;
   NevrHostContext context_{};
   NevrGameMainFn original_ = nullptr;
-  const void* target_ = nullptr;
   INIT_ONCE load_once_ = INIT_ONCE_STATIC_INIT;
   std::atomic<const NevrRuntimeApi*> api_{nullptr};
-  std::atomic<HMODULE> runtime_module_{nullptr};
   std::atomic<DWORD> loading_thread_{0};
   // Set when Install has journalled its last decision. A thread can enter the detour while
   // MH_EnableHook is still returning, so the load waits for this before it reports the
   // journal; otherwise the install record could be recorded after the report and never written.
+  // The handle is never closed: a detour thread can be waiting on it at any moment of the
+  // process's life, and one event is the whole cost.
   std::atomic<HANDLE> install_done_{nullptr};
 };
 

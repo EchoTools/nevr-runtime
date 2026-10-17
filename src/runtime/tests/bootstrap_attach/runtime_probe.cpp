@@ -84,6 +84,8 @@ std::int32_t Initialize(const NevrHostContext* host) {
   if (nevr_runtime_abi::ValidateHostContext(host) != nevr_runtime_abi::Status::kOk) return 1;
   g_host = host;
   g_original = host->original_game_main_wrapper;
+  // An unread or malformed hook record is not one the runtime may register: counted as a mismatch.
+  if (!nevr_runtime_abi::HookRecordUsable(host)) Record(kRuntimeHookMismatch);
   g_hooked_entry = reinterpret_cast<NevrGameMainFn>(
       reinterpret_cast<std::uintptr_t>(host->game_module) + nevr_host::kGameMainWrapperRva);
   Record(kRuntimeInitialized, AsPayload(reinterpret_cast<const void*>(host->original_game_main_wrapper)));

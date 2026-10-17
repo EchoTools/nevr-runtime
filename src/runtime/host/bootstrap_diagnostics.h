@@ -49,6 +49,22 @@ enum class AttachStep : std::uint32_t {
   kImageCheck = 1,     // is the process image a supported echovr.exe
   kPrologueCheck = 2,  // does GameMainWrapper still start with the pinned bytes
   kHookInstall = 3,    // MinHook initialize, create and enable
+  kInstallWait = 4,    // the load waited for the install to finish journalling
+  kDetourEntry = 5,    // the detour was entered in a state it must never be entered in
+  kSetGameModule = 6,  // a second NEVR_SetGameModule
+  kJournal = 7,        // the journal itself: entries it had no room for
+};
+
+/// What an entry adds to its step: the outcome of a wait, the reason for a refusal, a fact about
+/// the install. Each names what the host did next where that is not obvious.
+enum class AttachNote : std::uint32_t {
+  kNone = 0,
+  kHookBytesUnread = 1,          // hook_install: the hook is live but its first bytes were not read
+  kInstallWaitSignalled = 2,     // install_wait: the install had finished
+  kInstallWaitUnavailable = 3,   // install_wait: no event to wait on (CreateEventW failed)
+  kInstallWaitTimeout = 4,       // install_wait: the install did not finish in time
+  kDetourWithoutHook = 5,        // detour_entry: entered with no trampoline published
+  kDuplicateSetGameModule = 6,   // set_game_module: already called once
 };
 
 /// The MinHook call a hook-install step reached (the one that failed, or enable on success).
@@ -80,8 +96,8 @@ class BootstrapDiagnostics {
   /// prologue found at the target, kept so a mismatch can be explained. `detail` is the
   /// MH_STATUS of a hook-install step and `stage` the MinHook call it belongs to.
   void RecordAttach(AttachStep step, AttachOutcome outcome, std::uint32_t detail = 0,
-                    const unsigned char* actual = nullptr,
-                    HookStage stage = HookStage::kNone) noexcept;
+                    const unsigned char* actual = nullptr, HookStage stage = HookStage::kNone,
+                    AttachNote note = AttachNote::kNone) noexcept;
 
   /// Write every recorded attach step not yet written (a call with nothing new is a
   /// no-op). Called after
@@ -91,7 +107,8 @@ class BootstrapDiagnostics {
   /// crash reporter even though no detour exists to trigger it earlier.
   void FlushAttachJournal() noexcept;
 
-  /// True when any recorded attach step was a rejection or a failure.
+  /// True when any recorded attach step was a rejection or a failure, an install record says its
+  /// hook bytes were unread, or the journal dropped entries.
   bool AttachDegraded() const noexcept;
 
   /// Append one record built with nlohmann::json. `tag`, `ts` and `pid` are added.
@@ -116,6 +133,7 @@ class BootstrapDiagnostics {
   bool HostDirReady() const { return host_dir_ready_; }
   std::size_t JournalFlushed() const { return flushed_upto_.load(); }
   std::size_t JournalSize() const { return journal_count_.load(); }
+  std::size_t JournalDropped() const { return dropped_.load(); }
 
  private:
   struct JournalEntry {
@@ -123,6 +141,7 @@ class BootstrapDiagnostics {
     AttachOutcome outcome;
     std::uint32_t detail;
     HookStage stage;
+    AttachNote note;
     bool has_actual;
     unsigned char actual[kGameMainWrapperPrologueSize];
   };
@@ -142,6 +161,8 @@ class BootstrapDiagnostics {
   JournalEntry journal_[kJournalCapacity] = {};
   std::atomic<std::size_t> journal_count_{0};
   std::atomic<std::size_t> flushed_upto_{0};
+  std::atomic<std::size_t> dropped_{0};           // entries the full journal had no room for
+  std::atomic<std::size_t> dropped_reported_{0};  // the total the last overflow record carried
 };
 
 }  // namespace nevr_host

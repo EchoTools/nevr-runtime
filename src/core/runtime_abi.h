@@ -57,6 +57,11 @@ struct NevrHostContext {
   /// HookGuard from this record instead of hooking the wrapper itself.
   const void* wrapper_hook_target;
   unsigned char wrapper_hook_bytes[16];
+  /// 1 when the host read wrapper_hook_bytes from the target after enabling its hook, 0 when it
+  /// could not (the bytes are then zeros and mean nothing). Anything else is malformed. Use
+  /// nevr_runtime_abi::HookRecordUsable before registering the bytes with HookGuard.
+  std::uint32_t wrapper_hook_bytes_valid;
+  std::uint32_t reserved;
 };
 
 /// Returned by nevr.dll's NEVR_GetRuntimeApi export. All entries are required in v1.
@@ -86,7 +91,7 @@ inline constexpr std::uint32_t kMinor = 0;
 inline constexpr std::uint32_t kRuntimeApiV1Size =
     static_cast<std::uint32_t>(offsetof(NevrRuntimeApi, game_main) + sizeof(void*));
 inline constexpr std::uint32_t kHostContextV1Size = static_cast<std::uint32_t>(
-    offsetof(NevrHostContext, wrapper_hook_bytes) + sizeof(NevrHostContext::wrapper_hook_bytes));
+    offsetof(NevrHostContext, reserved) + sizeof(NevrHostContext::reserved));
 
 /// Bytes of the host's hook recorded in NevrHostContext::wrapper_hook_bytes.
 inline constexpr std::size_t kHookBytesSize = sizeof(NevrHostContext::wrapper_hook_bytes);
@@ -102,7 +107,9 @@ static_assert(offsetof(NevrHostContext, original_game_main_wrapper) == 32);
 static_assert(offsetof(NevrHostContext, wrapper_hook_target) == 40);
 static_assert(offsetof(NevrHostContext, wrapper_hook_bytes) == 48);
 static_assert(kHookBytesSize == 16);
-static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 64);
+static_assert(offsetof(NevrHostContext, wrapper_hook_bytes_valid) == 64);
+static_assert(offsetof(NevrHostContext, reserved) == 68);
+static_assert(sizeof(NevrHostContext) == kHostContextV1Size && kHostContextV1Size == 72);
 static_assert(offsetof(NevrRuntimeApi, initialize) == 16);
 static_assert(offsetof(NevrRuntimeApi, game_main) == 24);
 static_assert(sizeof(NevrRuntimeApi) == kRuntimeApiV1Size && kRuntimeApiV1Size == 32);
@@ -114,6 +121,7 @@ enum class Status : std::uint32_t {
   kMajorMismatch = 3,
   kStructTooSmall = 4,
   kMissingEntry = 5,
+  kInvalidField = 6,
 };
 
 /// Stable lower-case token for diagnostics records.
@@ -125,6 +133,7 @@ inline constexpr const char* StatusName(Status status) noexcept {
     case Status::kMajorMismatch: return "major_mismatch";
     case Status::kStructTooSmall: return "struct_too_small";
     case Status::kMissingEntry: return "missing_entry";
+    case Status::kInvalidField: return "invalid_field";
   }
   return "unknown";
 }
@@ -156,11 +165,23 @@ inline Status ValidateRuntimeApi(const NevrRuntimeApi* api) noexcept {
 inline Status ValidateHostContext(const NevrHostContext* host) noexcept {
   const Status header = CheckHeader(host == nullptr ? nullptr : &host->header, kHostContextV1Size);
   if (header != Status::kOk) return header;
-  if (host->game_module == nullptr || host->original_game_main_wrapper == nullptr ||
-      host->wrapper_hook_target == nullptr) {
+  if (host->host_module == nullptr || host->game_module == nullptr ||
+      host->original_game_main_wrapper == nullptr || host->wrapper_hook_target == nullptr) {
     return Status::kMissingEntry;
   }
+  // An unread record (0) is accepted: the runtime can still run, and refusing to start over a
+  // HookGuard registration would take every runtime fix with it. It is not usable (below).
+  if (host->wrapper_hook_bytes_valid > 1) return Status::kInvalidField;
   return Status::kOk;
+}
+
+/// True when the host's hook record may be registered with HookGuard: the writer's size covers
+/// the flag and the flag says the host read the bytes. False for an unread or malformed record.
+inline bool HookRecordUsable(const NevrHostContext* host) noexcept {
+  return host != nullptr &&
+         DescriptorCovers(&host->header, offsetof(NevrHostContext, wrapper_hook_bytes_valid) +
+                                             sizeof(host->wrapper_hook_bytes_valid)) &&
+         host->wrapper_hook_bytes_valid == 1;
 }
 
 }  // namespace nevr_runtime_abi

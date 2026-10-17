@@ -1,18 +1,23 @@
 #include "runtime/host/runtime_load.h"
 
+#include "runtime/host/host_json.h"
 #include "runtime/host/loader_lock.h"
 #include "runtime/host/path_buffer.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <atomic>
 #include <cstring>
+#include <exception>
+#include <stdexcept>
 #include <string>
 
 namespace nevr_host {
 namespace {
 
 constexpr wchar_t kRuntimeFileName[] = L"nevr.dll";
+constexpr std::size_t kMarkerBytes = 512;
 
 // Bounded copy of a NUL-terminated wide path into a fixed buffer.
 void CopyPath(wchar_t* dst, std::size_t dst_size, const wchar_t* src) {
@@ -144,25 +149,46 @@ RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_err
   return result;
 }
 
-void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) {
-  nlohmann::json record;
-  record["event"] = "runtime_load";
-  record["outcome"] = result.OutcomeName();
-  record["degraded_action"] = result.DegradedAction();
-  record["path_ok"] = result.path_ok;
-  record["loader_lock_held"] = result.loader_lock_held;
-  if (result.path_ok) record["path"] = ToUtf8(result.path);
-  record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
-  const bool descriptor_read = DescriptorRead(result.outcome);
-  if (descriptor_read) {
-    record["actual_abi"] = AbiVersion(result.actual_major, result.actual_minor);
+namespace {
+std::atomic<bool> g_fail_emit_for_test{false};
+}  // namespace
+
+void SetEmitLoadFailureForTest(bool fail) noexcept { g_fail_emit_for_test.store(fail); }
+
+void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept {
+  try {
+    if (g_fail_emit_for_test.load()) throw std::runtime_error("record builder failed (test seam)");
+    nlohmann::json record;
+    record["event"] = "runtime_load";
+    record["outcome"] = result.OutcomeName();
+    record["degraded_action"] = result.DegradedAction();
+    record["path_ok"] = result.path_ok;
+    record["loader_lock_held"] = result.loader_lock_held;
+    if (result.path_ok) record["path"] = ToUtf8(result.path);
+    record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
+    const bool descriptor_read = DescriptorRead(result.outcome);
+    if (descriptor_read) {
+      record["actual_abi"] = AbiVersion(result.actual_major, result.actual_minor);
+    }
+    if (result.win32_error != 0) record["win32_error"] = result.win32_error;
+    if (descriptor_read) record["abi_status"] = nevr_runtime_abi::StatusName(result.abi_status);
+    if (result.outcome == RuntimeLoadOutcome::kInitFailed || result.Loaded()) {
+      record["init_code"] = result.init_code;
+    }
+    diagnostics.Emit(record);
+  } catch (const std::exception& error) {
+    // Fixed buffer, no allocation: the record the load would have written, reduced to what
+    // survives. Emit() has its own marker for a record it cannot write; this one is for a record
+    // that could not be built.
+    char buffer[kMarkerBytes];
+    JsonLine line(buffer, sizeof(buffer), "runtime_load");
+    line.Str("error", "record_build_failed")
+        .Str("what", error.what())
+        .Str("outcome", result.OutcomeName())
+        .Bool("loader_lock_held", result.loader_lock_held);
+    const std::size_t length = line.Finish();
+    if (length != 0) diagnostics.AppendLine(buffer, length);
   }
-  if (result.win32_error != 0) record["win32_error"] = result.win32_error;
-  if (descriptor_read) record["abi_status"] = nevr_runtime_abi::StatusName(result.abi_status);
-  if (result.outcome == RuntimeLoadOutcome::kInitFailed || result.Loaded()) {
-    record["init_code"] = result.init_code;
-  }
-  diagnostics.Emit(record);
 }
 
 bool ResolveRuntimePath(HMODULE host_module, wchar_t* out, std::size_t out_size) noexcept {

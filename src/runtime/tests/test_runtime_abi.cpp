@@ -42,6 +42,7 @@ NevrHostContext ValidHost() {
   for (std::size_t at = 0; at < sizeof(host.wrapper_hook_bytes); ++at) {
     host.wrapper_hook_bytes[at] = static_cast<unsigned char>(0xE9 + at);
   }
+  host.wrapper_hook_bytes_valid = 1;
   return host;
 }
 
@@ -126,8 +127,9 @@ TEST(RuntimeAbi, V1LayoutIsPinned) {
   EXPECT_EQ(offsetof(NevrHostContext, wrapper_hook_bytes), 48u);
   EXPECT_EQ(sizeof(NevrHostContext::wrapper_hook_bytes), nevr_runtime_abi::kHookBytesSize);
   EXPECT_EQ(nevr_runtime_abi::kHookBytesSize, 16u);
-  EXPECT_EQ(nevr_runtime_abi::kHostContextV1Size, 64u);
-  EXPECT_EQ(sizeof(NevrHostContext), 64u);
+  EXPECT_EQ(offsetof(NevrHostContext, wrapper_hook_bytes_valid), 64u);
+  EXPECT_EQ(nevr_runtime_abi::kHostContextV1Size, 72u);
+  EXPECT_EQ(sizeof(NevrHostContext), 72u);
 }
 
 // The wrapper takes the command-line pointer and returns the process exit code as a 64-bit
@@ -185,6 +187,9 @@ TEST(RuntimeAbi, HostContextAcceptsValidAndRejectsMissingRendezvousEntries) {
   host.game_module = nullptr;
   EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kMissingEntry);
   host = ValidHost();
+  host.host_module = nullptr;
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kMissingEntry);
+  host = ValidHost();
   host.header.abi_major = nevr_runtime_abi::kMajor + 1;
   EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kMajorMismatch);
   host = ValidHost();
@@ -199,18 +204,38 @@ TEST(RuntimeAbi, HostContextNeedsTheWholeHookRecord) {
   for (const std::uint32_t size : {static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_target)),
                                    static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes)),
                                    static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes) +
-                                                              nevr_runtime_abi::kHookBytesSize - 1)}) {
+                                                              nevr_runtime_abi::kHookBytesSize - 1),
+                                   static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes_valid))}) {
     host.header.struct_size = size;
     EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kStructTooSmall) << size;
   }
 }
 
+// A record whose bytes were never read is accepted (the runtime can still run) but is not
+// usable: the runtime must not register zeros with HookGuard. A value that is neither 0 nor 1 is
+// a malformed writer and is rejected.
+TEST(RuntimeAbi, AnUnreadHookRecordIsAcceptedButNotUsable) {
+  NevrHostContext host = ValidHost();
+  EXPECT_TRUE(nevr_runtime_abi::HookRecordUsable(&host));
+  host.wrapper_hook_bytes_valid = 0;
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kOk);
+  EXPECT_FALSE(nevr_runtime_abi::HookRecordUsable(&host));
+  host.wrapper_hook_bytes_valid = 2;
+  EXPECT_EQ(nevr_runtime_abi::ValidateHostContext(&host), nevr_runtime_abi::Status::kInvalidField);
+  EXPECT_FALSE(nevr_runtime_abi::HookRecordUsable(&host));
+  EXPECT_FALSE(nevr_runtime_abi::HookRecordUsable(nullptr));
+  // A writer whose size stops before the flag cannot claim the bytes are usable.
+  host = ValidHost();
+  host.header.struct_size = static_cast<std::uint32_t>(offsetof(NevrHostContext, wrapper_hook_bytes_valid));
+  EXPECT_FALSE(nevr_runtime_abi::HookRecordUsable(&host));
+}
+
 TEST(RuntimeAbi, StatusNamesAreDistinctDiagnosticTokens) {
   std::set<std::string> names;
-  for (std::uint32_t raw = 0; raw <= 5; ++raw) {
+  for (std::uint32_t raw = 0; raw <= 6; ++raw) {
     names.insert(nevr_runtime_abi::StatusName(static_cast<nevr_runtime_abi::Status>(raw)));
   }
-  EXPECT_EQ(names.size(), 6u);
+  EXPECT_EQ(names.size(), 7u);
   EXPECT_EQ(names.count("unknown"), 0u);
   EXPECT_STREQ(nevr_runtime_abi::StatusName(nevr_runtime_abi::Status::kMajorMismatch), "major_mismatch");
 }

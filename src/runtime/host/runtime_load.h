@@ -66,8 +66,13 @@ RuntimeLoadResult ClassifyLoad(bool path_ok, const wchar_t* path, DWORD load_err
                                nevr_runtime_abi::Status abi_status, std::int32_t init_code);
 
 // Emit a bounded JSON diagnostic describing the result (full path, Win32 error,
-// expected/actual ABI version, ABI status, init code, degraded action).
-void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result);
+// expected/actual ABI version, ABI status, init code, degraded action). Never throws: it runs in an
+// InitOnce callback under the game's frames. A record that cannot be built (allocation, a bad
+// string) is replaced by a fixed-buffer marker line carrying the outcome and what failed.
+void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResult& result) noexcept;
+
+// Test seam: make the record builder throw, to reach the marker line.
+void SetEmitLoadFailureForTest(bool fail) noexcept;
 
 class RuntimeLoader {
  public:
