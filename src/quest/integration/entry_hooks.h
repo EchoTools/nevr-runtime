@@ -19,6 +19,12 @@ bool RegisterObbSkipCounters() noexcept;  // 4 counters
 // obb_skip::InstallIfCounted(countersRegistered): true when both slots hold their thunks.
 bool InstallObbSkipHook(bool countersRegistered) noexcept;
 
+// The #621 process-end hook (sentinel/process_end_hook.h), through this seam for the same reason: the process ends
+// when the game's android_main returns. No counters. `SetProcessEndCallback` registers what runs on the hook's
+// helper thread just before the process ends (the self-check report and flush); call it before the install.
+void SetProcessEndCallback(void (*callback)() noexcept) noexcept;
+bool InstallProcessEndHook() noexcept;  // true when the android_main slot holds the thunk
+
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;

@@ -29,7 +29,8 @@ void ReportAndroidMainReturned() noexcept {
   try {
     const nevr_self_check::CheckId id = nevr_self_check::Register(
         {"android_main_returned", "the process ends when the game's android_main returns", nullptr});
-    (void)id;  // placeholder, filled in by the next commit
+    nevr_self_check::Report(id, "ending_process exit_code=0", true);
+    nevr_self_check::Flush();
   } catch (const std::exception&) {
     // The unit builds strings; a failure to allocate one loses the result, never the process end.
   }
