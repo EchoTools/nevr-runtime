@@ -13,8 +13,8 @@
 //
 // Login: the bridge injects NOTHING. On Quest the game's own login (rewritten in place, PR #221) is the only
 // login, so Config has no login builder and the router runs with its injection options at their defaults.
-// The game's LoginRequest is relayed as the first frame of the login session; a second one here would give
-// the service two logins on one session.
+// The game's LoginRequest is relayed as the game sent it, after the frames queued before it (a config request
+// the game sent first goes ahead of it); a second one here would give the service two logins on one session.
 //
 // A held session. While the player has not signed in there is no account token. The login connection (the
 // game's long-lived, silent one) must not fail then, and neither does the config connection beside it:
