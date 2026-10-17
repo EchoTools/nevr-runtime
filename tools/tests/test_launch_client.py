@@ -144,7 +144,7 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def run_until_login(self, log_text=None, *extra, timeout_flag=("--login-timeout", "45"), env_extra=None):
-        env = dict(self.env, FAKE_WINE_SLEEP="6", NEVR_LOGIN_POLL_SECONDS="1")
+        env = dict(self.env, FAKE_WINE_SLEEP="3", NEVR_LOGIN_POLL_SECONDS="0.1")
         if log_text is not None:
             env["FAKE_LOG_TEXT"] = log_text
         env.update(env_extra or {})
@@ -156,28 +156,28 @@ class LaunchClientTest(unittest.TestCase):
         result, elapsed = self.run_until_login()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS: client reached logged in", result.stdout)
-        self.assertLess(elapsed, 5.5, "it waited for the game to exit instead of ending the run at the verdict")
+        self.assertLess(elapsed, 2.5, "it waited for the game to exit instead of ending the run at the verdict")
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_exit_after_login_fails_when_the_service_stays_unavailable(self):
         result, elapsed = self.run_until_login('{"msg":"Service is unavailable"}\\n' * 3)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_exit_after_login_fails_at_the_deadline_when_nothing_happens(self):
-        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                                env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertGreaterEqual(elapsed, 2.0)
-        self.assertLess(elapsed, 12.0)
+        self.assertGreaterEqual(elapsed, 1.0)
+        self.assertLess(elapsed, 6.0)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_the_deadline_is_not_short_when_the_run_starts_late_in_a_second(self):
         # Whole-second arithmetic once ended a 2 s deadline after 1.04 s when the script read its
-        # start at x.99. A `date +%s` whose clock reads x.99 the first time it is asked puts every run
+        # start at x.99 (a 1 s deadline would end after 0.04 s). A `date +%s` whose clock reads x.99 the first time it is asked puts every run
         # in that position, so the outcome does not depend on when the test happens to start.
         clock = self.tmp / "clock-shift"
         fake_date = self.fake_bin / "date"
@@ -188,10 +188,10 @@ class LaunchClientTest(unittest.TestCase):
             f'[[ -e {clock} ]] || echo $((990000 - now_us % 1000000)) > {clock}\n'
             f'echo $(( (now_us + $(cat {clock})) / 1000000 ))\n')
         fake_date.chmod(0o755)
-        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                                env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertGreaterEqual(elapsed, 2.0)
+        self.assertGreaterEqual(elapsed, 1.0)
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_even_if_login_appears(self):
         text = ('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n'
@@ -204,22 +204,22 @@ class LaunchClientTest(unittest.TestCase):
         result, elapsed = self.run_until_login('{"msg":"rad15_live failed"}\\n' * 3)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
 
     def test_a_dll_that_embeds_nothing_ends_the_run_without_waiting_for_the_deadline(self):
         result, elapsed = self.run_until_login('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("embeds no service endpoints", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
 
     def test_a_previous_runs_log_from_the_same_second_cannot_decide_the_verdict(self):
         logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/EchoVR/logs"
         stale = logs / "nevr-2026-10-07T00-00-00.000.jsonl"
         stale.write_text('{"msg":"NetGame switching state (from logging in, to logged in)"}\n')
         # This run's own log has no login at all; the stale file must not be mistaken for it.
-        result, _ = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, _ = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                          env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30",
-                                                    "FAKE_WINE_LOG_DELAY": "1"})
+                                                    "FAKE_WINE_LOG_DELAY": "0.3"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
         self.assertNotIn("nevr-2026-10-07T00-00-00.000.jsonl", result.stdout)
