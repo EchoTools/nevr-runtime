@@ -19,6 +19,7 @@
 #include "runtime/log/boot_log_tee.h"
 #include "core/hooking.h"
 
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -346,11 +347,17 @@ int Install() {
     // through the boot tee (stderr and nevr-boot.jsonl), and it returns the outcome for the caller.
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {
-        {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
-        {"LoadLibraryW",   (void*)&LoadLibraryW,   (void*)&HookedLoadLibraryW,   (void**)&g_origLoadLibraryW},
-        {"LoadLibraryExA", (void*)&LoadLibraryExA, (void*)&HookedLoadLibraryExA, (void**)&g_origLoadLibraryExA},
-        {"LoadLibraryExW", (void*)&LoadLibraryExW, (void*)&HookedLoadLibraryExW, (void**)&g_origLoadLibraryExW},
+        {"LoadLibraryA",   reinterpret_cast<void*>(&LoadLibraryA),   reinterpret_cast<void*>(&HookedLoadLibraryA),
+         reinterpret_cast<void**>(&g_origLoadLibraryA)},
+        {"LoadLibraryW",   reinterpret_cast<void*>(&LoadLibraryW),   reinterpret_cast<void*>(&HookedLoadLibraryW),
+         reinterpret_cast<void**>(&g_origLoadLibraryW)},
+        {"LoadLibraryExA", reinterpret_cast<void*>(&LoadLibraryExA), reinterpret_cast<void*>(&HookedLoadLibraryExA),
+         reinterpret_cast<void**>(&g_origLoadLibraryExA)},
+        {"LoadLibraryExW", reinterpret_cast<void*>(&LoadLibraryExW), reinterpret_cast<void*>(&HookedLoadLibraryExW),
+         reinterpret_cast<void**>(&g_origLoadLibraryExW)},
     };
+    static_assert(sizeof(specs) / sizeof(specs[0]) == static_cast<std::size_t>(kLoadLibraryVariantCount),
+                  "kLoadLibraryVariantCount (the count Install reports against) must match the hook table");
 
     int okCount = 0;
     for (const auto& s : specs) {

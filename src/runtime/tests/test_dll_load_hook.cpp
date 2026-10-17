@@ -306,22 +306,34 @@ void UseFakeHooks() {
 const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"};
 
 // What the boot tee wrote to nevr-boot.jsonl while `install` ran (#632). Install() runs inside the runtime's
-// boot phase, so its report must reach this file, not only stderr.
+// boot phase, so its report must reach this file, not only stderr. The window is exact: from the file size
+// at Init() to the file size when `install` returns, so an absence assertion over it cannot be satisfied or
+// broken by what earlier runs appended to the shared, append-only file. The tee is closed on every path.
+struct BootTeeScope {
+  BootTeeScope() { nevr_boot_log_tee::Init(); }
+  ~BootTeeScope() { nevr_boot_log_tee::Close(); }
+  BootTeeScope(const BootTeeScope&) = delete;
+  BootTeeScope& operator=(const BootTeeScope&) = delete;
+};
+
+std::streamoff FileSizeOf(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  return in ? static_cast<std::streamoff>(in.tellg()) : 0;
+}
+
 template <typename Fn>
 std::string BootFileTextWrittenBy(Fn install) {
-  nevr_boot_log_tee::Init();
+  BootTeeScope tee;
   const std::string path = nevr_boot_log_tee::Path();
   if (path.empty()) return "<the boot tee could not resolve nevr-boot.jsonl>";
-  std::streamoff start = 0;
-  {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (in) start = static_cast<std::streamoff>(in.tellg());
-  }
+  const std::streamoff start = FileSizeOf(path);
   install();
-  nevr_boot_log_tee::Close();
+  const std::streamoff end = FileSizeOf(path);
   std::ifstream in(path, std::ios::binary);
   in.seekg(start);
-  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  std::string text(static_cast<std::size_t>(end - start), '\0');
+  in.read(&text[0], end - start);
+  return text;
 }
 
 }  // namespace
