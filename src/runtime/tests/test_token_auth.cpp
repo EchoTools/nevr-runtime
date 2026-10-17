@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/auth_token.h"
+#include "core/credential_cache_stats.h"
 #include "core/auth_refresh.h"
 #include "core/bounded_retry.h"
 #include "core/signin_dialog_lifecycle.h"
@@ -1474,6 +1475,61 @@ TEST_F(CredentialsDirFixture, AHostModeThatIsNot600WritesNothing) {
   EXPECT_FALSE(saved);
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+}
+
+namespace {
+std::vector<std::string> g_cacheLog;
+void CaptureCacheLog(EchoVR::LogLevel, const CHAR* message) { g_cacheLog.push_back(message); }
+}  // namespace
+
+// #562: a save that wrote the cache is counted and logged at Info with the path and how the file is protected,
+// and never with a token byte or a length. (Wine: the host mode was read back as 600 before the write.)
+TEST_F(CredentialsDirFixture, ASavedCacheIsCountedAndLoggedWithPathAndProtectionButNoTokenBytes) {
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  g_cacheLog.clear();
+  SetBootLogSink(&CaptureCacheLog);
+  const bool saved = SaveAuthToken(TokenWith("sekret-refresh-value"), exe_dir_);
+  SetBootLogSink(nullptr);
+  ASSERT_TRUE(saved);
+
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 1u);
+  EXPECT_EQ(snap.refused, 0u);
+  EXPECT_FALSE(snap.lastProtection.empty());
+  const bool wine = nevr_system_info::Get().IsWine();
+  EXPECT_EQ(snap.lastProtection, wine ? "host_mode_600" : "dacl");
+
+  bool found = false;
+  for (const std::string& line : g_cacheLog) {
+    if (line.find("[NEVR.AUTH] Credentials written to ") != std::string::npos) {
+      found = true;
+      EXPECT_NE(line.find(path.string()), std::string::npos) << line;
+      EXPECT_NE(line.find(std::string("protection=") + snap.lastProtection), std::string::npos) << line;
+    }
+    EXPECT_EQ(line.find("sekret"), std::string::npos) << "a token byte reached the log: " << line;
+    EXPECT_EQ(line.find("refresh_token"), std::string::npos) << line;
+    EXPECT_EQ(line.find("chars"), std::string::npos) << "a length reached the log: " << line;
+    EXPECT_EQ(line.find("bytes"), std::string::npos) << "a length reached the log: " << line;
+  }
+  EXPECT_TRUE(found) << "no Info line says the cache was written";
+}
+
+// #562: a save that wrote nothing is counted with its reason.
+TEST_F(CredentialsDirFixture, ARefusedSaveIsCountedWithItsReason) {
+  if (!nevr_system_info::Get().IsWine()) GTEST_SKIP() << "Wine host permission behavior";
+  const auto path = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  std::filesystem::create_directories(path.parent_path());
+  nevr_credential_stats::ResetForTest();
+  nevr_credential_write::g_forcedHostMode = "644";
+  const bool saved = SaveAuthToken(TokenWith("must-not-land"), exe_dir_);
+  nevr_credential_write::g_forcedHostMode.clear();
+  EXPECT_FALSE(saved);
+  const nevr_credential_stats::Snapshot snap = nevr_credential_stats::Get();
+  EXPECT_EQ(snap.saved, 0u);
+  EXPECT_EQ(snap.refused, 1u);
+  EXPECT_NE(snap.lastRefusal.find("host mode is 644, not 600"), std::string::npos) << snap.lastRefusal;
 }
 
 // #563: a write that fails part-way must leave the previous token exactly as it was.
