@@ -81,7 +81,7 @@ B05@@boot@@Boot log tee opened (nevr-boot.jsonl)@@boot log opened run=@@
 B06@@boot@@Built-in log filter installed@@log filter installed@@
 B07@@boot@@Log filter emitting health counters@@\[NEVR\.LOGFILTER\] health emitted=@@CAPTURED ZERO GAME LINES
 B08@@boot@@Optional config.json searched (issue #21)@@Early config loaded from:|no _local/config\.json under@@exists but did not parse|Failed to early-load config
-B09@@boot@@DLL-load hooks installed@@dll load hooks installed|LoadLibrary hooks OK@@
+B09@@boot@@DLL-load hooks installed@@dll load hooks installed|LoadLibrary hooks OK@@dll load hooks PARTIAL|LoadLibrary hooks PARTIAL
 B10@@boot@@Vectored exception handler decision reported@@veh installed|veh deferred reason=wine_cli_unknown@@veh install failed
 B11@@boot@@Crash-recovery hooks installed@@crash recovery hooks installed@@
 B12@@boot@@Crash-dump probe hooked@@hooked name=HandleCrashDump@@hook failed name=HandleCrashDump

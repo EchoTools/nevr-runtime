@@ -107,6 +107,7 @@ set(PATCHES_HEADERS
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
     "lifecycle/veh_policy.h"
+    "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
@@ -1005,6 +1006,15 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_codec DISCOVERY_MODE PRE_TEST)
 
+    # CSymbol64Hash with plain `char` unsigned, as under the NDK's AArch64 clang (#657). A change to
+    # abi/symbol_hash.h that zero-extends a byte >= 0x80 passes with the default signed char and fails here.
+    add_executable(test_symbol_hash tests/test_symbol_hash.cpp)
+    set_source_files_properties(tests/test_symbol_hash.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_symbol_hash PRIVATE -funsigned-char)
+    target_include_directories(test_symbol_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_symbol_hash PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
+
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
     # rules, so it also builds and runs on its own.
     add_executable(test_legacy_session
@@ -1069,12 +1079,12 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
-    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp)
-    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp
+    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING NEVR_TEST_HOOKS)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
     # #504's timing fixture loads the stand-in pnsrad.dll that test_export_trace builds.
     add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)

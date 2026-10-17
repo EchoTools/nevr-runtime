@@ -18,7 +18,13 @@ namespace nevr_dll_load_hook {
  * Return: ignored. */
 typedef void (*PatchCallback)(const char* dll_name, HMODULE module);
 
-void Install();
+/* The LoadLibraryA/W/ExA/ExW variants Install() hooks. */
+constexpr int kLoadLibraryVariantCount = 4;
+
+/* Hooks the four LoadLibrary variants and reports each outcome through the boot tee. Returns how many
+ * variants are hooked: kLoadLibraryVariantCount on full success, less on a partial install (loads
+ * through an unhooked variant run no filter, observer or callback). 0 on a non-Windows build. */
+int Install();
 void Shutdown();
 
 /* Predicate for AddLoadFilter(): `lower_path` is the full path or name passed to LoadLibrary*,

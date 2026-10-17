@@ -4,6 +4,16 @@
 default_preset := if os() == "linux" { "mingw-release" } else { "release" }
 preset := env("PRESET", default_preset)
 
+# Shared compiler cache: used when ccache is installed, ignored when it is not (CI and release builds are unchanged).
+# NEVR_CCACHE= (set, empty) configures a fresh tree without it.
+# CMake reads the launcher variables on a build tree's first configure, so an existing tree keeps the choice it was configured with.
+# base_dir is the main checkout, so every worktree under it hashes the same relative include paths.
+export CMAKE_C_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
+export CMAKE_CXX_COMPILER_LAUNCHER := env("NEVR_CCACHE", `command -v ccache 2>/dev/null || true`)
+export CCACHE_CONFIGPATH := justfile_directory() / "tools/ccache.conf"
+export CCACHE_BASEDIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`
+export CCACHE_DIR := if path_exists("/mnt/games/cache/ccache") == "true" { "/mnt/games/cache/ccache" } else { env("HOME") / ".cache/ccache" }
+
 # Show available recipes (default)
 default:
     @just --list
@@ -80,12 +90,14 @@ clean:
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
 # NDK: r26d by default; override with ANDROID_NDK_HOME.
+# The Quest configure lines clear the ccache launcher: that build embeds the worktree path in its debug info (no -ffile-prefix-map),
+# so an object cached from one worktree would put that worktree's path into another's .so.
 
 ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
 
 # Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
 configure-android:
-    cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+    cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 
 # Build the Android arm64-v8a crash-reporter .so
 # Job count: CMAKE_BUILD_PARALLEL_LEVEL, else 4 (a bare -j would use every core and override the variable).
@@ -110,6 +122,10 @@ check-android-static-init: build-android
 test-android: check-android-static-init
     # The sentinel embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/android-arm64/generated/nevr_builtin_defaults.h --binary build/android-arm64/sentinel/libovrplatformloader.so
+    # CSymbol64Hash sign-extends a byte >= 0x80 under the NDK's AArch64 clang, where plain char is unsigned (#657).
+    # The vectors are static_asserts, so compiling the file is the check; the NDK's static bionic binary does not
+    # start under qemu-user (TLS segment alignment), so nothing is run here.
+    "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" -std=c++17 -Wall -Wextra -Werror -Isrc -fsyntax-only src/quest/tests/symbol_hash_test.cpp
     cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
@@ -228,7 +244,7 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
         cmake --build --preset mingw-dev
     )
     # Quest sentinel: its own build tree (build/android-dev).
-    (cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
+    (cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64-dev)
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
@@ -362,7 +378,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_socket_role
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -534,7 +550,7 @@ test-auth-unit:
         exit 1
     fi
     run_test "$bin"
-    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_socket_role; do
+    for test_name in test_boot_log_routing test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_self_check test_party_share_check test_party_leave_check test_quit_check test_friend_request_check test_credential_cache_check test_status_redirect_check test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec test_legacy_codec test_legacy_session test_symbol_hash test_socket_role; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -705,6 +721,14 @@ test-quest-shared: _vcpkg-quest-host
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
     "$out/login_standin_test"
+    # CSymbol64Hash on bytes >= 0x80 (#657): the vectors are static_asserts and a run-time loop. The NDK compile
+    # of the same file is in test-android (plain char is unsigned there).
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test"
+    "$out/symbol_hash_test"
+    # The same file with plain char unsigned, as under the NDK: it runs the loop with an unsigned char, which the
+    # NDK compile in test-android only parses. A bare static_cast<uint64_t>(c) fails to compile here.
+    g++ -std=c++17 -funsigned-char -Wall -Wextra -Werror -Isrc src/quest/tests/symbol_hash_test.cpp -o "$out/symbol_hash_test_uchar"
+    "$out/symbol_hash_test_uchar"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Shared EVR session router and the Quest loopback transport on the host. Plain g++, no NDK,

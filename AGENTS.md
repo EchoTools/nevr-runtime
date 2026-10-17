@@ -339,6 +339,12 @@ Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug
 
 Build output lands in `build/<preset>/bin/`.
 
+The `justfile` puts `ccache` in front of the compiler when it is installed, so every worktree shares one cache
+(`tools/ccache.conf`: 10 GB cap; the cache directory is `/mnt/games/cache/ccache` when that exists, else
+`~/.cache/ccache`). CMake reads the launcher on a build tree's first configure, so a tree configured before
+ccache keeps building without it. `NEVR_CCACHE= just build` configures a tree without it. The Quest build never
+uses it: its objects embed the worktree path.
+
 ## Testing
 
 Go-based system tests in `tests/system/` and `tests/plugins/`:
