@@ -415,6 +415,7 @@ struct FlowRig {
   int sleeps = 0;
   bool cancel = false;
   bool renews = false;
+  bool code_only = false;
   uint64_t poll_takes_s = 0;  // how long each poll request takes on the fake clock
   intptr_t browser = 33;
   int ui = 1;
@@ -444,6 +445,7 @@ struct FlowRig {
     o.cancelled = [this] { return cancel; };
     o.log = log.Sink();
     o.renews_expired_codes = renews;
+    o.shows_code_only = code_only;
     return o;
   }
 };
@@ -456,6 +458,31 @@ nevr_token_auth::DevicePollResponse Poll(nevr_token_auth::DevicePollStatus s) {
     r.refresh_token = "refresh";
   }
   return r;
+}
+
+TEST(flow_says_code_shown_when_the_platform_never_opens_a_browser) {
+  FlowRig rig;
+  rig.code_only = true;
+  rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Verified)};
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("Device authorization started; code shown") != std::string::npos);
+  CHECK(log.find("code shown url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") != std::string::npos);
+  CHECK(log.find("browser") == std::string::npos);
+  CHECK(log.find("SECRETCODE123") == std::string::npos);
+}
+
+TEST(flow_keeps_the_browser_wording_where_a_browser_is_opened) {
+  FlowRig rig;
+  rig.polls = {Poll(nevr_token_auth::DevicePollStatus::Verified)};
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/device");
+  CHECK(r.verified);
+  const std::string log = rig.log.All();
+  CHECK(log.find("Device authorization started; browser opening requested") != std::string::npos);
+  CHECK(log.find("browser open requested url=https://x/device?code=<13 chars masked> open_result=33 (accepted)") !=
+        std::string::npos);
+  CHECK(log.find("code shown") == std::string::npos);
 }
 
 TEST(flow_returns_the_verified_response_after_pending_polls_and_masks_the_code) {
@@ -1979,6 +2006,23 @@ TEST(session_a_log_sink_that_calls_stop_does_not_deadlock_or_join_itself) {
   CHECK(capture.All().find("auth worker stopped on an exception") == std::string::npos);
   s.Stop();  // the joining Stop: must return although the sink already asked for a stop
   CHECK(s.Get().readiness == Readiness::Stopped);
+}
+
+TEST(session_the_quest_login_says_code_shown_never_browser) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  DeviceHandler(http, 1000000, kT0 + 3600);
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return presenter.presented.load() >= 1; }));
+  s.Stop();
+  const std::string text = log.All();
+  CHECK(text.find("Device authorization started; code shown") != std::string::npos);
+  CHECK(text.find("code shown url=") != std::string::npos);
+  CHECK(text.find("browser") == std::string::npos);
 }
 
 TEST(session_the_login_link_is_removed_even_when_the_flow_throws) {
