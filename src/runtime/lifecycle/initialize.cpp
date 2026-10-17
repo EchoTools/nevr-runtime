@@ -6,6 +6,7 @@
 
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/lifecycle/boot.h"
+#include "runtime/lifecycle/boot_hook_policy.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/crash_recovery.h"
@@ -334,13 +335,22 @@ static VOID InitializeAfterGameImageGuard() {
   // --- DLL load interceptor (patch DLLs as they load) ---
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
   const int dllLoadHooksInstalled = nevr_dll_load_hook::Install();
-  if (dllLoadHooksInstalled == nevr_dll_load_hook::kLoadLibraryVariantCount) {
+  // The four hooks are required (boot_hook_policy.h). Install() has already logged each failing variant and its
+  // MH_STATUS; the PARTIAL line below carries the count and what it costs, and the verdict fails the boot, whose
+  // final line (boot.cpp, or "boot hooks installed ok=false") names the count as the cause.
+  const nevr_boot_hook_policy::LoadLibraryVerdict dllLoadHooksVerdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(
+      dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
+  if (dllLoadHooksVerdict.complete) {
     nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
   } else {
     nevr_boot_log_tee::TeeFprintf(
         "[NEVR.PATCH] dll load hooks PARTIAL (%d/%d): loads through an unhooked LoadLibrary variant run no load "
-        "filter, observer or callback\n",
+        "filter, observer or callback; the hooks are required, a server will refuse to start\n",
         dllLoadHooksInstalled, nevr_dll_load_hook::kLoadLibraryVariantCount);
+  }
+  if (dllLoadHooksVerdict.failsBoot) {
+    g_bootHookFailed = true;
+    NoteBootHookFailureCause(dllLoadHooksVerdict.cause);
   }
 
   // --- Headless graphics stubs (DXGI/D3D11 interception) ---

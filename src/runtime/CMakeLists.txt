@@ -107,6 +107,7 @@ set(PATCHES_HEADERS
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
     "lifecycle/veh_policy.h"
+    "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"

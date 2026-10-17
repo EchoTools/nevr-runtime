@@ -4,6 +4,7 @@
 
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/lifecycle/boot_hook_policy.h"
 #include "runtime/patch/pnsrad_load_queue.h"
 #include "core/logging.h"
 #include "runtime/log/boot_log_tee.h"
@@ -652,4 +653,29 @@ TEST_F(DllLoadHookInstall, InstallReturnsZeroWhenEveryCreateFails) {
   UseFakeHooks();
   g_fakeHooks.createResult = MH_ERROR_NOT_EXECUTABLE;
   EXPECT_EQ(nevr_dll_load_hook::Install(), 0);
+}
+
+// #632, ruled by Spritz: the four LoadLibrary hooks are REQUIRED. A partial install fails the boot (a server then
+// refuses to start, a client's last boot line says ok=false) and records the count as its cause. The verdict is
+// a pure function so it runs here; InitializeAfterGameImageGuard cannot run in a GTest, so
+// tools/tests/test_runtime_lifecycle_invariants.py pins that initialize.cpp acts on it.
+TEST(DllLoadHookBootVerdict, TheLoadLibraryHooksAreRequired) {
+  EXPECT_TRUE(nevr_boot_hook_policy::kLoadLibraryHooksRequired);
+}
+
+TEST(DllLoadHookBootVerdict, AFullInstallFailsNothingAndRecordsNoCause) {
+  const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(4, 4);
+  EXPECT_TRUE(verdict.complete);
+  EXPECT_FALSE(verdict.failsBoot);
+  EXPECT_STREQ(verdict.cause, "");
+}
+
+TEST(DllLoadHookBootVerdict, APartialInstallFailsTheBootAndNamesTheCount) {
+  for (int installed = 0; installed < 4; ++installed) {
+    const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(installed, 4);
+    EXPECT_FALSE(verdict.complete) << installed;
+    EXPECT_TRUE(verdict.failsBoot) << installed;
+    const std::string expected = "LoadLibrary hooks " + std::to_string(installed) + "/4 installed";
+    EXPECT_EQ(std::string(verdict.cause), expected);
+  }
 }
