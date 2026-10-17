@@ -187,10 +187,18 @@ WINE_RUNNING=1
 # a window that opens and closes before teardown would otherwise go unseen.
 MAX_WINDOWS=0
 elapsed=0
+started_at=$SECONDS
 while [ "$elapsed" -lt "$RUN_SECONDS" ]; do
-  sleep "$POLL_SECONDS" 9>&-
+  # One sample interval, ended at once if the game exits first. The sleep runs in the background and
+  # the shell waits on it, so an INT/TERM trap runs now and not after the interval (and `wait -n` on
+  # the game's PID leaves its exit status for the `wait` below).
+  sleep "$POLL_SECONDS" 9>&- &
+  sampler=$!
+  wait -n "$WINE_PID" "$sampler"
+  kill "$sampler" 2>/dev/null
+  wait "$sampler" 2>/dev/null
+  kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=$((SECONDS-started_at))s" >> "$OUT/context.txt"; break; }
   elapsed=$((elapsed+POLL_SECONDS))
-  kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=${elapsed}s" >> "$OUT/context.txt"; break; }
   pids=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE" | tr '\n' ' ')
   n=$(count_game_windows "$pids")
   [ "$n" -gt "$MAX_WINDOWS" ] && MAX_WINDOWS="$n"
