@@ -75,6 +75,10 @@ RuntimeRendezvous* g_active_rendezvous = nullptr;
 
 #if defined(NEVR_HOST_TESTING)
 void RuntimeRendezvous::ResetActiveForTest() { g_active_rendezvous = nullptr; }
+const NevrHostContext& RuntimeRendezvous::Context() const { return context_; }
+void RuntimeRendezvous::SetInstallEventForTest(HANDLE event) {
+  install_done_.store(event, std::memory_order_release);
+}
 #endif
 
 void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,

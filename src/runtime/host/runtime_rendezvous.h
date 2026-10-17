@@ -81,8 +81,8 @@ class RuntimeRendezvous {
     DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
   };
   static TestSeams& Seams();
-  const NevrHostContext& Context() const { return context_; }
-  void SetInstallEventForTest(HANDLE event) { install_done_.store(event, std::memory_order_release); }
+  const NevrHostContext& Context() const;
+  void SetInstallEventForTest(HANDLE event);
   static void ResetActiveForTest();
 #endif
 

@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """The BugSplat64.dll host units carry no test seam when NEVR_HOST_TESTING is not defined (docs/adr/0008).
 
-src/runtime/host/ holds seams a test needs (a failing CreateEventW, a throwing record builder, an output
+src/runtime/host/ holds seams a test needs (a failing CreateEventW, a record builder that throws, an output
 sink, a nested-fault probe). They exist only under NEVR_HOST_TESTING, which only the test-only library
 nevr_host_core defines. This check looks at what is compiled, not at how the source is spelled:
 
-  1. every unit of nevr_host_core is compiled again with the build's own compiler and flags
-     (compile_commands.json) minus the define, and the object is read with nm: no defined symbol may
-     say it is a seam;
-  2. no compile command outside src/runtime/host/ and src/runtime/tests/ carries the define, and no
-     host unit built for a target other than nevr_host_core carries it;
-  3. no tracked file defines the name by any spelling (#define, add_compile_definitions,
-     target_compile_definitions, add_compile_options, a -D in flags or a preset) other than the one
-     target_compile_definitions line for nevr_host_core.
+  1. every unit of nevr_host_core is compiled twice with the build's own compiler and flags
+     (compile_commands.json), with the define and without it, and the objects are read with nm:
+       - no defined symbol of the object compiled without the define may say it is a seam, and
+       - every symbol that exists only with the define must say it is a seam (or be a standard-library
+         template the seam instantiates), so a seam added under a name the pattern does not know is a failure;
+  2. no compile command outside src/runtime/host/ and src/runtime/tests/ carries the define, and no host unit
+     built for a target other than nevr_host_core does. This reads the given build directory and every
+     sibling build directory that has a compile_commands.json (another preset or configuration). In the
+     BUILD_TESTING=OFF configuration nevr_host_core is not created at all (it is inside if(BUILD_TESTING)), so
+     there the define can only arrive through a CMake or flags line, which step 3 reads in every configuration;
+  3. no tracked file spells the define in a way other than a gate line (`#if defined(NEVR_HOST_TESTING)` or
+     `#ifdef NEVR_HOST_TESTING`, nothing after it but a comment) or the one nevr_host_core
+     target_compile_definitions line: #define or #cmakedefine (also in a .h.in), add_compile_definitions,
+     target_compile_definitions elsewhere, add_compile_options, a -D in a script or a preset, and a gate that is
+     always true (`|| 1`).
+
+A seam defined inline in a header leaves no symbol for step 1; the host headers define their seams out of line
+for that reason, and step 3 anchors every gate line.
 
 usage: verify_host_seams.py <build-dir>      (the directory holding compile_commands.json)
 exit 0: clean. exit 1: a seam, a stray define or an unreadable subject (never a silent pass).
@@ -34,12 +44,21 @@ ALLOWED_DEFINITION = ("src/runtime/CMakeLists.txt",
                       re.compile(r"^\s*target_compile_definitions\(\s*nevr_host_core\s+PUBLIC\s+NEVR_HOST_TESTING\s*\)\s*$"))
 
 # A defined symbol whose demangled name says it is a seam.
-SEAM_SYMBOL = re.compile(r"ForTest|Seam|Probe|FailWrites|g_fail_|g_emit_sink|g_record_pause|Claimed|claimed_|test",
-                         re.IGNORECASE)
+SEAM_SYMBOL = re.compile(r"ForTest|Seam|Probe|FailWrites|g_fail_|g_emit_sink|g_record_pause|Claimed|claimed_"
+                         r"|RuntimeRendezvous::Context\(|test", re.IGNORECASE)
+# A symbol the define adds that is a standard-library template instantiation, not a seam (the throwing seam
+# instantiates std::runtime_error's typeinfo).
+LIBRARY_SYMBOL = re.compile(r"\bstd::|_ZT[ISV]St|_ZNSt|_ZSt|\.refptr\.")
 
-TEXT_SUFFIXES = {".h", ".hpp", ".c", ".cc", ".cpp", ".cmake", ".txt", ".json", ".sh", ".yml", ".yaml", ".in",
-                 ".toml", ".mk", ".env", ".just", ""}
-SKIP_SUFFIXES = {".md", ".py"}
+C_SUFFIXES = (".h", ".hpp", ".hh", ".hxx", ".c", ".cc", ".cpp", ".cxx", ".inl", ".ipp", ".tpp")
+C_TEMPLATE_SUFFIXES = tuple(suffix + ".in" for suffix in C_SUFFIXES)
+# Files that name the define because they are this check; markdown only describes it.
+EXEMPT_FILES = {"tools/verify_host_seams.py", "tools/tests/test_host_test_seams.py"}
+EXEMPT_SUFFIXES = {".md"}
+GATE_LINE = re.compile(rf"^\s*#\s*(?:if\s+defined\s*\(\s*{DEFINE}\s*\)|ifdef\s+{DEFINE})\s*(?://.*|/\*.*\*/)?\s*$")
+CMAKE_DEFINE_LINE = re.compile(rf"^\s*#\s*(?:cmakedefine01?|define)\b")
+LAUNCHERS = {"ccache", "sccache", "distcc", "icecc"}
+COMPILER_NAME = re.compile(r"(g\+\+|gcc|c\+\+|cc|clang\+\+|clang)(-[0-9.]+|-posix|-win32)?$")
 
 
 def strip_define(argv):
@@ -60,10 +79,22 @@ def strip_define(argv):
     return out, removed
 
 
+def real_compiler_argv(argv):
+    """The compile command without any compiler launcher (ccache and the like): the launcher is not the compiler."""
+    at = 0
+    while at < len(argv) and Path(argv[at]).name in LAUNCHERS:
+        at += 1
+    return argv[at:]
+
+
 def nm_tool(compiler):
+    """The nm that goes with a compiler. A launcher or any other program that is not a compiler is refused:
+    running `nm` named after it would run the launcher itself (ccache -C clears the cache)."""
     path = Path(compiler)
-    name = path.name.replace("g++", "nm").replace("gcc", "nm").replace("c++", "nm")
-    return str(path.with_name(name))
+    match = COMPILER_NAME.search(path.name)
+    if path.name in LAUNCHERS or match is None:
+        raise ValueError(f"{compiler} is not a compiler: cannot derive its nm")
+    return str(path.with_name(path.name[:match.start()] + "nm"))
 
 
 def seam_symbols(nm_output):
@@ -78,11 +109,30 @@ def seam_symbols(nm_output):
     return found
 
 
-def compile_without_define(entry, scratch):
-    """Compile one nevr_host_core unit without the define; returns (object path, flags removed)."""
-    argv = shlex.split(entry["command"])
-    argv, removed = strip_define(argv)
-    obj = scratch / (Path(entry["file"]).name + ".obj")
+def defined_symbols(nm_output):
+    """{name: type} for the defined symbols (not 'U') in `nm -C` output."""
+    symbols = {}
+    for line in nm_output.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or len(parts[1]) != 1 or parts[1] in "Uu":
+            continue
+        symbols[parts[2].strip()] = parts[1]
+    return symbols
+
+
+def define_only_unnamed(with_define, without_define):
+    """Symbols that exist only in the object compiled with the define and do not say they are seams."""
+    return sorted(name for name in with_define
+                  if name not in without_define and not SEAM_SYMBOL.search(name) and not LIBRARY_SYMBOL.search(name))
+
+
+def compile_unit(entry, scratch, with_define):
+    """Compile one nevr_host_core unit, with or without the define; returns (object path, flags removed, compiler)."""
+    argv = real_compiler_argv(shlex.split(entry["command"]))
+    removed = 0
+    if not with_define:
+        argv, removed = strip_define(argv)
+    obj = scratch / (Path(entry["file"]).name + (".with.obj" if with_define else ".obj"))
     if "-o" in argv:
         argv[argv.index("-o") + 1] = str(obj)
     else:
@@ -90,8 +140,8 @@ def compile_without_define(entry, scratch):
     argv = [a for a in argv if not a.startswith("-fdiagnostics-color")]
     result = subprocess.run(argv, cwd=entry["directory"], capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"{Path(entry['file']).name} did not compile without {DEFINE} "
-                           f"(rc={result.returncode}):\n{result.stderr}")
+        raise RuntimeError(f"{Path(entry['file']).name} did not compile {'with' if with_define else 'without'} "
+                           f"{DEFINE} (rc={result.returncode}):\n{result.stderr}")
     return obj, removed, argv[0]
 
 
@@ -120,23 +170,25 @@ def stray_define_commands(commands):
     return offenders
 
 
+def is_c_file(path):
+    return path.endswith(C_SUFFIXES) or path.endswith(C_TEMPLATE_SUFFIXES)
+
+
 def stray_definitions(files):
     """(path, line number, text) for every line of the given {path: text} that spells the define in a way
-    that is not a #if / #ifdef test of it, a comment, or the one allowed target_compile_definitions line."""
+    that is not an anchored gate line, a comment, or the one allowed target_compile_definitions line."""
     offenders = []
-    test_of_define = re.compile(rf"^\s*#\s*(if|elif)\b.*\bdefined\s*\(\s*{DEFINE}\s*\)|^\s*#\s*ifn?def\s+{DEFINE}\b")
     for path, text in sorted(files.items()):
-        suffix = Path(path).suffix
         for number, line in enumerate(text.splitlines(), 1):
             if DEFINE not in line:
                 continue
             code = line.strip()
-            if suffix in (".h", ".hpp", ".c", ".cc", ".cpp"):
+            if is_c_file(path):
                 if code.startswith("//") or code.startswith("*") or code.startswith("/*"):
                     continue
-                if test_of_define.match(line):
+                if GATE_LINE.match(line):
                     continue
-            elif code.startswith("#"):  # a cmake / shell comment
+            elif code.startswith("#") and not CMAKE_DEFINE_LINE.match(line):  # a cmake / shell / python comment
                 continue
             allowed_path, allowed_line = ALLOWED_DEFINITION
             if path == allowed_path and allowed_line.match(line):
@@ -150,8 +202,7 @@ def tracked_text_files():
                            check=True).stdout.split("\n")
     files = {}
     for name in names:
-        suffix = Path(name).suffix
-        if not name or suffix in SKIP_SUFFIXES or suffix not in TEXT_SUFFIXES:
+        if not name or name in EXEMPT_FILES or Path(name).suffix in EXEMPT_SUFFIXES:
             continue
         path = REPO / name
         if not path.is_file():
@@ -159,7 +210,7 @@ def tracked_text_files():
         try:
             files[name] = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
-            continue
+            continue  # a binary file spells nothing
     return files
 
 
@@ -184,23 +235,42 @@ def main(argv):
     for entry in units:
         name = Path(entry["file"]).name
         try:
-            obj, removed, compiler = compile_without_define(entry, scratch)
+            obj, removed, compiler = compile_unit(entry, scratch, with_define=False)
+            obj_with, _, _ = compile_unit(entry, scratch, with_define=True)
         except RuntimeError as error:
             failures.append(str(error))
             continue
         if removed != 1:
             failures.append(f"{name}: expected exactly one -D{DEFINE} in the build's flags, found {removed}")
-        listing = subprocess.run([nm_tool(compiler), "-C", str(obj)], capture_output=True, text=True)
-        if listing.returncode != 0 or not listing.stdout.strip():
-            failures.append(f"{name}: nm could not read {obj} (rc={listing.returncode}): {listing.stderr}")
+        try:
+            nm = nm_tool(compiler)
+        except ValueError as error:
+            failures.append(f"{name}: {error}")
             continue
-        seams = seam_symbols(listing.stdout)
-        print(f"verify_host_seams: {name}: compiled without -D{DEFINE}, {len(seams)} seam-like symbol(s)")
+        listings = {}
+        for label, path in (("without", obj), ("with", obj_with)):
+            listing = subprocess.run([nm, "-C", str(path)], capture_output=True, text=True)
+            if listing.returncode != 0 or not listing.stdout.strip():
+                failures.append(f"{name}: nm could not read {path} (rc={listing.returncode}): {listing.stderr}")
+            listings[label] = listing.stdout
+        if len(listings) != 2 or not all(listings.values()):
+            continue
+        seams = seam_symbols(listings["without"])
+        unnamed = define_only_unnamed(defined_symbols(listings["with"]), defined_symbols(listings["without"]))
+        print(f"verify_host_seams: {name}: compiled without -D{DEFINE}, {len(seams)} seam-like symbol(s); "
+              f"{len(unnamed)} define-only symbol(s) not named as a seam")
         for symbol in seams:
             failures.append(f"{name}: seam symbol in the object compiled without the define: {symbol}")
+        for symbol in unnamed:
+            failures.append(f"{name}: a symbol that exists only with the define does not say it is a seam: {symbol}")
         obj.unlink()
+        obj_with.unlink()
 
     failures += [f"compile command: {o}" for o in stray_define_commands(commands)]
+    others = [other for other in sorted(build.parent.glob("*/compile_commands.json")) if other != database]
+    for other in others:
+        failures += [f"compile command ({other.parent.name}): {o}"
+                     for o in stray_define_commands(json.loads(other.read_text(encoding="utf-8")))]
     failures += [f"{p}:{n}: defines {DEFINE} outside the nevr_host_core line: {t}"
                  for p, n, t in stray_definitions(tracked_text_files())]
     try:
@@ -211,7 +281,8 @@ def main(argv):
         for failure in failures:
             print(f"verify_host_seams: FAIL: {failure}")
         return 1
-    print(f"verify_host_seams: OK ({len(units)} units, no seam symbol, no stray {DEFINE})")
+    print(f"verify_host_seams: OK ({len(units)} units, no seam symbol, no stray {DEFINE}, "
+          f"{len(others)} other build configuration(s) checked)")
     return 0
 
 
