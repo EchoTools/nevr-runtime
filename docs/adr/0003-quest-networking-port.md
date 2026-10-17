@@ -459,8 +459,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
    no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
-   events go in; the router owns connection identity (config, login, matchmaker; matchmakers
-   attached to the login session, at most `Limits::maxMatchmakerConnections` live), frame order,
+   events go in; the router owns connection identity (config, login and matchmaker connections sharing one
+   session remote, at most `Limits::maxMatchmakerConnections` matchmakers live), frame order,
    size limits, bounded queues and
    backpressure, and, when a remote session ends, the close of every game socket on it plus
    forgetting the session so the next connection is a new login. The game transport, the remote
@@ -472,14 +472,32 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `SNSLobbyMatchmakerStatusRequest`, `FindSessionRequestv11`, `CreateSessionRequestv9`,
    `JoinSessionRequestv7`, `DirectoryRequestJsonv2`, `PendingSessionCancelv2`,
    `PlayerSessionsRequestv5` or `PingResponse`; the login connection sends nothing until
-   `LogInRequestv2`. Until that frame the role is provisional, by connection order (0 config, 1 login,
-   later ones matchmaker), so the remote can open before the game has spoken. A first frame that
-   contradicts the provisional role moves the connection to the remote its real role uses; only
-   `LogInRequestv2` moves a connection to login (an unlisted message never takes the login role). The
-   game opens a new config connection after login, and by order that connection is a matchmaker: the
-   first frame is what makes it a config connection with a remote of its own.
+   `LogInRequestv2`. When the adapter knows a connection's role at open it says so (`OpenHint`; the PC
+   bridge reads the request target and the listener): a hinted role is final, and a first frame that
+   contradicts it is logged once at Warning and not acted on. Without a hint (Quest) the role is
+   provisional until that frame, by connection order (0 config, 1 login, later ones matchmaker), so the
+   session can open before the game has spoken. A first frame that contradicts the provisional role
+   relabels the connection in place on the session it shares: the role, the login connection and the idle
+   exemption move with it, and no remote is opened, closed or re-attached. Only `LogInRequestv2` moves a
+   connection to login (an unlisted message never takes the login role); a connection relabelled to
+   matchmaker is counted against `Limits::maxMatchmakerConnections`. The game opens a new config
+   connection after login, and by order that connection is a matchmaker: the first frame makes it a
+   config connection on the same session.
 
-   **Frames from the login session's remote are routed by role**, never to the socket that spoke
+   **One session remote.** Config, login and matchmaker connections share one remote
+   (`RemoteOpenRequest::session`), opened by the first config or login connection. A matchmaker attaches
+   to it once a login connection has been attached; a matchmaker that arrives before that, or with no
+   session, keeps a remote of its own (`standaloneMatchmaker`), which is never the session. A connection
+   closing never ends the session: it ends when its remote ends, and then every connection on it, config
+   included, is closed and the next connection is a new login. When a connection becomes the login connection
+   the previous one, if still open, rides the session as a matchmaker if the adapter did not name its role
+   and the matchmaker cap has room; otherwise (a hinted role is final) it is closed. A connection's queued frames
+   (`Remote::pending`, never the outbox) leave the queue when it closes. With `Options::buildLogin` set,
+   the login is injected when a login connection is attached to an open session that has sent none, at
+   attach or at open, whichever comes second; the other connections' frames wait behind it, a config
+   connection's do not.
+
+   **Frames from the session remote are routed by role**, never to the socket that spoke
    last. libpnsovr drops a reply to a login-connection request that arrives on another peer
    (`CNSUser::ProfileSuccessCB` and the other login-peer checks), so login and profile replies,
    document and other-user-profile replies and the login settings (`IsLoginSessionReply`) go to the
@@ -506,32 +524,53 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    so frames interleave and the router queues, per paired message, the connection that message went to and
    gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,
    Unrequire, `SNSLoginSettings`], delivered whole to the login connection; an Unrequire inside a frame lowers
-   the count of the connection the frame goes to. `ChannelInfoResponse` goes to the login connection (the
+   the count of the connection the frame goes to. `SNSConfigSuccessv2` and `SNSConfigFailurev2` go to the connection that sent the oldest open config
+   request with the reply's type and id: the service echoes the request's two strings (the success as two
+   symbols, the failure as the strings), so a request the service never answers (nakama drops a rate-limited
+   message without a reply) does not shift the replies after it. The Unrequire after a reply goes to the same
+   connection. When the oldest open request for that key belongs to a connection that has closed, a live
+   connection's open request for the same key takes the reply and both entries go: the key already guarantees a
+   reply never reaches a connection that asked for another resource, so a closed connection's stale entry (a
+   request the service dropped) must not starve a replacement that asks for the same resource. If the closed
+   connection's reply was really in flight, the replacement has what it asked for, and the reply to its own
+   request finds no open request and is dropped like any reply nobody asked for (the Unrequires stay
+   consistent: the first reply's Unrequire lowers the replacement's count, the second is owed to nobody and is
+   dropped). With no live connection waiting on that key, or no open request of that key, the reply is dropped,
+   counted (`Stats::configRepliesOrphaned`, `Stats::configRepliesUnmatched`) and logged each time. Open
+   requests are kept per session up to 256; past that the oldest unanswered one is forgotten, counted
+   (`Stats::configRequestsEvicted`) and logged. A request payload that is not a pad byte and a JSON object with
+   string `type` and `id` has no key, and matches only a reply with no key.
+   `nevr_evr_codec::ConfigSymbol` reproduces the service's `ToSymbol` (nakama `server/evr/core_packet.go`), zero
+   extension of bytes included, because the service computes the reply symbols: it is not `EchoVR::CSymbol64Hash`,
+   which differs for the empty string (0 here, its seed there), for an 18-character `0x` + 16 hex digits string
+   (parsed here) and for bytes >= 0x80 (sign extension there; issue #657). If the service's hash changes to match
+   the game, `ConfigSymbol` changes in the same release.
+   `ChannelInfoResponse` goes to the login connection (the
    game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
    to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery
    sends one on the login session right after the login. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
    `TestServerFramesRouteByRole` pin this.
 
-   **A held login.** Before the player signs in there is no account token, and the login
+   **A held session.** Before the player signs in there is no account token, and the login
    connection (silent, long-lived: the game fails over to "service unavailable" after three failed
    connects) must not fail. `Options::loginGate` answers Awaiting, Ready or Refused
    (`TokenIdentitySource::GateFor`, kept current by the token-auth poll as a lock-free atomic).
    Awaiting covers every state in which a token is still to come, including a failure the session
    retries every recovery period (`Snapshot::will_retry`) and an expired token being replaced; only a
    final failure, a stopped session or a token without an account is Refused.
-   While it answers Awaiting the router creates the login session's record but does not open its
-   remote (`Stats::heldRemotes`), and queues what the
-   game sends in order. The login connection is silent until the game's `LogInRequestv2` (the game
-   sends none before the player has signed in, however long that takes), so the router tells the
-   transport (`GameTransport::SetIdleExempt`) that it is never to be closed for sending nothing, held
-   or released, for as long as it is the login connection; `LoopbackGameServer` then exempts it from
-   `idleFirstFrameMs` (pings are still answered). Config, matchmaker and unclassified connections
-   keep the idle close. `ReevaluateHeldLogins`
+   While it answers Awaiting the router creates the session's record, whichever connection opened it,
+   but does not open its remote (`Stats::heldRemotes`), and queues what the connections on it send in
+   order: a config connection waits with the session until the player has signed in. The login
+   connection is silent until the game's `LogInRequestv2` (the game sends none before the player has
+   signed in, however long that takes), so the router tells the transport
+   (`GameTransport::SetIdleExempt`) that it is never to be closed for sending nothing, held or released,
+   for as long as its role is login, provisional or confirmed; a relabel moves the exemption with the
+   role. `LoopbackGameServer` then exempts it from `idleFirstFrameMs` (pings are still answered).
+   Config, matchmaker and unclassified connections keep the idle close. `ReevaluateHeldLogins`
    (via `SessionBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
-   Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
-   never held: with no token their remote cannot start and they close with 1011 at once. A
-   connection opened while the login session has no live login connection is the login connection of
-   that session (held again if the account is still awaited).
+   Ready and closes every connection on the session with 1011 on Refused. A standalone matchmaker is
+   never held: with no token its remote cannot start and it closes with 1011 at once. A connection
+   opened while the session has no live login connection is the login connection of that session.
 
    **Login injection is mutually exclusive with the game's own login.** The router injects a
    LoginRequest (and, separately, a friend-list subscribe after LoginSuccess) only when the
@@ -1730,7 +1769,8 @@ is the loopback listener, because the redirect needs its port before the game re
 **Login.** The router is built without a login builder. The Quest game sends its own `LoginRequest`
 through `CNSUser::SendLogInRequest`, and the login rewrite has already put the NEVR token, the NEVR
 account id (the id the token carries), platform code 4 and the game's own HMD serial into it; the
-router relays it as the first frame of the login session. A second, injected `LoginRequest` would give
+router relays it in the order the game sent it (a config request sent earlier goes ahead of it). A second,
+injected `LoginRequest` would give
 the service two logins on one session while the game still waits for its reply. The remote upgrade
 carries the token session's JWT as its Bearer; with no JWT the remote session is not started.
 
