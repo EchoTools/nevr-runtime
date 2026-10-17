@@ -1985,6 +1985,98 @@ void TestRelabelToMatchmakerChecksTheCap() {
   QCHECK(rig.router->GetStats().droppedGameFrames == 1);
 }
 
+// The previous login connection rides the session as a matchmaker when another connection takes the login
+// over. Game 3 (a matchmaker by order) names itself the login with its first frame; game 2, the old login,
+// is then the only matchmaker, so lobby traffic goes to it and not to the new login connection.
+// Failure caught: the old login keeping its login role (lobby traffic then falls to the new login).
+void TestTheDemotedLoginConnectionRidesTheSessionAsAMatchmaker() {
+  const CaseScope scope("demoted login");
+  Rig rig;
+  rig.router->OnGameOpen(1);  // config
+  rig.router->OnGameOpen(2);  // login
+  rig.router->OnGameOpen(3);  // a matchmaker by order
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(3, FirstFrameOf(Role::Login), true);  // takes the login over
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')), true);  // -> 3
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, "lobby"), true);                          // -> 2
+  const std::vector<Delivery> expected = {
+      {3, nevr_evr_codec::kSymLoginSuccess},
+      {2, kSymLobbySessionSuccess},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(!Exempt(rig, 2));
+  QCHECK(Exempt(rig, 3));
+}
+
+// The login is injected into an OPEN session when a login connection attaches, and the frames the game sends
+// while the builder runs wait behind it, except a config connection's, which pass. The builder here sends one
+// of each from inside itself (it runs with no lock held, so it may re-enter the router). The session sees the
+// config frame, then the login, then the login connection's own frame.
+// Failure caught: a non-config frame overtaking the login; a config frame held behind it.
+void TestFramesWaitBehindTheLoginBeingBuiltExceptConfigs() {
+  const CaseScope scope("behind the login");
+  Rig* rigPtr = nullptr;
+  const std::string configFrame = Msg(nevr_evr_codec::kSymConfigRequest, "cfg-during-build");
+  const std::string loginFrame = Msg(nevr_evr_codec::kSymLoggedInUserProfileRequest, "profile-during-build");
+  Options o;
+  o.buildLogin = [&]() {
+    rigPtr->router->OnGameFrame(1, configFrame, true);
+    rigPtr->router->OnGameFrame(2, loginFrame, true);
+    return std::optional<std::string>(kLogin);
+  };
+  Rig rig(std::move(o));
+  rigPtr = &rig;
+  rig.router->OnGameOpen(1, Hinted(Role::Config));  // opens the session
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);  // open, with no login connection attached: nothing is built
+  QCHECK(rig.remotes.Sent().empty());
+  rig.router->OnGameOpen(2, Hinted(Role::Login));  // attaches to the open session: the login is built now
+  const std::vector<SentFrame> up = rig.remotes.Sent();
+  QCHECK(up.size() == 3);
+  if (up.size() == 3) {
+    QCHECK(up[0].data == configFrame);
+    QCHECK(up[1].data == kLogin);
+    QCHECK(up[2].data == loginFrame);
+  }
+}
+
+// The pending-bytes limit counts only the frames still queued. A socket that closes takes its queued bytes
+// with it, so a replacement can queue as much as the limit allows.
+// Failure caught: the closed socket's bytes staying counted, the replacement closed 1013 for a queue that is
+// not full.
+void TestAClosedSocketsQueuedBytesDoNotCountAgainstTheLimit() {
+  const CaseScope scope("pending bytes");
+  Options o;
+  o.limits.maxPendingBytes = 100;
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameFrame(1, std::string(60, 'a'), true);  // queued: the session is not open
+  QCHECK(rig.router->GetStats().pendingFrames == 1);
+  rig.router->OnGameClose(1);
+  QCHECK(rig.router->GetStats().pendingFrames == 0);
+  rig.router->OnGameOpen(2);
+  rig.router->OnGameFrame(2, std::string(60, 'b'), true);  // 60 <= 100 once game 1's 60 bytes are gone
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(rig.router->GetStats().pendingFrames == 1);
+}
+
+// The matchmaker cap counts a connection by its role, which a hint sets. Eight hinted matchmakers are at the
+// cap, and a hinted config socket that arrives next is not a matchmaker: it is accepted, though the order
+// alone would call it one.
+// Failure caught: the cap applied to the order-based guess, refusing the config socket.
+void TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap() {
+  const CaseScope scope("cap by hint");
+  Rig rig;
+  for (GameId g = 1; g <= 8; ++g) rig.router->OnGameOpen(g, Hinted(Role::Matchmaker));
+  QCHECK(rig.games.Closes().empty());
+  rig.router->OnGameOpen(9, Hinted(Role::Config));
+  QCHECK(rig.games.Closes().empty());
+  QCHECK(rig.router->GetStats().games == 9);
+}
+
 // A hinted role is final. A hinted config socket whose first frame is LogInRequestv2 stays config: the
 // contradiction is logged once, at Warning, and nothing is relabelled or taken over. The hinted login
 // socket keeps the exemption and the login replies, and the config socket still gets config replies.
@@ -2484,6 +2576,10 @@ int main() {
   TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames();
   TestTheNinthHintedMatchmakerIsRefused();
   TestAHintedConfigSocketThatSendsALoginStaysConfig();
+  TestTheDemotedLoginConnectionRidesTheSessionAsAMatchmaker();
+  TestFramesWaitBehindTheLoginBeingBuiltExceptConfigs();
+  TestAClosedSocketsQueuedBytesDoNotCountAgainstTheLimit();
+  TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap();
   TestRelabelToMatchmakerChecksTheCap();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
