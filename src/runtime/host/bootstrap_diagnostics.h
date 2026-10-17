@@ -13,16 +13,18 @@
 //
 // What may run where:
 //   - Prepare() copies two environment values and the host directory into fixed
-//     buffers and creates the log's named mutex (one CreateMutexW call, kernel32). No heap in this
-//     code, no I/O, no directory creation: safe under the loader lock (AGENTS.md N43 allows kernel32
-//     calls there). The mutex is created here and nowhere else; no append creates it.
+//     buffers and creates the log's named mutex (one CreateMutexW call, kernel32). It does no file
+//     I/O and no directory creation. That the mutex call is safe under the loader lock is an
+//     inference (a named kernel object, no module load), not a measurement. The mutex is created
+//     here and nowhere else; no append creates it. If the call fails, the failure is journalled
+//     (step log_mutex) and appends run without the lock.
 //   - RecordAttach() stores one step in a fixed journal. No heap, no I/O, no lock:
 //     safe under the loader lock. Nothing is written until FlushAttachJournal().
-//   - AppendLine() opens, writes once and closes. It allocates nothing and creates nothing: it
-//     waits on the log mutex Prepare() created (a wait is a WaitForSingleObject call), for at most kBootstrapLogLockWaitMs, and only the
-//     first wait that times out in the process pays it (later appends write without the lock). A
-//     crash record therefore costs at most that one wait in total. No logger: safe in the crash
-//     callback.
+//   - AppendLine() opens (and creates) the log file, writes once and closes, from the crash
+//     callback too. It creates no mutex: it waits on the one Prepare() created, for at most
+//     kBootstrapLogLockWaitMs, and only the first wait that times out in the process pays it (later
+//     appends write without the lock, after one host_log_lock record). Whether the file calls or the
+//     wait allocate is not measured. No logger.
 //   - Emit(), FlushAttachJournal() build records with nlohmann::json and so run
 //     only after attach has returned, off the crash path.
 // Nothing here calls the NEVR logger.
@@ -58,6 +60,7 @@ enum class AttachStep : std::uint32_t {
   kDetourEntry = 5,    // the detour was entered in a state it must never be entered in
   kSetGameModule = 6,  // a second NEVR_SetGameModule
   kJournal = 7,        // the journal itself: entries it had no room for
+  kLogMutex = 8,       // the log's mutex could not be created: appends run without the lock
 };
 
 /// What an entry adds to its step: the outcome of a wait, the reason for a refusal, a fact about
@@ -71,6 +74,7 @@ enum class AttachNote : std::uint32_t {
   kDetourWithoutHook = 5,        // detour_entry: entered with no trampoline published
   kDuplicateSetGameModule = 6,   // set_game_module: already called once
   kSetGameModuleAfterAttach = 7, // set_game_module: DllMain already attached to the process image
+  kLogMutexUnavailable = 8,      // log_mutex: CreateMutexW failed (detail carries the Win32 error)
 };
 
 /// The MinHook call a hook-install step reached (the one that failed, or enable on success).
@@ -90,7 +94,7 @@ enum class AttachOutcome : std::uint32_t {
 class BootstrapDiagnostics {
  public:
   /// Copy %LOCALAPPDATA%, %TEMP% and the directory of `host_module`, compute the three log
-  /// directories and create the log mutex (once per process). No allocation, no I/O.
+  /// directories and create the log mutex (once per process). No file I/O.
   void Prepare(HMODULE host_module);
 
   /// Store one attach step. `actual` (optional, kGameMainWrapperPrologueSize long) is the
@@ -119,8 +123,9 @@ class BootstrapDiagnostics {
   /// kDropped.
   DiagnosticDestination Emit(const nlohmann::json& record) noexcept;
 
-  /// Append an already-formatted line (ends in '\n'). Crash-safe: it creates and allocates nothing
-  /// and waits on the log mutex at most once per process (see the file comment).
+  /// Append an already-formatted line (ends in '\n'), also from the crash callback. It creates no
+  /// mutex and waits on the log mutex for one kBootstrapLogLockWaitMs at most per process (see the file
+  /// comment).
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
@@ -143,19 +148,20 @@ class BootstrapDiagnostics {
   void PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
                       const wchar_t* host_dir);
 
-  /// Close the log mutex and forget it, clear the timed-out mark and zero the creation count, so a
-  /// test can show what an append does when Prepare has already run.
+  /// Close the log mutex and forget it and clear the timed-out mark, so a test can show what an append
+  /// does when no mutex exists (a crash before the first Prepare).
   static void ResetLogLockForTest();
 
-  /// How many times the process called CreateMutexW for the log mutex since the last reset.
-  static std::size_t LogMutexCreations();
+  /// Name the log mutex `name` for the next CreateLogMutex (null or empty: the production name), so a
+  /// test does not share the production mutex with another test process. Call ResetLogLockForTest first.
+  static void SetLogMutexNameForTest(const wchar_t* name);
 
   /// True once an append's wait on the log mutex timed out.
-  static bool LogLockUnreliable();
+  static bool LogLockUnreliableForTest();
 
   /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
   /// flush has returned; more means an entry was claimed twice.
-  std::size_t JournalClaimed() const { return claimed_.load(); }
+  std::size_t JournalClaimed() const;
 
   /// Replace the output: every record Emit would write goes to `sink` instead. Null restores the file.
   using EmitSink = void (*)(const nlohmann::json& record);
@@ -183,6 +189,7 @@ class BootstrapDiagnostics {
 
   void EmitJournalEntry(const JournalEntry& entry);
   DiagnosticDestination EmitChecked(const nlohmann::json& record);
+  void EnsureLogMutex() noexcept;
   bool AppendTo(const wchar_t* dir, bool create_dir, const char* line, std::size_t length) noexcept;
 
   wchar_t local_app_data_[MAX_PATH] = {};

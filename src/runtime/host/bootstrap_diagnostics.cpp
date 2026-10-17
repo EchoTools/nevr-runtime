@@ -26,6 +26,7 @@ const char* StepName(AttachStep step) noexcept {
     case AttachStep::kDetourEntry: return "detour_entry";
     case AttachStep::kSetGameModule: return "set_game_module";
     case AttachStep::kJournal: return "journal";
+    case AttachStep::kLogMutex: return "log_mutex";
   }
   return "unknown";
 }
@@ -40,6 +41,7 @@ const char* OutcomeName(AttachStep step, AttachOutcome outcome, AttachNote note)
     case AttachStep::kDetourEntry: return "defect";
     case AttachStep::kSetGameModule: return "refused";
     case AttachStep::kJournal: return "overflow";
+    case AttachStep::kLogMutex: return "unavailable";
     case AttachStep::kImageCheck:
     case AttachStep::kPrologueCheck:
     case AttachStep::kHookInstall:
@@ -95,11 +97,10 @@ void ReportBuildFailure(const char* event, const char* what) noexcept {
   if (length != 0) WriteFile(stderr_handle, buffer, static_cast<DWORD>(length), &written, nullptr);
 }
 
-// The log's mutex. It is created once, by CreateLogMutex() from Prepare() (host attach, kernel32 only,
-// the one kernel object), and kept for the process. The append path, which the crash callback also
-// runs, only loads the handle: it never creates it, so nothing in the crash callback creates or
-// allocates anything. Null when Prepare() has not run or could not create it (appends then run
-// unserialized).
+// The log's mutex. It is created once, by CreateLogMutex() from Prepare() (host attach), and kept for
+// the process. The append path, which the crash callback also runs, only loads the handle: it never
+// creates the mutex. Null when Prepare() has not run or could not create it (appends then run
+// unserialized, and Prepare journalled why).
 std::atomic<HANDLE> g_log_mutex{nullptr};
 
 // Set by the first append whose wait on the mutex does not end owned. Later appends in the process
@@ -108,18 +109,27 @@ std::atomic<HANDLE> g_log_mutex{nullptr};
 std::atomic<bool> g_log_lock_unreliable{false};
 
 #if defined(NEVR_HOST_TESTING)
-std::atomic<std::size_t> g_log_mutex_creations{0};
+wchar_t g_log_mutex_name_for_test[128] = {};  // empty: the production name
 #endif
 
-void CreateLogMutex() noexcept {
-  if (g_log_mutex.load(std::memory_order_acquire) != nullptr) return;
+const wchar_t* LogMutexName() noexcept {
 #if defined(NEVR_HOST_TESTING)
-  g_log_mutex_creations.fetch_add(1);
+  if (g_log_mutex_name_for_test[0] != L'\0') return g_log_mutex_name_for_test;
 #endif
-  HANDLE created = CreateMutexW(nullptr, FALSE, kBootstrapLogMutexName);
-  if (created == nullptr) return;
+  return kBootstrapLogMutexName;
+}
+
+// Create the mutex unless it exists. Returns 0, or the Win32 error CreateMutexW failed with.
+DWORD CreateLogMutex() noexcept {
+  if (g_log_mutex.load(std::memory_order_acquire) != nullptr) return 0;
+  HANDLE created = CreateMutexW(nullptr, FALSE, LogMutexName());
+  if (created == nullptr) {
+    const DWORD error = GetLastError();
+    return error != 0 ? error : ERROR_GEN_FAILURE;
+  }
   HANDLE expected = nullptr;
   if (!g_log_mutex.compare_exchange_strong(expected, created)) CloseHandle(created);
+  return 0;
 }
 
 }  // namespace
@@ -145,8 +155,18 @@ void BootstrapDiagnostics::Prepare(HMODULE host_module) {
   if (temp_ok) fallback_ready_ = AppendPath(fallback_dir_, MAX_PATH, temp_, kLogsSubdirectory);
   host_dir_ready_ = DirOfModule(host_dir_, MAX_PATH, host_module);
   // The log's mutex is created here, at attach, and never inside an append: a crash callback that is
-  // the first to write must not have to create it. CreateMutexW is kernel32 (AGENTS.md N43).
-  CreateLogMutex();
+  // the first to write must not have to create it. CreateMutexW is a kernel32 call. That it is safe under
+  // the loader lock is an inference (it opens a named kernel object and loads no module), not a measurement.
+  EnsureLogMutex();
+}
+
+void BootstrapDiagnostics::EnsureLogMutex() noexcept {
+  const DWORD error = CreateLogMutex();
+  if (error != 0) {
+    // Nothing is written here (the loader lock may be held): the journal says it when it is flushed.
+    RecordAttach(AttachStep::kLogMutex, AttachOutcome::kFailed, error, nullptr, HookStage::kNone,
+                 AttachNote::kLogMutexUnavailable);
+  }
 }
 
 #if defined(NEVR_HOST_TESTING)
@@ -170,18 +190,25 @@ void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const w
     }
   }
   g_log_lock_unreliable.store(false);  // a test starts with a lock that has not yet timed out
-  CreateLogMutex();
+  EnsureLogMutex();
 }
 
 void BootstrapDiagnostics::ResetLogLockForTest() {
   g_log_lock_unreliable.store(false);
-  g_log_mutex_creations.store(0);
   HANDLE old = g_log_mutex.exchange(nullptr);
   if (old != nullptr) CloseHandle(old);
 }
 
-std::size_t BootstrapDiagnostics::LogMutexCreations() { return g_log_mutex_creations.load(); }
-bool BootstrapDiagnostics::LogLockUnreliable() { return g_log_lock_unreliable.load(); }
+void BootstrapDiagnostics::SetLogMutexNameForTest(const wchar_t* name) {
+  g_log_mutex_name_for_test[0] = L'\0';
+  if (name == nullptr || name[0] == L'\0') return;
+  const std::size_t length = wcslen(name);
+  if (length + 1 > sizeof(g_log_mutex_name_for_test) / sizeof(wchar_t)) return;
+  std::memcpy(g_log_mutex_name_for_test, name, (length + 1) * sizeof(wchar_t));
+}
+
+bool BootstrapDiagnostics::LogLockUnreliableForTest() { return g_log_lock_unreliable.load(); }
+std::size_t BootstrapDiagnostics::JournalClaimed() const { return claimed_.load(); }
 #endif
 
 void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
@@ -211,6 +238,7 @@ bool BootstrapDiagnostics::AttachDegraded() const noexcept {
   const std::size_t count = journal_count_.load();
   for (std::size_t at = 0; at < count && at < kJournalCapacity; ++at) {
     if (journal_[at].ready.load(std::memory_order_acquire) == 0) continue;
+    if (journal_[at].step == AttachStep::kLogMutex) continue;  // the log runs unserialized; the attach is intact
     if (journal_[at].outcome != AttachOutcome::kAccepted) return true;
     if (journal_[at].note == AttachNote::kHookBytesUnread) return true;
   }
@@ -296,6 +324,10 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
       case AttachNote::kSetGameModuleAfterAttach:
         record["reason"] = "attached_at_dll_main";
         record["next"] = "ignored";
+        break;
+      case AttachNote::kLogMutexUnavailable:
+        record["win32_error"] = entry.detail;
+        record["next"] = "log_appends_run_without_the_lock";
         break;
       case AttachNote::kNone:
       case AttachNote::kInstallWaitSignalled:
@@ -408,15 +440,35 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   // process pays it: after that the lock is treated as unreliable and appends write without it.
   HANDLE lock = g_log_mutex.load(std::memory_order_acquire);
   bool locked = false;
+  bool marked_unreliable = false;
+  DWORD waited = WAIT_OBJECT_0;
+  DWORD wait_error = 0;
   if (lock != nullptr && !g_log_lock_unreliable.load()) {
-    const DWORD waited = WaitForSingleObject(lock, kBootstrapLogLockWaitMs);
+    waited = WaitForSingleObject(lock, kBootstrapLogLockWaitMs);
+    if (waited == WAIT_FAILED) wait_error = GetLastError();
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
-    if (!locked) g_log_lock_unreliable.store(true);
+    if (!locked) marked_unreliable = !g_log_lock_unreliable.exchange(true);
   }
   DWORD written = 0;
   const BOOL ok = WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
   FlushFileBuffers(file);
   if (locked) ReleaseMutex(lock);
+  if (marked_unreliable) {
+    // The one record that says the log is no longer serialized: written to the open file, without the lock,
+    // from a fixed buffer (this can be the crash callback).
+    char buffer[512];
+    JsonLine record(buffer, sizeof(buffer), "host_log_lock");
+    record.Str("stage", "wait").Str("outcome", waited == WAIT_FAILED ? "failed" : "timeout");
+    record.UInt("wait_result", waited).UInt("wait_ms", kBootstrapLogLockWaitMs);
+    if (wait_error != 0) record.UInt("win32_error", wait_error);
+    record.Str("next", "later_appends_write_without_the_lock");
+    const std::size_t record_length = record.Finish();
+    DWORD record_written = 0;
+    if (record_length != 0) {
+      WriteFile(file, buffer, static_cast<DWORD>(record_length), &record_written, nullptr);
+      FlushFileBuffers(file);
+    }
+  }
   CloseHandle(file);
   return ok != FALSE && written == length;
 }

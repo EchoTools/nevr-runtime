@@ -5,6 +5,8 @@
 
 #include "runtime/host/crash_capture.h"
 
+#include "runtime/host/host_paths.h"
+
 #include "runtime/tests/host_crash/minidump.h"
 
 #include <nlohmann/json.hpp>
@@ -175,10 +177,16 @@ TEST(HostCrashCapture, TheCaptureCreatesNoLogMutexWhenItIsTheFirstToWrite) {
   const std::wstring local = MakeTempDir(L"local");
   Prepared prepared(local, MakeTempDir(L"temp"));
   BootstrapDiagnostics::ResetLogLockForTest();
+  const auto exists = [] {
+    HANDLE found = OpenMutexW(SYNCHRONIZE, FALSE, nevr_host::kBootstrapLogMutexName);
+    if (found != nullptr) CloseHandle(found);
+    return found != nullptr;
+  };
+  ASSERT_FALSE(exists()) << "another process holds the production log mutex: run one test process at a time";
   ASSERT_TRUE(prepared.capture.TryEnter());
   EXPECT_FALSE(prepared.capture.Capture(nullptr));
   prepared.capture.Exit();
-  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 0u) << "the crash path created the log mutex";
+  EXPECT_FALSE(exists()) << "the crash path created the log mutex";
   EXPECT_EQ(CrashRecords(local).size(), 1u);
   prepared.diagnostics.Prepare(GetModuleHandleW(nullptr));  // leave the process attached for later tests
 }

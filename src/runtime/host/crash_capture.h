@@ -15,10 +15,12 @@
 //   - records every decision as one JSON line through BootstrapDiagnostics::AppendLine
 //     (dump written, destination failed and why, capture suppressed, capture failed).
 //
-// No NEVR logger, no heap, no runtime load here: the process is faulting. The records are built
-// in a fixed stack buffer by JsonLine and appended through BootstrapDiagnostics::AppendLine, which
-// waits on the log mutex that attach created (it creates nothing) for at most one
-// kBootstrapLogLockWaitMs in the whole process. The reentrancy guard below is an atomic flag, not a lock.
+// No NEVR logger and no runtime load here: the process is faulting. The records are built in a
+// fixed stack buffer by JsonLine and appended through BootstrapDiagnostics::AppendLine. That call
+// opens and creates the log file and the crash directories (CreateFileW, CreateDirectoryW), and
+// waits on the log mutex that attach created (it creates no mutex) for at most one
+// kBootstrapLogLockWaitMs in the whole process. Whether those calls, or MiniDumpWriteDump,
+// allocate is not measured. The reentrancy guard below is an atomic flag, not a lock.
 
 #include "runtime/host/bootstrap_diagnostics.h"
 
@@ -42,7 +44,7 @@ using CaptureProbeFn = void (*)();
 class CrashCapture {
  public:
   /// Precompute the three destination directories into fixed buffers from
-  /// %LOCALAPPDATA%, %TEMP% and the host module path. No allocation, no I/O.
+  /// %LOCALAPPDATA%, %TEMP% and the host module path. No file I/O.
   /// `diagnostics` (optional, must outlive this object) receives the JSON records.
   void Prepare(HMODULE host_module, BootstrapDiagnostics* diagnostics);
 

@@ -636,9 +636,11 @@ TEST(BootstrapDiagnostics, TwoProcessesAppendingToOneFileLoseNoLine) {
 
 namespace {
 
+std::wstring g_holder_mutex_name;
+
 DWORD WINAPI HoldLogLock(void* raw) {
   HANDLE* handles = static_cast<HANDLE*>(raw);  // [0] ready, [1] release
-  HANDLE mutex = CreateMutexW(nullptr, FALSE, nevr_host::kBootstrapLogMutexName);
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, g_holder_mutex_name.c_str());
   WaitForSingleObject(mutex, 5000);
   SetEvent(handles[0]);
   WaitForSingleObject(handles[1], 10000);
@@ -647,10 +649,41 @@ DWORD WINAPI HoldLogLock(void* raw) {
   return 0;
 }
 
+// A mutex name no other test process shares, so two runs under one wineserver cannot hold each other's lock.
+std::wstring UniqueMutexName(const wchar_t* tag) {
+  wchar_t name[128] = {};
+  swprintf(name, 128, L"Local\\nevr-test-log-%ls-%lu-%llu", tag, static_cast<unsigned long>(GetCurrentProcessId()),
+           static_cast<unsigned long long>(GetTickCount64()));
+  return std::wstring(name);
+}
+
+// The log mutex of this process is named `name` for the scope; the old one is closed first and the
+// production name is restored (and the test's mutex closed) at the end.
+struct ScopedLogMutexName {
+  explicit ScopedLogMutexName(const std::wstring& name) {
+    BootstrapDiagnostics::ResetLogLockForTest();
+    BootstrapDiagnostics::SetLogMutexNameForTest(name.c_str());
+    g_holder_mutex_name = name;
+  }
+  ~ScopedLogMutexName() {
+    BootstrapDiagnostics::ResetLogLockForTest();
+    BootstrapDiagnostics::SetLogMutexNameForTest(nullptr);
+  }
+};
+
+// Whether a mutex called `name` exists in this session (opened, not created).
+bool MutexExists(const wchar_t* name) {
+  HANDLE found = OpenMutexW(SYNCHRONIZE, FALSE, name);
+  if (found == nullptr) return false;
+  CloseHandle(found);
+  return true;
+}
+
 }  // namespace
 
 // A holder that never lets go must delay an append by the bounded wait at most; the line is still written.
 TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheLogLock) {
+  ScopedLogMutexName scoped(UniqueMutexName(L"blocked"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
@@ -672,16 +705,18 @@ TEST(BootstrapDiagnostics, AnAppendIsNotBlockedForeverByAnotherThreadHoldingTheL
   EXPECT_EQ(where, DiagnosticDestination::kPrimary);
   EXPECT_LT(elapsed.count(), 4000);  // bounded, not the holder's 10 s
   EXPECT_GE(elapsed.count(), 300);   // it did wait for the lock first
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 2u);  // the line, then the host_log_lock record
 }
 
 // A crash inside an append runs the crash callback on the thread that holds the lock: the mutex is
 // recursive for its owner, so that record is written at once instead of waiting for itself.
 TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
+  const std::wstring name = UniqueMutexName(L"owner");
+  ScopedLogMutexName scoped(name);
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
-  HANDLE mutex = CreateMutexW(nullptr, FALSE, nevr_host::kBootstrapLogMutexName);
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, name.c_str());
   ASSERT_NE(mutex, nullptr);
   ASSERT_EQ(WaitForSingleObject(mutex, 5000), WAIT_OBJECT_0);
   const auto start = std::chrono::steady_clock::now();
@@ -694,25 +729,35 @@ TEST(BootstrapDiagnostics, AnAppendOnTheThreadThatHoldsTheLogLockIsImmediate) {
   EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
 }
 
-// The mutex is created at attach (Prepare), once, and never by an append: the crash callback is an
-// append, and it must not be the first to create a kernel object.
-TEST(BootstrapDiagnostics, PrepareCreatesTheLogMutexOnceAndAnAppendNeverCreatesIt) {
+// The mutex is created at attach (Prepare) and never by an append: the crash callback is an append, and
+// it must not be the first to create it. These two tests look at the production-named mutex itself with
+// OpenMutexW, so they would catch a creation made by any code path and under that name; they need the
+// name to be free, which holds when one test process runs at a time.
+TEST(BootstrapDiagnostics, PrepareCreatesTheLogMutex) {
   BootstrapDiagnostics::ResetLogLockForTest();
+  ASSERT_FALSE(MutexExists(nevr_host::kBootstrapLogMutexName))
+      << "another process holds the production log mutex: run one test process at a time";
   BootstrapDiagnostics attached;
   attached.Prepare(GetModuleHandleW(nullptr));
-  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 1u);
-  attached.Prepare(GetModuleHandleW(nullptr));
-  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 1u) << "a second Prepare created a second mutex";
+  EXPECT_TRUE(MutexExists(nevr_host::kBootstrapLogMutexName)) << "attach did not create the log mutex";
+  attached.Prepare(GetModuleHandleW(nullptr));  // idempotent
+  EXPECT_TRUE(MutexExists(nevr_host::kBootstrapLogMutexName));
+  BootstrapDiagnostics::ResetLogLockForTest();
+  EXPECT_FALSE(MutexExists(nevr_host::kBootstrapLogMutexName));
+}
 
-  // Nothing has attached in this process (the log mutex is forgotten), and the first write is an
-  // append, as a crash before the first flush is.
+TEST(BootstrapDiagnostics, AnAppendBeforeAttachCreatesNoLogMutex) {
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  // Nothing has attached in this process (the log mutex is forgotten), and the first write is an
+  // append, as a crash before the first flush is.
   BootstrapDiagnostics::ResetLogLockForTest();
+  ASSERT_FALSE(MutexExists(nevr_host::kBootstrapLogMutexName))
+      << "another process holds the production log mutex: run one test process at a time";
   const char line[] = "{\"event\":\"first_write_is_a_crash\"}\n";
   EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
-  EXPECT_EQ(BootstrapDiagnostics::LogMutexCreations(), 0u) << "an append created the log mutex";
+  EXPECT_FALSE(MutexExists(nevr_host::kBootstrapLogMutexName)) << "an append created the log mutex";
   EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 1u);
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);  // later tests start from an attached state
 }
@@ -720,6 +765,7 @@ TEST(BootstrapDiagnostics, PrepareCreatesTheLogMutexOnceAndAnAppendNeverCreatesI
 // One crash writes up to four records. With a holder that never releases, the first record waits and
 // the lock is then marked unreliable: the rest write at once, so the whole crash costs one wait.
 TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverReleases) {
+  ScopedLogMutexName scoped(UniqueMutexName(L"four"));
   const std::wstring local = MakeTempDir(L"local");
   BootstrapDiagnostics diagnostics;
   diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
@@ -732,7 +778,7 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   const char line[] = "{\"event\":\"crash_dump\"}\n";
   for (int record = 0; record < 4; ++record) diagnostics.AppendLine(line, sizeof(line) - 1);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-  const bool unreliable = BootstrapDiagnostics::LogLockUnreliable();
+  const bool unreliable = BootstrapDiagnostics::LogLockUnreliableForTest();
   SetEvent(handles[1]);
   WaitForSingleObject(holder, 10000);
   CloseHandle(holder);
@@ -742,7 +788,61 @@ TEST(BootstrapDiagnostics, ACrashOfFourRecordsPaysOneLockWaitWhenAHolderNeverRel
   EXPECT_TRUE(unreliable);
   EXPECT_GE(elapsed.count(), 300);  // the first record did wait
   EXPECT_LT(elapsed.count(), 900);  // four waits would be about 2000
-  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 4u);
+  EXPECT_EQ(CountLines(ReadAll(local + kLogsFile)).lines, 5u);  // four records and the one host_log_lock record
+}
+
+// The wait that times out says so, once, in the log: the stage, the wait result and what happens next.
+TEST(BootstrapDiagnostics, ATimedOutLogLockWaitIsRecordedOnceWithWhatHappensNext) {
+  ScopedLogMutexName scoped(UniqueMutexName(L"record"));
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
+  const char line[] = "{\"event\":\"x\"}\n";
+  for (int record = 0; record < 3; ++record) diagnostics.AppendLine(line, sizeof(line) - 1);
+  SetEvent(handles[1]);
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(handles[0]);
+  CloseHandle(handles[1]);
+
+  std::vector<nlohmann::json> locks;
+  for (const nlohmann::json& record : ReadRecords(local + kLogsFile)) {
+    if (record.value("event", "") == "host_log_lock") locks.push_back(record);
+  }
+  ASSERT_EQ(locks.size(), 1u);
+  EXPECT_EQ(locks[0].at("stage"), "wait");
+  EXPECT_EQ(locks[0].at("outcome"), "timeout");
+  EXPECT_EQ(locks[0].at("wait_result"), WAIT_TIMEOUT);
+  EXPECT_EQ(locks[0].at("wait_ms"), nevr_host::kBootstrapLogLockWaitMs);
+  EXPECT_EQ(locks[0].at("next"), "later_appends_write_without_the_lock");
+  EXPECT_EQ(locks[0].at("tag"), "NEVR.HOST");
+}
+
+// A mutex that cannot be created at attach is journalled (the loader lock may be held: nothing is written
+// then) and written when the journal is flushed; the appends still work, without the lock.
+TEST(BootstrapDiagnostics, AFailedLogMutexCreationIsJournalledAndAppendsStillWork) {
+  ScopedLogMutexName scoped(L"Local\\nevr-test\\not\\a\\valid\\mutex\\name");
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  ASSERT_EQ(diagnostics.JournalSize(), 1u);
+  EXPECT_FALSE(diagnostics.AttachDegraded()) << "a missing log lock is not a failed attach";
+  diagnostics.FlushAttachJournal();
+  const char line[] = "{\"event\":\"after\"}\n";
+  EXPECT_EQ(diagnostics.AppendLine(line, sizeof(line) - 1), DiagnosticDestination::kPrimary);
+
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[0].at("event"), "host_attach");
+  EXPECT_EQ(records[0].at("step"), "log_mutex");
+  EXPECT_EQ(records[0].at("outcome"), "unavailable");
+  EXPECT_NE(records[0].at("win32_error").get<std::uint32_t>(), 0u);
+  EXPECT_EQ(records[0].at("next"), "log_appends_run_without_the_lock");
+  EXPECT_EQ(records[1].at("event"), "after");
 }
 
 namespace {
