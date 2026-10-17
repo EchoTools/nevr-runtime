@@ -289,6 +289,7 @@ just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
@@ -782,7 +783,9 @@ your seat name, for example `claude-main` or `codex`.
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
+- **Fresh worktrees need build inputs.** `just install-hooks`, run once per clone, gives each new linked worktree
+  the gitignored files `.worktreeinclude` lists (`.mcp.json`, `.claude/settings.local.json`; Claude Code's own worktrees
+  copy them from the same file). Run `just worktree-setup` in the new linked worktree: it
   copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
   checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove

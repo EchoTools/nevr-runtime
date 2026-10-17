@@ -46,6 +46,11 @@ worktree-setup:
     tools/worktree-setup.sh
     tools/vcpkg_root.sh
 
+# Link the tracked post-checkout hook into this clone's hooks directory, once per clone: a new linked worktree
+# then gets the gitignored files .worktreeinclude lists (.mcp.json and the local Claude settings). Never overwrites a different hook.
+install-hooks:
+    tools/install-git-hooks.sh
+
 # Remove the worktrees under .claude/worktrees whose work has landed. Dry run unless `--apply` (tools/reap_merged.py)
 reap-merged *args:
     python3 -I tools/reap_merged.py {{ args }}
