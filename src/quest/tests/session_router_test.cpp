@@ -2088,6 +2088,31 @@ void TestStaleEntriesAreSkippedToReachALiveRequest() {
   QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
 }
 
+// A session end forgets the open config requests: they were the lost session's, and the service of the next
+// session never saw them. A reply for the same resource on the new session, which nobody asked for there, is
+// unmatched, not a closed socket's orphan. Failure caught: requests of an ended session kept in the list.
+void TestASessionEndForgetsTheOpenConfigRequests() {
+  const CaseScope scope("session end forgets requests");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId first = SessionRemote(rig);
+  rig.router->OnRemoteOpen(first);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnRemoteError(first, 0, "network error");
+  rig.router->OnGameClose(1);
+  rig.router->OnGameClose(2);
+  rig.router->OnGameClose(3);
+  rig.router->OnGameOpen(4);
+  rig.router->OnGameOpen(5);
+  const RemoteId second = SessionRemote(rig);
+  QCHECK(second != first);
+  rig.router->OnRemoteOpen(second);
+  rig.router->OnRemoteFrame(second, ConfigSuccessFor("main_menu"), true);
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 1);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+}
+
 // When no live socket has an open request for the key, the closed socket's reply is dropped and counted as
 // orphaned (there is nothing to hand it to), and the line says so once, without the generic drop line.
 void TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt() {
@@ -3179,6 +3204,7 @@ int main() {
   TestTwoRequestsOnAReplacementSocketBehindAStaleEntryAreBothAnswered();
   TestAClosedSocketsReplyIsDroppedWhenNoLiveSocketAskedForIt();
   TestStaleEntriesAreSkippedToReachALiveRequest();
+  TestASessionEndForgetsTheOpenConfigRequests();
   TestAConfigDropWritesOnlyItsOwnLine();
   TestRequestsOfOneTypeWithDifferentIdsAreToldApart();
   TestConfigFailureGoesToTheConfigSocket();
