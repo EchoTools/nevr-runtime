@@ -56,6 +56,11 @@ const char* OutcomeName(AttachStep step, AttachOutcome outcome, AttachNote note)
   return "unknown";
 }
 
+#if defined(NEVR_HOST_TESTING)
+std::atomic<BootstrapDiagnostics::EmitSink> g_emit_sink{nullptr};
+std::atomic<BootstrapDiagnostics::RecordPause> g_record_pause{nullptr};
+#endif
+
 const char* StageName(HookStage stage) noexcept {
   switch (stage) {
     case HookStage::kNone: return "none";
@@ -160,6 +165,9 @@ void BootstrapDiagnostics::RecordAttach(AttachStep step, AttachOutcome outcome,
   JournalEntry& entry = journal_[slot];
   entry.step = step;
   entry.outcome = outcome;
+#if defined(NEVR_HOST_TESTING)
+  if (const RecordPause pause = g_record_pause.load()) pause();
+#endif
   entry.detail = detail;
   entry.stage = stage;
   entry.note = note;
@@ -281,11 +289,8 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
 }
 
 #if defined(NEVR_HOST_TESTING)
-namespace {
-std::atomic<BootstrapDiagnostics::EmitSink> g_emit_sink{nullptr};
-}  // namespace
-
 void BootstrapDiagnostics::SetEmitSinkForTest(EmitSink sink) { g_emit_sink.store(sink); }
+void BootstrapDiagnostics::SetRecordPauseForTest(RecordPause pause) { g_record_pause.store(pause); }
 #endif
 
 DiagnosticDestination BootstrapDiagnostics::Emit(const nlohmann::json& record) noexcept {

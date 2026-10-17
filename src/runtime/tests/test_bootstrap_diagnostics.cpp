@@ -759,3 +759,67 @@ TEST(BootstrapDiagnostics, AFlushNeverEmitsAnEntryBeforeItIsWritten) {
     ASSERT_EQ(seen.size(), BootstrapDiagnostics::kJournalCapacity) << "round " << round;
   }
 }
+
+namespace {
+
+HANDLE g_reserved_event = nullptr;
+HANDLE g_release_event = nullptr;
+volatile LONG g_pause_armed = 0;
+
+// Called from RecordAttach after it reserved its slot and wrote part of it. Pauses only the armed call.
+void PauseInsideRecordAttach() {
+  if (InterlockedExchange(&g_pause_armed, 0) == 0) return;
+  SetEvent(g_reserved_event);
+  WaitForSingleObject(g_release_event, 20000);
+}
+
+struct RecordJob {
+  BootstrapDiagnostics* diagnostics;
+  std::uint32_t detail;
+};
+
+DWORD WINAPI RecordOne(void* raw) {
+  const auto* job = static_cast<const RecordJob*>(raw);
+  job->diagnostics->RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed, job->detail, nullptr,
+                                 nevr_host::HookStage::kCreate);
+  return 0;
+}
+
+}  // namespace
+
+// Deterministic form of the race above: an entry that is reserved and half written is not emitted, and
+// the mark does not skip it; once it is complete a later flush writes it, with its own fields.
+TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilItIsComplete) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(nullptr, nullptr, nullptr);
+  g_reserved_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  g_release_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  BootstrapDiagnostics::SetRecordPauseForTest(&PauseInsideRecordAttach);
+
+  RecordJob first{&diagnostics, 1000};
+  RecordOne(&first);  // complete: the pause is not armed
+  InterlockedExchange(&g_pause_armed, 1);
+  RecordJob second{&diagnostics, 1001};
+  HANDLE thread = CreateThread(nullptr, 0, &RecordOne, &second, 0, nullptr);
+  ASSERT_NE(thread, nullptr);
+  ASSERT_EQ(WaitForSingleObject(g_reserved_event, 10000), WAIT_OBJECT_0);
+
+  diagnostics.FlushAttachJournal();  // entry 0 is complete; entry 1 is reserved and half written
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].at("mh_status"), 1000);
+  EXPECT_EQ(diagnostics.JournalFlushed(), 1u);
+
+  SetEvent(g_release_event);
+  WaitForSingleObject(thread, 10000);
+  CloseHandle(thread);
+  BootstrapDiagnostics::SetRecordPauseForTest(nullptr);
+  diagnostics.FlushAttachJournal();
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[1].at("step"), "hook_install");
+  EXPECT_EQ(records[1].at("mh_status"), 1001);
+  EXPECT_EQ(records[1].at("stage"), "create");
+  CloseHandle(g_reserved_event);
+  CloseHandle(g_release_event);
+}

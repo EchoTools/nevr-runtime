@@ -143,6 +143,11 @@ class BootstrapDiagnostics {
   /// Replace the output: every record Emit would write goes to `sink` instead. Null restores the file.
   using EmitSink = void (*)(const nlohmann::json& record);
   static void SetEmitSinkForTest(EmitSink sink);
+
+  /// Run `pause` in the middle of RecordAttach, after the slot is reserved and part of it written:
+  /// the window in which a flush must not read the entry. Null removes it.
+  using RecordPause = void (*)();
+  static void SetRecordPauseForTest(RecordPause pause);
 #endif
 
  private:

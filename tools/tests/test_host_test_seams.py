@@ -17,7 +17,7 @@ DEFINE = "NEVR_HOST_TESTING"
 SEAM_NAMES = (
     "TestSeams", "Seams()", "SetEmitLoadFailureForTest", "g_fail_emit_for_test", "SetEmitSinkForTest",
     "g_emit_sink", "ResetActiveForTest", "SetInstallEventForTest", "claimed_", "JournalClaimed",
-    "EmitSink", "Context() const",
+    "EmitSink", "Context() const", "RecordPause", "SetRecordPauseForTest", "g_record_pause",
 )
 
 
