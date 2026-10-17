@@ -2817,9 +2817,10 @@ verify:
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     # Wave 10: a deleted unit test must be visible to the closed-loop gate.
-    # The floor sits at the real count (tools/tests/test_verify_gtest_floor.py checks it
-    # against this tree): adding tests raises it in the same change, a drop is a regression
-    # that needs an explicit sensor update and review.
+    # The floor may lag the real count by SLACK (tools/tests/test_verify_gtest_floor.py checks it
+    # against this tree): a change that would put the count more than SLACK above the floor raises
+    # it to the count; a drop below the floor is a regression that needs an explicit floor change
+    # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
     python3 tools/verify_gtest_floor.py --floor 1147
