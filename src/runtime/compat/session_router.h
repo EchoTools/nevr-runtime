@@ -22,9 +22,11 @@
 //     session ends when its remote ends (see "remote end").
 //   * server-to-game routing on the session is by role, never to whichever socket spoke last:
 //     replies to login-connection requests (and the settings that follow a login) go to the login
-//     connection; SNSConfigSuccessv2 and SNSConfigFailurev2 go to the config connection whose request is next in
-//     the session's FIFO of forwarded config requests (the service answers a session's requests in order), and
-//     are dropped and counted (Stats::configRepliesOrphaned) when that connection has closed; lobby traffic goes
+//     connection; SNSConfigSuccessv2 and SNSConfigFailurev2 go to the connection that sent the oldest open config
+//     request with the reply's (type, id) (the service echoes the request's two strings), so a request the service
+//     never answers does not shift later replies; a reply nobody asked for, or whose requester has closed, is
+//     dropped, counted (Stats::configRepliesUnmatched, configRepliesOrphaned) and logged every time; lobby
+//     traffic goes
 //     to the newest matchmaker connection; and an STcpConnectionUnrequireEvent goes to the connection whose reply
 //     it follows, only while that connection has a request outstanding (the game's own count wraps otherwise; see
 //     TakeUnrequireLocked); one with nothing to lower is dropped.
@@ -45,7 +47,8 @@
 //     token. A login connection that ended with requests outstanding is the game's Lost path (-95, RETRY):
 //     nothing is armed for it. What is kept is the 16-byte account id of the last LoginSuccess, cleared on any
 //     LogOut, a rejected login and Shutdown.
-//   * ordering: frames reach the remote in the order they arrived; an injected login request is first.
+//   * ordering: frames reach the remote in the order they arrived. An injected login request goes ahead of the
+//     frames that waited for it, except a config connection's, which may precede it on a session already open.
 //   * remote end (close or error): every game socket on that session, config included, is closed and the
 //     session is forgotten, so the game's next connection is a new login rather than a matchmaker.
 //   * a held session: while the wiring says the account the login needs is still being obtained
@@ -223,6 +226,11 @@ struct Stats {
   // Config replies whose requesting socket had closed (or that no forwarded request is owed), dropped rather
   // than sent to another socket.
   uint64_t configRepliesOrphaned = 0;
+  // Config replies no open request asked for (its (type, id) matches none), dropped.
+  uint64_t configRepliesUnmatched = 0;
+  // Unanswered config requests dropped from the list of requests awaiting a reply, oldest first, because it was
+  // full (a request the service never answers stays in the list until then).
+  uint64_t configRequestsEvicted = 0;
 };
 
 class Router {
@@ -282,7 +290,6 @@ class Router {
     bool classified = false;      // the first data frame has named the role
     bool hinted = false;          // the adapter named the role at open: it is final
     uint32_t required = 0;        // requests sent on the shared login session that await their Unrequire
-    uint64_t noticeEpoch = 0;     // the loss this socket reconnected after (0: none was due when it opened)
     bool noticeSent = false;      // it was sent the login-removed notice (never twice)
     Outbox out;
   };
@@ -304,7 +311,7 @@ class Router {
   // All of these require mutex_ held (suffix Locked) and only record work in `fx`.
   void FailSessionLocked(RemoteId remote, uint16_t code, const char* why, bool closeRemote, Effects& fx);
   // `from` is the game whose frame this is (kNoGame for a frame the router made). A config request from a game
-  // joins the session's FIFO of config requests.
+  // joins the session's list of open config requests, with its (type, id).
   bool PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<const std::string> data, bool binary,
                           GameId from, Effects& fx);
   void FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx);
@@ -330,7 +337,7 @@ class Router {
   void ForgetLoginUserLocked();
   void RecomputeActiveLocked();
   bool OnSessionLocked(GameId id) const;
-  GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop);
+  GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, Effects& fx);
   bool TakeUnrequireLocked(GameId target);
   void CountRequirementsLocked(Game& g, const std::string& frame);
   std::size_t LiveMatchmakersLocked() const;
@@ -356,8 +363,14 @@ class Router {
   GameId activeGame_ = kNoGame;         // the newest matchmaker connection on the session
   // The config connections whose requests went to the session remote and are not answered yet, in the order
   // they went out: the service answers a session's requests in order, so a config reply takes the front.
-  std::deque<GameId> configOwners_;
-  uint64_t configRepliesOrphaned_ = 0;
+  struct ConfigRequestRecord {
+    GameId owner = kNoGame;
+    std::optional<nevr_evr_codec::ConfigKey> key;  // the request's (type, id); nullopt when its payload is unreadable
+  };
+  std::deque<ConfigRequestRecord> configRequests_;
+  uint64_t configRepliesOrphaned_ = 0;   // the requester had closed
+  uint64_t configRepliesUnmatched_ = 0;  // no open request had the reply's (type, id)
+  uint64_t configRequestsEvicted_ = 0;   // the oldest unanswered request, dropped to bound the list
   // The connections that owe an Unrequire for the messages the service paired with one, in the order those
   // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
   std::deque<GameId> owedUnrequires_;
@@ -368,7 +381,6 @@ class Router {
   bool haveLoginUser_ = false;
   nevr_evr_codec::UserId loginUser_;
   bool removalDue_ = false;      // armed by a silent loss; disarmed by the game's own login or the next LoginSuccess
-  uint64_t removalEpoch_ = 0;    // counts armed losses; a socket is eligible only for the one it opened under
   uint64_t unmatchedEmbeddedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;

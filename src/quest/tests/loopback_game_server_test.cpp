@@ -368,13 +368,21 @@ void TestRoundTrip() {
   QCHECK(rig.remotes.opens[0].session);  // the first connection opened the session
 
   rig.router->OnRemoteOpen(remote);
-  // The config request, in a frame larger than one TCP chunk; its reply is routed to the config connection.
-  const std::string payload = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, std::string(40000, 'p'));
+  // The config request for main_menu, in a frame larger than one TCP chunk (an extra JSON field the service
+  // ignores); its reply, which carries the same type and id, is routed to the config connection.
+  const std::string payload = nevr_evr_codec::BuildMessage(
+      nevr_evr_codec::kSymConfigRequest,
+      std::string(1, '\0') + "{\"type\":\"main_menu\",\"id\":\"main_menu\",\"pad\":\"" + std::string(40000, 'p') + "\"}");
   game.Write(BuildMaskedFrame(Opcode::Binary, payload, kMask), /*oneByteAtATime=*/false);
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.sent.size() == 1; }));
   QCHECK(rig.remotes.sent[0].second == payload);
 
-  const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigSuccess, "reply-from-service");
+  std::string replyPayload;
+  for (int i = 0; i < 2; ++i) {
+    const uint64_t symbol = nevr_evr_codec::ConfigSymbol("main_menu");
+    for (int b = 0; b < 8; ++b) replyPayload.push_back(static_cast<char>((symbol >> (8 * b)) & 0xFF));
+  }
+  const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigSuccess, replyPayload + "reply-from-service");
   rig.router->OnRemoteFrame(remote, reply, true);
   const std::string wire = BuildFrame(Opcode::Binary, reply);
   QCHECK(game.Read(wire.size()) == wire);

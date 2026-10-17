@@ -294,8 +294,7 @@ void TestFrameDuringLoginBuildStaysBehindLogin() {
   }
 }
 
-// Failure caught: a second login on the same session (OnRemoteOpen delivered twice), or one built for a
-// session no login connection is attached to.
+// Failure caught: a second login on the same session (OnRemoteOpen delivered twice).
 void TestLoginInjectedOncePerLoginSessionOnly() {
   int builds = 0;
   Options o;
@@ -1045,7 +1044,7 @@ void TestAnEmbeddedUnrequireTheCountCannotCoverIsCounted() {
   QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 2);
 }
 
-// The config connection has a remote of its own; its Unrequire follows the same rule with its own count.
+// The config connection's Unrequire follows the same rule: it lowers the config connection's own count.
 void TestConfigConnectionUnrequireNeverExceedsItsRequests() {
   Rig rig;
   OpenThree(rig);
@@ -1194,7 +1193,7 @@ void TestHeldSessionOpensWhenTheAccountAppears() {
   QCHECK(rig.router->GetStats().heldRemotes == 1);
   const auto holds = rig.games.Holds();
   QCHECK(holds.size() == 1 && holds[0].first == 2 && holds[0].second);
-  QCHECK(rig.logs.Has("held"));
+  QCHECK(rig.logs.Has("(config) held"));  // config opened the session, which is held
   const std::string loginRequest = Msg(nevr_evr_codec::kSymLoginRequest, "the-login");
   const std::string next = Msg(nevr_evr_codec::kSymConfigRequest, "after");
   rig.router->OnGameFrame(2, loginRequest, true);
@@ -1244,7 +1243,7 @@ void TestConfigConnectionIsHeldWithTheSessionWhileTheAccountIsAwaited() {
   QCHECK(rig.remotes.Opens().empty());  // the login did not call Open either
   QCHECK(rig.games.Closes().empty());
   QCHECK(rig.router->GetStats().heldRemotes == 1);
-  rig.router->OnGameOpen(3);  // a matchmaker riding the held session is not held itself
+  rig.router->OnGameOpen(3);  // a matchmaker riding the held session is not idle-exempt
   for (const auto& h : rig.games.Holds()) QCHECK(h.first == 2);
   QCHECK(rig.router->GetStats().heldRemotes == 1);
 }
@@ -1437,14 +1436,35 @@ int CountUpstreamAnywhere(Rig& rig, uint64_t symbol) {
 
 const std::string kUnrequire = Msg(nevr_evr_codec::kSymConnectionUnrequire, "");
 
+// A config request as the game sends it, [pad byte][JSON {"type", "id"}], and the service's two replies to it:
+// the success carries the two symbols, the failure the two strings (nakama server/evr/config_request.go,
+// config_success.go, config_failure.go).
+std::string ConfigRequestFor(const std::string& type, const std::string& id) {
+  return Msg(nevr_evr_codec::kSymConfigRequest, std::string(1, '\0') + "{\"type\":\"" + type + "\",\"id\":\"" + id + "\"}");
+}
+std::string ConfigRequestFor(const std::string& name) { return ConfigRequestFor(name, name); }
+std::string ConfigSuccessFor(const std::string& type, const std::string& id) {
+  std::string payload;
+  for (const uint64_t v : {nevr_evr_codec::ConfigSymbol(type), nevr_evr_codec::ConfigSymbol(id)}) {
+    for (int i = 0; i < 8; ++i) payload.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+  }
+  return Msg(nevr_evr_codec::kSymConfigSuccess, payload + "zstd-resource");
+}
+std::string ConfigSuccessFor(const std::string& name) { return ConfigSuccessFor(name, name); }
+std::string ConfigFailureFor(const std::string& type, const std::string& id) {
+  return Msg(nevr_evr_codec::kSymConfigFailure, std::string(16, '\0') + "{\"type\":\"" + type + "\",\"identifier\":\"" + id +
+                                                    "\",\"errorCode\":1,\"error\":\"resource not found\"}");
+}
+std::string ConfigFailureFor(const std::string& name) { return ConfigFailureFor(name, name); }
+
 // One shared walk for the unhinted (Quest) cases: three sockets open in `openOrder` (each one the role its
 // name says, but the router is told nothing), the first frames arrive in `frameOrder`, and the service
 // answers on the one session remote. The rules pinned:
-//   * the three sockets share ONE remote, marked as the session remote (A4);
+//   * the three sockets share ONE remote, marked as the session remote;
 //   * a socket whose first frame corrects its provisional role is relabelled in place: no remote is opened,
-//     closed or re-attached, no socket is closed (A3);
-//   * the idle exemption follows the real login socket once it is identified, and no other socket (S6);
-//   * config, login and lobby replies each reach their socket, each Unrequire the socket that owes it (A6).
+//     closed or re-attached, no socket is closed;
+//   * the idle exemption follows the real login socket once it is identified, and no other socket;
+//   * config, login and lobby replies each reach their socket, each Unrequire the socket that owes it.
 void RunUnhinted(const Perm& openOrder, const Perm& frameOrder, const std::string& label) {
   const CaseScope scope(label);
   Rig rig;
@@ -1455,7 +1475,7 @@ void RunUnhinted(const Perm& openOrder, const Perm& frameOrder, const std::strin
   const RemoteId remote = SessionRemote(rig);
   rig.router->OnRemoteOpen(remote);
   // Before any first frame: the socket the router takes for the login (second by order) holds the exemption;
-  // a real login socket the router has not identified is still idle-closable (S6).
+  // a real login socket the router has not identified is still idle-closable.
   QCHECK(Exempt(rig, IdOf(openOrder[1])));
   if (openOrder[1] != Role::Login) QCHECK(!Exempt(rig, kLog));
 
@@ -1468,7 +1488,7 @@ void RunUnhinted(const Perm& openOrder, const Perm& frameOrder, const std::strin
   QCHECK(rig.remotes.Closes().empty());
   QCHECK(rig.games.Closes().empty());
   QCHECK(rig.router->GetStats().remotes == 1);
-  // The idle hold sits on the real login socket and on no other (S6).
+  // The idle hold sits on the real login socket and on no other.
   QCHECK(Exempt(rig, kLog));
   QCHECK(!Exempt(rig, kCfg));
   QCHECK(!Exempt(rig, kMm));
@@ -1504,14 +1524,14 @@ void RunUnhinted(const Perm& openOrder, const Perm& frameOrder, const std::strin
   QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 0);
 }
 
-// (a) Unhinted: all 6 open orders of config, login and matchmaker, the first frames arriving in open order.
+// Unhinted: all 6 open orders of config, login and matchmaker, the first frames arriving in open order.
 // Failure caught: config getting a remote of its own (two remotes where there is one session), and a reply
 // or an Unrequire landing on the wrong socket in any order.
 void TestUnhintedAllOpenOrdersShareOneSession() {
   for (const Perm& order : AllPerms()) RunUnhinted(order, order, "unhinted open=" + PermName(order));
 }
 
-// (b) The first frames arrive in a different order from the opens, so a socket's provisional role (by open
+// The first frames arrive in a different order from the opens, so a socket's provisional role (by open
 // order) is corrected by its first frame while the others hold the session. Failure caught: a correction
 // that releases and re-attaches (a remote opened or closed, a socket closed, "role stays login").
 void TestUnhintedFirstFrameOrderVariedSeparatelyFromOpenOrder() {
@@ -1523,7 +1543,7 @@ void TestUnhintedFirstFrameOrderVariedSeparatelyFromOpenOrder() {
   }
 }
 
-// S6: the idle exemption follows the role, provisional or confirmed. Login is opened first (provisionally
+// the idle exemption follows the role, provisional or confirmed. Login is opened first (provisionally
 // config), config second (provisionally login, so exempt), a matchmaker third. When config's first frame
 // names it, the exemption leaves it even though the matchmaker shares the session (today: "role stays
 // login" and the exemption stays on the config socket). The real login takes it only once identified.
@@ -1546,7 +1566,7 @@ void TestIdleExemptionFollowsTheRoleThroughARelabel() {
   QCHECK(rig.remotes.Closes().empty());
 }
 
-// ---- (c) hinted: the PC adapter names each socket's role at open ------------------------------------
+// ---- hinted: the PC adapter names each socket's role at open ------------------------------------
 
 Options PcOptions(int* builds) {
   Options o;
@@ -1582,7 +1602,7 @@ void RunHinted(const Perm& order, bool remoteOpensEarly, const std::string& labe
       if (i == loginAt) QCHECK(builds == 1);  // injected at attach, the session being open already
       if (order[i] == Role::Matchmaker && i < loginAt) {
         // A standalone matchmaker is not attached to the session, so it does not wait for a login that may
-        // never come (S12): its first frame goes straight up its own open remote.
+        // never come: its first frame goes straight up its own open remote.
         rig.router->OnGameFrame(kMm, FirstFrameOf(Role::Matchmaker), true);
         mmSentEarly = true;
         RemoteId own = kNoRemote;
@@ -1595,7 +1615,7 @@ void RunHinted(const Perm& order, bool remoteOpensEarly, const std::string& labe
     }
   }
   // One session remote; a matchmaker that came before the login socket had no session to share and
-  // keeps a remote of its own (S12).
+  // keeps a remote of its own.
   const auto opens = rig.remotes.Opens();
   const bool mmStandalone = mmAt < loginAt;
   QCHECK(opens.size() == (mmStandalone ? 2u : 1u));
@@ -1664,13 +1684,13 @@ void RunHinted(const Perm& order, bool remoteOpensEarly, const std::string& labe
   QCHECK(builds == 1);
 }
 
-// (c) Hinted, all 6 open orders, the remotes opening after every socket is attached.
+// Hinted, all 6 open orders, the remotes opening after every socket is attached.
 // Failure caught: a remote per config/login socket, a second login, a login behind the game's frames.
 void TestHintedAllOpenOrdersOneSessionOneLogin() {
   for (const Perm& order : AllPerms()) RunHinted(order, false, "hinted open=" + PermName(order));
 }
 
-// (c) Hinted, all 6 open orders, each remote opening as soon as it is asked for, so the session remote opens
+// Hinted, all 6 open orders, each remote opening as soon as it is asked for, so the session remote opens
 // before the login socket attaches in the orders where config (or a standalone matchmaker's neighbour) comes
 // first. Failure caught: the login injected only at remote open (never, when the login socket attaches to an
 // already open session), or injected twice (at attach and at open).
@@ -1678,9 +1698,9 @@ void TestHintedSessionRemoteOpeningBeforeTheLoginSocketAttaches() {
   for (const Perm& order : AllPerms()) RunHinted(order, true, "hinted early-open open=" + PermName(order));
 }
 
-// ---- (d), (e): the #239 sequence and the end of a session --------------------------------------------
+// ---- the #239 sequence and the end of a session --------------------------------------------
 
-// (d) After login the config socket closes and the game opens a new one. It reattaches to the SAME session:
+// After login the config socket closes and the game opens a new one. It reattaches to the SAME session:
 // no new remote, none closed, and its replies reach it while the login socket's still reach the login.
 void TestConfigClosesAndReopensAfterLoginOnTheSameSession() {
   const CaseScope scope("config reopens after login");
@@ -1722,7 +1742,7 @@ void TestConfigClosesAndReopensAfterLoginOnTheSameSession() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 0);
 }
 
-// (e) The session ends under the game. Every socket on it closes, the config socket too (it shares the
+// The session ends under the game. Every socket on it closes, the config socket too (it shares the
 // session), and when the game reconnects, config included, the sockets share ONE new session.
 void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
   const CaseScope scope("session end");
@@ -1770,26 +1790,25 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
   for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
 }
 
-// ---- (f) the config reply owner (S1) ----------------------------------------------------------------
+// ---- the config reply owner ----------------------------------------------------------------
 
-// Two /config sockets on one session, the newer sending first. The service answers a session's requests
-// in order, so each SNSConfigSuccessv2 goes to the socket whose request is next in the FIFO, and the
-// Unrequire after it to the same socket. Failure caught: the oldest config socket (or the newest) taking
-// every reply.
-void TestTwoConfigSocketsAreAnsweredInRequestOrder() {
+// Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
+// Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
+// it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
+void TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst() {
   const CaseScope scope("two config sockets");
   Rig rig;
   OpenThree(rig);  // config 1, login 2, matchmaker 3 (the second config socket, by order)
   const RemoteId session = SessionRemote(rig);
   rig.router->OnRemoteOpen(session);
   rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
-  rig.router->OnGameFrame(3, FirstFrameOf(Role::Config), true);  // the newer config socket sends first
-  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("main_menu"), true);  // the newer socket asks first
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
   QCHECK(rig.remotes.Opens().size() == 1);
-  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymConfigSuccess, "first"), true);   // -> 3
-  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 3
-  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymConfigSuccess, "second"), true);  // -> 1
-  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 1
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // -> 3
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                     // -> 3
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // -> 1
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                     // -> 1
   const std::vector<Delivery> expected = {
       {3, nevr_evr_codec::kSymConfigSuccess},
       {3, nevr_evr_codec::kSymConnectionUnrequire},
@@ -1802,9 +1821,166 @@ void TestTwoConfigSocketsAreAnsweredInRequestOrder() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 0);
 }
 
-// A config socket closes with its request in flight and a new one takes its place. The old socket's reply
-// is dropped and counted, never handed to the replacement; the Unrequire after it goes to the same (closed)
-// socket and is dropped; the replacement's own reply reaches it.
+// The service never answers some requests (nakama drops a message over its per-session rate limit with no
+// reply, server/session_ws.go). A reply goes to the oldest open request with ITS type and id, so the request
+// nobody answered does not shift the replies after it. Game 1's first request is never answered; its second
+// is, and the reply is game 1's. Game 1 then closes, a replacement config socket asks for another resource,
+// and that reply is the replacement's. Failure caught: replies taken in request order (the unanswered request
+// takes the second reply's place, and the replacement's reply goes to the closed socket's stale entry).
+void TestAnUnansweredConfigRequestDoesNotShiftLaterReplies() {
+  const CaseScope scope("unanswered config request");
+  Rig rig;
+  rig.router->OnGameOpen(1);  // config
+  rig.router->OnGameOpen(2);  // login
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);          // the service drops this one
+  rig.router->OnGameFrame(1, ConfigRequestFor("active_store_entry"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_store_entry"), true);  // -> 1
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                              // -> 1
+  rig.router->OnGameClose(1);  // the config socket goes; the game opens a new one
+  rig.router->OnGameOpen(3);
+  rig.router->OnGameFrame(3, ConfigRequestFor("active_battle_pass_season"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_battle_pass_season"), true);  // -> 3
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                                     // -> 3
+  const std::vector<Delivery> expected = {
+      {1, nevr_evr_codec::kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+      {3, nevr_evr_codec::kSymConfigSuccess},
+      {3, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 0);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// A failure carries the request's two strings, not symbols: it is matched by them, whatever their case. Game 1
+// asks for main_menu, game 3 for a resource the service does not have; the failure for the second goes to
+// game 3 although game 1's request is older, and the success for the first goes to game 1.
+// Failure caught: a failure delivered in request order, or not matched at all.
+void TestAConfigFailureIsMatchedByItsStrings() {
+  const CaseScope scope("config failure by strings");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameFrame(3, ConfigRequestFor("Unknown_Type"), true);
+  rig.router->OnRemoteFrame(session, ConfigFailureFor("UNKNOWN_TYPE"), true);  // -> 3 (the strings fold to one symbol)
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 3
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);     // -> 1
+  rig.router->OnRemoteFrame(session, kUnrequire, true);                        // -> 1
+  const std::vector<Delivery> expected = {
+      {3, nevr_evr_codec::kSymConfigFailure},
+      {3, nevr_evr_codec::kSymConnectionUnrequire},
+      {1, nevr_evr_codec::kSymConfigSuccess},
+      {1, nevr_evr_codec::kSymConnectionUnrequire},
+  };
+  const std::vector<Delivery> got = Delivered(rig);
+  QCHECK(got.size() == expected.size());
+  for (std::size_t i = 0; i < got.size() && i < expected.size(); ++i) QCHECK(got[i] == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// A config reply nobody asked for is dropped, counted, and logged every time with the symbols it carried
+// (they are resource names the game asked for, not credentials). Failure caught: handing it to a config
+// socket that asked for something else.
+void TestAConfigReplyNobodyAskedForIsDroppedAndLogged() {
+  const CaseScope scope("unmatched config reply");
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_store_entry"), true);
+  rig.router->OnRemoteFrame(session, ConfigFailureFor("active_store_entry"), true);
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 2);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
+  int lines = 0;
+  {
+    std::lock_guard<std::mutex> lock(rig.logs.mutex);
+    for (const auto& line : rig.logs.lines) {
+      if (line.first == LogLevel::Warning && line.second.find("no open config request has its type and id") != std::string::npos &&
+          line.second.find("type=0x59db56abec422dc9") != std::string::npos) {
+        ++lines;
+      }
+    }
+  }
+  QCHECK(lines == 2);  // each drop, not the first and every hundredth
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // the real one still arrives
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 1);
+}
+
+// A reply whose requester has closed is dropped and counted, and logged EVERY time even when other quiet
+// drops came first (the shared counter used to put the line at the 1st and every 100th drop of any kind).
+// Failure caught: an orphaned reply that leaves no line in the log.
+void TestAnOrphanedConfigReplyIsLoggedEveryTime() {
+  const CaseScope scope("orphan log");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnRemoteFrame(session, kUnrequire, true);  // an Unrequire nothing is owed: a quiet drop that came first
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("active_store_entry"), true);
+  rig.router->OnGameClose(1);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_store_entry"), true);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+  QCHECK(rig.router->GetStats().configRepliesOrphaned == 2);
+  int lines = 0;
+  {
+    std::lock_guard<std::mutex> lock(rig.logs.mutex);
+    for (const auto& line : rig.logs.lines) {
+      if (line.first == LogLevel::Warning && line.second.find("the connection that asked (game=1) has closed") != std::string::npos &&
+          line.second.find("symbol=0xb9cdaf586f7bd012") != std::string::npos) {
+        ++lines;
+      }
+    }
+  }
+  QCHECK(lines == 2);
+}
+
+// A request the service never answers stays in the list awaiting a reply until the list is full; then the
+// oldest is forgotten, counted and logged each time, and a late reply to it is a reply nobody asked for.
+// Failure caught: an unbounded list, or a forgotten request that no line mentions.
+void TestTheListOfOpenConfigRequestsIsBoundedAndSaysWhenItForgets() {
+  const CaseScope scope("config request bound");
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // the first of 257, never answered
+  for (int i = 0; i < 256; ++i) rig.router->OnGameFrame(1, ConfigRequestFor("active_store_entry"), true);
+  QCHECK(rig.router->GetStats().configRequestsEvicted == 1);
+  int lines = 0;
+  {
+    std::lock_guard<std::mutex> lock(rig.logs.mutex);
+    for (const auto& line : rig.logs.lines) {
+      if (line.first == LogLevel::Warning && line.second.find("config request list full") != std::string::npos) ++lines;
+    }
+  }
+  QCHECK(lines == 1);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);  // the forgotten request's reply
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().configRepliesUnmatched == 1);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("active_store_entry"), true);  // a remembered one
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 1);
+}
+
+// A config socket closes with its request in flight and a new one takes its place and asks for the same
+// resource. The reply to the old request is dropped and counted, never handed to the replacement; the Unrequire
+// after it goes to the same (closed) socket and is dropped; the replacement's own reply reaches it.
 void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
   const CaseScope scope("closed config socket's reply");
   Rig rig;
@@ -1812,17 +1988,17 @@ void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
   const RemoteId session = SessionRemote(rig);
   rig.router->OnRemoteOpen(session);
   rig.router->OnGameFrame(2, FirstFrameOf(Role::Login), true);
-  rig.router->OnGameFrame(1, FirstFrameOf(Role::Config), true);  // in flight
+  rig.router->OnGameFrame(1, ConfigRequestFor("main_menu"), true);  // in flight
   rig.router->OnGameClose(1);
   rig.router->OnGameOpen(4);
-  rig.router->OnGameFrame(4, FirstFrameOf(Role::Config), true);  // the replacement's request, behind it
-  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymConfigSuccess, "for-the-closed-socket"), true);
+  rig.router->OnGameFrame(4, ConfigRequestFor("main_menu"), true);  // the replacement's request, behind it
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
   QCHECK(rig.games.Sent().empty());                                  // not handed to game 4
   QCHECK(rig.router->GetStats().configRepliesOrphaned == 1);
   rig.router->OnRemoteFrame(session, kUnrequire, true);              // the closed socket's: dropped
   QCHECK(rig.games.Sent().empty());
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
-  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymConfigSuccess, "for-game-4"), true);
+  rig.router->OnRemoteFrame(session, ConfigSuccessFor("main_menu"), true);
   rig.router->OnRemoteFrame(session, kUnrequire, true);
   const std::vector<Delivery> expected = {
       {4, nevr_evr_codec::kSymConfigSuccess},
@@ -1834,7 +2010,7 @@ void TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
 
-// S16: SNSConfigFailurev2 is a config reply: it goes to the config socket, and its Unrequire after it.
+// SNSConfigFailurev2 is a config reply: it goes to the config socket, and its Unrequire after it.
 // Failure caught: the failure falling to the matchmaker (lobby traffic) or the login socket.
 void TestConfigFailureGoesToTheConfigSocket() {
   const CaseScope scope("config failure");
@@ -1859,7 +2035,7 @@ void TestConfigFailureGoesToTheConfigSocket() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 0);
 }
 
-// ---- (g) a held session, S2 ---------------------------------------------------------------------------
+// ---- a held session ---------------------------------------------------------------------------
 
 // The login gate holds the SESSION, whoever opened it. Config opens first and is held with it: its request
 // queues, and on Ready the session opens, the request is flushed and its reply arrives. Failure caught:
@@ -1899,7 +2075,7 @@ void TestHeldSessionQueuesConfigThenFlushesOnReady() {
   QCHECK(rig.games.Closes().empty());
 }
 
-// S2: a held session whose config socket closes and reopens three times. A closing socket's queued frames
+// a held session whose config socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one request per LIVE socket, and the counts stay
 // consistent (the live socket's reply and Unrequire are matched). Failure caught: the closed sockets'
 // requests flushed to the service, whose replies would be orphans.
@@ -1946,7 +2122,7 @@ void TestHeldSessionPurgesAClosedConfigSocketsQueuedFrames() {
   QCHECK(rig.router->GetStats().configRepliesOrphaned == 0);
 }
 
-// S16: the matchmaker cap counts a connection by its hint. Nine hinted matchmakers open before any
+// the matchmaker cap counts a connection by its hint. Nine hinted matchmakers open before any
 // config or login socket: the router's order-based guess would call the first two config and login, so
 // only seven would count. The ninth is refused with the cap's close code and the other eight stay.
 void TestTheNinthHintedMatchmakerIsRefused() {
@@ -1962,7 +2138,7 @@ void TestTheNinthHintedMatchmakerIsRefused() {
   QCHECK(rig.router->GetStats().games == 8);
 }
 
-// N5: a connection relabelled to matchmaker by its first frame is counted against the cap like one that
+// a connection relabelled to matchmaker by its first frame is counted against the cap like one that
 // opened as a matchmaker. With the cap at 1 and a matchmaker already on the session, the provisional login
 // whose first frame is a lobby request is refused (closed with the cap's code) and its frame goes nowhere.
 // Failure caught: the cap bypassed by opening as login and relabelling.
@@ -2231,6 +2407,103 @@ void TestConfigReplyKeyIsTheRequestsTypeAndId() {
   QCHECK(!nevr_evr_codec::ParseConfigReplyKey(nevr_evr_codec::kSymLoginSuccess, success).has_value());
 }
 
+// A hinted role is final, also for the connection a newer login replaces. The PC bridge hints every /login as
+// login; when a second one arrives it takes the session's login role and the first is closed, not given a
+// matchmaker role it was never hinted. Failure caught: a hinted login demoted to matchmaker and left open.
+void TestAHintedLoginReplacedByANewerLoginIsClosed() {
+  const CaseScope scope("hinted login replaced");
+  Rig rig;
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  rig.router->OnGameOpen(3, Hinted(Role::Login));  // a newer /login
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1);
+  if (closes.size() == 1) {
+    QCHECK(closes[0].id == 2);
+    QCHECK(closes[0].code == kCloseGoingAway);
+  }
+  QCHECK(!Exempt(rig, 2));
+  QCHECK(Exempt(rig, 3));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, Msg(kSymLobbySessionSuccess, "lobby"), true);  // no matchmaker: the new login
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 3);
+}
+
+// An unhinted login connection that another connection replaces is given the matchmaker role only while the
+// matchmaker cap has room; with the cap full it is closed. Game 1 (config by order) names itself the login while
+// game 3 is the one matchmaker the cap allows, so the old login (game 2) has no room.
+// Failure caught: the cap bypassed by demoting the old login.
+void TestAReplacedLoginIsClosedWhenTheMatchmakerCapIsFull() {
+  const CaseScope scope("replaced login at the cap");
+  Options o;
+  o.limits.maxMatchmakerConnections = 1;
+  Rig rig(std::move(o));
+  OpenThree(rig);  // config 1, login 2, matchmaker 3: the cap
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Login), true);  // game 1 takes the login over
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1);
+  if (closes.size() == 1) QCHECK(closes[0].id == 2);
+  QCHECK(!Exempt(rig, 2));
+  QCHECK(Exempt(rig, 1));
+}
+
+// The login is built when a login connection attaches to the open session, and a build that returns no frame is
+// tried again for the NEXT login connection, not for an unrelated connection that opens in between. The first
+// login's build returns nothing; a matchmaker then opens (no build); a newer login attaches and its build
+// succeeds, sending exactly one login. Failure caught: a build per open (a missing identity retried for every
+// connection), or no second chance for the next login.
+void TestAFailedLoginBuildIsRetriedOnlyForTheNextLoginConnection() {
+  const CaseScope scope("failed login build");
+  int builds = 0;
+  Options o;
+  o.buildLogin = [&builds]() {
+    ++builds;
+    return builds == 1 ? std::optional<std::string>() : std::optional<std::string>(kLogin);
+  };
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));  // attaches to the open session: build 1, no frame
+  QCHECK(builds == 1);
+  QCHECK(rig.logs.Has("login NOT injected", static_cast<int>(LogLevel::Error)));
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));  // shares the session: no build
+  rig.router->OnGameOpen(4, Hinted(Role::Config));      // a config connection: no build
+  QCHECK(builds == 1);
+  QCHECK(CountUpstreamAnywhere(rig, nevr_evr_codec::kSymLoginRequest) == 0);
+  rig.router->OnGameOpen(5, Hinted(Role::Login));  // the next login connection: build 2
+  QCHECK(builds == 2);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+}
+
+// An unhinted connection that proves to be the login by its first frame becomes the login connection and the
+// login build is tried for it; a connection that proves to be anything else does not try it. The provisional
+// login's build returns no frame; a matchmaker by order then names itself config (no build); the config socket
+// by order names itself login (build 2, which succeeds, and sends one login).
+// Failure caught: a build per relabel.
+void TestARelabelToLoginTriesTheLoginBuildAndOtherRelabelsDoNot() {
+  const CaseScope scope("relabel login build");
+  int builds = 0;
+  Options o;
+  o.buildLogin = [&builds]() {
+    ++builds;
+    return builds == 1 ? std::optional<std::string>() : std::optional<std::string>(kLogin);
+  };
+  Rig rig(std::move(o));
+  OpenThree(rig);  // config 1, login 2, matchmaker 3
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);  // the provisional login is attached: build 1, no frame
+  QCHECK(builds == 1);
+  rig.router->OnGameFrame(3, FirstFrameOf(Role::Config), true);  // a relabel to config
+  QCHECK(builds == 1);
+  rig.router->OnGameFrame(1, FirstFrameOf(Role::Login), true);   // a relabel to login
+  QCHECK(builds == 2);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 2);  // the injected one and game 1's own
+}
+
 // A hinted role is final. A hinted config socket whose first frame is LogInRequestv2 stays config: the
 // contradiction is logged once, at Warning, and nothing is relabelled or taken over. The hinted login
 // socket keeps the exemption and the login replies, and the config socket still gets config replies.
@@ -2422,12 +2695,17 @@ void TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice() {
   QCHECK(CountNotices(rig) == 2 && rig.router->GetStats().loginsRemoved == 2);
 }
 
-// A socket that was already open when the session failed did not reconnect: it is never sent the notice.
-void TestASocketOpenedBeforeTheLossIsNeverSentTheNotice() {
+// The loss closes every socket on the session, so a socket that was open before it can only be a closed one, and
+// a closed socket is never sent the notice (it is for sockets that reconnect). Failure caught: a notice queued
+// to a socket the router has closed.
+void TestASocketTheLossClosedIsNeverSentTheNotice() {
   Rig rig(RemovalOptions());
   const RemoteId session = EstablishedForRemoval(rig);
   rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg"), true);  // game 1 predates the loss
   const RemoteId fresh = LoseAndReconnect(rig, session);
+  bool gameOneClosed = false;
+  for (const CloseRecord& c : rig.games.Closes()) gameOneClosed = gameOneClosed || c.id == 1;
+  QCHECK(gameOneClosed);
   rig.router->OnRemoteOpen(fresh);
   rig.router->OnGameFrame(1, Msg(nevr_evr_codec::kSymConfigRequest, "cfg-again"), true);
   rig.router->OnGameSilent(1);
@@ -2677,7 +2955,7 @@ int main() {
   TestLoginSuccessUserIdIsParsed();
   TestSilentLoginSocketAfterTheLossIsSentOneNotice();
   TestConfigSocketFirstThenTheQuietLoginSocketEachGetOneNotice();
-  TestASocketOpenedBeforeTheLossIsNeverSentTheNotice();
+  TestASocketTheLossClosedIsNeverSentTheNotice();
   TestQuietMatchmakerFirstThenTheLoginSocketEachGetOneNotice();
   TestRealLoginSocketGuessedAsMatchmakerStillGetsItsNotice();
   TestSilentMatchmakerByOrderIsSentOneNoticeLikeTheRest();
@@ -2723,7 +3001,12 @@ int main() {
   TestHintedSessionRemoteOpeningBeforeTheLoginSocketAttaches();
   TestConfigClosesAndReopensAfterLoginOnTheSameSession();
   TestSessionEndClosesConfigAndConfigReconnectsToANewSession();
-  TestTwoConfigSocketsAreAnsweredInRequestOrder();
+  TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst();
+  TestAnUnansweredConfigRequestDoesNotShiftLaterReplies();
+  TestAConfigFailureIsMatchedByItsStrings();
+  TestAConfigReplyNobodyAskedForIsDroppedAndLogged();
+  TestAnOrphanedConfigReplyIsLoggedEveryTime();
+  TestTheListOfOpenConfigRequestsIsBoundedAndSaysWhenItForgets();
   TestAClosedConfigSocketsReplyIsDroppedNotHandedToItsReplacement();
   TestConfigFailureGoesToTheConfigSocket();
   TestHeldSessionQueuesConfigThenFlushesOnReady();
@@ -2733,6 +3016,10 @@ int main() {
   TestConfigRequestKeyMatchesTheServicesDecoder();
   TestConfigReplyKeyIsTheRequestsTypeAndId();
   TestAHintedConfigSocketThatSendsALoginStaysConfig();
+  TestAHintedLoginReplacedByANewerLoginIsClosed();
+  TestAReplacedLoginIsClosedWhenTheMatchmakerCapIsFull();
+  TestAFailedLoginBuildIsRetriedOnlyForTheNextLoginConnection();
+  TestARelabelToLoginTriesTheLoginBuildAndOtherRelabelsDoNot();
   TestTheDemotedLoginConnectionRidesTheSessionAsAMatchmaker();
   TestFramesWaitBehindTheLoginBeingBuiltExceptConfigs();
   TestAClosedSocketsQueuedBytesDoNotCountAgainstTheLimit();

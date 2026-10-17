@@ -155,7 +155,7 @@ bool PairsWithUnrequire(uint64_t symbol) {
 namespace {
 
 constexpr uint32_t kMaxRequireCount = 1000;  // a connection whose Unrequires never come cannot count for ever
-constexpr std::size_t kMaxConfigOwners = 256;  // config requests in flight on one session
+constexpr std::size_t kMaxConfigRequests = 256;  // config requests awaiting a reply on one session
 
 // Calls fn(symbol, index) for every message in `frame` (a WebSocket message can carry several, back to back).
 template <class Fn>
@@ -279,14 +279,13 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     owedUnrequires_.clear();
-    configOwners_.clear();
+    configRequests_.clear();
     connectionCount_ = 1;  // the game's next connection is a login
   }
   const bool removalDue = wasSession && !options_.loginRemovedJson.empty() && haveLoginUser_ && !outstanding &&
                           !loginSocketGone;
   if (wasSession) {
     removalDue_ = removalDue;
-    if (removalDue) ++removalEpoch_;
   }
   Log(fx, LogLevel::Warning,
       Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s%s",
@@ -355,9 +354,11 @@ bool Router::TakeUnrequireLocked(GameId target) {
 // (its first message; Unrequires later in the same frame belong to the messages before them in it):
 //   * an answer to a login-connection request (including ChannelInfoResponse): the login connection
 //     (libpnsovr drops the login family on any other peer), and nowhere else if that connection is gone;
-//   * SNSConfigSuccessv2 / SNSConfigFailurev2: the config connection at the front of the FIFO of forwarded
-//     config requests (the service answers a session's requests in order); dropped and counted when that
-//     connection has closed or no request is owed, never handed to another socket;
+//   * SNSConfigSuccessv2 / SNSConfigFailurev2: the connection that sent the OLDEST open config request with the
+//     reply's (type, id) (the service echoes the request's two strings, a success as symbols, a failure as the
+//     strings), so a request the service never answers does not shift the others' replies. Dropped, counted
+//     and logged when no open request has that key, or when its connection has closed: never handed to
+//     another socket;
 //   * LobbyPingRequest, the ping the service starts itself: the matchmaker connection, and dropped, with its
 //     Unrequire, when there is none;
 //   * STcpConnectionUnrequireEvent: the connection that owes it (below), if that connection still has a
@@ -368,8 +369,8 @@ bool Router::TakeUnrequireLocked(GameId target) {
 // service goroutines interleave, so the queue holds a connection per paired message rather than guessing from
 // the message just before.
 // *quietDrop is set when the frame is dropped on purpose and counted (an Unrequire, a ping with no matchmaker,
-// an orphaned config reply).
-GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop) {
+// a config reply nobody asked for or whose requester closed).
+GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, Effects& fx) {
   *quietDrop = false;
   const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
   std::size_t embedded = 0;
@@ -392,16 +393,34 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
   if (symbol == nevr_evr_codec::kSymLobbyPingRequest) {
     if (matchmakerLive) target = activeGame_;
   } else if (IsConfigSessionReply(symbol)) {
-    GameId owner = kNoGame;
-    if (!configOwners_.empty()) {
-      owner = configOwners_.front();
-      configOwners_.pop_front();
+    nevr_evr_codec::Message first;
+    std::optional<nevr_evr_codec::ConfigKey> key;
+    if (nevr_evr_codec::ReadMessage(frame, 0, &first) == nevr_evr_codec::ReadStatus::Ok) {
+      key = nevr_evr_codec::ParseConfigReplyKey(
+          symbol, std::string_view(reinterpret_cast<const char*>(first.payload), static_cast<std::size_t>(first.length)));
     }
-    if (OnSessionLocked(owner)) {
-      target = owner;
-    } else {
-      ++configRepliesOrphaned_;
+    auto request = configRequests_.begin();
+    while (request != configRequests_.end() && !(request->key == key)) ++request;
+    if (request == configRequests_.end()) {
+      ++configRepliesUnmatched_;
       *quietDrop = true;
+      Log(fx, LogLevel::Warning,
+          Fmt("[router] config reply dropped: no open config request has its type and id: symbol=0x%016llx "
+              "type=0x%016llx id=0x%016llx (%llu such replies in total)",
+              Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_)));
+    } else {
+      const GameId owner = request->owner;
+      configRequests_.erase(request);
+      if (OnSessionLocked(owner)) {
+        target = owner;
+      } else {
+        ++configRepliesOrphaned_;
+        *quietDrop = true;
+        Log(fx, LogLevel::Warning,
+            Fmt("[router] config reply dropped: the connection that asked (game=%llu) has closed: symbol=0x%016llx "
+                "type=0x%016llx id=0x%016llx (%llu such replies in total)",
+                Ull(owner), Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesOrphaned_)));
+      }
     }
   } else if (IsLoginSessionReply(symbol)) {
     target = OnSessionLocked(loginGame_) ? loginGame_ : kNoGame;
@@ -436,12 +455,25 @@ bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<cons
     return false;
   }
   if (from != kNoGame && remote == sessionRemote_) {
-    // The service answers a session's requests in order: remember whose config request this is.
-    ForEachMessage(*data, [this, from](uint64_t symbol, std::size_t) {
-      if (symbol != nevr_evr_codec::kSymConfigRequest) return;
-      configOwners_.push_back(from);
-      while (configOwners_.size() > kMaxConfigOwners) configOwners_.pop_front();
-    });
+    // The service echoes a request's type and id in its reply: remember whose request this is, and by what key.
+    std::size_t offset = 0;
+    nevr_evr_codec::Message message;
+    while (nevr_evr_codec::ReadMessage(*data, offset, &message) == nevr_evr_codec::ReadStatus::Ok) {
+      if (message.symbol == nevr_evr_codec::kSymConfigRequest) {
+        configRequests_.push_back(
+            {from, nevr_evr_codec::ParseConfigRequestKey(std::string_view(
+                       reinterpret_cast<const char*>(message.payload), static_cast<std::size_t>(message.length)))});
+        while (configRequests_.size() > kMaxConfigRequests) {
+          ++configRequestsEvicted_;
+          Log(fx, LogLevel::Warning,
+              Fmt("[router] config request list full (%zu): the oldest unanswered request, game=%llu, is forgotten "
+                  "(%llu forgotten in total)",
+                  kMaxConfigRequests, Ull(configRequests_.front().owner), Ull(configRequestsEvicted_)));
+          configRequests_.pop_front();
+        }
+      }
+      offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
+    }
   }
   r.out.bytes += data->size();
   r.out.queue.push_back({std::move(data), binary, kNoGame});
@@ -450,7 +482,8 @@ bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<cons
 }
 
 // Marks the remote open and moves [login request, then every frame the game queued] into its outbox, in
-// that order. The login frame is first so the server never sees a game frame on an unauthenticated session.
+// that order: the login goes ahead of every frame that waited for it, so the service sees no queued game
+// frame (a config connection's excepted, which may already have gone out) before the login.
 void Router::FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx) {
   r.open = true;
   if (login.has_value()) {
@@ -484,7 +517,9 @@ void Router::PurgePendingLocked(GameId game) {
 
 // The role a connection that has sent nothing yet is given when the adapter has no hint: by connection order,
 // except that a connection opened while the session has no live login connection is that connection (the game
-// reconnected it).
+// reconnected it). A count of 2 or more means a session exists (every end of the session sets the count back
+// to 1), and a matchmaker is given only while a login connection is attached to it, so an unhinted connection
+// is always on the session and a first frame can relabel it in place.
 Role Router::ProvisionalRoleLocked() const {
   if (connectionCount_ == 0) return Role::Config;
   if (connectionCount_ == 1) return Role::Login;
@@ -563,15 +598,21 @@ void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
           sit->second.deferred ? " (held: waiting for the account)" : ""));
 }
 
-// Makes `game` the session's login connection: the idle exemption moves to it, and the previous login
-// connection, if still open, rides the session as a matchmaker.
+// Makes `game` the session's login connection: the idle exemption moves to it. The previous login connection,
+// if still open, rides the session as a matchmaker when the adapter did not name its role and the matchmaker
+// cap has room; a hinted role is final, so a hinted previous login (and one the cap leaves no room for) is
+// closed instead of being given another role.
 void Router::TakeOverLoginLocked(GameId game, Game& g, Effects& fx) {
   const GameId previous = loginGame_;
   if (previous != kNoGame && previous != game) {
     const auto pit = gameTable_.find(previous);
     if (pit != gameTable_.end()) {
-      pit->second.role = Role::Matchmaker;
       fx.holds.emplace_back(previous, false);
+      if (pit->second.hinted || LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
+        CloseGameLocked(previous, kCloseGoingAway, "replaced by a newer login connection", fx);
+      } else {
+        pit->second.role = Role::Matchmaker;
+      }
     }
   }
   loginGame_ = game;
@@ -590,7 +631,9 @@ void Router::TakeOverLoginLocked(GameId game, Game& g, Effects& fx) {
 bool Router::LoginAttachedLocked(RemoteId remote) const { return remote == sessionRemote_ && OnSessionLocked(loginGame_); }
 
 // A login is injected when a login connection is attached to an OPEN session that has sent none and is not
-// building one. A session that is not open yet is handled by OnRemoteOpen: whichever comes second injects.
+// building one. Called when a connection becomes the login connection (it opens as one, or its first frame
+// relabels it), so a build that returned no frame is tried again for the next login connection and not for an
+// unrelated open. A session that is not open yet is handled by OnRemoteOpen: whichever comes second injects.
 void Router::MaybeInjectLocked(Effects& fx) {
   if (!options_.buildLogin || sessionRemote_ == kNoRemote) return;
   const auto rit = remoteTable_.find(sessionRemote_);
@@ -618,11 +661,10 @@ void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& 
   if (observed == Role::Login && g.role != Role::Login && symbol != nevr_evr_codec::kSymLoginRequest) observed = g.role;
   if (observed == g.role) return;
   const Role provisional = g.role;
-  if (g.hinted || g.remote != sessionRemote_) {
+  if (g.hinted) {
     Log(fx, LogLevel::Warning,
-        Fmt("[router] game=%llu conn=%d first frame symbol=0x%016llx names %s: it contradicts the %s, role stays %s",
-            Ull(game), g.connIdx, Ull(symbol), RoleName(observed), g.hinted ? "hint" : "standalone remote",
-            RoleName(provisional)));
+        Fmt("[router] game=%llu conn=%d first frame symbol=0x%016llx names %s: it contradicts the hint, role stays %s",
+            Ull(game), g.connIdx, Ull(symbol), RoleName(observed), RoleName(provisional)));
     return;
   }
   if (observed == Role::Matchmaker && LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
@@ -642,7 +684,7 @@ void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& 
           Ull(symbol), RoleName(provisional), RoleName(observed)));
   if (observed == Role::Login) TakeOverLoginLocked(game, g, fx);
   RecomputeActiveLocked();
-  MaybeInjectLocked(fx);
+  if (observed == Role::Login) MaybeInjectLocked(fx);
 }
 
 void Router::OnGameOpen(GameId game, OpenHint hint) {
@@ -664,11 +706,10 @@ void Router::OnGameOpen(GameId game, OpenHint hint) {
       g.connIdx = connectionCount_++;
       g.role = next;
       g.hinted = hint.hinted;
-      g.noticeEpoch = removalDue_ ? removalEpoch_ : 0;
       AttachLocked(game, g, fx);
       gameTable_.emplace(game, std::move(g));
       RecomputeActiveLocked();
-      MaybeInjectLocked(fx);
+      if (next == Role::Login) MaybeInjectLocked(fx);
     }
   }
   Run(fx);
@@ -786,10 +827,7 @@ void Router::ForgetLoginUserLocked() {
 }
 
 void Router::SendLoginRemovedLocked(GameId game, Game& g, Effects& fx) {
-  if (options_.loginRemovedJson.empty() || !removalDue_ || !haveLoginUser_ || g.closing || g.noticeSent ||
-      g.noticeEpoch != removalEpoch_) {
-    return;
-  }
+  if (options_.loginRemovedJson.empty() || !removalDue_ || !haveLoginUser_ || g.closing || g.noticeSent) return;
   g.noticeSent = true;
   std::string frame = nevr_evr_codec::BuildLoginRemovedNotify(loginUser_, nevr_evr_codec::kLoginRemovedReasonText,
                                                               options_.loginRemovedJson);
@@ -926,7 +964,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
         GameId target = kNoGame;
         bool quietDrop = false;
         if (remote == sessionRemote_) {
-          target = RouteSessionFrameLocked(frame, &quietDrop);
+          target = RouteSessionFrameLocked(frame, &quietDrop, fx);
         } else {
           for (const auto& entry : gameTable_) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
@@ -939,7 +977,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
           }
         }
         if (target == kNoGame && quietDrop) {
-          const uint64_t dropped = droppedUnrequires_ + droppedRemoteFrames_ + configRepliesOrphaned_;
+          const uint64_t dropped = droppedUnrequires_ + droppedRemoteFrames_;
           if (dropped == 1 || dropped % 100 == 0) {
             Log(fx, LogLevel::Warning,
                 Fmt("[router] server->game frame dropped on purpose: remote=%llu symbol=0x%016llx (%llu total)",
@@ -1016,7 +1054,7 @@ void Router::ReevaluateHeldLogins() {
       if (gate == LoginGate::Ready) {
         rit->second.deferred = false;
         fx.opens.push_back(rit->second.request);
-        Log(fx, LogLevel::Info, Fmt("[router] remote=%llu: the account is available; opening the held login", Ull(id)));
+        Log(fx, LogLevel::Info, Fmt("[router] remote=%llu: the account is available; opening the held session", Ull(id)));
       } else {
         // The sign-in expired or failed: the hold ends with a close, so the game sees a failed connect.
         FailSessionLocked(id, kCloseInternalError, "the account the login needs will not be available", false, fx);
@@ -1042,7 +1080,7 @@ void Router::Shutdown() {
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
     owedUnrequires_.clear();
-    configOwners_.clear();
+    configRequests_.clear();
     ForgetLoginUserLocked();
     connectionCount_ = 0;
     Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
@@ -1071,6 +1109,8 @@ Stats Router::GetStats() const {
   stats.droppedUnrequires = droppedUnrequires_;
   stats.unmatchedEmbeddedUnrequires = unmatchedEmbeddedUnrequires_;
   stats.configRepliesOrphaned = configRepliesOrphaned_;
+  stats.configRepliesUnmatched = configRepliesUnmatched_;
+  stats.configRequestsEvicted = configRequestsEvicted_;
   return stats;
 }
 
