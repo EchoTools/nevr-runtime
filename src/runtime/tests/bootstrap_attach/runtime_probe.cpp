@@ -2,15 +2,17 @@
 // descriptor from core/runtime_abi.h and records everything it is called with.
 //
 // Variants are compile definitions (one DLL per fixture directory):
-//   BOOTSTRAP_PROBE_BAD_VERSION   descriptor reports abi_major + 1
-//   BOOTSTRAP_PROBE_INIT_FAILURE  initialize returns nonzero
-//   BOOTSTRAP_PROBE_REENTER_INIT  initialize calls the hooked PreprocessCommandLine
-//   BOOTSTRAP_PROBE_SLOW_INIT     initialize holds the host's InitOnce for 200 ms
+//   BOOTSTRAP_PROBE_BAD_VERSION     descriptor reports abi_major + 1
+//   BOOTSTRAP_PROBE_INIT_FAILURE    initialize returns nonzero
+//   BOOTSTRAP_PROBE_REENTER_INIT    initialize calls the hooked GameMainWrapper
+//   BOOTSTRAP_PROBE_SLOW_INIT       initialize holds the host's InitOnce for 200 ms
 //
 // The default fixture also installs its OWN MinHook hook (its own static
 // MinHook copy, separate from the host's) on a disjoint target, to exercise the
 // ADR's rule that the host and the runtime use separate MinHook state with disjoint targets. It
-// never touches the rendezvous address.
+// never touches the rendezvous address, and it checks that the host's hook record still
+// matches the bytes at the wrapper after its own hook is in: the first 16 bytes read after
+// initialize equal the host's post-install snapshot.
 
 #include "runtime/tests/bootstrap_attach/abi.h"
 
@@ -20,13 +22,16 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 namespace {
 
 using namespace nevr_bootstrap_probe;
 
 RecordEventFn g_record = nullptr;
-NevrPreprocessCommandLineFn g_hooked_entry = nullptr;
+NevrGameMainFn g_original = nullptr;
+NevrGameMainFn g_hooked_entry = nullptr;
+const NevrHostContext* g_host = nullptr;
 std::atomic<LONG> g_nested_issued{0};
 SecondTargetFn g_second_original = nullptr;
 
@@ -39,10 +44,11 @@ std::uint64_t AsPayload(const void* pointer) {
 }
 
 // A caller of the hooked entry, recorded exactly like the executable's callers.
-void CallHookedEntry(std::uintptr_t raw_game) {
-  void* game = reinterpret_cast<void*>(raw_game);
-  Record(kCallIssued, raw_game);
-  if (g_hooked_entry(game) != ExpectedResult(game)) Record(kBadResult, raw_game);
+void CallHookedEntry(std::int64_t command_line) {
+  Record(kCallIssued, static_cast<std::uint64_t>(command_line));
+  if (g_hooked_entry(command_line) != ExpectedResult(command_line)) {
+    Record(kBadResult, static_cast<std::uint64_t>(command_line));
+  }
 }
 
 std::uint64_t SecondTargetDetour(std::uint64_t value) {
@@ -65,20 +71,36 @@ bool InstallDisjointHook() {
   return true;
 }
 
+// The host's record of its hook is the bytes at the target after the host enabled it. Nothing
+// but the host may change them: the runtime registers the host's hook instead of hooking.
+void CheckHostHookRecord() {
+  if (std::memcmp(g_host->wrapper_hook_target, g_host->wrapper_hook_bytes,
+                  nevr_runtime_abi::kHookBytesSize) != 0) {
+    Record(kRuntimeHookMismatch);
+  }
+}
+
 std::int32_t Initialize(const NevrHostContext* host) {
   if (nevr_runtime_abi::ValidateHostContext(host) != nevr_runtime_abi::Status::kOk) return 1;
-  g_hooked_entry = reinterpret_cast<NevrPreprocessCommandLineFn>(
-      reinterpret_cast<std::uintptr_t>(host->game_module) + kPreprocessRva);
-  Record(kRuntimeInitialized, AsPayload(reinterpret_cast<const void*>(host->original_preprocess)));
+  g_host = host;
+  g_original = host->original_game_main_wrapper;
+  g_hooked_entry = reinterpret_cast<NevrGameMainFn>(
+      reinterpret_cast<std::uintptr_t>(host->game_module) + nevr_host::kGameMainWrapperRva);
+  Record(kRuntimeInitialized, AsPayload(reinterpret_cast<const void*>(host->original_game_main_wrapper)));
+  Record(kRuntimeHookTarget, AsPayload(host->wrapper_hook_target));
+  std::uint64_t first_bytes = 0;
+  std::memcpy(&first_bytes, host->wrapper_hook_bytes, sizeof(first_bytes));
+  Record(kRuntimeHookBytes, first_bytes);
 #if defined(BOOTSTRAP_PROBE_SLOW_INIT)
   // Test-only race widening: concurrent first callers must be parked in the
   // host's InitOnce for this whole window, never dispatched early or twice.
   Sleep(200);
 #endif
 #if defined(BOOTSTRAP_PROBE_REENTER_INIT)
-  CallHookedEntry(kInitReentryGame);
+  CallHookedEntry(kInitReentryArgument);
 #endif
   const bool hooked = InstallDisjointHook();
+  CheckHostHookRecord();
 #if defined(BOOTSTRAP_PROBE_INIT_FAILURE)
   // Fail AFTER patching something: the host must still run degraded, with the
   // failed runtime left mapped rather than unloaded under its own live hook.
@@ -88,17 +110,17 @@ std::int32_t Initialize(const NevrHostContext* host) {
 #endif
 }
 
-void PreprocessBefore(void* game) {
-  Record(kRuntimeBefore, AsPayload(game));
+// The stand-in for GameMain: runs the original wrapper through the host's trampoline.
+std::int64_t GameMain(std::int64_t command_line) {
+  Record(kRuntimeGameMainEnter, static_cast<std::uint64_t>(command_line));
   // One nested call through the live detour from inside the dispatch.
   if (g_nested_issued.exchange(1, std::memory_order_acq_rel) == 0) {
-    CallHookedEntry(kNestedGame);
+    CallHookedEntry(kNestedArgument);
   }
-}
-
-void PreprocessAfter(void* game, std::uint64_t result) {
-  Record(kRuntimeAfter, result);
-  if (result != ExpectedResult(game)) Record(kBadResult, AsPayload(game));
+  CheckHostHookRecord();
+  const std::int64_t result = g_original(command_line);
+  Record(kRuntimeGameMainExit, static_cast<std::uint64_t>(result));
+  return result;
 }
 
 const NevrRuntimeApi kApi = {
@@ -113,8 +135,7 @@ const NevrRuntimeApi kApi = {
         0,
     },
     &Initialize,
-    &PreprocessBefore,
-    &PreprocessAfter,
+    &GameMain,
 };
 
 }  // namespace

@@ -54,27 +54,33 @@ validator must not read past.
 
 ### Early start without the runtime under the loader lock
 
-The host's attach path, as the proof gate measures it, in direct-import mode: `DllMain` does three things: validate the game image
-(`nevr_game_image_guard`), validate the pinned 18-byte prologue of
-`PreprocessCommandLine` (RVA `0x116720`) and install one MinHook detour on it. It
-loads nothing and does no file I/O. The runtime loads on the first call of the
-detour, after attach has returned, and the detour dispatches
-`preprocess_before` -> original, once -> `preprocess_after`. Every failure leaves the
-game unhooked or running the original and returns `TRUE`, because the game imports the
-DLL statically and a `FALSE` aborts process start.
+The host's attach path, in direct-import mode: `DllMain` does three things: validate the
+game image (`nevr_game_image_guard`), validate the pinned 13-byte prologue of
+`GameMainWrapper` (RVA `0xCD510`) and install one MinHook detour on it. It loads nothing
+and does no file I/O. The runtime loads on the first call of the detour, after attach has
+returned, and the detour returns `game_main(command_line)`; without a runtime it returns
+the original wrapper's result. Every failure leaves the game unhooked or running the
+original and returns `TRUE`, because the game imports the DLL statically and a `FALSE`
+aborts process start.
 
-`src/runtime/tests/bootstrap_attach` is the proof gate for that path. A probe host
-built as `BugSplat64.dll` attaches inside child processes against a synthetic image
+`src/runtime/tests/bootstrap_attach` is the proof gate for that path. It is built from the
+production host units (`src/runtime/host/`) behind a `BugSplat64.dll` shim, so it measures
+the code the game runs. The shim attaches inside child processes against a synthetic image
 that starts with the real prologue bytes, and a static-import executable attaches it
-before `main`. The scenarios cover a missing, incompatible, entry-less and
-failing-init runtime, concurrent first calls, a thread calling the target across the
-attach, `DllMain` held open with a live hook, same-thread re-entry during
-initialization, a wrong timestamp and a wrong prologue. What it measured:
+before `main` and enters the wrapper from `main`. The scenarios cover a missing,
+incompatible, entry-less and failing-init runtime, concurrent first calls, threads calling
+the target across the attach, `DllMain` held open with a live hook, same-thread re-entry
+during initialization, a wrong timestamp and a wrong prologue. Every child checks that the
+host recorded one `hook_install` when it hooked and none when it did not, and that the
+runtime never hooks the wrapper: the first 16 bytes read after the runtime's `initialize`
+equal the host's record of its hook. What it measured:
 
 - a same-thread re-entry during runtime load must bypass to the original;
   `InitOnceExecuteOnce` recursion on the loading thread deadlocks;
 - the trampoline and the host context must be published before `MH_EnableHook`,
-  because a racing thread entered the detour before `MH_EnableHook` returned;
+  because a racing thread enters the detour before `MH_EnableHook` returns;
+- the load waits for the hook install to be journalled before it reports the journal,
+  for the same reason: the install record is written after `MH_EnableHook` returns;
 - an attach failure returns `TRUE` and leaves the game unhooked.
 
 The harness runs under Wine in `just verify`. It has not run on native Windows.

@@ -3,32 +3,41 @@
 //
 // This executable stands in for echovr.exe. It exports an event recorder and a
 // synthetic game image: a VirtualAlloc'd PE32+ header block with the supported
-// TimeDateStamp and, at RVA 0x116720, a function that begins with the REAL
-// 18-byte PreprocessCommandLine prologue and then calls a C body that records
-// the call and returns ExpectedResult(game). The probe host (BugSplat64.dll)
-// validates and MinHooks it from DLL_PROCESS_ATTACH; MinHook therefore relocates
-// and executes the real prologue instructions in its trampoline.
+// TimeDateStamp and, at RVA 0xCD510, a function that begins with the REAL
+// 13-byte GameMainWrapper prologue and then calls a C body that records the call
+// and returns ExpectedResult(command_line). The host (BugSplat64.dll, the production
+// host units behind host_shim.cpp) validates and MinHooks it from DLL_PROCESS_ATTACH;
+// MinHook therefore relocates and executes the real prologue instructions in its
+// trampoline.
 //
 // Built twice:
 //   test_bootstrap_attach.exe        suite + dynamic-load child scenarios
 //                                    (LoadLibraryW of the host while other threads run)
 //   test_bootstrap_attach_static.exe statically imports the host, the way the game
 //                                    does: host attach runs inside process start,
-//                                    before main and before this image's CRT init.
+//                                    before main and before this image's CRT init; its
+//                                    main enters the wrapper.
 //
 // Every child validates, from the recorded events (index order is a
-// linearization: each record takes its slot with InterlockedIncrement):
-//   - host attach: enter < image ok < prologue ok < hook enabled (JMP written) < exit,
-//     with nevr.dll NOT loaded at attach exit;
+// linearization: each record takes its slot with InterlockedIncrement) and from the
+// host's own bootstrap records (nevr-bootstrap.jsonl in the scenario's directory):
+//   - host attach: enter < hook live (JMP written) < exit, with nevr.dll NOT loaded
+//     at attach exit; the records are the decisions in order with exactly one
+//     hook_install record when hooked and none when not;
 //   - no runtime operation (load, DllMain, GetApi, initialize, dispatch) before
 //     attach returned — and, where the scenario allows it, before LoadLibrary /
 //     main saw the return;
 //   - every call issued executed the original exactly once, with the exact
 //     argument, and returned the exact result;
-//   - per thread, before -> original -> after nesting is balanced;
+//   - per thread, game_main enter -> original -> exit nesting is balanced;
+//   - the runtime never hooks the wrapper: the host's record of its hook (target and
+//     the first 16 bytes after MH_EnableHook) still equals the bytes at the wrapper
+//     after the runtime's initialize and in game_main;
 //   - load/API/init failures degrade to original-only calls and never dispatch.
 
 #include "runtime/tests/bootstrap_attach/abi.h"
+
+#include <nlohmann/json.hpp>
 
 #include <windows.h>
 
@@ -67,6 +76,8 @@ volatile LONG g_image_kind = kImageSupported;
 BYTE* g_image = nullptr;
 volatile LONG g_attach_hold_ms = 0;
 constexpr SIZE_T kImageSize = 0x118000;
+// A value that needs all 64 bits: a truncated argument or result changes it.
+constexpr std::int64_t kCommandLine = 0x1234'5678'9ABC'DEF0;
 constexpr SIZE_T kPage = 0x1000;
 
 }  // namespace
@@ -83,9 +94,9 @@ extern "C" __declspec(dllexport) void BootstrapProbeRecordEvent(LONG event, std:
 }
 
 // The body behind the synthetic prologue. Called from generated machine code.
-extern "C" std::uint64_t BootstrapProbeOriginalBody(void* game) {
-  BootstrapProbeRecordEvent(kOriginal, reinterpret_cast<std::uintptr_t>(game));
-  return ExpectedResult(game);
+extern "C" std::int64_t BootstrapProbeOriginalBody(std::int64_t command_line) {
+  BootstrapProbeRecordEvent(kOriginal, static_cast<std::uint64_t>(command_line));
+  return ExpectedResult(command_line);
 }
 
 // Disjoint target for the runtime fixture's own MinHook instance.
@@ -118,23 +129,24 @@ BYTE* BuildGameImage(LONG kind) {
   nt->OptionalHeader.SizeOfHeaders = kPage;
   nt->OptionalHeader.SizeOfImage = static_cast<DWORD>(kImageSize);
 
-  BYTE* code = base + kPreprocessRva;
+  // The real prologue (sub rsp,0x38; mov qword [rsp+0x20],0), then
+  //   mov rax, imm64 ; call rax ; mov [rsp+0x20], rax ; add rsp, 0x38 ; ret
+  // Entry RSP is 8 mod 16; the real `sub rsp,0x38` makes it 16-aligned for the call, and
+  // RCX (the command line) reaches the body untouched.
+  BYTE* code = base + nevr_host::kGameMainWrapperRva;
   SIZE_T at = 0;
-  for (const unsigned char byte : kPreprocessPrologue) code[at++] = byte;
-  if (kind == kImageWrongPrologue) code[kPrologueMutationOffset] = 0xb2;
-  // mov rcx, rdi ; mov rax, imm64 ; call rax ; add rsp, 0xa8 ; pop rdi ; pop rbp ; ret
-  // Entry RSP is 8 mod 16; push, push, sub 0xa8 leaves it 16-aligned with the
-  // 32-byte shadow space inside the frame the real prologue allocated.
-  const unsigned char mid[] = {0x48, 0x89, 0xf9, 0x48, 0xb8};
+  for (const unsigned char byte : nevr_host::kGameMainWrapperPrologue) code[at++] = byte;
+  if (kind == kImageWrongPrologue) code[kPrologueMutationOffset] = 0x28;
+  const unsigned char mid[] = {0x48, 0xb8};
   for (const unsigned char byte : mid) code[at++] = byte;
   std::uintptr_t body = reinterpret_cast<std::uintptr_t>(&BootstrapProbeOriginalBody);
   for (int shift = 0; shift < 64; shift += 8) code[at++] = static_cast<BYTE>(body >> shift);
-  const unsigned char tail[] = {0xff, 0xd0, 0x48, 0x81, 0xc4, 0xa8, 0x00,
-                                0x00, 0x00, 0x5f, 0x5d, 0xc3};
+  const unsigned char tail[] = {0xff, 0xd0, 0x48, 0x89, 0x44, 0x24, 0x20,
+                                0x48, 0x83, 0xc4, 0x38, 0xc3};
   for (const unsigned char byte : tail) code[at++] = byte;
 
   DWORD old_protection = 0;
-  BYTE* code_page = base + (kPreprocessRva & ~(kPage - 1));
+  BYTE* code_page = base + (nevr_host::kGameMainWrapperRva & ~(kPage - 1));
   if (VirtualProtect(base, kPage, PAGE_READONLY, &old_protection) == FALSE ||
       VirtualProtect(code_page, kPage, PAGE_EXECUTE_READ, &old_protection) == FALSE) {
     return nullptr;
@@ -158,26 +170,25 @@ namespace {
 
 [[noreturn]] void Fail(const char* message);
 
-NevrPreprocessCommandLineFn Target() {
-  return reinterpret_cast<NevrPreprocessCommandLineFn>(g_image + kPreprocessRva);
+NevrGameMainFn Target() {
+  return reinterpret_cast<NevrGameMainFn>(g_image + nevr_host::kGameMainWrapperRva);
 }
 
-void CallTarget(std::uintptr_t raw_game) {
-  void* game = reinterpret_cast<void*>(raw_game);
-  BootstrapProbeRecordEvent(kCallIssued, raw_game);
-  if (Target()(game) != ExpectedResult(game)) BootstrapProbeRecordEvent(kBadResult, raw_game);
+void CallTarget(std::int64_t command_line) {
+  BootstrapProbeRecordEvent(kCallIssued, static_cast<std::uint64_t>(command_line));
+  if (Target()(command_line) != ExpectedResult(command_line)) {
+    BootstrapProbeRecordEvent(kBadResult, static_cast<std::uint64_t>(command_line));
+  }
 }
 
 const char* EventName(LONG event) {
   static const char* const kNames[kEventLimit] = {
-      "?", "host.attach_enter", "host.image_accepted", "host.image_rejected",
-      "host.prologue_accepted", "host.prologue_rejected", "host.hook_enabled",
-      "host.hook_failed", "host.attach_exit", "host.load_begin", "host.load_end",
-      "host.reentry_bypass", "runtime.dll_attach", "runtime.get_api",
-      "runtime.initialized", "runtime.before", "original", "runtime.after",
-      "call.issued", "call.bad_result", "main.entered", "host.loadlibrary_returned",
-      "runtime.second_hook_enabled", "second.detour", "second.original",
-      "host.attach_held"};
+      "?", "host.attach_enter", "host.hook_enabled", "host.hook_failed", "host.attach_exit",
+      "runtime.dll_attach", "runtime.get_api", "runtime.initialized", "runtime.game_main_enter",
+      "original", "runtime.game_main_exit", "call.issued", "call.bad_result", "main.entered",
+      "host.loadlibrary_returned", "runtime.second_hook_enabled", "second.detour",
+      "second.original", "host.attach_held", "runtime.hook_target", "runtime.hook_bytes",
+      "runtime.hook_mismatch"};
   return event > 0 && event < kEventLimit ? kNames[event] : "?";
 }
 
@@ -239,51 +250,54 @@ void Require(bool condition, const char* message) {
   if (!condition) Fail(message);
 }
 
-// Per-thread nesting: before pushes a frame, original completes the innermost
-// open frame (or is a lone original when no frame is open: unhooked/degraded),
-// after closes it. Returns the number of lone originals.
+// Per-thread nesting: game_main enter pushes a frame, original completes the innermost
+// open frame (or is a lone original when no frame is open: unhooked/degraded/bypassed),
+// game_main exit closes it. Returns the number of lone originals.
 LONG CheckFrames(const std::vector<EventRecord>& events) {
   struct Frame {
-    std::uint64_t game;
+    std::uint64_t command_line;
     bool original_seen;
   };
   std::map<DWORD, std::vector<Frame>> stacks;
   LONG lone = 0;
   for (const EventRecord& record : events) {
     std::vector<Frame>& stack = stacks[record.thread];
-    if (record.event == kRuntimeBefore) {
+    if (record.event == kRuntimeGameMainEnter) {
       stack.push_back(Frame{record.payload, false});
     } else if (record.event == kOriginal) {
       if (stack.empty()) {
         ++lone;
       } else {
         Require(!stack.back().original_seen, "original ran twice inside one dispatched call");
-        Require(stack.back().game == record.payload, "original saw a different game pointer than before");
+        Require(stack.back().command_line == record.payload,
+                "original saw a different command line than game_main");
         stack.back().original_seen = true;
       }
-    } else if (record.event == kRuntimeAfter) {
-      Require(!stack.empty(), "runtime.after without an open runtime.before on its thread");
-      Require(stack.back().original_seen, "runtime.after ran before the original");
-      Require(record.payload == ExpectedResult(reinterpret_cast<const void*>(stack.back().game)),
-              "runtime.after saw a result other than the original's");
+    } else if (record.event == kRuntimeGameMainExit) {
+      Require(!stack.empty(), "game_main exit without an open game_main entry on its thread");
+      Require(stack.back().original_seen, "game_main returned before the original ran");
+      Require(static_cast<std::int64_t>(record.payload) ==
+                  ExpectedResult(static_cast<std::int64_t>(stack.back().command_line)),
+              "game_main returned a result other than the original's");
       stack.pop_back();
     }
   }
-  for (const auto& entry : stacks) Require(entry.second.empty(), "a dispatched call never reached runtime.after");
+  for (const auto& entry : stacks) Require(entry.second.empty(), "a dispatched call never left game_main");
   return lone;
 }
 
 struct Expectation {
   bool hooked = true;                  // image + prologue accepted, detour enabled
   bool dispatched = true;              // runtime loaded, validated and initialized
-  std::uint64_t load_outcome = kLoadOk;  // low 32 bits of host.load_end payload
+  const char* load_record = "loaded";  // the runtime_load record's outcome (hooked scenarios)
   bool static_import = false;
   bool load_may_precede_return = false;  // hammer: a racing thread may trigger the load
-  bool load_begin_inside_attach = false;  // held attach: the racing load MUST start inside DllMain
+  bool call_parked_inside_attach = false;  // held attach: a call must be in flight across DllMain's exit
   enum class Lone { kNone, kAtLeastOne, kExactlyOne, kEveryCall } lone = Lone::kNone;
-  bool expect_reentry_bypass = false;
   bool second_hook_called = false;
   LONG min_threads_parked_in_load = 0;  // concurrent-first
+  // What the host recorded when it rejected the game (the records the scenario expects).
+  const char* rejected_step = "";  // "image_check" or "prologue_check" when not hooked
 };
 
 void ValidateHostAttach(const std::vector<EventRecord>& events, const Expectation& expect,
@@ -294,23 +308,28 @@ void ValidateHostAttach(const std::vector<EventRecord>& events, const Expectatio
   *attach_exit = First(events, kHostAttachExit);
   Require(enter < *attach_exit, "host attach exit recorded before enter");
   Require(events[*attach_exit].payload == 0, "nevr.dll was loaded before host DllMain returned");
-  const BYTE first_target_byte = g_image[kPreprocessRva];
+  const BYTE first_target_byte = g_image[nevr_host::kGameMainWrapperRva];
   if (expect.hooked) {
-    const std::size_t image = First(events, kHostImageAccepted);
-    const std::size_t prologue = First(events, kHostPrologueAccepted);
     const std::size_t enabled = First(events, kHostHookEnabled);
-    Require(image != kNone && prologue != kNone && enabled != kNone,
-            "host did not accept image, accept prologue and enable the hook");
-    Require(enter < image && image < prologue && prologue < enabled && enabled < *attach_exit,
-            "host attach steps out of order");
+    Require(enabled != kNone && Count(events, kHostHookFailed) == 0,
+            "host did not install the hook");
+    Require(enter < enabled && enabled < *attach_exit, "host attach steps out of order");
     Require(events[enabled].payload == 0xE9 && first_target_byte == 0xE9,
             "rendezvous does not start with a JMP rel32 after enable (partial install?)");
   } else {
-    Require(Count(events, kHostHookEnabled) == 0, "host hooked a rejected image");
-    Require(first_target_byte == kPreprocessPrologue[0], "rejected target bytes were modified");
-    Require(Count(events, kHostImageRejected) + Count(events, kHostPrologueRejected) == 1,
-            "rejection was not recorded exactly once");
+    Require(Count(events, kHostHookEnabled) == 0 && Count(events, kHostHookFailed) == 1,
+            "host hooked a rejected image, or did not leave the game unhooked");
+    Require(first_target_byte == nevr_host::kGameMainWrapperPrologue[0],
+            "rejected target bytes were modified");
   }
+}
+
+// Index of the first kOriginal after `from` on `thread`, or kNone.
+std::size_t NextOriginalOnThread(const std::vector<EventRecord>& events, std::size_t from, DWORD thread) {
+  for (std::size_t index = from + 1; index < events.size(); ++index) {
+    if (events[index].event == kOriginal && events[index].thread == thread) return index;
+  }
+  return kNone;
 }
 
 void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expectation& expect,
@@ -319,25 +338,21 @@ void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expect
       First(events, expect.static_import ? kMainEntered : kHostLoadReturned);
   Require(returned != kNone && attach_exit < returned,
           "attach return was not observed after host attach exit");
-  // host.load_begin is the HOST deciding to load (it can race attach exit when
-  // another thread is already calling the game); everything below is the load
-  // itself or code inside nevr.dll, and must follow attach exit.
-  const LONG runtime_events[] = {kHostLoadEnd, kHostReentryBypass,
-                                 kRuntimeDllAttach, kRuntimeGetApi, kRuntimeInitialized,
-                                 kRuntimeBefore, kRuntimeAfter, kRuntimeSecondHookEnabled};
-  const std::size_t load_begin = First(events, kHostLoadBegin);
-  if (expect.load_begin_inside_attach) {
-    // Bounded by prologue_accepted, not hook_enabled: MH_EnableHook makes the JMP
-    // live and resumes frozen threads BEFORE it returns, so a racing caller can
-    // enter the detour before the host records hook_enabled (observed under
-    // Wine). That is safe only because the host publishes the trampoline and the
-    // host context before enabling.
-    Require(load_begin != kNone && First(events, kHostPrologueAccepted) < load_begin &&
-                load_begin < attach_exit,
-            "held attach: no thread entered the detour while host DllMain held the loader lock");
-  } else if (load_begin != kNone && !expect.load_may_precede_return) {
-    Require(load_begin > attach_exit && load_begin > returned,
-            "host began loading the runtime before attach return was observed");
+  // Everything below is the load itself or code inside nevr.dll, and must follow attach exit.
+  const LONG runtime_events[] = {kRuntimeDllAttach, kRuntimeGetApi, kRuntimeInitialized,
+                                 kRuntimeGameMainEnter, kRuntimeGameMainExit,
+                                 kRuntimeSecondHookEnabled};
+  if (expect.call_parked_inside_attach) {
+    // A thread called the wrapper after the hook was live and before DllMain returned: its call
+    // entered the detour, which parks in the runtime load (LoadLibrary needs the loader lock
+    // DllMain holds) until attach returns. The original therefore ran after attach exit.
+    bool parked = false;
+    for (std::size_t index = 0; index < attach_exit && !parked; ++index) {
+      if (events[index].event != kCallIssued) continue;
+      const std::size_t original = NextOriginalOnThread(events, index, events[index].thread);
+      parked = original != kNone && original > attach_exit;
+    }
+    Require(parked, "held attach: no call was in flight inside the detour when host DllMain returned");
   }
   const bool strict = expect.static_import || !expect.load_may_precede_return;
   for (std::size_t index = 0; index < events.size(); ++index) {
@@ -350,14 +365,100 @@ void ValidateNoEarlyRuntime(const std::vector<EventRecord>& events, const Expect
   }
 }
 
+// The host's own records for this run: parsed, each with the NEVR.HOST header.
+std::vector<nlohmann::json> ReadHostRecords() {
+  wchar_t local[MAX_PATH] = {};
+  const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+  Require(length != 0 && length < MAX_PATH, "the scenario's LOCALAPPDATA is not set");
+  const std::wstring path = std::wstring(local, length) + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl";
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  std::string text;
+  if (file != INVALID_HANDLE_VALUE) {
+    char buffer[512] = {};
+    DWORD read = 0;
+    while (ReadFile(file, buffer, sizeof(buffer), &read, nullptr) != FALSE && read != 0) {
+      text.append(buffer, read);
+    }
+    CloseHandle(file);
+  }
+  std::vector<nlohmann::json> records;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    Require(end != std::string::npos, "a host record is missing its terminating newline");
+    nlohmann::json record = nlohmann::json::parse(text.substr(start, end - start), nullptr, false);
+    Require(!record.is_discarded(), "a host record does not parse as JSON");
+    Require(record.value("tag", "") == "NEVR.HOST", "a host record lacks the NEVR.HOST tag");
+    records.push_back(std::move(record));
+    start = end + 1;
+  }
+  return records;
+}
+
+std::size_t CountRecords(const std::vector<nlohmann::json>& records, const char* event, const char* step) {
+  std::size_t count = 0;
+  for (const nlohmann::json& record : records) {
+    if (record.value("event", "") != event) continue;
+    if (step[0] != '\0' && record.value("step", "") != step) continue;
+    ++count;
+  }
+  return count;
+}
+
+void ValidateHostRecords(const Expectation& expect) {
+  // The attach decisions of a run that did not hook reach the file through the crash-reporter
+  // constructor's trigger; a hooked run reports them at its first call, before the load.
+  if (!expect.hooked) {
+    const auto flush = reinterpret_cast<void (*)()>(
+        GetProcAddress(GetModuleHandleW(L"BugSplat64.dll"), "nevr_host_test_FlushDeferred"));
+    Require(flush != nullptr, "the host shim's deferred flush did not resolve");
+    flush();
+  }
+  const std::vector<nlohmann::json> records = ReadHostRecords();
+  // One install record when hooked, none when the game was rejected: a second install attempt
+  // or an install over a rejected image would show here.
+  Require(CountRecords(records, "host_attach", "hook_install") == (expect.hooked ? 1u : 0u),
+          "the host did not record exactly one hook install when hooked, or recorded one when not");
+  if (!expect.hooked) {
+    Require(CountRecords(records, "runtime_load", "") == 0, "a rejected run loaded the runtime");
+    Require(!records.empty() && records.back().value("step", "") == expect.rejected_step &&
+                (records.back().value("outcome", "") == "rejected" ||
+                 records.back().value("outcome", "") == "mismatch"),
+            "the host's last record is not the rejection the scenario expects");
+    if (std::strcmp(expect.rejected_step, "prologue_check") == 0) {
+      Require(records.back().at("rva") == "0xcd510" &&
+                  records.back().at("expected_prologue") == "4883ec3848c744242000000000" &&
+                  records.back().at("actual_prologue") == "4883ec3848c744242800000000",
+              "the prologue mismatch record lacks the rva, the pinned bytes or the bytes found");
+    }
+    return;
+  }
+  Require(records.size() == 4, "a hooked run recorded something other than its four decisions");
+  Require(records[0].value("step", "") == "image_check" && records[0].value("outcome", "") == "accepted" &&
+              records[1].value("step", "") == "prologue_check" &&
+              records[1].value("outcome", "") == "accepted" &&
+              records[2].value("step", "") == "hook_install" && records[2].value("outcome", "") == "enabled" &&
+              records[3].value("event", "") == "runtime_load",
+          "the host's decisions were not recorded in order");
+  Require(records[2].at("rva") == "0xcd510" && records[2].at("stage") == "enable" &&
+              records[2].at("mh_status") == 0 &&
+              records[2].at("actual_prologue") == records[2].at("expected_prologue"),
+          "the install record lacks the rva, the enable stage, MH_OK or the matching bytes");
+  Require(records[3].value("outcome", "") == expect.load_record,
+          "the runtime_load record has an unexpected outcome");
+  Require(records[3].contains("loader_lock_held") && records[3].at("loader_lock_held") == false,
+          "the runtime_load record does not say the loader lock was not held");
+}
+
 void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation& expect) {
   const LONG calls = Count(events, kCallIssued);
   Require(calls > 0, "scenario issued no calls");
   Require(Count(events, kOriginal) == calls, "original did not run exactly once per call");
   Require(Count(events, kBadResult) == 0, "a caller received a result other than the original's");
-  // A lone original is a call that reached the original with no dispatch frame
-  // open: unhooked (before attach / rejected image), degraded, or the bypassed
-  // same-thread re-entry during runtime load.
+  // A lone original is a call that reached the original with no game_main frame open:
+  // unhooked (before attach / rejected image), degraded, or the bypassed same-thread
+  // re-entry during runtime load.
   const LONG lone = CheckFrames(events);
   switch (expect.lone) {
     case Expectation::Lone::kNone:
@@ -373,28 +474,19 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
       Require(lone == calls, "a degraded or unhooked call was dispatched");
       break;
   }
-  Require((Count(events, kHostReentryBypass) == 1) == expect.expect_reentry_bypass,
-          "same-thread re-entry during runtime load was not bypassed exactly as expected");
+  // The runtime never hooks the wrapper: whenever its initialize ran, the host's record of
+  // its hook still equals the live bytes (checked by the fixture after initialize and in game_main).
+  Require(Count(events, kRuntimeHookMismatch) == 0,
+          "the host's hook record differs from the bytes at the wrapper: something else hooked it");
 
   if (!expect.hooked) {
-    Require(Count(events, kHostLoadBegin) == 0 && Count(events, kRuntimeDllAttach) == 0 &&
-                GetModuleHandleW(L"nevr.dll") == nullptr,
+    Require(Count(events, kRuntimeDllAttach) == 0 && GetModuleHandleW(L"nevr.dll") == nullptr,
             "runtime was loaded although the host rejected the image");
-    Require(Count(events, kRuntimeBefore) == 0, "dispatch without a hook");
+    Require(Count(events, kRuntimeGameMainEnter) == 0, "dispatch without a hook");
     return;
   }
-  Require(Count(events, kHostLoadBegin) == 1 && Count(events, kHostLoadEnd) == 1,
-          "runtime load attempted other than exactly once");
-  const std::size_t load_end = First(events, kHostLoadEnd);
-  const std::uint64_t outcome = events[load_end].payload;
-  if ((outcome & 0xFFFFFFFFull) != expect.load_outcome) {
-    std::fprintf(stderr, "load outcome 0x%llx, expected 0x%llx\n",
-                 static_cast<unsigned long long>(outcome),
-                 static_cast<unsigned long long>(expect.load_outcome));
-    Fail("unexpected runtime load outcome");
-  }
   if (!expect.dispatched) {
-    Require(Count(events, kRuntimeBefore) == 0 && Count(events, kRuntimeAfter) == 0,
+    Require(Count(events, kRuntimeGameMainEnter) == 0 && Count(events, kRuntimeGameMainExit) == 0,
             "a failed runtime was dispatched");
     return;
   }
@@ -403,12 +495,19 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
           "runtime DllMain/GetApi/initialize did not run exactly once");
   const std::size_t initialized = First(events, kRuntimeInitialized);
   const std::uint64_t trampoline = events[initialized].payload;
-  Require(trampoline != 0 && trampoline != reinterpret_cast<std::uintptr_t>(g_image + kPreprocessRva),
+  Require(trampoline != 0 &&
+              trampoline != reinterpret_cast<std::uintptr_t>(g_image + nevr_host::kGameMainWrapperRva),
           "host context did not carry a trampoline distinct from the hooked target");
-  Require(First(events, kRuntimeBefore) > load_end, "dispatch began before runtime initialization finished");
-  Require(Count(events, kRuntimeBefore) > 0 &&
-              Count(events, kRuntimeBefore) == Count(events, kRuntimeAfter),
-          "before/after counts differ");
+  Require(Count(events, kRuntimeHookTarget) == 1 && Count(events, kRuntimeHookBytes) == 1 &&
+              events[First(events, kRuntimeHookTarget)].payload ==
+                  reinterpret_cast<std::uintptr_t>(g_image + nevr_host::kGameMainWrapperRva) &&
+              (events[First(events, kRuntimeHookBytes)].payload & 0xFF) == 0xE9,
+          "the host context's hook record is not the wrapper's address and the host's JMP");
+  Require(First(events, kRuntimeGameMainEnter) > initialized,
+          "game_main began before runtime initialization");
+  Require(Count(events, kRuntimeGameMainEnter) > 0 &&
+              Count(events, kRuntimeGameMainEnter) == Count(events, kRuntimeGameMainExit),
+          "game_main enter/exit counts differ");
   Require(Count(events, kRuntimeSecondHookEnabled) == 1, "runtime's disjoint MinHook instance did not install");
   if (expect.second_hook_called) {
     Require(Count(events, kSecondDetour) == 1 && Count(events, kSecondOriginal) == 1,
@@ -416,7 +515,8 @@ void ValidateDispatch(const std::vector<EventRecord>& events, const Expectation&
   }
   if (expect.min_threads_parked_in_load > 0) {
     std::map<DWORD, bool> parked;
-    for (std::size_t index = 0; index < load_end; ++index) {
+    const std::size_t first_dispatch = First(events, kRuntimeGameMainEnter);
+    for (std::size_t index = 0; index < first_dispatch; ++index) {
       if (events[index].event == kCallIssued) parked[events[index].thread] = true;
     }
     Require(static_cast<LONG>(parked.size()) >= expect.min_threads_parked_in_load,
@@ -430,11 +530,12 @@ void Validate(const Expectation& expect, const char* label) {
   ValidateHostAttach(events, expect, &attach_exit);
   ValidateNoEarlyRuntime(events, expect, attach_exit);
   ValidateDispatch(events, expect);
+  ValidateHostRecords(expect);
   PrintTimeline(events, label);
   std::printf("bootstrap attach test: PASS: %s (calls=%ld originals=%ld dispatched=%ld threads=%llu)\n",
               label, static_cast<long>(Count(events, kCallIssued)),
               static_cast<long>(Count(events, kOriginal)),
-              static_cast<long>(Count(events, kRuntimeBefore)),
+              static_cast<long>(Count(events, kRuntimeGameMainEnter)),
               [&events] {
                 std::map<DWORD, bool> threads;
                 for (const EventRecord& record : events) threads[record.thread] = true;
@@ -452,8 +553,7 @@ DWORD WINAPI CallWorker(void* raw) {
   const auto* args = static_cast<const WorkerArgs*>(raw);
   if (args->start != nullptr) WaitForSingleObject(args->start, INFINITE);
   for (LONG call = 0; call < args->calls; ++call) {
-    CallTarget((static_cast<std::uintptr_t>(args->worker) + 1) << 24 |
-               static_cast<std::uintptr_t>(call) << 4);
+    CallTarget(((static_cast<std::int64_t>(args->worker) + 1) << 24) | (static_cast<std::int64_t>(call) << 4));
   }
   return 0;
 }
@@ -494,7 +594,7 @@ int main() {
   Require(GetModuleHandleW(L"nevr.dll") == nullptr, "nevr.dll loaded before main");
   Require(g_image != nullptr, "host never requested the game image during static-import attach");
   DetoursExportPlaceholder();  // the import that makes the loader attach the host first
-  CallTarget(0x1000);
+  CallTarget(kCommandLine);  // main enters the wrapper
   RunWorkers(4, 50, false);
   CallSecondTarget();
   Expectation expect;
@@ -522,12 +622,18 @@ DWORD WINAPI HeartbeatThread(void*) {
   return 0;
 }
 
+// Several threads, so MinHook has more than one to freeze and resume: the first one resumed runs
+// the new jump while the others are still being resumed, which is the window a trampoline or
+// host context published after MH_EnableHook would be read in.
+constexpr int kHammerThreads = 8;
+
 // Calls the rendezvous continuously across the host's attach: before the hook
 // exists, while MinHook freezes threads and writes the JMP, and after.
-DWORD WINAPI HammerThread(void*) {
-  std::uintptr_t call = 0;
+DWORD WINAPI HammerThread(void* raw) {
+  const auto index = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(raw));
+  std::int64_t call = 0;
   while (InterlockedCompareExchange(&g_stop_hammer, 0, 0) == 0) {
-    CallTarget(0x0F00'0000 | (++call & 0xFFFFF) << 4);
+    CallTarget(0x0F00'0000'0000'0000 | (index << 40) | ((++call & 0xFFFFF) << 4));
     if (InterlockedCompareExchange(&g_host_loaded, 0, 0) != 0) InterlockedIncrement(&g_hammer_calls_after_load);
   }
   return 0;
@@ -546,24 +652,27 @@ std::wstring ExecutableDirectory() {
 int RunChildScenario(const std::string& mode) {
   Expectation expect;
   LONG image_kind = kImageSupported;
-  if (mode == "missing" || mode == "bad-image") {
+  if (mode == "missing") {
     expect.dispatched = false;
-    expect.load_outcome = kLoadLibraryFailed;
+    expect.load_record = "runtime_absent";
+  } else if (mode == "bad-image") {
+    expect.dispatched = false;
+    expect.load_record = "load_failed";
   } else if (mode == "bad-version") {
     expect.dispatched = false;
-    expect.load_outcome = kLoadAbiRejectedBase + static_cast<std::uint64_t>(nevr_runtime_abi::Status::kMajorMismatch);
+    expect.load_record = "abi_rejected";
   } else if (mode == "missing-entry") {
     expect.dispatched = false;
-    expect.load_outcome = kLoadNoEntry;
+    expect.load_record = "missing_entry";
   } else if (mode == "init-failure") {
     expect.dispatched = false;
-    expect.load_outcome = kLoadInitFailed;
+    expect.load_record = "init_failed";
   } else if (mode == "bad-timestamp" || mode == "bad-prologue") {
     expect.hooked = false;
     expect.dispatched = false;
     image_kind = mode == "bad-timestamp" ? kImageWrongTimestamp : kImageWrongPrologue;
+    expect.rejected_step = mode == "bad-timestamp" ? "image_check" : "prologue_check";
   } else if (mode == "reentrant-init") {
-    expect.expect_reentry_bypass = true;
     expect.lone = Expectation::Lone::kExactlyOne;
   } else if (mode == "concurrent-first") {
     expect.min_threads_parked_in_load = 2;
@@ -571,7 +680,7 @@ int RunChildScenario(const std::string& mode) {
     expect.load_may_precede_return = true;
     expect.lone = Expectation::Lone::kAtLeastOne;
     if (mode == "hammer-held-attach") {
-      expect.load_begin_inside_attach = true;
+      expect.call_parked_inside_attach = true;
       InterlockedExchange(&g_attach_hold_ms, 100);
     }
   } else if (mode != "valid") {
@@ -585,10 +694,14 @@ int RunChildScenario(const std::string& mode) {
 
   HANDLE heartbeat = CreateThread(nullptr, 0, &HeartbeatThread, nullptr, 0, nullptr);
   Require(heartbeat != nullptr, "could not create heartbeat thread");
-  HANDLE hammer = nullptr;
+  std::vector<HANDLE> hammers;
   if (mode == "hammer-attach" || mode == "hammer-held-attach") {
-    hammer = CreateThread(nullptr, 0, &HammerThread, nullptr, 0, nullptr);
-    Require(hammer != nullptr, "could not create hammer thread");
+    for (int index = 0; index < kHammerThreads; ++index) {
+      HANDLE thread = CreateThread(nullptr, 0, &HammerThread,
+                                   reinterpret_cast<void*>(static_cast<std::uintptr_t>(index)), 0, nullptr);
+      Require(thread != nullptr, "could not create hammer thread");
+      hammers.push_back(thread);
+    }
   }
   Sleep(30);
   const std::wstring host_path = ExecutableDirectory() + L"BugSplat64.dll";
@@ -597,13 +710,15 @@ int RunChildScenario(const std::string& mode) {
   BootstrapProbeRecordEvent(kHostLoadReturned, 0);
   InterlockedExchange(&g_host_loaded, 1);
 
-  if (hammer != nullptr) {
+  if (!hammers.empty()) {
     for (int wait = 0; wait < 500 && InterlockedCompareExchange(&g_hammer_calls_after_load, 0, 0) < 200; ++wait) {
       Sleep(10);
     }
     InterlockedExchange(&g_stop_hammer, 1);
-    Require(WaitForSingleObject(hammer, 10000) == WAIT_OBJECT_0, "hammer thread did not stop");
-    CloseHandle(hammer);
+    Require(WaitForMultipleObjects(static_cast<DWORD>(hammers.size()), hammers.data(), TRUE, 10000) ==
+                WAIT_OBJECT_0,
+            "hammer threads did not stop");
+    for (HANDLE thread : hammers) CloseHandle(thread);
     Require(InterlockedCompareExchange(&g_hammer_calls_after_load, 0, 0) >= 200,
             "hammer thread stalled after attach");
   }
@@ -617,9 +732,9 @@ int RunChildScenario(const std::string& mode) {
     RunWorkers(8, 1, true);
     RunWorkers(4, 25, false);
   } else if (mode == "reentrant-init") {
-    CallTarget(0x2000);
+    CallTarget(kCommandLine);
   } else {
-    CallTarget(0x1000);
+    CallTarget(kCommandLine);
     RunWorkers(4, mode == "valid" || mode == "hammer-attach" || mode == "hammer-held-attach" ? 100 : 25,
                false);
   }
@@ -707,12 +822,29 @@ int RunSuite() {
       {"bad-timestamp", L"good"},
       {"bad-prologue", L"good"},
   };
+  // Each child gets its own LOCALAPPDATA and TEMP, so the host's bootstrap records of one
+  // scenario are the only records the child reads.
+  wchar_t temp_base[MAX_PATH] = {};
+  const DWORD temp_len = GetTempPathW(MAX_PATH, temp_base);
+  Require(temp_len != 0 && temp_len < MAX_PATH, "no temp directory available");
+  const std::wstring base = std::wstring(temp_base, temp_len) + L"nevr-attach-" +
+                            std::to_wstring(GetCurrentProcessId()) + L"-" +
+                            std::to_wstring(GetTickCount64());
+  CreateDirectoryW(base.c_str(), nullptr);
+  const auto use_scenario_directory = [&base](const std::wstring& name) {
+    const std::wstring directory = base + L"\\" + name;
+    CreateDirectoryW(directory.c_str(), nullptr);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", directory.c_str());
+    SetEnvironmentVariableW(L"TEMP", directory.c_str());
+  };
   for (const Scenario& scenario : scenarios) {
     StageRuntimeFixture(root, scenario.fixture);
     std::wstring mode(scenario.mode, scenario.mode + std::strlen(scenario.mode));
+    use_scenario_directory(mode);
     RunChild(L"\"" + std::wstring(self, length) + L"\" --child " + mode, scenario.mode);
   }
   StageRuntimeFixture(root, L"good");
+  use_scenario_directory(L"static-import");
   RunChild(L"\"" + root + L"test_bootstrap_attach_static.exe\"", "static-import");
   std::printf("bootstrap attach test: PASS: all %llu dynamic scenarios + static-import\n",
               static_cast<unsigned long long>(sizeof(scenarios) / sizeof(scenarios[0])));

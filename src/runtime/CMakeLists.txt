@@ -322,10 +322,28 @@ if(BUILD_TESTING)
     target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
 
+    # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
+    # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
+    # recorder, the minidump capture, the runtime load/validate state machine and the
+    # GameMainWrapper rendezvous. It is a static library of its own so the tests
+    # drive the objects the host links and not a copy. Built only for the tests until the
+    # target split links it into BugSplat64.dll.
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_library(nevr_host_core STATIC
+      host/bootstrap_diagnostics.cpp
+      host/crash_capture.cpp
+      host/host_entry.cpp
+      host/runtime_load.cpp
+      host/runtime_rendezvous.cpp
+      lifecycle/game_image_guard.cpp)
+    target_compile_options(nevr_host_core PRIVATE -Werror)
+    target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
+
     # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
     # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
-    # The probe host (built as BugSplat64.dll) validates the game image and the
-    # real PreprocessCommandLine prologue and installs ONE MinHook detour from
+    # The host (the production host units behind a shim, built as BugSplat64.dll) validates the game image and the
+    # real GameMainWrapper prologue and installs ONE MinHook detour from
     # DLL_PROCESS_ATTACH; it loads the versioned runtime (core/runtime_abi.h) on
     # the first rendezvous call. test_bootstrap_attach.exe drives twelve
     # dynamic-load child scenarios; test_bootstrap_attach_static.exe imports the
@@ -342,12 +360,9 @@ if(BUILD_TESTING)
       target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     endfunction()
 
-    add_library(test_bootstrap_attach_host SHARED
-      tests/bootstrap_attach/host_probe.cpp
-      lifecycle/game_image_guard.cpp)
-    set_source_files_properties(tests/bootstrap_attach/host_probe.cpp lifecycle/game_image_guard.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_link_libraries(test_bootstrap_attach_host PRIVATE minhook)
+    # The host of the gate is the production host units (nevr_host_core) behind a shim DllMain.
+    add_library(test_bootstrap_attach_host SHARED tests/bootstrap_attach/host_shim.cpp)
+    target_link_libraries(test_bootstrap_attach_host PRIVATE nevr_host_core)
     set_target_properties(test_bootstrap_attach_host PROPERTIES
       PREFIX "" OUTPUT_NAME "BugSplat64")
     bootstrap_attach_output(test_bootstrap_attach_host "${BOOTSTRAP_ATTACH_DIR}")
@@ -395,10 +410,12 @@ if(BUILD_TESTING)
 
     add_executable(test_bootstrap_attach_static tests/bootstrap_attach/attach_test.cpp)
     target_compile_definitions(test_bootstrap_attach_static PRIVATE BOOTSTRAP_PROBE_STATIC_IMPORT)
-    target_link_libraries(test_bootstrap_attach_static PRIVATE test_bootstrap_attach_host)
+    target_link_libraries(test_bootstrap_attach_static PRIVATE test_bootstrap_attach_host
+      nlohmann_json::nlohmann_json)
     bootstrap_attach_output(test_bootstrap_attach_static "${BOOTSTRAP_ATTACH_DIR}")
 
     add_executable(test_bootstrap_attach tests/bootstrap_attach/attach_test.cpp)
+    target_link_libraries(test_bootstrap_attach PRIVATE nlohmann_json::nlohmann_json)
     bootstrap_attach_output(test_bootstrap_attach "${BOOTSTRAP_ATTACH_DIR}")
     add_dependencies(test_bootstrap_attach
       test_bootstrap_attach_host
@@ -410,24 +427,6 @@ if(BUILD_TESTING)
       test_bootstrap_attach_runtime_slow_init
       test_bootstrap_attach_runtime_missing_entry
       test_bootstrap_attach_bad_image)
-
-    # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
-    # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
-    # recorder, the minidump capture, the runtime load/validate state machine and the
-    # GameMainWrapper rendezvous. It is a static library of its own so the tests
-    # drive the objects the host links and not a copy. Built only for the tests until the
-    # target split links it into BugSplat64.dll.
-    find_package(nlohmann_json CONFIG REQUIRED)
-    add_library(nevr_host_core STATIC
-      host/bootstrap_diagnostics.cpp
-      host/crash_capture.cpp
-      host/host_entry.cpp
-      host/runtime_load.cpp
-      host/runtime_rendezvous.cpp
-      lifecycle/game_image_guard.cpp)
-    target_compile_options(nevr_host_core PRIVATE -Werror)
-    target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
 
     add_executable(test_host_json tests/test_host_json.cpp)
     set_source_files_properties(tests/test_host_json.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

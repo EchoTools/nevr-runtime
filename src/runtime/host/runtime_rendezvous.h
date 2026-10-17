@@ -86,6 +86,10 @@ class RuntimeRendezvous {
   std::atomic<const NevrRuntimeApi*> api_{nullptr};
   std::atomic<HMODULE> runtime_module_{nullptr};
   std::atomic<DWORD> loading_thread_{0};
+  // Set when Install has journalled its last decision. A thread can enter the detour while
+  // MH_EnableHook is still returning, so the load waits for this before it reports the
+  // journal; otherwise the install record could be recorded after the report and never written.
+  std::atomic<HANDLE> install_done_{nullptr};
 };
 
 }  // namespace nevr_host

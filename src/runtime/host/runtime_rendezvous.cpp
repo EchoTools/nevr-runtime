@@ -57,6 +57,16 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
   }
   Journal(AttachStep::kPrologueCheck, AttachOutcome::kAccepted, 0, actual);
 
+  // Created before the jump can go live; signalled by every way out of here.
+  HANDLE install_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  install_done_.store(install_done, std::memory_order_release);
+  struct SignalOnExit {
+    HANDLE event;
+    ~SignalOnExit() {
+      if (event != nullptr) SetEvent(event);
+    }
+  } signal_on_exit{install_done};
+
   MH_STATUS status = MH_Initialize();
   if (status != MH_OK) {
     Journal(AttachStep::kHookInstall, AttachOutcome::kFailed, static_cast<std::uint32_t>(status),
@@ -105,6 +115,9 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   auto* self = static_cast<RuntimeRendezvous*>(parameter);
   if (self == nullptr) return TRUE;
   self->loading_thread_.store(GetCurrentThreadId(), std::memory_order_release);
+  // A thread can be here before the thread that installed the hook has journalled it.
+  const HANDLE install_done = self->install_done_.load(std::memory_order_acquire);
+  if (install_done != nullptr) WaitForSingleObject(install_done, 5000);
   // The attach decisions are reported first, now that attach has returned, so the
   // load record that follows reads in order.
   self->diagnostics_->FlushAttachJournal();
