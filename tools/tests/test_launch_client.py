@@ -67,7 +67,8 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
-        '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
+        '(sleep 3 >/dev/null 2>&1) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
+        '# (its output goes nowhere: a child holding the test\'s stdout pipe would make subprocess.run wait for it)\n'
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
         '# which is who runs the tests in the CI container.\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && { rm -f ./BugSplat64.dll; mkdir ./BugSplat64.dll; }\n'
@@ -520,8 +521,10 @@ class LaunchServerTest(unittest.TestCase):
                               capture_output=True, text=True, timeout=60)
 
     def test_deploys_into_the_game_root_from_a_checkout_without_echovr(self):
+        started = time.monotonic()
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertLess(time.monotonic() - started, 2.0, "the run waited for the game's leftover child")
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
         self.assertFalse((self.checkout / "echovr").exists())
 
