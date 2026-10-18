@@ -20,18 +20,21 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
 TRACE_EXPORTS=""
+EXTRA_GAME_ARGS=()
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
+USAGE="launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
     --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
+    --game-arg) EXTRA_GAME_ARGS+=("${2:?--game-arg needs one game argument}"); shift 2 ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
     --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
+    -h|--help) echo "usage: $USAGE  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: $USAGE)" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -125,9 +128,16 @@ echo "=== Console log: $CONSOLE_LOG ==="
 start=$(date +%s)
 set +e
 # -windowed alone (owner, 2026-10-03: "just -windowed"; "-windowed is basically -novr (not -noovr)"):
-# it is the game's no-headset mode. A client is not meant to run with -noovr (a "VR bypass");
-# -mp has no reader in the runtime and no string in echovr.exe (issue #45).
+# it is the game's no-headset mode. A client is not meant to run with -noovr (a "VR bypass").
+# A player's client reaches multiplayer from the menu's own Play action; a scenario has no hand, so
+# it passes the stock flag that begins multiplayer itself: `--game-arg -mp` (#674). The game's syntax
+# has both: `-mp\0` sits in echovr.exe's CLI table at file offset 0x16d0d44, beside -capture and
+# -dumpstats; `-windowed` is the runtime's own flag (src/runtime/lifecycle/cli.cpp).
 game_args=(-windowed)
+if [[ ${#EXTRA_GAME_ARGS[@]} -gt 0 ]]; then
+  game_args+=("${EXTRA_GAME_ARGS[@]}")
+  echo "=== extra game arguments: ${EXTRA_GAME_ARGS[*]} ==="
+fi
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")

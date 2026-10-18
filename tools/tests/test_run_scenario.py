@@ -37,6 +37,65 @@ class LoadScenarioTest(unittest.TestCase):
                     run_scenario.load_scenario(path)
 
 
+class ControlPatienceTest(unittest.TestCase):
+    """A fire's reply waits for the game's next frame, and one frame can last many seconds while the
+    client loads the social lobby. The old 10 s socket timeout cut a reply the endpoint would still
+    have sent (#674)."""
+
+    def test_a_reply_slower_than_ten_seconds_is_still_read(self):
+        import socket
+        import threading
+        import time
+        import control
+
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve():
+            conn, _ = server.accept()
+            with conn:
+                conn.recv(4096)
+                time.sleep(11)
+                conn.sendall(b'{"ok": true}\n')
+            server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            self.assertEqual(control.call(port, {"op": "state"}), {"ok": True})
+        finally:
+            thread.join(5)
+
+    def test_the_runner_s_control_socket_outlasts_a_long_frame(self):
+        import socket
+        import threading
+        import time
+
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve():
+            conn, _ = server.accept()
+            with conn:
+                conn.recv(4096)
+                time.sleep(11)
+                conn.sendall(b'{"ok": true}\n')
+            server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        client = run_scenario.Control(port)
+        try:
+            self.assertEqual(client.call({"op": "state"}), {"ok": True})
+        finally:
+            client.close()
+            thread.join(5)
+
+
 class StateMatchesTest(unittest.TestCase):
     def test_friend_invitable(self):
         state = {"friends": [{"id": 7, "online": True, "invitable": 1}]}
