@@ -34,8 +34,13 @@ def port_from_log(path: pathlib.Path) -> int:
     return int(ports[-1])
 
 
+# A fire's reply waits for the game's next frame, and one frame can last tens of seconds while the
+# client loads the social lobby (scenario_control.cpp waits 120 s); the socket must outlast that.
+REPLY_TIMEOUT_SECONDS = 130
+
+
 def call(port: int, command: dict) -> dict:
-    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+    with socket.create_connection(("127.0.0.1", port), timeout=REPLY_TIMEOUT_SECONDS) as sock:
         sock.sendall((json.dumps(command) + "\n").encode())
         buffer = b""
         while b"\n" not in buffer:

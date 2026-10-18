@@ -717,8 +717,11 @@ nlohmann::json Handle(const std::string& line) {
         std::lock_guard<std::mutex> lock(g_fireMutex);
         g_fireQueue.push_back(request);
       }
-      if (done.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-        return Fail("no game frame tick ran the fire within 5 s");
+      // A client entering the social lobby spends a long time in one frame loading a level (a 98 s
+      // level load was measured on 2026-10-18); a fire posted in that window waits for the next tick,
+      // not a hung game. 120 s covers the load and still fails a game that never ticks again (#674).
+      if (done.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
+        return Fail("no game frame tick ran the fire within 120 s");
       }
       const std::string why = done.get();
       if (!why.empty()) return Fail(why);

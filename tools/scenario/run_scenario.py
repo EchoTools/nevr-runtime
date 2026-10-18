@@ -149,9 +149,15 @@ class ConsoleLog:
         return f"last state: {states[-1] if states else 'none logged'}; last warnings/errors: {notable or 'none'}"
 
 
+# A fire's reply waits for the game's next frame. One frame can last a minute or more while the
+# client loads the social lobby (a 98 s level load was measured on 2026-10-18), so the reply wait is
+# generous: a false "no tick" aborts a scenario that would have passed (#674).
+REPLY_TIMEOUT_SECONDS = 130
+
+
 class Control:
     def __init__(self, port: int):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=REPLY_TIMEOUT_SECONDS)
         self.buffer = b""
 
     def call(self, command: dict) -> dict:
@@ -325,7 +331,9 @@ class Run:
 
     def launch(self):
         launcher_out = self.out / "launch-client.out"
-        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
+        # -mp is the game's own multiplayer flag: with -windowed alone a client reaches the menu
+        # and waits for a hand on Play, so no scenario waiting for "in game" can ever pass (#674).
+        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll), "--game-arg", "-mp"]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)

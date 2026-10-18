@@ -174,6 +174,23 @@ class LaunchClientTest(unittest.TestCase):
         self.assertIn("--trace-exports takes a comma separated list", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
 
+    def test_game_arg_reaches_the_game_and_is_absent_by_default(self):
+        args_file = self.tmp / "wine-args.txt"
+        env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
+        result = self.run_script("--dll", str(self.dll), "--game-arg", "-mp", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed -mp", result.stdout)
+        self.assertIn("extra game arguments: -mp", result.stdout)
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed", result.stdout)
+
+    def test_game_arg_needs_a_value(self):
+        result = self.run_script("--dll", str(self.dll), "--game-arg")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("--game-arg needs one game argument", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
     def test_runs_from_a_checkout_without_echovr_and_restores_the_original(self):
         result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -353,6 +370,36 @@ class LaunchClientTest(unittest.TestCase):
                 del os.environ["NEVR_GAME_ROOT"]
             else:
                 os.environ["NEVR_GAME_ROOT"] = old
+
+    def test_the_scenario_runner_launches_the_client_in_multiplayer(self):
+        """The runner must hand the game -mp. With -windowed alone the client sits in the menu and no
+        step that waits for "in game" can pass (#674); the launcher itself keeps -windowed as its default."""
+        import sys
+        sys.path.insert(0, str(REPO / "tools/scenario"))
+        import run_scenario
+        args_file = self.tmp / "wine-args.txt"
+        env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
+        out = self.tmp / "scenario-out"
+        out.mkdir()
+        old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
+                                                  "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
+                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL")}
+        os.environ.update(env)
+        try:
+            run = run_scenario.Run({"name": "launch-args"}, self.dll, out)
+            try:
+                run.launch()
+            finally:
+                run.teardown()
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # wineprefix() caches: leave the next test the prefix it resolves for itself.
+            run_scenario.wineprefix.cache_clear()
+        self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed -mp")
 
 
 class VerifyServerTest(unittest.TestCase):
