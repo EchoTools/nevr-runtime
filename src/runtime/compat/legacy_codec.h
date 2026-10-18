@@ -56,7 +56,6 @@ inline constexpr uint64_t kSNSLobbySessionFailurev2 = 0x4ae8365ebc45f96aULL;
 // ---- current symbols the translator needs beyond evr_codec.h (CSymbol64 of the name) -----------
 inline constexpr uint64_t kSNSLobbySessionSuccessv5 = 0x6d4de3650ee3110fULL;
 inline constexpr uint64_t kSNSLobbySessionFailurev4 = 0x4ae8365ebc45f96cULL;
-inline constexpr uint64_t kSNSConfigSuccessv2 = 0xb9cdaf586f7bd012ULL;
 inline constexpr uint64_t kSNSReconcileIAP = 0x1bd0fc454c85573cULL;
 inline constexpr uint64_t kSNSReconcileIAPResult = 0x0dabc24265508a82ULL;
 inline constexpr uint64_t kSNSLobbyMatchmakerStatus = 0x8f28cf33dabfbecbULL;

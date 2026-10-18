@@ -57,8 +57,8 @@ class SessionBridge::TappedRemotes final : public nevr_session_router::RemoteTra
   TappedRemotes(nevr_session_router::RemoteTransport* inner, FrameTap* tap) : inner_(inner), tap_(tap) {}
 
   bool Open(const nevr_session_router::RemoteOpenRequest& request) override {
-    if (request.role == nevr_session_router::Role::Login && !request.standaloneMatchmaker) {
-      // A new login session: nothing may be sent on it until the service accepts the login.
+    if (request.session) {
+      // A new session (config or login opened it): nothing may be sent on it until the service accepts the login.
       loginAccepted_.store(false, std::memory_order_release);
       loginRemote_.store(request.remote, std::memory_order_release);
     }

@@ -906,7 +906,7 @@ bool IsPassthrough(uint64_t symbol) {
     case nevr_evr_codec::kSymLoginSuccess:
     case nevr_evr_codec::kSymUpdateProfile:
     case nevr_evr_codec::kSymConfigRequest:
-    case kSNSConfigSuccessv2:
+    case nevr_evr_codec::kSymConfigSuccess:
     case nevr_evr_codec::kSymConfigFailure:
     case kSNSReconcileIAP:
     case kSNSReconcileIAPResult:

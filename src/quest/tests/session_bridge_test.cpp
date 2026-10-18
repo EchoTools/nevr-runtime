@@ -156,7 +156,11 @@ struct Client {
         if (eof != nullptr) *eof = true;
         break;
       }
-      if (n < 0) break;
+      if (n < 0) {
+        // A read error (a reset close is ECONNRESET) ends the stream as a close does.
+        if (eof != nullptr) *eof = true;
+        break;
+      }
       out.append(buf, static_cast<std::size_t>(n));
     }
     return out;
@@ -287,7 +291,8 @@ void TestLoginRelayTapAndSideChannel() {
   QCHECK(config.Upgrade(path));
   QCHECK(connector.WaitConnects(1));
   QCHECK(login.Upgrade(path));
-  QCHECK(connector.WaitConnects(2));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));  // the login shares the session: no second connect
+  QCHECK(connector.Calls() == 1);
 
   // The token-auth route: a Bearer JWT on every upgrade, the configured URI unchanged.
   {
@@ -410,11 +415,29 @@ SessionBridge::Config MakeHeldConfig(FakeConnector* connector, Observed* seen, A
   return c;
 }
 
-// The #239 smoke sequence end to end: no account at boot, so the config connection fails and the login
-// connection is held (open past the idle window, answered to pings, no remote). The player signs in: the
-// remote opens with the new token, the game's login goes through, and the NEW config connection the game
-// opens afterwards gets its own remote while the login session's profile reply reaches the login connection.
-void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
+// A config request for the resource `name` (type and id the same, as the game asks) and the service's success
+// for it: the success carries the two symbols the service computes from the request's strings.
+std::string ConfigRequestFor(const std::string& name) {
+  return nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest,
+                                      std::string(1, '\0') + "{\"type\":\"" + name + "\",\"id\":\"" + name + "\"}");
+}
+std::string ConfigSuccessFor(const std::string& name, const std::string& resource) {
+  std::string payload;
+  for (int i = 0; i < 2; ++i) {
+    const uint64_t symbol = nevr_evr_codec::ConfigSymbol(name);
+    for (int b = 0; b < 8; ++b) payload.push_back(static_cast<char>((symbol >> (8 * b)) & 0xFF));
+  }
+  return nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigSuccess, payload + resource);
+}
+
+// The #239 smoke sequence end to end: no account at boot, so the session is held with the config connection on
+// it (nothing is connected, nothing is failed) and the login connection is held beside it (open past the idle
+// window, answered to pings). The player signs in: the remote opens with the new token, the config request the
+// game queued goes first and its own login after it. The config connection then closes and the game opens a NEW
+// one: it reattaches to the same session (no second connect), its reply reaches it and not the login connection,
+// the closed connection's stale request yields to it (it gets the reply, and the second reply is dropped), and
+// the login session's profile reply reaches the login connection.
+void TestHeldSessionSurvivesUntilSignInThenRoutesByRole() {
   FakeConnector connector;
   Observed seen;
   Account account;
@@ -423,21 +446,22 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   QCHECK(port != 0);
   const std::string path = PathOf(bridge.LocalUri());
 
-  Client bootConfig(port);
-  std::string bootBytes = bootConfig.UpgradeBytes(path);
+  auto bootConfig = std::make_unique<Client>(port);
+  std::string bootBytes = bootConfig->UpgradeBytes(path);
   QCHECK(bootBytes.rfind("HTTP/1.1 101", 0) == 0);
-  bootConfig.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
+  const std::string bootRequest = ConfigRequestFor("main_menu");
+  bootConfig->Write(BuildMaskedFrame(Opcode::Binary, bootRequest, kMask));
+  // Held, not failed: the connection stays open (it sent a frame, so the idle rule does not apply) and no
+  // connect is made while the account is awaited.
+  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
   bool bootEof = false;
-  const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "remote could not be started");
-  // Fail-fast, as before: the connection is closed 1011 (the close frame can share a read with the upgrade
-  // response, so everything up to the end of the stream is read).
-  bootBytes += bootConfig.Read(1u << 20, 3000, &bootEof);
-  QCHECK(bootBytes.find(closeFrame) != std::string::npos);
+  bootConfig->Read(1, 400, &bootEof);
+  QCHECK(!bootEof);
   QCHECK(connector.Calls() == 0);
 
   Client login(port);
   QCHECK(login.Upgrade(path));
-  QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));
   std::this_thread::sleep_for(std::chrono::milliseconds(900));  // three idle windows
   login.Write(BuildMaskedFrame(Opcode::Ping, "pp", kMask));
   const std::string pong = BuildFrame(Opcode::Pong, "pp");
@@ -461,28 +485,24 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
     std::lock_guard<std::mutex> lock(connector.mutex);
     if (connector.connections.empty()) return false;
     loginConn = connector.connections[0];
-    return !loginConn->Sent().empty();
+    return loginConn->Sent().size() >= 2;
   }));
   if (loginConn == nullptr) return;
-  QCHECK(loginConn->Sent()[0] == gameLogin);
+  QCHECK(loginConn->Sent()[0] == bootRequest);  // the queued config request, in arrival order
+  QCHECK(loginConn->Sent()[1] == gameLogin);
   const std::string success = nevr_evr_codec::BuildLoginSuccess(nevr_evr_codec::kBridgeLoginPlatform, 4242);
   loginConn->Push(success);
   const std::string successWire = BuildFrame(Opcode::Binary, success);
   QCHECK(login.Read(successWire.size()) == successWire);
 
+  bootConfig.reset();  // the config connection goes with its request unanswered
   Client config(port);  // the connection the game opens after login
   QCHECK(config.Upgrade(path));
-  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c2"), kMask));
-  QCHECK(connector.WaitConnects(2));
-  FakeConnection* configConn = nullptr;
-  QCHECK(WaitFor([&] {
-    std::lock_guard<std::mutex> lock(connector.mutex);
-    if (connector.connections.size() < 2) return false;
-    configConn = connector.connections[1];
-    return !configConn->Sent().empty();
-  }));
-  if (configConn == nullptr) return;
-  QCHECK(configConn->Sent()[0] == nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c2"));
+  const std::string configRequest = ConfigRequestFor("main_menu");
+  config.Write(BuildMaskedFrame(Opcode::Binary, configRequest, kMask));
+  QCHECK(WaitFor([&] { return loginConn->Sent().size() >= 3; }));
+  QCHECK(loginConn->Sent().size() >= 3 && loginConn->Sent()[2] == configRequest);  // the same session
+  QCHECK(connector.Calls() == 1);
 
   const std::string profile = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoggedInUserProfileSuccess, "profile");
   loginConn->Push(profile);
@@ -492,13 +512,17 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   QCHECK(bridge.DroppedUnrequires() == 0);
   loginConn->Push(nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, ""));
   QCHECK(WaitFor([&] { return bridge.DroppedUnrequires() == 1; }));
-  const std::string configReply = nevr_evr_codec::BuildMessage(0xb9cdaf586f7bd012ULL, "config");
-  configConn->Push(configReply);
+  // The service answers the closed connection's request first, then the new one's. The closed connection's open
+  // request is the oldest for this resource, but the replacement asked for the same resource, so it takes the
+  // first reply; the reply to its own request then finds no open request and is dropped.
+  const std::string configReply = ConfigSuccessFor("main_menu", "for-the-closed-connection");
+  loginConn->Push(configReply);
   const std::string configWire = BuildFrame(Opcode::Binary, configReply);
   QCHECK(config.Read(configWire.size()) == configWire);
-  bool configGotProfile = false;
-  config.Read(1, 200, &configGotProfile);
-  QCHECK(!configGotProfile);
+  loginConn->Push(ConfigSuccessFor("main_menu", "for-the-new-connection"));
+  bool configEof = false;
+  QCHECK(config.Read(1, 300, &configEof).empty());  // nothing more reaches it
+  QCHECK(!configEof);                               // and the socket is still open, not closed
   // An Unrequire inside a frame can reach the game with nothing outstanding; the bridge reports the count.
   const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0')) +
                             nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConnectionUnrequire, "");
@@ -508,8 +532,9 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   bridge.Stop();
 }
 
-// A sign-in that fails ends the hold: the login connection is closed (1011).
-void TestHeldLoginIsClosedWhenSignInFails() {
+// A sign-in that fails ends the hold: every connection on the held session is closed (1011), the config
+// connection as well as the login connection.
+void TestHeldSessionIsClosedWhenSignInFails() {
   FakeConnector connector;
   Observed seen;
   Account account;
@@ -520,25 +545,39 @@ void TestHeldLoginIsClosedWhenSignInFails() {
   Client config(port), login(port);
   QCHECK(config.Upgrade(path));
   // The role of a connection is its order at the router, and each connection's thread flushes the 101 BEFORE it
-  // tells the router the game opened. Without this wait the login socket's thread can reach the router first,
-  // the sockets swap roles, and the 1011 goes to the "config" socket (#565). The router's connection count is
-  // the proof the first connection has been counted (a config socket with no account is closed again at once,
-  // so a count of live games is not).
+  // tells the router the game opened. Without this wait the login socket's thread can reach the router first
+  // and the sockets swap provisional roles (#565).
   QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 1; }));
+  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
   QCHECK(login.Upgrade(path));
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));  // the login is on the held session too
   account.Set("", nevr_session_router::LoginGate::Refused);
   bridge.ReevaluateLoginGate();
   const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
   QCHECK(login.Read(closeFrame.size()) == closeFrame);
+  QCHECK(config.Read(closeFrame.size()) == closeFrame);  // the config connection shares the held session
   QCHECK(connector.Calls() == 0);
   bridge.Stop();
+}
+
+// The role of a connection is observable by the idle rule: the login connection is exempt from the close for
+// sending nothing, any other connection is closed after `idleFirstFrameMs` (300 ms in MakeHeldConfig). If the
+// second-accepted socket were given the config role (the opens being reported in the threads' order, not the
+// accept order) it would be closed 1008 within that window. So after two windows the login socket must still
+// be open and answer a ping, and the later refusal must reach it as 1011, not 1008.
+void ExpectTheLoginSocketIsStillOpen(Client& login) {
+  std::this_thread::sleep_for(std::chrono::milliseconds(800));  // more than two idle windows
+  login.Write(BuildMaskedFrame(Opcode::Ping, "pp", kMask));
+  const std::string pong = BuildFrame(Opcode::Pong, "pp");
+  QCHECK(login.Read(pong.size()) == pong);
 }
 
 // #565: roles follow the ORDER THE CONNECTIONS WERE ACCEPTED, not the order their threads reach the router. The
 // first connection's thread is stalled for 300 ms between its 101 and its open report (the window a loaded
 // phone puts it in), and the second socket is opened the moment the first one's 101 arrives, with no wait for the
-// router: the login socket must still be the login (held, then closed 1011), and the config socket must not be.
+// router: the login socket must still be the login (exempt from the idle close, then closed 1011 by the refusal),
+// and the config socket must not be.
 void TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls() {
   FakeConnector connector;
   Observed seen;
@@ -555,6 +594,8 @@ void TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls() {
   QCHECK(config.Upgrade(path));
   QCHECK(login.Upgrade(path));  // straight after the first 101: the first connection has not reported its open
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));  // the login is on the held session too
+  ExpectTheLoginSocketIsStillOpen(login);
   account.Set("", nevr_session_router::LoginGate::Refused);
   bridge.ReevaluateLoginGate();
   const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
@@ -564,7 +605,7 @@ void TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls() {
 
 // #565, second door: the first-accepted connection is still HANDSHAKING (connected, no upgrade request yet) when
 // the second one upgrades. Opens are reported in accept order, so the second waits for the first and the roles
-// are the accept order's: config first, login second.
+// are the accept order's: config first, login second (the login socket stays open past the idle window).
 void TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake() {
   FakeConnector connector;
   Observed seen;
@@ -581,6 +622,8 @@ void TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake() {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   QCHECK(config.Upgrade(path));  // the slow handshake finishes
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));  // the login is on the held session too
+  ExpectTheLoginSocketIsStillOpen(login);
   account.Set("", nevr_session_router::LoginGate::Refused);
   bridge.ReevaluateLoginGate();
   const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
@@ -590,7 +633,9 @@ void TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake() {
 
 // #565, third door: the first connection's stall (2.5 s) outlasts the longest wait a healthy server should see
 // here (handshake 0.8 s + close flush 1 s). The second connection does NOT go ahead out of order: the roles are
-// still the accept order, and the slow wait is said once in the log (a silent fallback is a defect).
+// still the accept order, and the slow wait is said once in the log (a silent fallback is a defect). What it pins
+// is the accept order through the idle exemption: had the second connection gone ahead it would have been the
+// config connection and been closed 1008 during the stall, so the refusal would not reach it as 1011.
 void TestRolesFollowAcceptOrderWhenTheFirstConnectionStallsPastTwoSeconds() {
   FakeConnector connector;
   Observed seen;
@@ -613,6 +658,7 @@ void TestRolesFollowAcceptOrderWhenTheFirstConnectionStallsPastTwoSeconds() {
   QCHECK(config.Upgrade(path));
   QCHECK(login.Upgrade(path));
   QCHECK(WaitFor([&] { return bridge.HeldLogins() == 1; }, 8000));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }, 8000));  // the login is on the held session too
   account.Set("", nevr_session_router::LoginGate::Refused);
   bridge.ReevaluateLoginGate();
   const std::string closeFrame = BuildCloseFrame(nevr_session_router::kCloseInternalError, "the account the login needs will not be available");
@@ -657,7 +703,7 @@ void TestReconnectedLoginSocketIsToldItsLoginWasRemoved() {
   QCHECK(config.Upgrade(path));
   QCHECK(connector.WaitConnects(1));
   QCHECK(login.Upgrade(path));
-  QCHECK(connector.WaitConnects(2));
+  QCHECK(WaitFor([&] { return bridge.ConnectionsCounted() >= 2; }));  // the login shares the session: no second connect
   const std::string gameLogin = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "game-own-login-SECRET");
   login.Write(BuildMaskedFrame(Opcode::Binary, gameLogin, kMask));
   FakeConnection* first = nullptr;
@@ -726,8 +772,8 @@ int main() {
   TestLoginRelayTapAndSideChannel();
   TestUpgradeWithoutTheTokenIsRefused();
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
-  TestHeldLoginSurvivesUntilSignInThenRoutesByRole();
-  TestHeldLoginIsClosedWhenSignInFails();
+  TestHeldSessionSurvivesUntilSignInThenRoutesByRole();
+  TestHeldSessionIsClosedWhenSignInFails();
   TestRolesFollowAcceptOrderWhenTheFirstConnectionStalls();
   TestRolesFollowAcceptOrderWhenTheFirstConnectionIsSlowToHandshake();
   TestRolesFollowAcceptOrderWhenTheFirstConnectionStallsPastTwoSeconds();
