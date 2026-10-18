@@ -916,6 +916,17 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/obb_skip_hook_test" -ldl
     timeout 120 "$out/obb_skip_hook_test"
+    # The process ends when the game's android_main returns (#621): the real handler through the thunk entry,
+    # and a real process ended under a writer that saves the way the Quest code saves.
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/process_end_fixture_provider.cpp \
+        -o "$out/libpefx_provider.so"
+    "${cxx[@]}" -fPIC -shared -Wl,--build-id=sha1 -L"$out" -lpefx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now \
+        src/quest/tests/process_end_fixture_consumer.cpp -o "$out/libpefx_consumer.so"
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/process_end_hook_test.cpp \
+        src/quest/sentinel/process_end_hook.cpp src/quest/auth/atomic_write.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/process_end_hook_test" -ldl
+    timeout 300 "$out/process_end_hook_test" "$out"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
