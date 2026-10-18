@@ -12,6 +12,7 @@ import os
 import pathlib
 import shutil
 import signal
+import select
 import subprocess
 import time
 import tempfile
@@ -32,6 +33,42 @@ def install_scripts(checkout: pathlib.Path) -> None:
     shutil.copy(LIB, checkout / "tools/lib/game_install.sh")
     for script in (SCRIPT, VERIFY_SERVER, LAUNCH_SERVER):
         shutil.copy(script, checkout / script.name)
+
+
+class Fifo:
+    """A named pipe a fake binary writes one line into when something happens, so a test blocks on the event
+    instead of polling for its effect. A writer end held open here keeps the reader from seeing EOF between
+    two writers."""
+
+    def __init__(self, path: pathlib.Path):
+        os.mkfifo(path)
+        self.path = path
+        self.reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        self.holder = os.open(path, os.O_WRONLY)
+        self.lines = 0
+        self.pending = b""
+
+    def close(self) -> None:
+        os.close(self.reader)
+        os.close(self.holder)
+
+    def wait_for(self, lines: int, timeout: float = 30.0) -> None:
+        """Block until `lines` lines have arrived in total; fail if they do not within `timeout` seconds."""
+        deadline = time.monotonic() + timeout
+        while self.lines < lines:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([self.reader], [], [], left)[0]:
+                raise AssertionError(f"{self.path.name}: {self.lines} of {lines} lines within {timeout} s")
+            self.pending += os.read(self.reader, 4096)
+            self.lines += self.pending.count(b"\n")
+            self.pending = self.pending.rsplit(b"\n", 1)[-1]
+
+
+def open_gate(path: pathlib.Path) -> None:
+    """Let a fake binary blocked in `read < gate` go on (the open waits until that reader is there)."""
+    fd = os.open(path, os.O_WRONLY)
+    os.write(fd, b"go\n")
+    os.close(fd)
 
 
 def make_game_root(root: pathlib.Path) -> pathlib.Path:
@@ -62,12 +99,14 @@ def make_fake_bin(directory: pathlib.Path) -> None:
     (directory / "wine").write_text(
         '#!/bin/bash\n'
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
+        '[[ -n "${FAKE_WINE_STARTED:-}" ]] && echo started > "$FAKE_WINE_STARTED"  # the script deploys before it starts the game\n'
         'sleep "${FAKE_WINE_LOG_DELAY:-0}"\n'
         'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake-$(date +%s%N).jsonl"\n'
         'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
         '[[ -n "${FAKE_WINE_ARGS:-}" ]] && printf "%s\\n" "$*" > "$FAKE_WINE_ARGS"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
-        '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
+        '(sleep 3 >/dev/null 2>&1) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
+        '# (its output goes nowhere: a child holding the test\'s stdout pipe would make subprocess.run wait for it)\n'
         '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
         '# which is who runs the tests in the CI container.\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && { rm -f ./BugSplat64.dll; mkdir ./BugSplat64.dll; }\n'
@@ -143,7 +182,7 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def run_until_login(self, log_text=None, *extra, timeout_flag=("--login-timeout", "45"), env_extra=None):
-        env = dict(self.env, FAKE_WINE_SLEEP="6", NEVR_LOGIN_POLL_SECONDS="1")
+        env = dict(self.env, FAKE_WINE_SLEEP="3", NEVR_LOGIN_POLL_SECONDS="0.1")
         if log_text is not None:
             env["FAKE_LOG_TEXT"] = log_text
         env.update(env_extra or {})
@@ -155,28 +194,28 @@ class LaunchClientTest(unittest.TestCase):
         result, elapsed = self.run_until_login()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS: client reached logged in", result.stdout)
-        self.assertLess(elapsed, 5.5, "it waited for the game to exit instead of ending the run at the verdict")
+        self.assertLess(elapsed, 2.5, "it waited for the game to exit instead of ending the run at the verdict")
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_exit_after_login_fails_when_the_service_stays_unavailable(self):
         result, elapsed = self.run_until_login('{"msg":"Service is unavailable"}\\n' * 3)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_exit_after_login_fails_at_the_deadline_when_nothing_happens(self):
-        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                                env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertGreaterEqual(elapsed, 2.0)
-        self.assertLess(elapsed, 12.0)
+        self.assertGreaterEqual(elapsed, 1.0)
+        self.assertLess(elapsed, 6.0)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_the_deadline_is_not_short_when_the_run_starts_late_in_a_second(self):
         # Whole-second arithmetic once ended a 2 s deadline after 1.04 s when the script read its
-        # start at x.99. A `date +%s` whose clock reads x.99 the first time it is asked puts every run
+        # start at x.99 (a 1 s deadline would end after 0.04 s). A `date +%s` whose clock reads x.99 the first time it is asked puts every run
         # in that position, so the outcome does not depend on when the test happens to start.
         clock = self.tmp / "clock-shift"
         fake_date = self.fake_bin / "date"
@@ -187,10 +226,10 @@ class LaunchClientTest(unittest.TestCase):
             f'[[ -e {clock} ]] || echo $((990000 - now_us % 1000000)) > {clock}\n'
             f'echo $(( (now_us + $(cat {clock})) / 1000000 ))\n')
         fake_date.chmod(0o755)
-        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                                env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertGreaterEqual(elapsed, 2.0)
+        self.assertGreaterEqual(elapsed, 1.0)
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_even_if_login_appears(self):
         text = ('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n'
@@ -203,22 +242,22 @@ class LaunchClientTest(unittest.TestCase):
         result, elapsed = self.run_until_login('{"msg":"rad15_live failed"}\\n' * 3)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
 
     def test_a_dll_that_embeds_nothing_ends_the_run_without_waiting_for_the_deadline(self):
         result, elapsed = self.run_until_login('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("embeds no service endpoints", result.stderr)
-        self.assertLess(elapsed, 5.5)
+        self.assertLess(elapsed, 2.5)
 
     def test_a_previous_runs_log_from_the_same_second_cannot_decide_the_verdict(self):
         logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/EchoVR/logs"
         stale = logs / "nevr-2026-10-07T00-00-00.000.jsonl"
         stale.write_text('{"msg":"NetGame switching state (from logging in, to logged in)"}\n')
         # This run's own log has no login at all; the stale file must not be mistaken for it.
-        result, _ = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+        result, _ = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "1"),
                                          env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30",
-                                                    "FAKE_WINE_LOG_DELAY": "1"})
+                                                    "FAKE_WINE_LOG_DELAY": "0.3"})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("client never reached logged in", result.stderr)
         self.assertNotIn("nevr-2026-10-07T00-00-00.000.jsonl", result.stdout)
@@ -364,15 +403,19 @@ class VerifyServerTest(unittest.TestCase):
         self.assertIn("args=-server -headless -noconsole -fixedtimestep -timestep 120",
                       (self.tmp / "server-runs/run-ts/context.txt").read_text().splitlines())
 
+    def started_fifo(self) -> Fifo:
+        fifo = Fifo(self.tmp / "game-started")
+        self.addCleanup(fifo.close)
+        return fifo
+
     def test_an_interrupted_run_still_restores(self):
-        env = dict(self.env, FAKE_WINE_SLEEP="30")
+        started = self.started_fifo()
+        env = dict(self.env, FAKE_WINE_SLEEP="30", FAKE_WINE_STARTED=str(started.path))
         process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True)
         try:
-            deadline = time.monotonic() + 30
-            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL:
-                self.assertLess(time.monotonic(), deadline, "the test DLL was never deployed")
-                time.sleep(0.05)
+            started.wait_for(1)  # the script deploys before it starts the game
+            self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
             process.send_signal(signal.SIGTERM)
             process.wait(timeout=30)
         finally:
@@ -381,6 +424,41 @@ class VerifyServerTest(unittest.TestCase):
             process.stdout.close()
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
         self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def test_an_interrupt_ends_the_census_wait_at_once(self):
+        # A sample interval of 30 s: the SIGTERM has to run the restore now, not when the interval ends.
+        started = self.started_fifo()
+        env = dict(self.env, FAKE_WINE_SLEEP="30", FAKE_WINE_STARTED=str(started.path), NEVR_VERIFY_POLL_SECONDS="30")
+        process = subprocess.Popen([str(self.checkout / "verify-server.sh"), "run1", "default", "60"], env=env,
+                                   cwd=self.checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            started.wait_for(1)
+            asked = time.monotonic()
+            process.send_signal(signal.SIGTERM)
+            process.wait(timeout=10)
+            self.assertLess(time.monotonic() - asked, 3.0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+        self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def test_a_game_that_exits_at_once_ends_the_census_at_once(self):
+        # The fake game exits immediately; a sample interval of 30 s must not be waited out.
+        started = time.monotonic()
+        result = self.run_verify(dict(self.env, NEVR_VERIFY_POLL_SECONDS="30"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertLess(time.monotonic() - started, 5.0)
+        self.assertIn("process exited early at t=", (self.tmp / "server-runs/run1/context.txt").read_text())
+
+    def test_a_game_that_stays_up_is_sampled_each_interval(self):
+        # Time is what this test is about: one interval of 1 s with the game alive for it.
+        result = self.run_verify(dict(self.env, FAKE_WINE_SLEEP="1.5"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run = self.tmp / "server-runs/run1"
+        self.assertRegex((run / "window-census.txt").read_text(), r"^t=1s game_pids=\[")
+        self.assertNotIn("process exited early", (run / "context.txt").read_text())
+        self.assertIn("max_game_windows=", (run / "context.txt").read_text())
 
     def run_verify(self, env=None):
         return subprocess.run(self.command(), env=env or self.env, cwd=self.checkout, capture_output=True,
@@ -394,26 +472,19 @@ class VerifyServerTest(unittest.TestCase):
     def wait_for_lock_release(self, timeout=30.0) -> float:
         """Seconds until nothing holds the run lock. SIGKILL stops the shell at once, but a child it had
         just started (a cp copying the DLL) can outlive it by a moment and, having inherited the lock
-        descriptor, keeps the lock until it ends; a rerun in that moment is refused, correctly (#295)."""
+        descriptor, keeps the lock until it ends; a rerun in that moment is refused, correctly (#295).
+        `flock -w` blocks until the last holder ends, so nothing here polls."""
         started = time.monotonic()
-        while True:
-            with open(self.tmp / "launch.lock", "a") as probe:
-                try:
-                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    return time.monotonic() - started
-                except OSError:
-                    pass
-            self.assertLess(time.monotonic() - started, timeout, "the killed run's lock was never released")
-            time.sleep(0.02)
+        taken = subprocess.run(["flock", "-w", str(timeout), str(self.tmp / "launch.lock"), "true"])
+        self.assertEqual(taken.returncode, 0, "the killed run's lock was never released")
+        return time.monotonic() - started
 
-    def kill_after_deploy(self, env, also_wait_for=lambda: True):
+    def kill_after(self, env, wait_for):
+        """Start a run, block in `wait_for()` until the event the test names has happened, then SIGKILL it."""
         process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
         try:
-            deadline = time.monotonic() + 30
-            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL or not also_wait_for():
-                self.assertLess(time.monotonic(), deadline, "the test DLL was never deployed")
-                time.sleep(0.01)
+            wait_for()
             process.send_signal(signal.SIGKILL)  # no trap runs: the test DLL and the plugin stay deployed
             process.wait(timeout=30)
         finally:
@@ -426,7 +497,9 @@ class VerifyServerTest(unittest.TestCase):
 
     def test_a_killed_run_is_restored_by_the_next_run_not_mistaken_for_the_original(self):
         # The fake wine's orphan (FAKE_WINE_SLEEP) outlives SIGKILL for 8 s; it must NOT hold the lock.
-        self.kill_after_deploy(dict(self.env, FAKE_WINE_SLEEP="8"))
+        started = self.started_fifo()
+        self.kill_after(dict(self.env, FAKE_WINE_SLEEP="8", FAKE_WINE_STARTED=str(started.path)),
+                        lambda: started.wait_for(1))
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
         waited = self.wait_for_lock_release()
         self.assertLess(waited, 5.0, "the orphaned game kept the run lock")
@@ -438,19 +511,30 @@ class VerifyServerTest(unittest.TestCase):
         self.assertFalse((self.win10 / "plugins/extra.dll").exists())
 
     def test_a_rerun_while_a_child_of_the_killed_run_is_still_working_is_refused_then_succeeds(self):
-        # A slow cp stands for the child the killed shell had just started: it holds the lock descriptor.
+        # A cp that waits at a gate stands for the child the killed shell had just started: it holds the lock
+        # descriptor until the test opens the gate.
         slow = self.tmp / "slowbin"
         slow.mkdir()
-        mark = self.tmp / "cp-started"
-        (slow / "cp").write_text('#!/bin/bash\necho started >> "$FAKE_CP_MARK"\nsleep "${FAKE_CP_DELAY:-0}"\nexec /bin/cp "$@"\n')
+        cp_started = Fifo(self.tmp / "cp-started")
+        self.addCleanup(cp_started.close)
+        gate = self.tmp / "cp-gate"
+        os.mkfifo(gate)
+        (slow / "cp").write_text(
+            '#!/bin/bash\n'
+            'echo started > "$FAKE_CP_STARTED"\n'
+            'n=$(( $(cat "$FAKE_CP_COUNT" 2>/dev/null || echo 0) + 1 )); echo $n > "$FAKE_CP_COUNT"\n'
+            '[[ $n -eq 3 ]] && read -r _ < "$FAKE_CP_GATE"\n'
+            'exec /bin/cp "$@"\n')
         (slow / "cp").chmod(0o755)
-        env = dict(self.env, FAKE_CP_DELAY="1.5", FAKE_WINE_SLEEP="8", FAKE_CP_MARK=str(mark))
+        env = dict(self.env, FAKE_WINE_SLEEP="8", FAKE_CP_STARTED=str(cp_started.path),
+                   FAKE_CP_COUNT=str(self.tmp / "cp-count"), FAKE_CP_GATE=str(gate))
         env["PATH"] = f"{slow}:{env['PATH']}"
-        # cp 1 saves the DLL, cp 2 deploys it, cp 3 deploys the plugin: kill while cp 3 is running and sleeping.
-        self.kill_after_deploy(env, lambda: mark.exists() and len(mark.read_text().split()) >= 3)
+        # cp 1 saves the DLL, cp 2 deploys it, cp 3 deploys the plugin: kill while cp 3 waits at the gate.
+        self.kill_after(env, lambda: cp_started.wait_for(3))
         refused = self.rerun()
         self.assertEqual(refused.returncode, 4, refused.stdout + refused.stderr)
         self.assertIn("holds", refused.stderr)
+        open_gate(gate)
         self.wait_for_lock_release()
         result = self.rerun("run3")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -520,8 +604,10 @@ class LaunchServerTest(unittest.TestCase):
                               capture_output=True, text=True, timeout=60)
 
     def test_deploys_into_the_game_root_from_a_checkout_without_echovr(self):
+        started = time.monotonic()
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertLess(time.monotonic() - started, 2.0, "the run waited for the game's leftover child")
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
         self.assertFalse((self.checkout / "echovr").exists())
 

@@ -237,6 +237,18 @@ class HooksTest(unittest.TestCase):
                     checks.FAIL,
                 )
 
+    def test_a_levelled_dllhook_failure_line_is_still_classified(self):
+        # #632: the DLLHOOK lines carry their level after the tag (logging.md Rule 12); the classifier must
+        # still see the failure, and a partial install ends in ok=false.
+        line = ("[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExA reason=MH_ERROR_MEMORY_PROTECT "
+                "\u2014 loads through this variant run no load filter, observer or callback\n")
+        results = checks.check_hooks("[NEVR.PATCH] boot hooks installed ok=true\n" + line)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+        partial = checks.check_hooks(line + "[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)\n"
+                                     "[NEVR.PATCH] boot hooks installed ok=false\n")
+        self.assertEqual(by_name(partial, "hooks_installed")[0].status, checks.FAIL)
+        self.assertFalse(checks.overall(partial))
+
     def test_boot_success_does_not_mask_unexpected_hook_failure(self):
         log = ("[NEVR.PATCH] boot hooks installed ok=true\n"
                "[NEVR.PATCH] hook FAILED name=NewHook target=0x1 status=MH_ERROR_ALREADY_CREATED\n")

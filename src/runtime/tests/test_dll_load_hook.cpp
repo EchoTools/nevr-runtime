@@ -4,8 +4,10 @@
 
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/lifecycle/boot_hook_policy.h"
 #include "runtime/patch/pnsrad_load_queue.h"
 #include "core/logging.h"
+#include "runtime/log/boot_log_tee.h"
 
 #include <MinHook.h>
 #include <gtest/gtest.h>
@@ -18,7 +20,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -108,9 +112,41 @@ HMODULE WINAPI BlockingModuleProbe(LPCSTR name) {
 
 }  // namespace
 
-VOID Log(EchoVR::LogLevel, const CHAR*, ...) {}
+// Each test leaves the process as it found it. TearDown resets what the tests in this file change, even
+// after a fatal ASSERT: the fake MinHook ops, the module probe, DllLoadHook's registrations, filters
+// and observers and its hooks (Shutdown), MinHook's initialisation (a fatal ASSERT that skipped
+// MH_Uninitialize made the next MH_Initialize return MH_ERROR_ALREADY_INITIALIZED), the four trampoline
+// pointers (Shutdown only disables the hooks, so they would name freed trampolines), and the hook
+// guard's records. The guard keeps the first record it finds for an address, so a record left by one
+// test (a fake install records LoadLibraryW's unhooked bytes) made IsOurDetour false for the next test
+// that hooks LoadLibraryW for real (#633). The first test starts from the process's clean state, and SetUp
+// fails a test that starts with a trampoline or a hook-guard record left behind.
+class DllLoadHookIsolation : public testing::Test {
+ protected:
+  // Checks, does not reset: a test that leaves a trampoline or a hook-guard record behind fails the next one here.
+  void SetUp() override {
+    for (const char* variant : {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"}) {
+      ASSERT_EQ(nevr_dll_load_hook::OriginalForTest(variant), nullptr) << variant << ": a trampoline outlived the previous test";
+    }
+    ASSERT_EQ(nevr_hook_guard::RecordedCount(), 0) << "a hook-guard record outlived the previous test";
+  }
 
-TEST(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAlone) {
+  void TearDown() override {
+    nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+    nevr_dll_load_hook::SetModuleProbeForTest(nullptr);
+    nevr_dll_load_hook::Shutdown();  // disables the hooks, then clears registrations, filters, observers
+    MH_Uninitialize();               // MH_ERROR_NOT_INITIALIZED, ignored, when the test never initialised it
+    nevr_dll_load_hook::ResetTrampolinesForTest();
+    nevr_hook_guard::ResetForTest();
+  }
+};
+class DllLoadHookFilter : public DllLoadHookIsolation {};
+class DllLoadHookCallbacks : public DllLoadHookIsolation {};
+class DllLoadHookInstall : public DllLoadHookIsolation {};
+class DllLoadHookOnLoad : public DllLoadHookIsolation {};
+class DllLoadHookPostLoad : public DllLoadHookIsolation {};
+
+TEST_F(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAlone) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   EXPECT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
@@ -138,23 +174,18 @@ TEST(DllLoadHookFilter, RefusesAFilteredLoadThroughEveryVariantAndLeavesOthersAl
   EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
 
   EXPECT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr) << "a load no filter matches must go through";
-
-  nevr_dll_load_hook::Shutdown();
-  MH_Uninitialize();
 }
 
-TEST(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
+TEST_F(DllLoadHookFilter, IsLoadBlockedNamesTheFilter) {
   nevr_dll_load_hook::AddLoadFilter("named-filter", BlocksVersionDll);
   const char* by = nullptr;
   EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"c:\\x\\version.dll", &by));
   ASSERT_NE(by, nullptr);
   EXPECT_STREQ(by, "named-filter");
   EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"kernel32.dll", &by));
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookFilter, ReportedNameOutlivesFilterVectorChanges) {
-  nevr_dll_load_hook::Shutdown();
+TEST_F(DllLoadHookFilter, ReportedNameOutlivesFilterVectorChanges) {
   nevr_dll_load_hook::AddLoadFilter("original-filter", BlocksVersionDll);
   const char* by = nullptr;
   ASSERT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", &by));
@@ -162,11 +193,9 @@ TEST(DllLoadHookFilter, ReportedNameOutlivesFilterVectorChanges) {
   nevr_dll_load_hook::Shutdown();
   nevr_dll_load_hook::AddLoadFilter("replacement-filter", BlocksVersionDll);
   EXPECT_STREQ(by, "original-filter");
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookFilter, OverlongFilterNameIsTruncatedNotDropped) {
-  nevr_dll_load_hook::Shutdown();
+TEST_F(DllLoadHookFilter, OverlongFilterNameIsTruncatedNotDropped) {
   // 60 bytes in; the stored name holds 47 plus the terminator.
   const std::string longName(60, 'n');
   nevr_dll_load_hook::AddLoadFilter(longName.c_str(), BlocksVersionDll);
@@ -174,11 +203,9 @@ TEST(DllLoadHookFilter, OverlongFilterNameIsTruncatedNotDropped) {
   ASSERT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", &by));
   ASSERT_NE(by, nullptr);
   EXPECT_EQ(std::string(by), std::string(47, 'n'));
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookFilter, PredicateCanRegisterFilterForNextLoad) {
-  nevr_dll_load_hook::Shutdown();
+TEST_F(DllLoadHookFilter, PredicateCanRegisterFilterForNextLoad) {
   g_addedFilter = false;
   g_predicateHeldLock = false;
   nevr_dll_load_hook::AddLoadFilter("registering-filter", AddsFilterDuringPredicate);
@@ -186,11 +213,9 @@ TEST(DllLoadHookFilter, PredicateCanRegisterFilterForNextLoad) {
   JoinLockProbes();
   EXPECT_FALSE(g_predicateHeldLock.load()) << "the registry mutex was held while a filter predicate ran";
   EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"version.dll", nullptr));
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookCallbacks, ReentrantRegistrationFiresEachCallbackOnce) {
-  nevr_dll_load_hook::Shutdown();
+TEST_F(DllLoadHookCallbacks, ReentrantRegistrationFiresEachCallbackOnce) {
   g_firstCalls = 0;
   g_nestedCalls = 0;
   g_callbackHeldLock = false;
@@ -202,11 +227,9 @@ TEST(DllLoadHookCallbacks, ReentrantRegistrationFiresEachCallbackOnce) {
   EXPECT_FALSE(g_callbackHeldLock.load()) << "the registry mutex was held while a patch callback ran";
   EXPECT_EQ(g_firstCalls.load(), 1);
   EXPECT_EQ(g_nestedCalls.load(), 1);
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookCallbacks, OnLoadClaimsItsOwnRegistrationAfterConcurrentAppend) {
-  nevr_dll_load_hook::Shutdown();
+TEST_F(DllLoadHookCallbacks, OnLoadClaimsItsOwnRegistrationAfterConcurrentAppend) {
   g_immediateCalls = 0;
   g_laterCalls = 0;
   {
@@ -230,12 +253,10 @@ TEST(DllLoadHookCallbacks, OnLoadClaimsItsOwnRegistrationAfterConcurrentAppend) 
   }
   g_probeCondition.notify_all();
   first.join();
-  nevr_dll_load_hook::SetModuleProbeForTest(nullptr);
   ASSERT_TRUE(entered) << "module probe did not reach the forced interleaving";
   EXPECT_EQ(g_immediateCalls.load(), 1);
   nevr_dll_load_hook::FireCallbacksForModule("nevr-pending-b.dll", reinterpret_cast<HMODULE>(0x1234));
   EXPECT_EQ(g_laterCalls.load(), 1);
-  nevr_dll_load_hook::Shutdown();
 }
 
 // Install() creates, enables and (on a failed enable) removes four MinHook hooks. The tests below
@@ -251,20 +272,24 @@ struct FakeHookState {
   MH_STATUS enableResult = MH_OK;
   MH_STATUS removeResult = MH_OK;
   bool writeTrampoline = true;
+  // When set, createResult and enableResult apply to this target only; every other target succeeds.
+  void* onlyTarget = nullptr;
 };
 FakeHookState g_fakeHooks;
 int g_trampolineStorage = 0;
 
-MH_STATUS WINAPI FakeCreate(LPVOID, LPVOID, LPVOID* original) {
+MH_STATUS WINAPI FakeCreate(LPVOID target, LPVOID, LPVOID* original) {
   ++g_fakeHooks.createCalls;
-  if (g_fakeHooks.createResult == MH_OK && g_fakeHooks.writeTrampoline && original != nullptr) {
+  const MH_STATUS result =
+      g_fakeHooks.onlyTarget == nullptr || g_fakeHooks.onlyTarget == target ? g_fakeHooks.createResult : MH_OK;
+  if (result == MH_OK && g_fakeHooks.writeTrampoline && original != nullptr) {
     *original = &g_trampolineStorage;  // MinHook writes the trampoline only on MH_OK
   }
-  return g_fakeHooks.createResult;
+  return result;
 }
-MH_STATUS WINAPI FakeEnable(LPVOID) {
+MH_STATUS WINAPI FakeEnable(LPVOID target) {
   ++g_fakeHooks.enableCalls;
-  return g_fakeHooks.enableResult;
+  return g_fakeHooks.onlyTarget == nullptr || g_fakeHooks.onlyTarget == target ? g_fakeHooks.enableResult : MH_OK;
 }
 MH_STATUS WINAPI FakeRemove(LPVOID target) {
   ++g_fakeHooks.removeCalls;
@@ -280,13 +305,43 @@ void UseFakeHooks() {
 
 const char* const kVariants[] = {"LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW"};
 
+// What the boot tee wrote to nevr-boot.jsonl while `install` ran (#632). Install() runs inside the runtime's
+// boot phase, so its report must reach this file, not only stderr. The window is exact: from the file size
+// at Init() to the file size when `install` returns, so an absence assertion over it cannot be satisfied or
+// broken by what earlier runs appended to the shared, append-only file. The tee is closed on every path.
+struct BootTeeScope {
+  BootTeeScope() { nevr_boot_log_tee::Init(); }
+  ~BootTeeScope() { nevr_boot_log_tee::Close(); }
+  BootTeeScope(const BootTeeScope&) = delete;
+  BootTeeScope& operator=(const BootTeeScope&) = delete;
+};
+
+std::streamoff FileSizeOf(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  return in ? static_cast<std::streamoff>(in.tellg()) : 0;
+}
+
+template <typename Fn>
+std::string BootFileTextWrittenBy(Fn install) {
+  BootTeeScope tee;
+  const std::string path = nevr_boot_log_tee::Path();
+  if (path.empty()) return "<the boot tee could not resolve nevr-boot.jsonl>";
+  const std::streamoff start = FileSizeOf(path);
+  install();
+  const std::streamoff end = FileSizeOf(path);
+  std::ifstream in(path, std::ios::binary);
+  in.seekg(start);
+  std::string text(static_cast<std::size_t>(end - start), '\0');
+  in.read(&text[0], end - start);
+  return text;
+}
+
 }  // namespace
 
 // MinHook writes the trampoline only when MH_CreateHook returns MH_OK. A second Install() fails every
 // create with MH_ERROR_ALREADY_CREATED and leaves the first install's trampoline in place; the
 // detours still call through it, so Install() must not clear it.
-TEST(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled) {
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+TEST_F(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   void* before[4];
@@ -315,11 +370,9 @@ TEST(DllLoadHookInstall, AFailedCreateKeepsTheTrampolineOfTheHookThatIsInstalled
   }
   nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
   EXPECT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr) << "the installed hook must still load through its trampoline";
-  nevr_dll_load_hook::Shutdown();
-  MH_Uninitialize();
 }
 
-TEST(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampoline) {
+TEST_F(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampoline) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
   const int recordedBefore = nevr_hook_guard::RecordedCount();
@@ -338,13 +391,11 @@ TEST(DllLoadHookInstall, AFailedEnableRemovesTheCreatedHookAndClearsItsTrampolin
         << kVariants[i] << ": a removed hook's trampoline must not stay published";
   }
   EXPECT_EQ(nevr_hook_guard::RecordedCount(), recordedBefore) << "a hook that did not install must not be guarded";
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
 // #630: the failure line says what an unhooked variant loses (its loads run no filter, observer or callback)
 // and claims no search-path hardening.
-TEST(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
+TEST_F(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
   testing::internal::CaptureStderr();
@@ -355,13 +406,11 @@ TEST(DllLoadHookInstall, AFailedHookSaysItsLoadsRunNoFilterObserverOrCallback) {
             std::string::npos)
       << err;
   EXPECT_EQ(err.find("hardening"), std::string::npos) << err;
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
 // #630: a create that fails for any other reason (a first Install() that could not hook) leaves no hook, so its
 // line says the variant's loads run no filter, observer or callback, never that a hook stays in place.
-TEST(DllLoadHookInstall, ACreateThatFailsForAnotherReasonSaysItsLoadsRunNoFilter) {
+TEST_F(DllLoadHookInstall, ACreateThatFailsForAnotherReasonSaysItsLoadsRunNoFilter) {
   UseFakeHooks();
   g_fakeHooks.createResult = MH_ERROR_NOT_EXECUTABLE;
   testing::internal::CaptureStderr();
@@ -373,11 +422,9 @@ TEST(DllLoadHookInstall, ACreateThatFailsForAnotherReasonSaysItsLoadsRunNoFilter
       << err;
   EXPECT_EQ(err.find("stays in place"), std::string::npos) << err;
   EXPECT_EQ(g_fakeHooks.removeCalls, 0) << "nothing was created, so there is nothing to remove";
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
+TEST_F(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
   UseFakeHooks();
   g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
   g_fakeHooks.removeResult = MH_ERROR_NOT_CREATED;
@@ -387,11 +434,9 @@ TEST(DllLoadHookInstall, AFailedCleanupStillClearsTheTrampoline) {
   for (int i = 0; i < 4; ++i) {
     EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), nullptr) << kVariants[i];
   }
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
-TEST(DllLoadHookInstall, ASuccessfulInstallRemovesNothing) {
+TEST_F(DllLoadHookInstall, ASuccessfulInstallRemovesNothing) {
   UseFakeHooks();
   nevr_dll_load_hook::Install();
 
@@ -399,8 +444,6 @@ TEST(DllLoadHookInstall, ASuccessfulInstallRemovesNothing) {
   for (int i = 0; i < 4; ++i) {
     EXPECT_EQ(nevr_dll_load_hook::OriginalForTest(kVariants[i]), &g_trampolineStorage) << kVariants[i];
   }
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
 // #363 review: the Oculus predicate matches the file name, not any folder on the path.
@@ -433,7 +476,7 @@ void Count(const char*, HMODULE module) {
 // the runtime's boot (an injector such as Revive's loads dxgi/d3d12 before the runtime starts, #495).
 // What made that unsafe was the callbacks' Log() reaching the game's CLog; Log() reports through the
 // boot tee while the runtime boots (test_boot_log_routing).
-TEST(DllLoadHookOnLoad, AnAlreadyLoadedDllsCallbackFiresAtOnceAfterInstall) {
+TEST_F(DllLoadHookOnLoad, AnAlreadyLoadedDllsCallbackFiresAtOnceAfterInstall) {
   UseFakeHooks();
   nevr_dll_load_hook::Install();
   g_fired = 0;
@@ -441,8 +484,6 @@ TEST(DllLoadHookOnLoad, AnAlreadyLoadedDllsCallbackFiresAtOnceAfterInstall) {
   nevr_dll_load_hook::OnLoad("KERNEL32.dll", Count);
   EXPECT_EQ(g_fired, 1) << "Install() must not delay the callback of a loaded DLL";
   EXPECT_EQ(g_module, GetModuleHandleA("kernel32.dll"));
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
-  nevr_dll_load_hook::Shutdown();
 }
 
 // #504: the pnsrad patches are applied when the LoadLibrary call that mapped the module returns, not in the
@@ -501,8 +542,10 @@ std::wstring FixturePnsradPath() {
 
 }  // namespace
 
-TEST(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirstRead) {
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+TEST_F(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirstRead) {
+  // Everything this test reads is reset here, so an earlier run of it (--gtest_repeat) leaves nothing behind.
+  g_notifiedUnderLoaderLock = false;
+  g_fixturePatches = 0;
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   ASSERT_TRUE(nevr_hook_guard::IsOurDetour(reinterpret_cast<void*>(&LoadLibraryW)));
@@ -515,6 +558,16 @@ TEST(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirst
   ASSERT_NE(unreg, nullptr);
   void* cookie = nullptr;
   ASSERT_EQ(reg(0, RecordFixtureLoad, nullptr, &cookie), 0);
+  // Unregisters on every exit, so a failed ASSERT below cannot leave RecordFixtureLoad registered.
+  struct NotificationGuard {
+    UnregisterNotificationFn unregister;
+    void* cookie;
+    void Release() {
+      if (cookie != nullptr) unregister(cookie);
+      cookie = nullptr;
+    }
+    ~NotificationGuard() { Release(); }
+  } notification{unreg, cookie};
 
   const std::wstring path = FixturePnsradPath();
   ASSERT_EQ(GetModuleHandleW(path.c_str()), nullptr) << "precondition: the fixture is not loaded yet";
@@ -523,18 +576,15 @@ TEST(DllLoadHookPostLoad, APatchAppliedAtLibraryReturnLandsBeforeTheCallersFirst
   const auto* data = module ? reinterpret_cast<const int*>(GetProcAddress(module, "FixtureData")) : nullptr;
   const int firstRead = data ? *data : -1;
 
-  unreg(cookie);
+  notification.Release();
   ASSERT_NE(module, nullptr) << "fixture missing: export-trace-fixture\\pnsrad.dll next to the test";
   EXPECT_TRUE(g_notifiedUnderLoaderLock) << "the notification is expected to run under the loader lock";
   EXPECT_EQ(g_fixturePatches.load(), 1) << "the post-load observer did not patch the recorded load";
   EXPECT_EQ(firstRead, 4321) << "the caller read the module before its patch landed";
   FreeLibrary(module);
-  nevr_dll_load_hook::Shutdown();
-  MH_Uninitialize();
 }
 
-TEST(DllLoadHookPostLoad, ObserversWaitUntilTheCallingThreadReleasesTheLoaderLock) {
-  nevr_dll_load_hook::SetMinHookOpsForTest(nullptr);
+TEST_F(DllLoadHookPostLoad, ObserversWaitUntilTheCallingThreadReleasesTheLoaderLock) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
   nevr_dll_load_hook::AddPostLoadObserver(&CountObserverRun);
@@ -560,6 +610,84 @@ TEST(DllLoadHookPostLoad, ObserversWaitUntilTheCallingThreadReleasesTheLoaderLoc
   EXPECT_FALSE(nevr_dll_load_hook::LoaderLockHeldByThisThread());
   ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
   EXPECT_EQ(g_observerRuns.load(), 2);
-  nevr_dll_load_hook::Shutdown();
-  MH_Uninitialize();
+}
+
+// #632: the per-variant failure line, with its MH_STATUS, and the PARTIAL summary reach the boot file.
+TEST_F(DllLoadHookInstall, AFailedVariantAndThePartialSummaryReachTheBootFile) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryExW);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  testing::internal::CaptureStderr();
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  const std::string err = testing::internal::GetCapturedStderr();
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExW reason=MH_ERROR_MEMORY_PROTECT"), std::string::npos)
+      << "boot file was:\n" << boot;
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_EQ(boot.find("LoadLibrary hooks OK"), std::string::npos) << boot;
+  EXPECT_NE(err.find("LoadLibrary hooks PARTIAL (3/4)"), std::string::npos) << "the tee still writes stderr: " << err;
+}
+
+// #632: the failed-hook cleanup line is a report line too.
+TEST_F(DllLoadHookInstall, AFailedCleanupReachesTheBootFile) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryW);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  g_fakeHooks.removeResult = MH_ERROR_NOT_CREATED;
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] warn; failed-hook cleanup FAILED name=LoadLibraryW reason=MH_ERROR_NOT_CREATED"),
+            std::string::npos)
+      << "boot file was:\n" << boot;
+}
+
+// #632: a full install says OK (4/4) in the boot file and no FAILED line.
+TEST_F(DllLoadHookInstall, AFullInstallSaysOkInTheBootFile) {
+  UseFakeHooks();
+  const std::string boot = BootFileTextWrittenBy([] { nevr_dll_load_hook::Install(); });
+  EXPECT_NE(boot.find("[NEVR.DLLHOOK] info; LoadLibrary hooks OK (4/4)"), std::string::npos) << "boot file was:\n" << boot;
+  EXPECT_EQ(boot.find("FAILED"), std::string::npos) << boot;
+}
+
+// #632: Install() returns how many of the four variants are hooked, so the caller can say what happened.
+TEST_F(DllLoadHookInstall, InstallReturnsTheNumberOfVariantsHooked) {
+  UseFakeHooks();
+  EXPECT_EQ(nevr_dll_load_hook::Install(), nevr_dll_load_hook::kLoadLibraryVariantCount);
+  EXPECT_EQ(nevr_dll_load_hook::kLoadLibraryVariantCount, 4);
+}
+
+TEST_F(DllLoadHookInstall, InstallReturnsThreeWhenOneVariantFailsToEnable) {
+  UseFakeHooks();
+  g_fakeHooks.onlyTarget = reinterpret_cast<void*>(&LoadLibraryExA);
+  g_fakeHooks.enableResult = MH_ERROR_MEMORY_PROTECT;
+  EXPECT_EQ(nevr_dll_load_hook::Install(), 3);
+}
+
+TEST_F(DllLoadHookInstall, InstallReturnsZeroWhenEveryCreateFails) {
+  UseFakeHooks();
+  g_fakeHooks.createResult = MH_ERROR_NOT_EXECUTABLE;
+  EXPECT_EQ(nevr_dll_load_hook::Install(), 0);
+}
+
+// #632, ruled by Spritz: the four LoadLibrary hooks are REQUIRED. A partial install fails the boot (a server then
+// refuses to start, a client's last boot line says ok=false) and records the count as its cause. The verdict is
+// a pure function so it runs here; InitializeAfterGameImageGuard cannot run in a GTest, so
+// tools/tests/test_runtime_lifecycle_invariants.py pins that initialize.cpp acts on it.
+TEST(DllLoadHookBootVerdict, TheLoadLibraryHooksAreRequired) {
+  EXPECT_TRUE(nevr_boot_hook_policy::kLoadLibraryHooksRequired);
+}
+
+TEST(DllLoadHookBootVerdict, AFullInstallFailsNothingAndRecordsNoCause) {
+  const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(4, 4);
+  EXPECT_TRUE(verdict.complete);
+  EXPECT_FALSE(verdict.failsBoot);
+  EXPECT_STREQ(verdict.cause, "");
+}
+
+TEST(DllLoadHookBootVerdict, APartialInstallFailsTheBootAndNamesTheCount) {
+  for (int installed = 0; installed < 4; ++installed) {
+    const auto verdict = nevr_boot_hook_policy::JudgeLoadLibraryHooks(installed, 4);
+    EXPECT_FALSE(verdict.complete) << installed;
+    EXPECT_TRUE(verdict.failsBoot) << installed;
+    const std::string expected = "LoadLibrary hooks " + std::to_string(installed) + "/4 installed";
+    EXPECT_EQ(std::string(verdict.cause), expected);
+  }
 }

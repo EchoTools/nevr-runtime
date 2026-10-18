@@ -273,6 +273,9 @@ Every branch an agent creates has a documented deletion point from the moment it
 - **"Merged" means** the PR state is MERGED (GitHub squash-merges, so `git branch -d` refuses those branches) or the tip is in `origin/main`. Use `gh pr view <branch> --json state`.
 - **A branch that lands with no PR** (a fast-forward or a hand merge) counts as merged when `git merge-base --is-ancestor <branch> origin/main` succeeds, and its creator deletes it then.
 - **Before deleting an unmerged branch,** print its tip SHA, and check `git -C <worktree> status --porcelain` is empty. Uncommitted work is work.
+- **Remove a worktree only behind the cwd check** (the "no process has its cwd inside" proof of "Ownership and cleanup"; `tools/reap_merged.py` runs the same check), in one command that removes nothing and fails when any process has its cwd inside, a shell of your own session included:
+  `W=$(realpath .claude/worktrees/<branch>); hits=$(for p in /proc/[0-9]*; do c=$(readlink "$p/cwd" 2>/dev/null) && case "$c" in "$W"|"$W"/*) echo "${p#/proc/} $c";; esac; done); if [ -n "$hits" ]; then echo "$hits"; false; else git worktree unlock "$W" 2>/dev/null; git worktree remove "$W"; fi`.
+  A check that only prints, followed by a removal, is not the check.
 
 ## Build Commands
 
@@ -286,6 +289,7 @@ just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
+just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
 just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes)
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
@@ -336,6 +340,12 @@ Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug
 
 Build output lands in `build/<preset>/bin/`.
 
+The `justfile` puts `ccache` in front of the compiler when it is installed, so every worktree shares one cache
+(`tools/ccache.conf`: 10 GB cap; the cache directory is `/mnt/games/cache/ccache` when that exists, else
+`~/.cache/ccache`). CMake reads the launcher on a build tree's first configure, so a tree configured before
+ccache keeps building without it. `NEVR_CCACHE= just build` configures a tree without it. The Quest build never
+uses it: its objects embed the worktree path.
+
 ## Testing
 
 Go-based system tests in `tests/system/` and `tests/plugins/`:
@@ -381,7 +391,7 @@ The game has a ~15-20 second splash-screen delay at startup before any nEVR code
 | `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins its export table (26 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr.dll`) and, with the game binary present, the nine imports of `echovr.exe`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -392,6 +402,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
+| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled only into the test harnesses until the target split (ADR 0008) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -609,10 +620,16 @@ your seat name, for example `claude-main` or `codex`.
   recipe(s) that cover the changed code (`just --list` names them: `test-auth-unit`, `test-quest-shared`,
   `test-quest-*`, `test-android` for a change under `src/quest`, and so on), and the PC login test (see "System
   test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
-  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) sets the floor
-  (`verify_gtest_floor.py --floor` in `justfile`) to the count `python3 tools/verify_gtest_floor.py --floor 0` prints
-  (`declarations=`), then runs `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. Run the quick check on the
-  PR's tip, in the build slice. CI runs only when started by hand.
+  GTest declarations in `src/runtime/tests/*.cpp` (`TEST(` / `TEST_F(` at the start of a line) runs
+  `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. The floor (`verify_gtest_floor.py --floor` in
+  `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
+  `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
+  `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
+  the count and says in its body which tests went and why. Every PR, whatever it touches, also runs
+  `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a
+  fresh worktree: the doc-path check reads `extern/`). Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
+  not run is named as not run.
+  CI runs only when started by hand.
 - **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a
   reviewer does not ask for it. It runs once per tip, never again to re-prove it. Its log starts with
   `verify: HEAD <sha>` and `verify: tree clean|DIRTY`. A log with the tip's sha and `tree clean` that ends
@@ -766,7 +783,9 @@ your seat name, for example `claude-main` or `codex`.
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
+- **Fresh worktrees need build inputs.** `just install-hooks`, run once per clone, gives each new linked worktree
+  the gitignored files `.worktreeinclude` lists (`.mcp.json`, `.claude/settings.local.json`; Claude Code's own worktrees
+  copy them from the same file). Run `just worktree-setup` in the new linked worktree: it
   copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
   checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove

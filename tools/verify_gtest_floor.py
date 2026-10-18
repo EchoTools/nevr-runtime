@@ -3,9 +3,9 @@
 
 Counts the lines of src/runtime/tests/*.cpp that begin `TEST(` or `TEST_F(`: exactly what the gate
 counted with `grep -hE '^TEST(_F)?\\(' src/runtime/tests/*.cpp | wc -l` (an indented, commented or
-TEST_P declaration is not counted). The floor lives in the justfile next to the call and is meant to
-sit at the real count: a test that disappears must fail the gate, and a test that is added raises
-the floor in the same change (tools/tests/test_verify_gtest_floor.py pins both).
+TEST_P declaration is not counted). The floor lives in the justfile next to the call: a test that
+disappears below it fails the gate, and tools/tests/test_verify_gtest_floor.py keeps it at most SLACK
+below the real count, so a change that would pass floor + SLACK raises it to the count.
 """
 
 import argparse

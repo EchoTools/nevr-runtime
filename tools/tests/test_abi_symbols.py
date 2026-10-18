@@ -16,7 +16,11 @@ values the game binary produced (rad-protocol/src/symbol/tests.rs, src/abi/symbo
 """
 import importlib.util
 import pathlib
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -330,6 +334,12 @@ class AbiSymbolsTest(unittest.TestCase):
         for text, value in [("serverdb", 0x25e886012ced8064), ("rwd_tint_0000", 0x74d228d09dc5dc86),
                             ("NEVRProtobufJSONMessageV1", 0xc6b3710cd9c4ef47), ("main", 0xc8c33e48377217be)]:
             self.assertEqual(g.csymbol64_hash(text), value, "CSymbol64(%r)" % text)
+        # A byte >= 0x80 is sign-extended before the table XOR (echovr.exe 0x1400ce199 MOVSX; libr15.so 0x11cc760
+        # sxtb), and a str is hashed as its UTF-8 bytes, as the game's byte strings are (#657).
+        for text, value in [(b"caf\xc3\xa9", 0xcd0714df62754f5f), ("caf\u00e9", 0xcd0714df62754f5f),
+                            (b"\xff\xfe", 0x1f17d45f0697bb92), ("main_menu", 0x1509ee27440e1d7b),
+                            (b"MAIN_MENU", 0x1509ee27440e1d7b), ("", 0xFFFFFFFFFFFFFFFF)]:
+            self.assertEqual(g.csymbol64_hash(text), value, "CSymbol64(%r)" % (text,))
 
     def test_the_header_holds_exactly_the_constants_this_test_names(self):
         want = self.expected()
@@ -364,6 +374,66 @@ class AbiSymbolsTest(unittest.TestCase):
             by_value.setdefault((ns, value), []).append(ident)
         shared = {k: v for k, v in by_value.items() if len(v) > 1}
         self.assertEqual(shared, {})
+
+
+class CSymbol64InputTest(unittest.TestCase):
+    """csymbol64_hash and the candidate readers of tools/gen_symbol_corpus.py, against the game's behaviour (#657)."""
+
+    CAFE = 0xcd0714df62754f5f  # CSymbol64 of the UTF-8 bytes of "caf\u00e9", as the game computes it
+
+    @classmethod
+    def setUpClass(cls):
+        cls.gen = load_generator()
+        cls.tool = REPO / "tools/gen_symbol_corpus.py"
+
+    def test_the_hash_stops_at_the_first_nul_as_the_game_and_symbol_hash_h_do(self):
+        g = self.gen
+        # `for (p = str; *p != '\0'; p++)` in src/abi/symbol_hash.h: bytes after a NUL are never read.
+        self.assertEqual(g.csymbol64_hash(b"ab\x00cd"), g.csymbol64_hash(b"ab"))
+        self.assertEqual(g.csymbol64_hash("ab\x00cd"), g.csymbol64_hash("ab"))
+        self.assertEqual(g.csymbol64_hash(b"\x00ab"), 0xFFFFFFFFFFFFFFFF)
+
+    def test_only_str_and_bytes_are_hashable(self):
+        g = self.gen
+        for bad in (3, None, 1.5, ["a"], bytearray(b"ab"), memoryview(b"ab")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(TypeError):
+                    g.csymbol64_hash(bad)
+
+    def _non_utf8_env(self):
+        """An environment in which open() and sys.stdin default to latin-1, or None when this host cannot give one.
+
+        Python 3.7+ coerces the C/POSIX locale to UTF-8 (PEP 538/540), so LC_ALL=C would not do: it needs
+        PYTHONUTF8=0 and an installed non-UTF-8 locale."""
+        env = dict(os.environ, PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", LC_ALL="en_US.iso88591", LANG="en_US.iso88591")
+        env.pop("PYTHONIOENCODING", None)
+        probe = subprocess.run([sys.executable, "-c", "import sys,locale;print(locale.getpreferredencoding(False),"
+                                "sys.stdin.encoding)"], env=env, capture_output=True, text=True, check=True)
+        return env if "utf" not in probe.stdout.lower() else None
+
+    def _run_tool(self, extra_args, stdin_bytes):
+        env = self._non_utf8_env()
+        if env is None:
+            self.skipTest("no non-UTF-8 locale installed (needs en_US.iso88591; see `locale -a`)")
+        # Only stdout is forced to UTF-8, so the generator can finish: its header text has a non-latin-1 dash.
+        # The readers under test keep the non-UTF-8 default.
+        launcher = ("import sys,runpy;sys.stdout.reconfigure(encoding='utf-8');sys.argv=[sys.argv[1]]+sys.argv[2:];"
+                    "runpy.run_path(sys.argv[0],run_name='__main__')")
+        done = subprocess.run([sys.executable, "-c", launcher, str(self.tool)] + extra_args, env=env,
+                              input=stdin_bytes, capture_output=True, check=True)
+        return done.stdout.decode("utf-8")
+
+    def test_candidates_file_is_read_as_utf8_under_a_non_utf8_locale(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "candidates.txt")
+            with open(path, "wb") as f:
+                f.write("caf\u00e9\n".encode("utf-8"))
+            out = self._run_tool(["--candidates", path], b"")
+        self.assertIn('{0x%016xULL, "caf\u00e9"}' % self.CAFE, out)
+
+    def test_candidates_on_stdin_are_read_as_utf8_under_a_non_utf8_locale(self):
+        out = self._run_tool([], "caf\u00e9\n".encode("utf-8"))
+        self.assertIn('{0x%016xULL, "caf\u00e9"}' % self.CAFE, out)
 
 
 # The strings of rad-protocol/src/message_registry.rs (nevr-server-rs), sorted, one per message type.
