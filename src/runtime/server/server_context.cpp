@@ -254,6 +254,21 @@ GUID ServerContext::GetEntrantSessionGuid(uint32_t slot) const {
   return sessions[slot].guid;
 }
 
+bool ServerContext::TryGetEntrantSessionGuid(uint32_t slot, GUID* out) const {
+  if (out == nullptr) {
+    return false;
+  }
+  const GUID guid = GetEntrantSessionGuid(slot);
+  const bool accepted = guid.Data1 != 0 || guid.Data2 != 0 || guid.Data3 != 0 || guid.Data4[0] != 0 ||
+                        guid.Data4[1] != 0 || guid.Data4[2] != 0 || guid.Data4[3] != 0 || guid.Data4[4] != 0 ||
+                        guid.Data4[5] != 0 || guid.Data4[6] != 0 || guid.Data4[7] != 0;
+  if (!accepted) {
+    return false;
+  }
+  *out = guid;
+  return true;
+}
+
 uint64_t ServerContext::CountAcceptedEntrants() const {
   std::shared_lock lock(m_stateMutex);
 

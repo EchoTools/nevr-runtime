@@ -364,3 +364,45 @@ TEST(ServerContextEntrants, EntrantSessionGuidIgnoresUnacceptedAndOutOfRangeSlot
   EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
   EXPECT_EQ(context.GetEntrantSessionGuid(1).Data1, 0U);
 }
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidReturnsTheAcceptedSlotsGuid) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0x11223344;
+  sessions[0].joinState = 4;  // accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  GUID out{};
+  ASSERT_TRUE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0x11223344U);
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidDropsAnUnacceptedSlotWithoutAccountFallback) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(42)};  // account id 42 must never be sent
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0xDEADBEEF;
+  sessions[0].joinState = 3;  // pending, not accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  GUID out{};
+  out.Data1 = 0xAA;
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0xAAU) << "a rejected slot must leave the caller's GUID untouched";
+  EXPECT_NE(out.Data1, 42U) << "the account id must never stand in for the session UUID";
+}

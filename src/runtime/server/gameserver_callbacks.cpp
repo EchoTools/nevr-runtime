@@ -506,14 +506,8 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
             // AcceptPlayerSessions reports and nakama holds in its entrant
             // streams. It is not the account id: the save is gated by the
             // sender's match and that session's presence.
-            const GUID entrantSessionGuid = self->GetContext().GetEntrantSessionGuid(playerSlot);
-            const bool hasEntrantSession = entrantSessionGuid.Data1 != 0 || entrantSessionGuid.Data2 != 0 ||
-                                           entrantSessionGuid.Data3 != 0 || entrantSessionGuid.Data4[0] != 0 ||
-                                           entrantSessionGuid.Data4[1] != 0 || entrantSessionGuid.Data4[2] != 0 ||
-                                           entrantSessionGuid.Data4[3] != 0 || entrantSessionGuid.Data4[4] != 0 ||
-                                           entrantSessionGuid.Data4[5] != 0 || entrantSessionGuid.Data4[6] != 0 ||
-                                           entrantSessionGuid.Data4[7] != 0;
-            if (!hasEntrantSession) {
+            GUID entrantSessionGuid{};
+            if (!self->GetContext().TryGetEntrantSessionGuid(playerSlot, &entrantSessionGuid)) {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.GAMESERVER] [SAVE_LOADOUT] No accepted client session for slot=%u; not sending", playerSlot);
               return;

@@ -118,6 +118,11 @@ class ServerContext {
   // out of range, not accepted, or the lobby is not initialized.
   GUID GetEntrantSessionGuid(uint32_t slot) const;
 
+  // True only when the slot holds an ACCEPTED client session; on true, *out is
+  // its GUID. On false *out is untouched. This is the "send nothing" decision
+  // for a save-loadout request: there is no fallback to the entrant's account id.
+  bool TryGetEntrantSessionGuid(uint32_t slot, GUID* out) const;
+
   // Number of player sessions whose join state is 4 (accepted): the players actually in the session.
   // GetEntrantCount() is the array capacity, not this. 0 when not initialized.
   uint64_t CountAcceptedEntrants() const;
