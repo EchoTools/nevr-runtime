@@ -42,8 +42,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runHash(args[1:], stdout)
 	case "resolve":
 		return runResolve(args[1:], stdout)
-	case "pr-decision":
-		return runPRDecision(args[1:], stdout)
+	case "pr-plan":
+		return runPRPlan(args[1:], stdout)
 	case "pr-cleanup":
 		return runPRCleanup(args[1:], stdout)
 	default:
@@ -61,7 +61,7 @@ commands:
   diff        compare two corpus JSON files and print the added/removed/changed markdown
   hash        print CSymbol64 for each name
   resolve     resolve hashes through the generated C++ table
-  pr-decision decide create/skip/update for the automation PR
+  pr-plan     decide create/skip/update from the PRs and the pins they track
   pr-cleanup  list automation branches whose PRs are merged or closed`)
 }
 

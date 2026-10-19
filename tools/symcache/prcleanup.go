@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 )
@@ -50,10 +51,26 @@ func BranchesToDelete(prs []PREntry) []string {
 	return branches
 }
 
+// DeleteBranches deletes each automation branch through remove and stops at the
+// first error. It refuses names outside the automation namespace.
+func DeleteBranches(branches []string, remove func(string) error) error {
+	for _, branch := range branches {
+		if !strings.HasPrefix(branch, automationBranchPrefix) {
+			return fmt.Errorf("refusing to delete non-automation branch %q", branch)
+		}
+		if err := remove(branch); err != nil {
+			return fmt.Errorf("delete %s: %w", branch, err)
+		}
+	}
+	return nil
+}
+
 func runPRCleanup(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("pr-cleanup", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	input := flags.String("input", "", "file holding `gh pr list --state all --json headRefName,state`")
+	execute := flags.Bool("execute", false, "delete the branches (git push <remote> --delete)")
+	remote := flags.String("remote", "origin", "git remote used by --execute")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -68,8 +85,18 @@ func runPRCleanup(args []string, stdout io.Writer) error {
 	if err := json.Unmarshal(data, &prs); err != nil {
 		return fmt.Errorf("pr-cleanup: %w", err)
 	}
-	for _, branch := range BranchesToDelete(prs) {
-		fmt.Fprintln(stdout, branch)
+	branches := BranchesToDelete(prs)
+	if !*execute {
+		for _, branch := range branches {
+			fmt.Fprintln(stdout, branch)
+		}
+		return nil
 	}
-	return nil
+	return DeleteBranches(branches, func(branch string) error {
+		fmt.Fprintf(stdout, "deleting %s\n", branch)
+		cmd := exec.Command("git", "push", *remote, "--delete", branch)
+		cmd.Stdout = stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	})
 }

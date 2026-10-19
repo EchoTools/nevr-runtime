@@ -46,15 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           gh pr list --state all --limit 200 --json headRefName,state > "$RUNNER_TEMP/prs.json"
-          mapfile -t stale < <(cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json")
-          if [ "${#stale[@]}" -eq 0 ]; then
-            echo "no merged or closed automation branches"
-            exit 0
-          fi
-          for branch in "${stale[@]}"; do
-            echo "deleting $branch"
-            git push origin --delete "$branch"
-          done
+          # The tool itself deletes and returns nonzero on the first failed
+          # `git push`; no output capture can hide its status.
+          (cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json" --execute)
 
       - name: Compare the pin with echo-symbols main
         id: pin
@@ -109,23 +103,52 @@ jobs:
           pin='${{ steps.pin.outputs.pin }}'
           head='${{ steps.pin.outputs.head }}'
           short=$(printf '%s' "$head" | cut -c1-12)
+          prefix="automation/echo-symbols-"
 
-          # One stable automation branch: a re-run updates the open PR instead of
-          # opening a second one. The pin on that branch records the echo-symbols
-          # sha the PR currently tracks (the branch commit is a nevr-runtime sha,
-          # not comparable to the echo-symbols head).
-          branch="automation/echo-symbols-sync"
-          pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // 0')
-          pr_head=""
-          remote_tip=""
-          if [ "$pr" != "0" ]; then
-            if git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
-              remote_tip=$(git rev-parse --verify -q "refs/remotes/origin/$branch" || true)
-              pr_head=$(git show "refs/remotes/origin/$branch:tools/symbols.pin" 2>/dev/null | tr -d '[:space:]' || true)
+          # The pin a PR tracks lives in its branch commit; HeadRefOid is a
+          # nevr-runtime sha, so it is never compared with the echo-symbols
+          # head. Fetch the PR ref when the checkout does not already have it.
+          pin_for() {
+            number=$1
+            tip=$2
+            if git cat-file -e "$tip:tools/symbols.pin" 2>/dev/null; then
+              git show "$tip:tools/symbols.pin" | tr -d '[:space:]'
+              return 0
             fi
-          fi
-          decision=$(cd tools/symcache && go run . pr-decision --pr "$pr" --pr-head "$pr_head" --head "$head")
+            git fetch -q origin "refs/pull/$number/head" || return 1
+            git show "FETCH_HEAD:tools/symbols.pin" | tr -d '[:space:]'
+          }
+
+          gh pr list --state all --limit 200             --json number,headRefName,headRefOid,state > "$RUNNER_TEMP/prs.json"
+          : > "$RUNNER_TEMP/enriched.jsonl"
+          while IFS= read -r pr; do
+            branch=$(printf '%s' "$pr" | jq -r .headRefName)
+            case "$branch" in
+              "$prefix"*) ;;
+              *) continue ;;
+            esac
+            number=$(printf '%s' "$pr" | jq -r .number)
+            state=$(printf '%s' "$pr" | jq -r .state)
+            tip=$(printf '%s' "$pr" | jq -r .headRefOid)
+            tracked=""
+            if [ "$state" = "OPEN" ] || [ "$state" = "CLOSED" ]; then
+              tracked=$(pin_for "$number" "$tip") || {
+                echo "cannot read the echo-symbols pin of PR #$number ($branch)" >&2
+                exit 1
+              }
+            fi
+            printf '%s' "$pr" | jq -c --arg pin "$tracked" '. + {pin:$pin}' >> "$RUNNER_TEMP/enriched.jsonl"
+          done < <(jq -c '.[]' "$RUNNER_TEMP/prs.json")
+
+          jq -s '[.[] | select(.state == "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/open.json"
+          jq -s '[.[] | select(.state != "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/closed.json"
+
+          decision=$(cd tools/symcache && go run . pr-plan --head "$head" \
+            --open "$RUNNER_TEMP/open.json" --closed "$RUNNER_TEMP/closed.json")
           action=$(printf '%s\n' "$decision" | sed -n 's/^action=//p')
+          pr=$(printf '%s\n' "$decision" | sed -n 's/^pr=//p')
+          branch=$(printf '%s\n' "$decision" | sed -n 's/^branch=//p')
+          tip=$(printf '%s\n' "$decision" | sed -n 's/^tip=//p')
           note=$(printf '%s\n' "$decision" | sed -n 's/^note=//p')
           if [ "$action" = "skip" ]; then
             echo "$note"
@@ -139,12 +162,9 @@ jobs:
           git add tools/symbols.pin src/runtime/log/symcache_data.cpp
           git commit -m "chore(symcache): echo-symbols $pin -> $short"
 
-          # A closed PR can leave the branch behind even though no open PR
-          # remains; pick up its tip so the lease protects that case too.
-          if [ -z "$remote_tip" ] && git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
-            remote_tip=$(git rev-parse --verify -q "refs/remotes/origin/$branch" || true)
-          fi
-          git push --force-with-lease="refs/heads/$branch:${remote_tip}" origin "HEAD:refs/heads/$branch"
+          lease=""
+          if [ "$action" = "update" ]; then lease="$tip"; fi
+          git push --force-with-lease="refs/heads/$branch:${lease}" origin "HEAD:refs/heads/$branch"
 
           {
             echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
@@ -161,7 +181,7 @@ jobs:
             echo "- \`go run . validate\` on the corpus at \`$head\`: keys, strings, every name re-hashed with CSymbol64, count within 20% of \`$pin\`"
             echo "- \`go run . regenerate\`: wrote \`src/runtime/log/symcache_data.cpp\` (the table in this commit)"
             echo "- \`go run . diff\`: produced the lists above"
-            echo "- \`g++ -std=c++17 -fsyntax-only -I../../src src/runtime/log/symcache_data.cpp\`"
+            echo "- \`g++ -std=c++17 -fsyntax-only -Isrc src/runtime/log/symcache_data.cpp\`"
             echo
             echo "## What did not run"
             echo
@@ -169,8 +189,10 @@ jobs:
             echo
             echo "- \`just build\`"
             echo "- \`cd tools/symcache && go test ./...\`"
+            echo "- \`python3 -m pytest -q tools/tests\`"
+            echo "- \`python3 tools/verify_doc_paths.py\`"
             echo
-            echo "Branch lifecycle: the next sync run deletes this branch after the PR merges or closes."
+            echo "Branch lifecycle: deleted by the next scheduled run after it merges or closes."
             echo
             echo "Read AGENTS.md at $(git merge-base HEAD origin/main)"
           } > "$RUNNER_TEMP/pr.md"
