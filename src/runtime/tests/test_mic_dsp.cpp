@@ -277,26 +277,74 @@ TEST(MicRingBuffer, AZeroCapacityRingDropsEverythingItIsGiven) {
   EXPECT_EQ(ring.DroppedSamples(), 3u);
 }
 
+namespace {
+MicFlowCounters Flow(uint64_t dropped, uint64_t reads, uint64_t samplesRead, uint64_t pushed) {
+  MicFlowCounters flow;
+  flow.droppedTotal = dropped;
+  flow.readCalls = reads;
+  flow.samplesRead = samplesRead;
+  flow.samplesPushed = pushed;
+  return flow;
+}
+}  // namespace
+
 // The warning line is counted instead of once per stream: the first overflow logs at once and carries the
 // samples dropped since the last line; later ones wait the interval and then carry what piled up.
 TEST(MicOverflowLogGate, FirstOverflowLogsThenWaitsTheIntervalAndCarriesTheAccumulatedCount) {
   MicOverflowLogGate gate(5000);
-  EXPECT_EQ(gate.Poll(0, 1000), 0u);        // nothing dropped: nothing to say
-  EXPECT_EQ(gate.Poll(480, 1010), 480u);    // first overflow logs immediately
-  EXPECT_EQ(gate.Poll(960, 1020), 0u);      // inside the interval
-  EXPECT_EQ(gate.Poll(1920, 5999), 0u);     // 4989 ms after the line: still inside
-  EXPECT_EQ(gate.Poll(1920, 6010), 1440u);  // 5000 ms: what piled up since the line (1920 - 480)
-  EXPECT_EQ(gate.Poll(1920, 20000), 0u);    // nothing new: silent however long it has been
+  gate.Rebase(Flow(0, 0, 0, 0), 1000);
+  EXPECT_EQ(gate.Poll(Flow(0, 0, 0, 0), 1000).dropped, 0u);     // nothing dropped: nothing to say
+  EXPECT_EQ(gate.Poll(Flow(480, 1, 100, 580), 1010).dropped, 480u);  // first overflow logs immediately
+  EXPECT_EQ(gate.Poll(Flow(960, 1, 100, 1060), 1020).dropped, 0u);  // inside the interval
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 5999).dropped, 0u);  // 4989 ms after the line: inside
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 6010).dropped, 1440u);  // 5000 ms: 1920 - 480
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 20000).dropped, 0u);  // nothing new: silent
 }
 
 TEST(MicOverflowLogGate, RebaseHidesDropsFromBeforeTheGameWasReadingAndResetLogsTheNextStreamAtOnce) {
   MicOverflowLogGate gate(5000);
-  gate.Rebase(9600);                        // dropped while nobody was listening
-  EXPECT_EQ(gate.Poll(9600, 100), 0u);
-  EXPECT_EQ(gate.Poll(10080, 110), 480u);  // only the drop after the game started reading
+  gate.Rebase(Flow(9600, 0, 0, 9600), 50);  // dropped while nobody was listening
+  EXPECT_EQ(gate.Poll(Flow(9600, 0, 0, 9600), 100).dropped, 0u);
+  EXPECT_EQ(gate.Poll(Flow(10080, 1, 480, 10080), 110).dropped, 480u);  // only the drop after reading began
   gate.Reset();                             // a new stream: its first overflow is not held back
-  gate.Rebase(10080);
-  EXPECT_EQ(gate.Poll(10560, 200), 480u);  // 90 ms after the last line, inside the old interval
+  gate.Rebase(Flow(10080, 1, 480, 10080), 150);
+  EXPECT_EQ(gate.Poll(Flow(10560, 2, 960, 10560), 200).dropped, 480u);  // inside the old interval
+}
+
+// #95: the line says what the game did in the window. A game that read, but less than capture produced, is
+// a slow reader; one that made no MicRead call is a stalled one. The old wording called both "not draining".
+TEST(MicOverflowLogGate, AReaderThatReadSomethingIsSlowAndOneThatReadNothingIsStalled) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 1000);
+  const MicOverflowReport slow = gate.Poll(Flow(211680, 3, 28800, 240480), 6016);
+  EXPECT_EQ(slow.dropped, 211680u);
+  EXPECT_EQ(slow.readCalls, 3u);
+  EXPECT_EQ(slow.samplesRead, 28800u);
+  EXPECT_EQ(slow.samplesPushed, 240480u);
+  EXPECT_FALSE(slow.readerStalled);
+  const MicOverflowReport stalled = gate.Poll(Flow(400000, 3, 28800, 428800), 11016);
+  EXPECT_EQ(stalled.dropped, 188320u);
+  EXPECT_EQ(stalled.readCalls, 0u);
+  EXPECT_TRUE(stalled.readerStalled);
+}
+
+// Every figure covers only the window since the previous line (or since the game started reading), so
+// the read counts and the window length can be compared with the drops beside them.
+TEST(MicOverflowLogGate, EachReportCoversOnlyTheWindowSinceTheLastLineOrTheRebase) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(9600, 7, 6000, 15600), 2000);  // the game had already read 7 times before the window
+  const MicOverflowReport first = gate.Poll(Flow(9700, 8, 6100, 15800), 2400);
+  EXPECT_EQ(first.windowMs, 400u);
+  EXPECT_EQ(first.dropped, 100u);
+  EXPECT_EQ(first.readCalls, 1u);
+  EXPECT_EQ(first.samplesRead, 100u);
+  EXPECT_EQ(first.samplesPushed, 200u);
+  const MicOverflowReport second = gate.Poll(Flow(20000, 10, 6300, 26300), 7400);
+  EXPECT_EQ(second.windowMs, 5000u);
+  EXPECT_EQ(second.dropped, 10300u);
+  EXPECT_EQ(second.readCalls, 2u);
+  EXPECT_EQ(second.samplesRead, 200u);
+  EXPECT_EQ(second.samplesPushed, 10500u);
 }
 
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
