@@ -58,6 +58,12 @@ FATAL_PATTERNS = [
     r"\[NEVR\.FATAL\]",
     r"NetGame switching state \(from [^)]*, to (login failed|service unavailable|logged out)\)",
     r"Lost connection to the login service",
+    # The client was dropped by its lobby host: it leaves the session and no scenario step can
+    # continue (2026-10-18, suite 20261018T065159, party_data_receive: "R14NetClient: Destroy Peer
+    # 0 [...] (communication timeout)" then "Disconnected from server due to timeout"). Without
+    # this the first step's timeout-free wait hung the whole suite for 38 minutes (#674).
+    r"NetClientLobby switching state \(from [^)]*, to timed out\)",
+    r"Disconnected from server due to timeout",
 ]
 FATAL = re.compile("|".join(FATAL_PATTERNS))
 STATE = re.compile(r"NetGame switching state \(from [^)]*, to [^)]*\)")
@@ -284,6 +290,30 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
+# The launcher's own pattern (tools/lib/game_install.sh ECHOVR_CMDLINE).
+GAME_CMDLINE = r"(^|[/\\])echovr\.exe( |$)"
+
+
+def game_pids() -> list[str]:
+    out = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", GAME_CMDLINE],
+                         capture_output=True, text=True)
+    return out.stdout.split()
+
+
+def wait_for_game_exit(timeout: float = 30.0) -> bool:
+    """The client can outlive the Wine server by a moment, and launch-client.sh refuses to start
+    beside a live echovr.exe (exit 4). Suite 20261018T061805 lost its invite scenario to exactly
+    that: the previous scenario's client was still up when the next launch ran (#674)."""
+    deadline = time.monotonic() + timeout
+    pids = game_pids()
+    while pids and time.monotonic() < deadline:
+        time.sleep(0.5)
+        pids = game_pids()
+    for pid in pids:
+        subprocess.run(["kill", "-9", pid], capture_output=True)
+    return not pids
+
+
 def wait_for_wineserver_exit() -> None:
     """Block until the prefix's wineserver has exited (`wineserver -w`). `-k` only signals it; a
     client launched while the old server is still going down started with a broken socket layer
@@ -354,6 +384,8 @@ class Run:
         env = dict(os.environ, WINEPREFIX=str(wineprefix()))
         subprocess.run(["wineserver", "-k"], env=env, capture_output=True)
         wait_for_wineserver_exit()
+        if not wait_for_game_exit():
+            print("scenario: killed a client that outlived its Wine server", flush=True)
         if self.launcher:
             try:
                 self.launcher.wait(timeout=90)
