@@ -15,6 +15,12 @@ steps:
     wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
   - name: control endpoint is up
     wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  # The roster and the recently-met list arrive after the lobby loads; ask for the second through
+  # the game's node and wait for a non-empty answer, or the fire has no other player to name.
+  - name: refresh the recently-met list through the game's node
+    fire: {action: refresh_recently_met}
+  - name: the server's list has people in it
+    wait_log: {pattern: '\[NEVR\.SOCIAL\] recently met list count=[1-9]\d*', timeout: 20}
   - name: request that player's profile
     fire: {action: request_profile, user: other}
     save: {other_user: user}
