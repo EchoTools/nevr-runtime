@@ -4,8 +4,10 @@ name: echo-symbols sync
 # moves past the pin, fetch the echo_vr-pc subset at that exact sha, validate it,
 # regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
 # check, then open or update one PR. It never merges and never opens a second PR
-# for the same branch: the symbol delta is a human review, and the full build is
-# the reviewer's quick check (build.yml does not run on pull requests).
+# for the same branch. What actually runs here: `go test ./...` in tools/symcache
+# and `g++ -std=c++17 -fsyntax-only` on the generated table. The full build is the
+# reviewer's quick check; build.yml runs only on workflow_dispatch and release,
+# and a PR opened with GITHUB_TOKEN starts no workflow runs at all.
 #
 # Trust boundary: data is fetched by sha from the public raw endpoint, never from
 # a branch tip, so the workflow and the pin describe the same bytes. Permissions
@@ -161,9 +163,14 @@ jobs:
             echo "- \`go run . diff\`: produced the lists above"
             echo "- \`g++ -std=c++17 -fsyntax-only -I../../src src/runtime/log/symcache_data.cpp\`"
             echo
-            echo "The full build is the reviewer's quick check: \`just build\`. \`build.yml\` does not run on pull requests (it runs on workflow_dispatch and release)."
+            echo "## What did not run"
             echo
-            echo "Branch lifecycle: deleted when this PR merges or closes."
+            echo "Checks don't auto-run on this PR: a pull request opened with GITHUB_TOKEN starts no workflow runs, so neither \`build.yml\` nor \`pr-read-check.yml\` fires on it. The reviewer runs the quick check:"
+            echo
+            echo "- \`just build\`"
+            echo "- \`cd tools/symcache && go test ./...\`"
+            echo
+            echo "Branch lifecycle: the next sync run deletes this branch after the PR merges or closes."
             echo
             echo "Read AGENTS.md at $(git merge-base HEAD origin/main)"
           } > "$RUNNER_TEMP/pr.md"

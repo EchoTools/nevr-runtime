@@ -120,6 +120,26 @@ func TestWriteGeneratedSortedDeterministicAndEscaped(t *testing.T) {
 	}
 }
 
+func TestParseGeneratedAcceptsUppercaseHexHash(t *testing.T) {
+	// The nakama-era generated file carried two uppercase hashes; parsing the
+	// committed table for diffing must not silently drop them (6,028 removed,
+	// not 6,026).
+	body := "extern const SymCacheEntry kSymCacheData[] = {\n" +
+		"    {0x7777777777770A00ULL, \"ERGameServerChallengeRequest\"},\n" +
+		"    {0xA1B9CAE1F8588968ULL, \"SNSLobbyPlayerSessionsSuccessv2\"},\n" +
+		"};\n"
+	corpus, err := ParseGenerated(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseGenerated: %v", err)
+	}
+	if len(corpus) != 2 {
+		t.Fatalf("parsed %d entries, want 2", len(corpus))
+	}
+	if corpus[0x7777777777770A00] != "ERGameServerChallengeRequest" {
+		t.Fatalf("uppercase hash missing: %v", corpus)
+	}
+}
+
 func TestParseGeneratedRoundTrips(t *testing.T) {
 	corpus := Corpus{0x0000b27f29ed0f87: "mpl_cbt_gauss_s03_scaffolding_rail_b~instance_phys"}
 	var buf bytes.Buffer

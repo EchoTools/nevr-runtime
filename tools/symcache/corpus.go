@@ -172,7 +172,7 @@ func cEscape(name string) string {
 	return builder.String()
 }
 
-var generatedEntryPattern = regexp.MustCompile(`\{0x([0-9a-f]{16})ULL, "((?:[^"\\]|\\.)*)"\},`)
+var generatedEntryPattern = regexp.MustCompile(`\{0x([0-9a-fA-F]{16})ULL, "((?:[^"\\]|\\.)*)"\},`)
 
 // ParseGenerated reads the committed C++ table back into a Corpus, so a test
 // (and the resolve command) reads the artifact that ships, not the JSON it was
