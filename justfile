@@ -157,26 +157,21 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
 # forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
 # verifies both libs' ELF shape from the SIGNED output (no headset needed).
 # All work under build/android-arm64/repack — never mutates the source APK or shim.
-# `apk` is required (the store APK path); the debug keystore is throwaway, NOT prod.
-android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore" workdir="build/android-arm64/repack":
+# `apk` is required (the store APK path). The signing key is the one persistent Quest key stored in
+# pass (tools/quest_keystore.sh): it is read into a private tmpfs file for the signing command only
+# and is never generated here. Store it once with: just import-quest-keystore <keystore>.
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" workdir="build/android-arm64/repack":
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(pwd)"
-    apk="{{ apk }}"; shim="{{ shim }}"; ks="{{ ks }}"
+    apk="{{ apk }}"; shim="{{ shim }}"
     work="$root/{{ workdir }}"
-    for t in unzip patchelf zip zipalign apksigner readelf nm keytool; do
+    for t in unzip patchelf zip zipalign apksigner readelf nm keytool pass; do
         command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
     done
     [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
     [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
     mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig"
-    # Debug keystore — generated once, self-signed, for sideload only (never prod).
-    if [ ! -f "$ks" ]; then
-        mkdir -p "$(dirname "$ks")"
-        keytool -genkeypair -v -keystore "$ks" -alias nevrdebug -keyalg RSA -keysize 2048 \
-            -validity 10000 -storepass android -keypass android \
-            -dname "CN=NEVR Debug, OU=nevr-runtime, O=Sprock, C=US"
-    fi
     # 1. extract the real original loader from the store APK
     unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
     # 2. rename original + patch soname so the NEEDED string matches the file on disk
@@ -193,10 +188,11 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
     ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
         lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
-    # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign
+    # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign.
+    # The key is a private tmpfs copy for this one command, shredded when it returns; the passphrase
+    # reaches apksigner through the environment (`env:`), never through its command line.
     zipalign -p -f 4 "$unsigned" "$aligned"
-    apksigner sign --ks "$ks" --ks-key-alias nevrdebug \
-        --ks-pass pass:android --key-pass pass:android --out "$signed" "$aligned"
+    tools/quest_keystore.sh with bash -c 'exec apksigner sign --ks "$NEVR_QUEST_KS" --ks-key-alias "$NEVR_QUEST_KS_ALIAS" --ks-pass env:NEVR_QUEST_KS_PASS --key-pass env:NEVR_QUEST_KS_PASS --out "$1" "$2"' _ "$signed" "$aligned"
     apksigner verify --print-certs "$signed" | head -1
     # 6. VERIFY from the SIGNED apk — the headless packaging proof
     rm -rf "$work/verify"; mkdir -p "$work/verify"
@@ -209,6 +205,21 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     echo ""
     echo "Signed sideload APK ready -> $signed"
     echo "Install with: just quest-install"
+
+# Store the Quest APK signing key (once) and its passphrase in pass, so every repack signs with the
+# same key and the headset accepts it as an update. Reads the passphrase from NEVR_QUEST_KS_IMPORT_PASS
+# (never an argument) and refuses to replace a key that is already stored.
+import-quest-keystore file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tools/quest_keystore.sh import "{{ file }}"
+
+# Print the Quest APK signer's SHA-256 (lowercase hex, no colons): compare it with the app's signer
+# on the headset before installing, a different one forces an uninstall.
+quest-keystore-fingerprint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tools/quest_keystore.sh fingerprint
 
 # Refuse (exit 1, one line per problem) unless this clone is exactly origin's release branch: every local
 # tag is on origin and at the same commit, no uncommitted or untracked change, HEAD is origin/<base>'s tip.
@@ -224,18 +235,19 @@ release-preflight base="main":
 # Both builds embed config/public-defaults.env (git-ignored: copy it from the main checkout or from the
 # .example) and need no config file to log in; the gate (tools/package_release.py) refuses the package
 # otherwise, and refuses a binary whose identity literal is not this commit's development version.
-# `ks` is the existing Quest debug keystore (signer bc4d88e4...): it is required and never generated, because
+# The Quest APK is signed with the one persistent key stored in pass (tools/quest_keystore.sh),
+# imported once with `just import-quest-keystore <keystore>`; a new key is never generated, because
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK.
 # Neither build needs a config file: the Quest redirects, bridges, logs in and runs the social facade from the
 # embedded endpoints and keys alone (config.yaml only overrides).
 # The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
 # This never tags, uploads or publishes.
-package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
+package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash
     set -euo pipefail
     # First: a package is built only from a pristine clone that is origin's main (tools/release_preflight.py).
     tools/release_preflight.py
-    [ -f "{{ ks }}" ] || { echo "package-dev: keystore not found: {{ ks }} (pass the existing Quest debug keystore; one is never generated)" >&2; exit 1; }
+    pass show services/echovrce/quest-signing-keystore >/dev/null 2>&1 || { echo "package-dev: no Quest signing keystore in pass; store one with: just import-quest-keystore <keystore>" >&2; exit 1; }
     [ -f "{{ store_apk }}" ] || { echo "package-dev: store APK not found: {{ store_apk }}" >&2; exit 1; }
     commit=$(git rev-parse HEAD)
     echo "package-dev: LOCAL build of ${commit:0:7}: it stamps a DEVELOPMENT version, not a release (a release is a vX.Y.Z tag built by CI)" >&2
@@ -253,7 +265,7 @@ package-dev ks store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
     objects=$(python3 tools/quest_link_objects.py build/android-dev sentinel/libovrplatformloader.so)
     tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-dev/sentinel/libovrplatformloader.so $objects
-    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so "{{ ks }}" build/android-dev/repack
+    just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
