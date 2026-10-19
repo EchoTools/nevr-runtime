@@ -15,16 +15,10 @@ import (
 // automationBranchPrefix is the only branch namespace this workflow deletes.
 const automationBranchPrefix = "automation/echo-symbols-"
 
-// PREntry is the subset of `gh pr list --json headRefName,state` this tool reads.
-type PREntry struct {
-	HeadRefName string `json:"headRefName"`
-	State       string `json:"state"`
-}
-
 // BranchesToDelete returns the automation branches whose PRs are all merged or
 // closed. A branch that still has an open PR, or that is outside the automation
 // namespace, is never returned.
-func BranchesToDelete(prs []PREntry) []string {
+func BranchesToDelete(prs []PRInfo) []string {
 	open := map[string]bool{}
 	for _, pr := range prs {
 		if pr.State == "OPEN" && strings.HasPrefix(pr.HeadRefName, automationBranchPrefix) {
@@ -68,9 +62,10 @@ func DeleteBranches(branches []string, remove func(string) error) error {
 func runPRCleanup(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("pr-cleanup", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	input := flags.String("input", "", "file holding `gh pr list --state all --json headRefName,state`")
+	input := flags.String("input", "", "file holding `gh pr list --state all --json ...`")
 	execute := flags.Bool("execute", false, "delete the branches (git push <remote> --delete)")
 	remote := flags.String("remote", "origin", "git remote used by --execute")
+	limit := flags.Int("limit", 1000, "fail when the listing reaches this many PRs")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -81,8 +76,12 @@ func runPRCleanup(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var prs []PREntry
+	var prs []PRInfo
 	if err := json.Unmarshal(data, &prs); err != nil {
+		return fmt.Errorf("pr-cleanup: %w", err)
+	}
+	prs, err = FilterPRs(prs, *limit)
+	if err != nil {
 		return fmt.Errorf("pr-cleanup: %w", err)
 	}
 	branches := BranchesToDelete(prs)

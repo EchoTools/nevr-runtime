@@ -9,7 +9,7 @@ import (
 var errTestDelete = errors.New("delete failed")
 
 func TestBranchesToDelete(t *testing.T) {
-	prs := []PREntry{
+	prs := []PRInfo{
 		{HeadRefName: "automation/echo-symbols-aaaaaaaaaaaa", State: "MERGED"},
 		{HeadRefName: "automation/echo-symbols-bbbbbbbbbbbb", State: "CLOSED"},
 		{HeadRefName: "automation/echo-symbols-cccccccccccc", State: "OPEN"},

@@ -46,6 +46,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runPRPlan(args[1:], stdout)
 	case "pr-cleanup":
 		return runPRCleanup(args[1:], stdout)
+	case "pr-filter":
+		return runPRFilter(args[1:], stdout)
+	case "pin-check":
+		return runPinCheck(args[1:], stdout)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -62,7 +66,9 @@ commands:
   hash        print CSymbol64 for each name
   resolve     resolve hashes through the generated C++ table
   pr-plan     decide create/skip/update from the PRs and the pins they track
-  pr-cleanup  list automation branches whose PRs are merged or closed`)
+  pr-cleanup  list automation branches whose PRs are merged or closed
+  pr-filter   enforce the PR listing window, drop forks and foreign branches
+  pin-check   fail unless a value is a 40-character lowercase sha`)
 }
 
 func runRegenerate(args []string, stderr io.Writer) error {

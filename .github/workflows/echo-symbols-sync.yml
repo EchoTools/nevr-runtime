@@ -4,8 +4,9 @@ name: echo-symbols sync
 # moves past the pin, fetch the echo_vr-pc subset at that exact sha, validate it,
 # regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
 # check, then open or update one PR. It never merges and never opens a second PR
-# for the same branch. What actually runs here: `go test ./...` in tools/symcache
-# and `g++ -std=c++17 -fsyntax-only` on the generated table. The full build is the
+# for the same branch. What actually runs here: `go test ./...`, `validate`,
+# `regenerate`, `diff` and `g++ -std=c++17 -fsyntax-only` on the generated
+# table. The full build is the
 # reviewer's quick check; build.yml runs only on workflow_dispatch and release,
 # and a PR opened with GITHUB_TOKEN starts no workflow runs at all.
 #
@@ -45,10 +46,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh pr list --state all --limit 200 --json headRefName,state > "$RUNNER_TEMP/prs.json"
+          gh pr list --state all --search 'head:automation/echo-symbols-' --limit 1000 \
+            --json headRefName,state,isCrossRepository > "$RUNNER_TEMP/prs.json"
           # The tool itself deletes and returns nonzero on the first failed
           # `git push`; no output capture can hide its status.
-          (cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json" --execute)
+          (cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json" --limit 1000 --execute)
 
       - name: Compare the pin with echo-symbols main
         id: pin
@@ -56,6 +58,9 @@ jobs:
           set -euo pipefail
           pin=$(cat tools/symbols.pin)
           head=$(git ls-remote https://github.com/Dualgame/echo-symbols.git refs/heads/main | cut -f1)
+          # Both values reach URLs and commit messages; reject a malformed pin
+          # before either happens.
+          (cd tools/symcache && go run . pin-check --sha "$pin" && go run . pin-check --sha "$head")
           if [ -z "$pin" ] || [ -z "$head" ]; then
             echo "could not read a sha (pin='$pin' head='$head')" >&2
             exit 1
@@ -112,16 +117,30 @@ jobs:
             number=$1
             tip=$2
             if git cat-file -e "$tip:tools/symbols.pin" 2>/dev/null; then
-              git show "$tip:tools/symbols.pin" | tr -d '[:space:]'
-              return 0
+              tracked=$(git show "$tip:tools/symbols.pin" | tr -d '[:space:]')
+            else
+              git fetch -q origin "refs/pull/$number/head" || return 1
+              tracked=$(git show "FETCH_HEAD:tools/symbols.pin" | tr -d '[:space:]')
             fi
-            git fetch -q origin "refs/pull/$number/head" || return 1
-            git show "FETCH_HEAD:tools/symbols.pin" | tr -d '[:space:]'
+            case "$tracked" in
+              *[!0-9a-f]*|"") return 1 ;;
+            esac
+            [ "${#tracked}" -eq 40 ] || return 1
+            printf '%s' "$tracked"
           }
 
-          gh pr list --state all --limit 200             --json number,headRefName,headRefOid,state > "$RUNNER_TEMP/prs.json"
+          gh pr list --state all --search 'head:automation/echo-symbols-' --limit 1000 \
+            --json number,headRefName,headRefOid,state,isCrossRepository > "$RUNNER_TEMP/prs.json"
+          (cd tools/symcache && go run . pr-filter --input "$RUNNER_TEMP/prs.json" --limit 1000 > "$RUNNER_TEMP/filtered.json")
+          # Capture jq's status before the loop: a process substitution would
+          # return 0 even when jq fails.
+          if ! jq -c '.[]' "$RUNNER_TEMP/filtered.json" > "$RUNNER_TEMP/prs.jsonl"; then
+            echo "jq failed to read the filtered PR list" >&2
+            exit 1
+          fi
           : > "$RUNNER_TEMP/enriched.jsonl"
           while IFS= read -r pr; do
+            [ -n "$pr" ] || continue
             branch=$(printf '%s' "$pr" | jq -r .headRefName)
             case "$branch" in
               "$prefix"*) ;;
@@ -138,7 +157,7 @@ jobs:
               }
             fi
             printf '%s' "$pr" | jq -c --arg pin "$tracked" '. + {pin:$pin}' >> "$RUNNER_TEMP/enriched.jsonl"
-          done < <(jq -c '.[]' "$RUNNER_TEMP/prs.json")
+          done < "$RUNNER_TEMP/prs.jsonl"
 
           jq -s '[.[] | select(.state == "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/open.json"
           jq -s '[.[] | select(.state != "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/closed.json"

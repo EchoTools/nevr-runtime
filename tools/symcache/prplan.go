@@ -26,6 +26,9 @@ type PRInfo struct {
 	HeadRefOid  string `json:"headRefOid"`
 	State       string `json:"state"`
 	Pin         string `json:"pin"`
+	// IsCrossRepository is true for a PR whose head branch lives in a fork;
+	// a fork branch with an automation-looking name must never decide this repo's PR.
+	IsCrossRepository bool `json:"isCrossRepository"`
 }
 
 // PRPlan is what one sync run should do with the automation PR.
@@ -41,7 +44,7 @@ type PRPlan struct {
 // is left alone; one whose pin is older is updated in place; a head rejected by
 // a closed-unmerged PR is skipped; otherwise one PR is created.
 func PlanPR(head string, open, closed []PRInfo) (PRPlan, error) {
-	if !shaPattern.MatchString(head) {
+	if !ValidSHA(head) {
 		return PRPlan{}, fmt.Errorf("head %q is not a 40-character lowercase sha", head)
 	}
 	openAuto := make([]PRInfo, 0)
@@ -49,10 +52,10 @@ func PlanPR(head string, open, closed []PRInfo) (PRPlan, error) {
 		if !strings.HasPrefix(pr.HeadRefName, automationBranchPrefix) {
 			continue
 		}
-		if !shaPattern.MatchString(pr.Pin) {
+		if !ValidSHA(pr.Pin) {
 			return PRPlan{}, fmt.Errorf("PR #%d pin %q is not a 40-character lowercase sha", pr.Number, pr.Pin)
 		}
-		if !shaPattern.MatchString(pr.HeadRefOid) {
+		if !ValidSHA(pr.HeadRefOid) {
 			return PRPlan{}, fmt.Errorf("PR #%d headRefOid %q is not a 40-character lowercase sha", pr.Number, pr.HeadRefOid)
 		}
 		openAuto = append(openAuto, pr)
@@ -75,7 +78,7 @@ func PlanPR(head string, open, closed []PRInfo) (PRPlan, error) {
 		if !strings.HasPrefix(pr.HeadRefName, automationBranchPrefix) || pr.State != "CLOSED" {
 			continue
 		}
-		if !shaPattern.MatchString(pr.Pin) {
+		if !ValidSHA(pr.Pin) {
 			return PRPlan{}, fmt.Errorf("closed PR #%d pin %q is not a 40-character lowercase sha", pr.Number, pr.Pin)
 		}
 		closedAuto = append(closedAuto, pr)
