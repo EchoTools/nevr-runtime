@@ -48,6 +48,8 @@ TEST(BootLines, TheRecordsLevelIsTheOneTheMessageStates) {
       {"[NEVR.PATCH] warn without the semicolon", "info"},
       {"[NEVR.PATCH]warn; no space after the tag", "info"},
       {"[NEVR.PATCH]xwarn; glued to the tag", "info"},
+      {"[NEVR.PATCH] warn;glued", "info"},
+      {"[NEVR.PATCH] information about the boot", "info"},
       {"[NEVR.PATCH] warn  two spaces, no semicolon", "info"},
       {"[NEVR.PATCH] text that says warn; later", "info"},
       {"", "info"},
