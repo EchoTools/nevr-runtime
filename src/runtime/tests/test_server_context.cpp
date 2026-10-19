@@ -314,3 +314,53 @@ TEST(ServerContextSmite, AbsentSessionArrayIsNotFound) {
   uint64_t slot = 0;
   EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(1), slot));
 }
+
+TEST(ServerContextEntrants, EntrantSessionGuidIsTheAcceptedSlotsClientGuid) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[2]{};
+  sessions[1].guid.Data1 = 0x11223344;
+  sessions[1].guid.Data2 = 0x5566;
+  sessions[1].guid.Data3 = 0x7788;
+  sessions[1].guid.Data4[0] = 0x99;
+  sessions[1].joinState = 4;
+  sessions[0].joinState = 4;
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 2;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  const GUID slotOne = context.GetEntrantSessionGuid(1);
+  EXPECT_EQ(slotOne.Data1, 0x11223344U);
+  EXPECT_EQ(slotOne.Data2, 0x5566U);
+  EXPECT_EQ(slotOne.Data3, 0x7788U);
+  EXPECT_EQ(slotOne.Data4[0], 0x99U);
+
+  const GUID slotZero = context.GetEntrantSessionGuid(0);
+  EXPECT_EQ(slotZero.Data1, 0U);
+  EXPECT_EQ(slotZero.Data2, 0U);
+  EXPECT_EQ(slotZero.Data3, 0U);
+}
+
+TEST(ServerContextEntrants, EntrantSessionGuidIgnoresUnacceptedAndOutOfRangeSlots) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0xDEADBEEF;
+  sessions[0].joinState = 3;  // pending, not accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
+  EXPECT_EQ(context.GetEntrantSessionGuid(1).Data1, 0U);
+}

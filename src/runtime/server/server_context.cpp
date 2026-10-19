@@ -235,6 +235,25 @@ bool ServerContext::FindEntrantSlotBySession(const GUID& session, uint64_t& slot
   return false;
 }
 
+GUID ServerContext::GetEntrantSessionGuid(uint32_t slot) const {
+  std::shared_lock lock(m_stateMutex);
+
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
+    return GUID{};
+  }
+  const auto& entrants = m_lobby->entrantData;
+  const auto* sessions = m_lobby->playerSessions;
+  if (!sessions || !entrants.items) {
+    return GUID{};
+  }
+  constexpr uint64_t kJoinStateAccepted = 4;
+  const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
+  if (slot >= limit || sessions[slot].joinState != kJoinStateAccepted) {
+    return GUID{};
+  }
+  return sessions[slot].guid;
+}
+
 uint64_t ServerContext::CountAcceptedEntrants() const {
   std::shared_lock lock(m_stateMutex);
 
