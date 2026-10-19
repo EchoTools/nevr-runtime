@@ -46,7 +46,7 @@ function Get-LibraryRoots {
       }
     }
   } catch {
-    Write-Output ('note: the Oculus library list could not be read: ' + $_.Exception.Message)
+    Write-Warning ('the Oculus library list could not be read: ' + $_.Exception.Message)
   }
   return $out
 }
