@@ -35,6 +35,6 @@ source-invariant tests over the C++ tree and the release contract
 | --- | --- |
 | `build_distribution.py` | Sign a staged runtime package and atomically publish verified archives. |
 | `gen_symbol_corpus.py`, `symbol_candidates.txt` | Hash candidate symbol names and emit the reverse-lookup tables (CSymbol64 and SNS message hashes). |
-| `generate-symcache.sh` | Regenerate `src/runtime/log/symcache_data.cpp` from the evrcat symbol cache (`just build` runs it when that cache is present). |
+| `symcache/` | Go tool that fetches the pinned `Dualgame/echo-symbols` `echo_vr-pc` and `echo_vr-quest` subsets (`tools/symbols.pin`), merges them (PC name wins a case-only collision), validates, and regenerates `src/runtime/log/symcache_data.cpp` deterministically (`just generate-symcache`). |
 | `hook_identity_manifest.json` | The pinned prologues `verify_hook_invariants.py` checks. |
 | `echomod/` | Standalone Echo VR modding scripts; see `echomod/README.md`. |
