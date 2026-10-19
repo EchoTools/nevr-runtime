@@ -18,11 +18,13 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/log/boot_log_tee.h"
 #include "core/hooking.h"
+#include "core/logging.h"
 
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cstdarg>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -54,6 +56,62 @@ struct Filter {
 static std::vector<Filter> g_filters;
 
 static std::vector<PostLoadObserver> g_observers;
+
+/* #654: the hook's own lines reach the durable log. Boot phase: Log() goes through the boot tee (N36),
+ * which needs no CRT lock. After boot, Log() reaches the game's CLog, which is not usable under the loader
+ * lock, so a line produced by a load made under the lock waits in this fixed buffer (no heap) and is written
+ * by the next report or post-load observer pass outside it. A line that does not fit is counted. */
+namespace {
+constexpr std::size_t kPendingLines = 8;
+constexpr std::size_t kPendingText = 256;
+struct PendingLine {
+    EchoVR::LogLevel level;
+    char text[kPendingText];
+};
+PendingLine g_pending[kPendingLines];
+std::size_t g_pendingCount = 0;
+unsigned g_pendingDropped = 0;
+std::mutex g_pendingMutex;
+}  // namespace
+
+static void DrainPendingLines() {
+    PendingLine batch[kPendingLines];
+    std::size_t count = 0;
+    unsigned dropped = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_pendingMutex);
+        count = g_pendingCount;
+        dropped = g_pendingDropped;
+        for (std::size_t i = 0; i < count; ++i) batch[i] = g_pending[i];
+        g_pendingCount = 0;
+        g_pendingDropped = 0;
+    }
+    for (std::size_t i = 0; i < count; ++i) Log(batch[i].level, "%s", batch[i].text);
+    if (dropped != 0) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.DLLHOOK] %u line(s) made under the loader lock were dropped", dropped);
+    }
+}
+
+static void ReportLine(EchoVR::LogLevel level, const char* fmt, ...) {
+    char text[kPendingText];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    if (nevr_boot_log_tee::Active() || !LoaderLockHeldByThisThread()) {
+        DrainPendingLines();
+        Log(level, "%s", text);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_pendingMutex);
+    if (g_pendingCount == kPendingLines) {
+        ++g_pendingDropped;
+        return;
+    }
+    g_pending[g_pendingCount].level = level;
+    std::memcpy(g_pending[g_pendingCount].text, text, sizeof(text));
+    ++g_pendingCount;
+}
 
 #ifdef _WIN32
 
@@ -173,8 +231,10 @@ static bool RefuseLoad(const std::wstring& lower) {
     const char* by = nullptr;
     if (!IsLoadBlocked(lower.c_str(), &by)) return false;
     const std::string filterName = by ? by : "?";
-    fprintf(stderr, "[NEVR.DLLHOOK] load refused by filter '%s': %ls\n", filterName.c_str(), lower.c_str());
-    fflush(stderr);
+    std::string narrow;
+    for (const wchar_t c : lower) narrow.push_back(c > 0 && c < 0x80 ? static_cast<char>(c) : '?');
+    ReportLine(EchoVR::LogLevel::Info, "[NEVR.DLLHOOK] load refused by filter '%s': %s", filterName.c_str(),
+               narrow.c_str());
     SetLastError(ERROR_MOD_NOT_FOUND);
     return true;
 }
@@ -193,9 +253,8 @@ static void FireCallbacks(const char* lower_name, HMODULE module) {
         }
     }
     for (const auto& reg : pending) {
-        fprintf(stderr, "[NEVR.DLLHOOK] firing patch callback for '%s' (module=%p)\n",
-                reg.dll_name, (void*)module);
-        fflush(stderr);
+        ReportLine(EchoVR::LogLevel::Info, "[NEVR.DLLHOOK] firing patch callback for '%s' (module=%p)",
+                   reg.dll_name, static_cast<void*>(module));
         reg.callback(reg.dll_name, module);
     }
 }
@@ -207,6 +266,7 @@ static constexpr size_t kPebLoaderLockOffset = 0x110;
  * observer may load a library or register another observer. */
 static void RunPostLoadObservers() {
     if (LoaderLockHeldByThisThread()) return;
+    DrainPendingLines();
     std::vector<PostLoadObserver> observers;
     {
         std::lock_guard<std::mutex> lock(g_registryMutex);
@@ -272,9 +332,8 @@ void AddLoadFilter(const char* name, LoadFilter filter) {
     const char* label = name ? name : "?";
     const int needed = snprintf(f.name, sizeof(f.name), "%s", label);
     if (needed >= static_cast<int>(sizeof(f.name))) {
-        fprintf(stderr, "[NEVR.DLLHOOK] load filter name truncated to %zu bytes: '%s'\n",
-                sizeof(f.name) - 1, f.name);
-        fflush(stderr);
+        ReportLine(EchoVR::LogLevel::Warning, "[NEVR.DLLHOOK] load filter name truncated to %zu bytes: '%s'",
+                   sizeof(f.name) - 1, f.name);
     }
     f.predicate = filter;
     std::lock_guard<std::mutex> lock(g_registryMutex);
@@ -440,9 +499,8 @@ void OnLoad(const char* dll_name, PatchCallback callback) {
             }
         }
         if (claimed) {
-            fprintf(stderr, "[NEVR.DLLHOOK] '%s' already loaded (module=%p), firing immediately\n",
-                    reg.dll_name, (void*)existing);
-            fflush(stderr);
+            ReportLine(EchoVR::LogLevel::Info, "[NEVR.DLLHOOK] '%s' already loaded (module=%p), firing immediately",
+                       reg.dll_name, static_cast<void*>(existing));
             callback(reg.dll_name, existing);
         }
     }
