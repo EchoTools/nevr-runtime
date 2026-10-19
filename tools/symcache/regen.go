@@ -17,6 +17,7 @@ import (
 const (
 	defaultEchoSymbolsBaseURL = "https://raw.githubusercontent.com/Dualgame/echo-symbols"
 	defaultSourceName         = "subsets/echo_vr-pc.json"
+	defaultQuestSourceName    = "subsets/echo_vr-quest.json"
 	maxCorpusBytes            = 64 << 20
 )
 
@@ -58,11 +59,19 @@ func ReadGeneratedCount(path string) (int, error) {
 	return strconv.Atoi(string(match[1]))
 }
 
+// CorpusSource is one input to the merged cache: a local path or, when Path
+// is empty, a file fetched at the pin from base/<pin>/Name.
+type CorpusSource struct {
+	Path string
+	Name string
+}
+
 // RegenerateOptions describes one regeneration.
 type RegenerateOptions struct {
 	Pin              string
 	PinFile          string
 	InputPath        string
+	Sources          []CorpusSource
 	BaseURL          string
 	SourceName       string
 	OutPath          string
@@ -74,12 +83,13 @@ type RegenerateOptions struct {
 
 // RegenerateResult reports what one regeneration did.
 type RegenerateResult struct {
-	OutPath  string
-	Pin      string
-	Count    int
-	Previous int
-	Delta    int
-	Skipped  bool
+	OutPath   string
+	Pin       string
+	Count     int
+	Previous  int
+	Delta     int
+	Conflicts int
+	Skipped   bool
 }
 
 // Regenerate loads the corpus at the given pin (local file or the pinned
@@ -115,30 +125,37 @@ func Regenerate(ctx context.Context, options RegenerateOptions) (RegenerateResul
 		}
 	}
 
-	source := options.SourceName
-	if source == "" {
-		source = defaultSourceName
-	}
-
-	var data []byte
-	if options.InputPath != "" {
-		read, err := os.ReadFile(options.InputPath)
+	sources := options.corpusSources()
+	corpora := make([]Corpus, 0, len(sources))
+	names := make([]string, 0, len(sources))
+	for _, source := range sources {
+		if source.Name == "" {
+			source.Name = defaultSourceName
+		}
+		names = append(names, source.Name)
+		corpus, err := loadSource(ctx, options.HTTPClient, options.BaseURL, pin, source)
 		if err != nil {
 			return result, err
 		}
-		data = read
-	} else {
-		fetched, err := fetchPinned(ctx, options.HTTPClient, options.BaseURL, pin, source)
+		// Validate each subset on its own: a conflicting Quest name that the
+		// merge drops must still be a real symbol of the pinned commit.
+		if err := ValidateCorpus(corpus, ValidateOptions{}); err != nil {
+			return result, fmt.Errorf("%s at %s: %w", source.Name, pin, err)
+		}
+		corpora = append(corpora, corpus)
+	}
+
+	corpus := corpora[0]
+	conflicts := 0
+	for _, extra := range corpora[1:] {
+		merged, count, err := MergeCorpora(corpus, extra)
 		if err != nil {
 			return result, err
 		}
-		data = fetched
+		corpus = merged
+		conflicts += count
 	}
-
-	corpus, err := LoadCorpus(strings.NewReader(string(data)))
-	if err != nil {
-		return result, fmt.Errorf("input at %s: %w", pin, err)
-	}
+	result.Conflicts = conflicts
 
 	validate := ValidateOptions{PreviousCount: options.PreviousCount}
 	if options.AllowCountChange {
@@ -149,7 +166,7 @@ func Regenerate(ctx context.Context, options RegenerateOptions) (RegenerateResul
 	}
 
 	if err := writeFileAtomically(result.OutPath, func(w io.Writer) error {
-		return WriteGenerated(w, corpus, source, pin)
+		return WriteGenerated(w, corpus, strings.Join(names, " + "), pin)
 	}); err != nil {
 		return result, err
 	}
@@ -210,3 +227,44 @@ func writeFileAtomically(path string, write func(io.Writer) error) error {
 }
 
 var errNoPrevious = errors.New("no previous count")
+
+// corpusSources is the ordered input list: explicit Sources, else the legacy
+// single InputPath, else the PC and Quest subsets fetched at the pin.
+func (options RegenerateOptions) corpusSources() []CorpusSource {
+	if len(options.Sources) > 0 {
+		return options.Sources
+	}
+	if options.InputPath != "" {
+		name := options.SourceName
+		if name == "" {
+			name = defaultSourceName
+		}
+		return []CorpusSource{{Path: options.InputPath, Name: name}}
+	}
+	return []CorpusSource{
+		{Name: defaultSourceName},
+		{Name: defaultQuestSourceName},
+	}
+}
+
+func loadSource(ctx context.Context, client *http.Client, baseURL, pin string, source CorpusSource) (Corpus, error) {
+	var data []byte
+	if source.Path != "" {
+		read, err := os.ReadFile(source.Path)
+		if err != nil {
+			return nil, err
+		}
+		data = read
+	} else {
+		fetched, err := fetchPinned(ctx, client, baseURL, pin, source.Name)
+		if err != nil {
+			return nil, err
+		}
+		data = fetched
+	}
+	corpus, err := LoadCorpus(strings.NewReader(string(data)))
+	if err != nil {
+		return nil, fmt.Errorf("%s at %s: %w", source.Name, pin, err)
+	}
+	return corpus, nil
+}

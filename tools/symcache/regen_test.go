@@ -13,9 +13,9 @@ import (
 const testSHA = "27fd4ce81e1fc64315dcb4cf935086b3f80c2d81"
 
 func TestRegenerateFetchesAtThePinnedSHA(t *testing.T) {
-	var gotPath string
+	var gotPaths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
+		gotPaths = append(gotPaths, r.URL.Path)
 		w.Write([]byte(validJSON))
 	}))
 	defer server.Close()
@@ -30,8 +30,12 @@ func TestRegenerateFetchesAtThePinnedSHA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Regenerate: %v", err)
 	}
-	if gotPath != "/"+testSHA+"/subsets/echo_vr-pc.json" {
-		t.Fatalf("fetched %q, want the pinned sha path", gotPath)
+	want := []string{
+		"/" + testSHA + "/subsets/echo_vr-pc.json",
+		"/" + testSHA + "/subsets/echo_vr-quest.json",
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != want[0] || gotPaths[1] != want[1] {
+		t.Fatalf("fetched %v, want the pinned PC and Quest paths %v", gotPaths, want)
 	}
 	if result.Count != 2 {
 		t.Fatalf("count = %d, want 2", result.Count)
@@ -109,4 +113,30 @@ func writeFixture(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestRegenerateUnionsPCAndQuest(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "symcache_data.cpp")
+	quest := writeFixture(t, `{"0x0008c4da8d842133": "ambient.clothirradianceintensity"}`)
+	result, err := Regenerate(context.Background(), RegenerateOptions{
+		Pin: testSHA, OutPath: out, PreviousCount: 3,
+		Sources: []CorpusSource{
+			{Path: writeFixture(t, validJSON), Name: "echo_vr-pc.json"},
+			{Path: quest, Name: "echo_vr-quest.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Regenerate: %v", err)
+	}
+	if result.Count != 3 {
+		t.Fatalf("count = %d, want 3 (2 PC + 1 Quest)", result.Count)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "0x0008c4da8d842133") {
+		t.Fatalf("generated table lacks the Quest entry:\n%s", data)
+	}
 }

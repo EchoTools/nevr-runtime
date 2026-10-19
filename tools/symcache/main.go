@@ -77,6 +77,7 @@ func runRegenerate(args []string, stderr io.Writer) error {
 	pin := flags.String("pin", "", "echo-symbols commit sha (overrides --pin-file)")
 	pinFile := flags.String("pin-file", "", "file holding the commit sha")
 	input := flags.String("input", "", "local corpus JSON instead of fetching")
+	questInput := flags.String("quest-input", "", "local Quest corpus JSON (default: fetch at the pin)")
 	baseURL := flags.String("base-url", "", "base URL for the pinned fetch")
 	source := flags.String("source", "", "path within echo-symbols (default subsets/echo_vr-pc.json)")
 	out := flags.String("out", "src/runtime/log/symcache_data.cpp", "generated file")
@@ -98,11 +99,24 @@ func runRegenerate(args []string, stderr io.Writer) error {
 			*previous = count
 		}
 	}
-	result, err := Regenerate(context.Background(), RegenerateOptions{
-		Pin: *pin, PinFile: *pinFile, InputPath: *input, BaseURL: *baseURL,
+	options := RegenerateOptions{
+		Pin: *pin, PinFile: *pinFile, BaseURL: *baseURL,
 		SourceName: *source, OutPath: *out, PreviousCount: *previous,
 		AllowCountChange: *allowCountChange, IfPinChanged: *ifPinChanged,
-	})
+	}
+	if *questInput != "" {
+		pcName := *source
+		if pcName == "" {
+			pcName = defaultSourceName
+		}
+		options.Sources = []CorpusSource{
+			{Path: *input, Name: pcName},
+			{Path: *questInput, Name: defaultQuestSourceName},
+		}
+	} else {
+		options.InputPath = *input
+	}
+	result, err := Regenerate(context.Background(), options)
 	if err != nil {
 		return err
 	}
@@ -110,7 +124,7 @@ func runRegenerate(args []string, stderr io.Writer) error {
 		fmt.Fprintf(stderr, "symcache: %s already holds pin %s (%d entries)\n", result.OutPath, result.Pin, result.Count)
 		return nil
 	}
-	fmt.Fprintf(stderr, "symcache: wrote %d entries to %s (previous %d, delta %+d)\n", result.Count, result.OutPath, result.Previous, result.Delta)
+	fmt.Fprintf(stderr, "symcache: wrote %d entries to %s (previous %d, delta %+d, kept PC name for %d case-only collisions)\n", result.Count, result.OutPath, result.Previous, result.Delta, result.Conflicts)
 	return nil
 }
 
@@ -118,6 +132,7 @@ func runValidate(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	input := flags.String("input", "", "corpus JSON")
+	questInput := flags.String("quest-input", "", "Quest corpus JSON to merge with --input")
 	previous := flags.Int("previous", 0, "entry count at the previous pin (0 = no check)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -134,10 +149,31 @@ func runValidate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidateCorpus(corpus, ValidateOptions{PreviousCount: *previous}); err != nil {
+	if *questInput == "" {
+		if err := ValidateCorpus(corpus, ValidateOptions{PreviousCount: *previous}); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "symcache: %s: %d entries, all names hash to their keys\n", *input, len(corpus))
+		return nil
+	}
+	quest, err := loadCorpusFile(*questInput)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "symcache: %s: %d entries, all names hash to their keys\n", *input, len(corpus))
+	if err := ValidateCorpus(corpus, ValidateOptions{}); err != nil {
+		return err
+	}
+	if err := ValidateCorpus(quest, ValidateOptions{}); err != nil {
+		return err
+	}
+	merged, conflicts, err := MergeCorpora(corpus, quest)
+	if err != nil {
+		return err
+	}
+	if err := ValidateCorpus(merged, ValidateOptions{PreviousCount: *previous}); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "symcache: %s + %s: %d entries, all names hash to their keys, %d case-only collisions kept the PC name\n", *input, *questInput, len(merged), conflicts)
 	return nil
 }
 
@@ -146,6 +182,8 @@ func runDiff(args []string, stdout io.Writer) error {
 	flags.SetOutput(stdout)
 	oldPath := flags.String("old", "", "corpus JSON at the previous pin")
 	newPath := flags.String("new", "", "corpus JSON at the new pin")
+	oldQuestPath := flags.String("old-quest", "", "Quest corpus JSON at the previous pin")
+	newQuestPath := flags.String("new-quest", "", "Quest corpus JSON at the new pin")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -159,6 +197,25 @@ func runDiff(args []string, stdout io.Writer) error {
 	newCorpus, err := loadCorpusFile(*newPath)
 	if err != nil {
 		return err
+	}
+	if (*oldQuestPath == "") != (*newQuestPath == "") {
+		return errors.New("diff: --old-quest and --new-quest must be given together")
+	}
+	if *oldQuestPath != "" {
+		oldQuest, err := loadCorpusFile(*oldQuestPath)
+		if err != nil {
+			return err
+		}
+		newQuest, err := loadCorpusFile(*newQuestPath)
+		if err != nil {
+			return err
+		}
+		if oldCorpus, _, err = MergeCorpora(oldCorpus, oldQuest); err != nil {
+			return err
+		}
+		if newCorpus, _, err = MergeCorpora(newCorpus, newQuest); err != nil {
+			return err
+		}
 	}
 	fmt.Fprint(stdout, Diff(oldCorpus, newCorpus).Markdown())
 	return nil

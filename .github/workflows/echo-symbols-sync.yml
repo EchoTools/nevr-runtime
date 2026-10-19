@@ -1,7 +1,7 @@
 name: echo-symbols sync
 
 # Daily check of Dualgame/echo-symbols against tools/symbols.pin. When its main
-# moves past the pin, fetch the echo_vr-pc subset at that exact sha, validate it,
+# moves past the pin, fetch the echo_vr-pc and echo_vr-quest subsets at that exact sha, validate them,
 # regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
 # check, then open or update one PR. It never merges and never opens a second PR
 # for the same branch. What actually runs here: `go test ./...`, `validate`,
@@ -75,13 +75,15 @@ jobs:
             echo "echo-symbols moved $pin -> $head"
           fi
 
-      - name: Fetch both corpora at their shas
+      - name: Fetch both subsets at both shas
         if: steps.pin.outputs.changed == 'true'
         run: |
           set -euo pipefail
           base=https://raw.githubusercontent.com/Dualgame/echo-symbols
-          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/old.json"
-          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/new.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/old-pc.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-quest.json" -o "$RUNNER_TEMP/old-quest.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/new-pc.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-quest.json" -o "$RUNNER_TEMP/new-quest.json"
 
       - name: Validate, regenerate, compile check
         if: steps.pin.outputs.changed == 'true'
@@ -89,13 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           go test ./...
-          go run . validate --input "$RUNNER_TEMP/new.json" \
+          go run . validate --input "$RUNNER_TEMP/new-pc.json" --quest-input "$RUNNER_TEMP/new-quest.json" \
             --previous "$(sed -n 's/.*kSymCacheCount = \([0-9]*\);/\1/p' ../../src/runtime/log/symcache_data.cpp)"
           go run . regenerate --pin "${{ steps.pin.outputs.head }}" \
-            --input "$RUNNER_TEMP/new.json" \
+            --input "$RUNNER_TEMP/new-pc.json" --quest-input "$RUNNER_TEMP/new-quest.json" \
             --out ../../src/runtime/log/symcache_data.cpp \
             --previous-from ../../src/runtime/log/symcache_data.cpp
-          go run . diff --old "$RUNNER_TEMP/old.json" --new "$RUNNER_TEMP/new.json" > "$RUNNER_TEMP/diff.md"
+          go run . diff --old "$RUNNER_TEMP/old-pc.json" --new "$RUNNER_TEMP/new-pc.json" \
+            --old-quest "$RUNNER_TEMP/old-quest.json" --new-quest "$RUNNER_TEMP/new-quest.json" > "$RUNNER_TEMP/diff.md"
           # The generated table is C++ data in the runtime; compile it before proposing it.
           g++ -std=c++17 -fsyntax-only -I../../src ../../src/runtime/log/symcache_data.cpp
 
@@ -190,7 +193,7 @@ jobs:
             echo
             echo "echo-symbols-sha: $head"
             echo
-            echo "Data: the \`echo_vr-pc\` subset."
+            echo "Data: the union of the \`echo_vr-pc\` and \`echo_vr-quest\` subsets at the pinned sha; on a case-only hash collision the PC name is kept (the merge reports the conflict count)."
             echo
             cat "$RUNNER_TEMP/diff.md"
             echo
