@@ -212,7 +212,7 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
   flow.samplesPushed = g_samplesPushed.load();
   if (!g_ring.ReaderActive()) {
     g_overflowGate.Rebase(flow, nowMs);
-  } else if (result.ringOverflow) {
+  } else {
     const MicOverflowReport report = g_overflowGate.Poll(flow, nowMs);
     if (report.dropped > 0) {
       Log(EchoVR::LogLevel::Warning,

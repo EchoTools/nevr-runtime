@@ -69,8 +69,9 @@ struct MicOverflowReport {
 class MicOverflowLogGate {
  public:
   explicit MicOverflowLogGate(uint64_t intervalMs) : intervalMs_(intervalMs) {}
-  /// `now` is the counters at this moment; `nowMs` a monotonic clock. Returns the report to log now,
-  /// otherwise one whose `dropped` is 0.
+  /// Call on every capture packet while the game is reading. `now` is the counters at this moment; `nowMs`
+  /// a monotonic clock. Returns the report to log now, otherwise one whose `dropped` is 0. While nothing
+  /// is waiting to be reported the window slides forward, so it opens where an overflow begins.
   MicOverflowReport Poll(const MicFlowCounters& now, uint64_t nowMs);
   /// Treats everything counted so far as already accounted for (the game is not reading yet, so a full
   /// ring is the normal state and not a stall) and starts the next window at `nowMs`.
@@ -85,6 +86,7 @@ class MicOverflowLogGate {
   uint64_t intervalMs_;
   MicFlowCounters reported_;
   uint64_t windowStartMs_ = 0;
+  uint64_t lastLogMs_ = 0;
   bool hasLogged_ = false;
 };
 

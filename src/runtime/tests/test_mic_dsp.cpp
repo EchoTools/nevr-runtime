@@ -328,6 +328,45 @@ TEST(MicOverflowLogGate, AReaderThatReadSomethingIsSlowAndOneThatReadNothingIsSt
   EXPECT_TRUE(stalled.readerStalled);
 }
 
+// Spritz's review of #682: a game that read cleanly for a minute and then stalled must be reported as
+// stalled by the FIRST line. The gate is polled on every capture packet; while nothing is waiting to be
+// reported the window slides forward, so the healthy minute is not counted in the line that follows.
+TEST(MicOverflowLogGate, CleanReadsThenAStallAreReportedAsStalledByTheFirstLine) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 0);
+  uint64_t reads = 0;
+  uint64_t samplesRead = 0;
+  uint64_t pushed = 0;
+  for (uint64_t t = 1000; t <= 60000; t += 1000) {  // a minute of reads that keep up: nothing dropped
+    ++reads;
+    samplesRead += 48000;
+    pushed += 48000;
+    EXPECT_EQ(gate.Poll(Flow(0, reads, samplesRead, pushed), t).dropped, 0u);
+  }
+  pushed += 480;  // the reader stops: the ring fills and the next packet overflows
+  const MicOverflowReport first = gate.Poll(Flow(480, reads, samplesRead, pushed), 60010);
+  EXPECT_EQ(first.dropped, 480u);
+  EXPECT_EQ(first.readCalls, 0u) << "the healthy minute before the stall is counted in the stall's line";
+  EXPECT_TRUE(first.readerStalled);
+  EXPECT_LT(first.windowMs, 1000u) << "the window must start where the overflow started";
+}
+
+// While overflow is pending the window stays put, even when a read in between frees the ring for a moment:
+// a slow reader is reported with all of its reads in the window, not just the ones after the last clean packet.
+TEST(MicOverflowLogGate, APendingOverflowKeepsItsWindowOpenAcrossACleanPacket) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 0);
+  EXPECT_EQ(gate.Poll(Flow(480, 0, 0, 480), 100).dropped, 480u);  // first line at once
+  EXPECT_EQ(gate.Poll(Flow(960, 0, 0, 960), 200).dropped, 0u);    // inside the interval
+  EXPECT_EQ(gate.Poll(Flow(960, 1, 9600, 10560), 1000).dropped, 0u);  // a read, a clean packet: drops still pending
+  EXPECT_EQ(gate.Poll(Flow(1440, 1, 9600, 11040), 2000).dropped, 0u);
+  const MicOverflowReport report = gate.Poll(Flow(2400, 5, 48000, 40000), 5100);
+  EXPECT_EQ(report.dropped, 1920u);  // 2400 - 480
+  EXPECT_EQ(report.readCalls, 5u);   // every read since the first line
+  EXPECT_FALSE(report.readerStalled);
+  EXPECT_EQ(report.windowMs, 5000u);
+}
+
 // Every figure covers only the window since the previous line (or since the game started reading), so
 // the read counts and the window length can be compared with the drops beside them.
 TEST(MicOverflowLogGate, EachReportCoversOnlyTheWindowSinceTheLastLineOrTheRebase) {

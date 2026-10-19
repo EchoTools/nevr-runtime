@@ -36,8 +36,14 @@ uint64_t MicRingBuffer::DroppedSamples() const {
 }
 
 MicOverflowReport MicOverflowLogGate::Poll(const MicFlowCounters& now, uint64_t nowMs) {
-  if (now.droppedTotal <= reported_.droppedTotal) return {};
-  if (hasLogged_ && nowMs - windowStartMs_ < intervalMs_) return {};
+  if (now.droppedTotal <= reported_.droppedTotal) {
+    // Nothing is waiting to be reported: the window slides to now, so a report that follows covers only
+    // the time since its overflow began, not the healthy reads before it.
+    reported_ = now;
+    windowStartMs_ = nowMs;
+    return {};
+  }
+  if (hasLogged_ && nowMs - lastLogMs_ < intervalMs_) return {};
   MicOverflowReport report;
   report.dropped = now.droppedTotal - reported_.droppedTotal;
   report.readCalls = now.readCalls - reported_.readCalls;
@@ -47,6 +53,7 @@ MicOverflowReport MicOverflowLogGate::Poll(const MicFlowCounters& now, uint64_t 
   report.readerStalled = report.readCalls == 0;
   reported_ = now;
   windowStartMs_ = nowMs;
+  lastLogMs_ = nowMs;
   hasLogged_ = true;
   return report;
 }
