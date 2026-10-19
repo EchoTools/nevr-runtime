@@ -48,6 +48,7 @@
 #include "runtime/compat/login_profile.h"
 #include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
+#include "core/host_environment_line.h"
 #include "core/system_info.h"
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
@@ -2735,6 +2736,24 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
                 h.cpu_brand.c_str(), h.physical_cores, h.logical_cores,
                 (unsigned long long)h.memory_used_mb, (unsigned long long)h.memory_total_mb,
                 h.wine_version.c_str(), h.wine_host_os.c_str(), h.os_build);
+}
+
+TEST(HostEnvironmentLine, NamesTheWineVersionHostOsAndWindowsBuild) {
+    nevr_system_info::Host host;
+    host.wine_version = "10.0";
+    host.wine_host_os = "Linux";
+    host.os_build = 19045;
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=10.0 host_os=Linux os_build=19045\n");
+}
+
+TEST(HostEnvironmentLine, ANativeWindowsHostSaysNoneAndAnUnmeasuredBuildSaysUnknown) {
+    nevr_system_info::Host host;  // nothing measured: native Windows with no build
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=unknown\n");
+    host.os_build = 22631;
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=22631\n");
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {

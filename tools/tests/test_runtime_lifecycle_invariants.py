@@ -186,6 +186,16 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
 
+    def test_the_boot_log_names_the_host_environment_in_the_boot_phase(self):
+        # #673: a crash report names the Wine version from the log. The line is written through the boot
+        # tee (loader lock held), after the tee opens and before it first closes.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        line = body.index("nevr_host_environment::BootLine(nevr_system_info::Get())")
+        self.assertLess(body.index("nevr_boot_log_tee::Init()"), line, "the line is written before the tee opens")
+        self.assertLess(line, body.index("nevr_boot_log_tee::Close()"), "the line is written after the tee closes")
+        self.assertRegex(body[max(0, line - 40):line], r"TeeFprintf\(", "the line must go through the boot tee")
+
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
         # hook that never installed could not reach g_bootHookFailed and a server booted as if

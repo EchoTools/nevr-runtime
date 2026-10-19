@@ -23,7 +23,7 @@ says how to check each one and which log line proves it.
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
-- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-noconsole` default apply. (PC)
+- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-noconsole` default apply. (PC) Tested clean: Proton Experimental 11.0 and Wine 11. Proton 8.0 (8.0-103) crashes in its own `dxgi.dll` right after the graphics device is created, with the stock `BugSplat64.dll` too, so use Proton Experimental or a recent Wine (#673). The boot log's `[NEVR.BOOT] host environment:` line records the Wine version.
 - **A wrong `echovr.exe` is refused.** A wrong or damaged game image is refused instead of patched. (PC)
 
 ### Friends, party and the social lobby
