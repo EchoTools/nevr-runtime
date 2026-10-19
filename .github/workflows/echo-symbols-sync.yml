@@ -1,0 +1,114 @@
+name: echo-symbols sync
+
+# Daily check of Dualgame/echo-symbols against tools/symbols.pin. When its main
+# moves past the pin, fetch the echo_vr-pc subset at that exact sha, validate it,
+# regenerate src/runtime/log/symcache_data.cpp, run the quick check, and open a
+# PR. It never merges: the symbol delta is a human review, and the PR triggers the
+# full build workflow.
+#
+# Trust boundary: data is fetched by sha from the public raw endpoint, never from
+# a branch tip, so the workflow and the pin describe the same bytes. Permissions
+# are limited to the two write scopes the PR needs.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: echo-symbols-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: pin, validate, regenerate, PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: tools/symcache/go.mod
+          cache: false
+
+      - name: Compare the pin with echo-symbols main
+        id: pin
+        run: |
+          set -euo pipefail
+          pin=$(cat tools/symbols.pin)
+          head=$(git ls-remote https://github.com/Dualgame/echo-symbols.git refs/heads/main | cut -f1)
+          if [ -z "$pin" ] || [ -z "$head" ]; then
+            echo "could not read a sha (pin='$pin' head='$head')" >&2
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          if [ "$pin" = "$head" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "echo-symbols is unchanged at $pin"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "echo-symbols moved $pin -> $head"
+          fi
+
+      - name: Fetch both corpora at their shas
+        if: steps.pin.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          base=https://raw.githubusercontent.com/Dualgame/echo-symbols
+          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/old.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/new.json"
+
+      - name: Validate, regenerate, quick check
+        if: steps.pin.outputs.changed == 'true'
+        working-directory: tools/symcache
+        run: |
+          set -euo pipefail
+          go test ./...
+          go run . validate --input "$RUNNER_TEMP/new.json" \
+            --previous "$(sed -n 's/.*kSymCacheCount = \([0-9]*\);/\1/p' ../../src/runtime/log/symcache_data.cpp)"
+          go run . regenerate --pin "${{ steps.pin.outputs.head }}" \
+            --input "$RUNNER_TEMP/new.json" \
+            --out ../../src/runtime/log/symcache_data.cpp \
+            --previous-from ../../src/runtime/log/symcache_data.cpp
+          go run . diff --old "$RUNNER_TEMP/old.json" --new "$RUNNER_TEMP/new.json" > "$RUNNER_TEMP/diff.md"
+          # The generated table is C++ data in the runtime; compile it before proposing it.
+          g++ -std=c++17 -fsyntax-only -I../../src ../../src/runtime/log/symcache_data.cpp
+
+      - name: Open the PR
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pin='${{ steps.pin.outputs.pin }}'
+          head='${{ steps.pin.outputs.head }}'
+          short=$(printf '%s' "$head" | cut -c1-12)
+          branch="automation/echo-symbols-$short"
+          printf '%s\n' "$head" > tools/symbols.pin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add tools/symbols.pin src/runtime/log/symcache_data.cpp
+          git commit -m "chore(symcache): echo-symbols $pin -> $short"
+          git push origin "HEAD:refs/heads/$branch"
+          {
+            echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
+            echo
+            echo "Data: the \`echo_vr-pc\` subset. Validation parsed every key, re-hashed every name with CSymbol64, and required the count to stay within 20% of the previous pin."
+            echo
+            cat "$RUNNER_TEMP/diff.md"
+            echo
+            echo "Branch lifecycle: deleted when this PR merges or closes."
+            echo
+            echo "Read AGENTS.md at $(git merge-base HEAD origin/main)"
+          } > "$RUNNER_TEMP/pr.md"
+          gh pr create --base main --head "$branch" \
+            --title "chore(symcache): echo-symbols $short" \
+            --body-file "$RUNNER_TEMP/pr.md"
