@@ -648,8 +648,10 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       if (nevr_social_roster::ParseRecentlyMetResponse(payload, static_cast<size_t>(len), &people)) {
         const auto online = static_cast<unsigned>(std::count_if(people.begin(), people.end(),
                                                                 [](const nevr_social_roster::Entry& e) { return e.online; }));
-        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met list count=%zu online=%u", people.size(), online);
+        const size_t count = people.size();
         nevr_social_roster::RecentlyMet().SetList(std::move(people));
+        // After the store: a reader that waits for this line (the scenario harness) finds the list in place.
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met list count=%zu online=%u", count, online);
       } else {
         nevr_social_roster::RecentlyMet().EndRefresh();
         Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] recently met list could not be read bytes=%llu",

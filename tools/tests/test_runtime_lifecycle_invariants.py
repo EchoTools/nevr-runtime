@@ -280,6 +280,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIsNotNone(cap)
         self.assertLessEqual(int(cap.group(1)), 9600)
 
+    def test_the_recently_met_line_is_logged_after_the_list_is_stored(self):
+        # #676: the scenario harness waits for `recently met list count=` and then reads the list, so the
+        # line must not come before RecentlyMet().SetList (a wait that fires early reads the old list).
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        store = source.index("nevr_social_roster::RecentlyMet().SetList(")
+        line = source.index("[NEVR.SOCIAL] recently met list count=")
+        self.assertLess(store, line, "the recently-met log line is written before the list is stored")
+
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
         # RadPluginShutdown guard has to be inside that hook; a second detour on the
