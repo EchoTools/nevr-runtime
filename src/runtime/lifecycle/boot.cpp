@@ -43,6 +43,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 #include "runtime/lifecycle/timestep_log.h"
+#include "core/cli_option_value.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "abi/echovr_functions.h"
@@ -86,8 +87,13 @@ void PreflightRuntimeBootstrap() {
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
       g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
-    } else if ((lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) && i + 1 < argc) {
-      WideCharToMultiByte(CP_UTF8, 0, argv[++i], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
+    } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
+      // #587: `-config -server` gives -config no value; -server is still read. The main parse below
+      // logs the missing value; this early pass runs before the log exists.
+      if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
+        WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
+        ++i;
+      }
     }
   }
   LocalFree(argv);
@@ -183,6 +189,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 // CommandLineToArgvW differs on quotes. The game's own "CL Args: %s" line (NRadPhysics::InitGlobals,
 // echovr.exe 0x141548da0) still prints the original command line. It allocates inside a game-called hook, so
 // a failure is caught by type and logged, never allowed to leave.
+// #587: a value option followed by another option (or by nothing) takes no value; the next token is parsed
+// as the option it is. The option is named, its (absent) value is not.
+static void LogOptionWithoutValue(const char* option) {
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s was given without a value; it is ignored", option);
+}
+
 static void LogTimestepArgs() {
   try {
     const nevr_timestep_log::Inputs in = nevr_timestep_log::BuildInputs(
@@ -360,10 +372,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
       g_telemetryEnabled = FALSE;
     } else if (lstrcmpW(arg, L"-telemetryrate") == 0) {
-      if (i + 1 < argc) {
-        g_telemetryRateHz = std::wcstoul(argv[i + 1], nullptr, 10);
+      if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
+        g_telemetryRateHz = std::wcstoul(value, nullptr, 10);
         if (g_telemetryRateHz == 0) g_telemetryRateHz = 10;
         ++i;
+      } else {
+        LogOptionWithoutValue("-telemetryrate");
       }
     } else if (lstrcmpW(arg, L"-telemetrydiag") == 0) {
       g_telemetryDiag = TRUE;
@@ -374,24 +388,38 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     } else if (lstrcmpW(arg, L"-allow-dbgcore") == 0) {
       g_allowDbgCore = TRUE;
     } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
-      if (i + 1 < argc) {
-        WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
+      if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
+        WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
         ++i;
+      } else {
+        LogOptionWithoutValue("-config");
       }
     } else if (lstrcmpW(arg, L"-region") == 0 || lstrcmpW(arg, L"-serverregion") == 0) {
-      if (i + 1 < argc) {
-        WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
+      if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
+        WideCharToMultiByte(CP_UTF8, 0, value, -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
         ++i;
+      } else {
+        LogOptionWithoutValue("-region");
       }
     } else if (lstrcmpW(arg, L"-traceexports") == 0) {
       // Consumed here so it is not mistaken for anything else; the tracer reads its own value from the
       // command line (runtime/hook/export_tracer.cpp), so no ordering with this parse can matter.
-      if (i + 1 < argc) ++i;
+      if (nevr_cli::OptionValue(argc, argv, i) != nullptr) {
+        ++i;
+      } else {
+        LogOptionWithoutValue("-traceexports");
+      }
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
       // #515: a server's time step is NEVR's. GameMainWrapperHook (crash_recovery.cpp) removed these
       // arguments from the string the game parses, before the game read it; LogTimestepArgs reports it
       // once, from what the hook recorded. Here the value is only consumed so it is not read as an option.
-      if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
+      if (lstrcmpW(arg, L"-timestep") == 0) {
+        if (nevr_cli::OptionValue(argc, argv, i) != nullptr) {
+          ++i;
+        } else {
+          LogOptionWithoutValue("-timestep");
+        }
+      }
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.

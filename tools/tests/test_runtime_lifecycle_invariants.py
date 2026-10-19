@@ -186,14 +186,26 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
 
+    def test_a_value_option_never_takes_an_option_as_its_value(self):
+        # #587: `-timestep -noconsole` lost -noconsole because boot.cpp took argv[i + 1] unchecked.
+        # Every value option reads its value through nevr_cli::OptionValue (core/cli_option_value.h).
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+
+        self.assertNotRegex(boot, r"i\s*\+\s*1\s*<\s*argc", "a raw lookahead past the option is back")
+        self.assertNotRegex(boot, r"argv\[\s*(\+\+i|i\s*\+\s*1)\s*\]", "argv[i + 1] is read unchecked")
+        # -config (twice: the early pass and the main parse), -telemetryrate, -region, -traceexports, -timestep.
+        self.assertGreaterEqual(len(re.findall(r"nevr_cli::OptionValue\(", boot)), 6)
+
     def test_the_boot_log_names_the_host_environment_in_the_boot_phase(self):
         # #673: a crash report names the Wine version from the log. The line is written through the boot
         # tee (loader lock held), after the tee opens and before it first closes.
         source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
         body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
         line = body.index("nevr_host_environment::BootLine(nevr_system_info::Get())")
-        self.assertLess(body.index("nevr_boot_log_tee::Init()"), line, "the line is written before the tee opens")
-        self.assertLess(line, body.index("nevr_boot_log_tee::Close()"), "the line is written after the tee closes")
+        self.assertLess(body.index("nevr_boot_log_tee::Init()"), line,
+                        "the host environment line must come after Init(), but it is written before the tee opens")
+        self.assertLess(line, body.index("nevr_boot_log_tee::Close()"),
+                        "the host environment line must come before Close(), but it is written after the tee closes")
         self.assertRegex(body[max(0, line - 40):line], r"TeeFprintf\(", "the line must go through the boot tee")
 
     def test_every_boot_detour_result_is_consumed(self):
