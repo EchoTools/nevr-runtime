@@ -609,6 +609,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
         self.assertIn("nevr_boot_lines::Build(", tee)
+        # #664: the replay carries each record's own level into the main log, not a literal.
+        self.assertRegex(replay, r"WriteFileRecord\(\s*line\.ts\.c_str\(\)\s*,\s*line\.level\.c_str\(\)")
         self.assertIn("GetSystemTime(", tee)
         close = extract_braced_function(tee, "void nevr_boot_log_tee::Close(")
         self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
