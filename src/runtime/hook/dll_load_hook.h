@@ -27,6 +27,10 @@ constexpr int kLoadLibraryVariantCount = 4;
 int Install();
 void Shutdown();
 
+/* Writes the lines a load made under the loader lock left waiting (#688), unless this thread holds the
+ * lock. Called at graceful shutdown, before the process is ended, so a held line is not lost with it. */
+void FlushPendingLines();
+
 /* Predicate for AddLoadFilter(): `lower_path` is the full path or name passed to LoadLibrary*,
  * lowercased, as wide characters. Return true to refuse the load. */
 typedef bool (*LoadFilter)(const wchar_t* lower_path);

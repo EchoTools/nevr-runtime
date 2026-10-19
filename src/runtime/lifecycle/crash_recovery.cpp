@@ -29,6 +29,7 @@
 #include "core/logging.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
@@ -1395,6 +1396,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
   nevr_binary_bug_fixes::Shutdown();
+
+  // 2b. Write any DLL-hook line a load under the loader lock left waiting (#688); outside the lock here.
+  nevr_dll_load_hook::FlushPendingLines();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
   //    ForceFatalExit sets g_forceExitInProgress, then calls

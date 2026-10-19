@@ -92,6 +92,11 @@ static void DrainPendingLines() {
     }
 }
 
+void FlushPendingLines() {
+    if (LoaderLockHeldByThisThread()) return;
+    DrainPendingLines();
+}
+
 static void ReportLine(EchoVR::LogLevel level, const char* fmt, ...) {
     char text[kPendingText];
     va_list args;
