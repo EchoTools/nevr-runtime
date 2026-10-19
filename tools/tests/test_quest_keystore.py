@@ -37,6 +37,13 @@ esac
 '''
 
 
+FAKE_SHRED = r'''#!/bin/bash
+# A fake `shred`: record the full argument list where the test can see it, then do the real work.
+printf '%s\n' "$*" >> "$FAKE_SHRED_LOG"
+exec /usr/bin/shred "$@"
+'''
+
+
 def fingerprint(keystore: pathlib.Path) -> str:
     out = subprocess.run(
         ["keytool", "-list", "-keystore", str(keystore), "-alias", ALIAS, "-storepass", PASSPHRASE],
@@ -55,6 +62,9 @@ class QuestKeystoreTest(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / "pass").write_text(FAKE_PASS)
         (self.bin / "pass").chmod(0o755)
+        (self.bin / "shred").write_text(FAKE_SHRED)
+        (self.bin / "shred").chmod(0o755)
+        self.shred_log = self.tmp / "shred.log"
         self.store = self.tmp / "store"
         self.store.mkdir()
         self.run_dir = self.tmp / "run"
@@ -66,6 +76,7 @@ class QuestKeystoreTest(unittest.TestCase):
              "-dname", "CN=Quest Keystore Test, O=test"], capture_output=True, check=True)
         self.fp = fingerprint(self.ks)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", FAKE_PASS_DIR=str(self.store),
+                        FAKE_SHRED_LOG=str(self.shred_log),
                         XDG_RUNTIME_DIR=str(self.run_dir), NEVR_QUEST_KS_IMPORT_PASS=PASSPHRASE)
 
     def entry(self, name: str) -> pathlib.Path:
@@ -146,6 +157,59 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertFalse(marker.exists())
         self.assertEqual(self.left_behind(), [])
+
+    # ---- shred ----------------------------------------------------------------------------------------------
+
+    def shred_lines(self):
+        if not self.shred_log.exists():
+            return []
+        return [line for line in self.shred_log.read_text().splitlines() if line.strip()]
+
+    def assert_shredded(self, key_path):
+        lines = self.shred_lines()
+        self.assertTrue(lines, "shred was never called")
+        self.assertTrue(any("-u" in line.split() and str(key_path) in line for line in lines),
+                        f"no 'shred -u {key_path}' in {lines}")
+
+    def test_shred_is_called_on_the_key_after_the_command_succeeds(self):
+        self.seed()
+        seen = self.tmp / "seen-key-success"
+        result = self.run_script("with", "bash", "-c", f'printf "%s" "$NEVR_QUEST_KS" > {seen}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_shredded(seen.read_text())
+        self.assertEqual(self.left_behind(), [])
+
+    def test_shred_is_called_on_the_key_after_the_command_fails(self):
+        self.seed()
+        seen = self.tmp / "seen-key-failure"
+        result = self.run_script("with", "bash", "-c", f'printf "%s" "$NEVR_QUEST_KS" > {seen}; exit 7')
+        self.assertEqual(result.returncode, 7)
+        self.assert_shredded(seen.read_text())
+        self.assertEqual(self.left_behind(), [])
+
+    def assert_shredded_after_signal(self, sig):
+        self.seed()
+        proc = subprocess.Popen([str(SCRIPT), "with", "sleep", "30"], env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.time() + 20
+        while time.time() < deadline and not [p for p in self.run_dir.rglob("*") if p.is_file()]:
+            time.sleep(0.05)
+        keys = [p for p in self.run_dir.rglob("*") if p.is_file()]
+        self.assertTrue(keys, "the keystore was never written")
+        key = keys[0]
+        proc.send_signal(sig)
+        proc.communicate(timeout=20)
+        self.assert_shredded(key)
+        self.assertEqual(self.left_behind(), [])
+
+    def test_shred_is_called_on_sigterm(self):
+        self.assert_shredded_after_signal(signal.SIGTERM)
+
+    def test_shred_is_called_on_sigint(self):
+        self.assert_shredded_after_signal(signal.SIGINT)
+
+    def test_shred_is_called_on_sighup(self):
+        self.assert_shredded_after_signal(signal.SIGHUP)
 
     # ---- fingerprint ----------------------------------------------------------------------------------------
 
