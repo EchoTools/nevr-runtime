@@ -48,6 +48,7 @@
 #include "runtime/compat/login_profile.h"
 #include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
+#include "core/cli_option_value.h"
 #include "core/system_info.h"
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
@@ -3168,4 +3169,32 @@ TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinu
     }
     MH_Uninitialize();
     VirtualFree(base, 0, MEM_RELEASE);
+}
+
+// #587: a value option takes the next token as its value only when that token is not an option.
+TEST(CliOptionValue, ATokenThatIsNotAnOptionIsTheValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", value[] = L"120", negative[] = L"-5";
+    wchar_t* argv[] = {exe, flag, value};
+    ASSERT_NE(nevr_cli::OptionValue(3, argv, 1), nullptr);
+    EXPECT_STREQ(nevr_cli::OptionValue(3, argv, 1), L"120");
+    wchar_t* argvNegative[] = {exe, flag, negative};
+    ASSERT_NE(nevr_cli::OptionValue(3, argvNegative, 1), nullptr) << "-5 is a number to the game's tokenizer";
+    EXPECT_STREQ(nevr_cli::OptionValue(3, argvNegative, 1), L"-5");
+}
+
+TEST(CliOptionValue, AnOptionAfterAValueOptionIsNotItsValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", next[] = L"-noconsole", plus[] = L"+x", dash[] = L"-";
+    wchar_t* argv[] = {exe, flag, next};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argv, 1), nullptr) << "-timestep -noconsole must leave -noconsole to the parse";
+    wchar_t* argvPlus[] = {exe, flag, plus};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvPlus, 1), nullptr);
+    wchar_t* argvDash[] = {exe, flag, dash};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvDash, 1), nullptr);
+}
+
+TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-config", beyond[] = L"past-argc";
+    wchar_t* argv[] = {exe, flag, beyond};  // a token sits past argc: a lookahead that ignores argc finds it
+    EXPECT_EQ(nevr_cli::OptionValue(2, argv, 1), nullptr);
+    EXPECT_EQ(nevr_cli::OptionValue(2, nullptr, 1), nullptr);
 }

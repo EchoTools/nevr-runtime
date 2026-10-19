@@ -186,6 +186,16 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
 
+    def test_a_value_option_never_takes_an_option_as_its_value(self):
+        # #587: `-timestep -noconsole` lost -noconsole because boot.cpp took argv[i + 1] unchecked.
+        # Every value option reads its value through nevr_cli::OptionValue (core/cli_option_value.h).
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+
+        self.assertNotRegex(boot, r"i\s*\+\s*1\s*<\s*argc", "a raw lookahead past the option is back")
+        self.assertNotRegex(boot, r"argv\[\s*(\+\+i|i\s*\+\s*1)\s*\]", "argv[i + 1] is read unchecked")
+        # -config (twice: the early pass and the main parse), -telemetryrate, -region, -traceexports, -timestep.
+        self.assertGreaterEqual(len(re.findall(r"nevr_cli::OptionValue\(", boot)), 6)
+
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
         # hook that never installed could not reach g_bootHookFailed and a server booted as if
