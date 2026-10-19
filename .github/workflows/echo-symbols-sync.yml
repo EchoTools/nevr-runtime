@@ -2,9 +2,10 @@ name: echo-symbols sync
 
 # Daily check of Dualgame/echo-symbols against tools/symbols.pin. When its main
 # moves past the pin, fetch the echo_vr-pc subset at that exact sha, validate it,
-# regenerate src/runtime/log/symcache_data.cpp, run the quick check, and open a
-# PR. It never merges: the symbol delta is a human review, and the PR triggers the
-# full build workflow.
+# regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
+# check, then open or update one PR. It never merges and never opens a second PR
+# for the same branch: the symbol delta is a human review, and the full build is
+# the reviewer's quick check (build.yml does not run on pull requests).
 #
 # Trust boundary: data is fetched by sha from the public raw endpoint, never from
 # a branch tip, so the workflow and the pin describe the same bytes. Permissions
@@ -65,7 +66,7 @@ jobs:
           curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/old.json"
           curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/new.json"
 
-      - name: Validate, regenerate, quick check
+      - name: Validate, regenerate, compile check
         if: steps.pin.outputs.changed == 'true'
         working-directory: tools/symcache
         run: |
@@ -81,7 +82,7 @@ jobs:
           # The generated table is C++ data in the runtime; compile it before proposing it.
           g++ -std=c++17 -fsyntax-only -I../../src ../../src/runtime/log/symcache_data.cpp
 
-      - name: Open the PR
+      - name: Open or update the PR
         if: steps.pin.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,13 +92,37 @@ jobs:
           head='${{ steps.pin.outputs.head }}'
           short=$(printf '%s' "$head" | cut -c1-12)
           branch="automation/echo-symbols-$short"
+
+          # A re-run must never open a second PR. Ask the tool what to do:
+          # create (no open PR), skip (open PR already at this sha) or update
+          # (open PR at an older sha; force-push this workflow's own branch and
+          # edit that PR's body).
+          pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // 0')
+          pr_head=""
+          if [ "$pr" != "0" ]; then
+            pr_head=$(gh pr list --head "$branch" --state open --json headRefOid --jq '.[0].headRefOid // ""')
+          fi
+          decision=$(cd tools/symcache && go run . pr-decision --pr "$pr" --pr-head "$pr_head" --head "$head")
+          action=$(printf '%s\n' "$decision" | sed -n 's/^action=//p')
+          note=$(printf '%s\n' "$decision" | sed -n 's/^note=//p')
+          if [ "$action" = "skip" ]; then
+            echo "$note"
+            exit 0
+          fi
+
           printf '%s\n' "$head" > tools/symbols.pin
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add tools/symbols.pin src/runtime/log/symcache_data.cpp
           git commit -m "chore(symcache): echo-symbols $pin -> $short"
-          git push origin "HEAD:refs/heads/$branch"
+
+          if [ "$action" = "update" ]; then
+            git push --force-with-lease="refs/heads/$branch:$pr_head" origin "HEAD:refs/heads/$branch"
+          else
+            git push --force-with-lease="refs/heads/$branch:" origin "HEAD:refs/heads/$branch"
+          fi
+
           {
             echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
             echo
@@ -105,10 +130,23 @@ jobs:
             echo
             cat "$RUNNER_TEMP/diff.md"
             echo
+            echo "## Checks run in this workflow"
+            echo
+            echo "- \`go test ./...\` in \`tools/symcache\`"
+            echo "- \`g++ -std=c++17 -fsyntax-only -I../../src src/runtime/log/symcache_data.cpp\`"
+            echo "- \`go run . validate\` and \`go run . regenerate\` on the fetched corpora"
+            echo
+            echo "The full \`just build\` / quick check is the reviewer's: \`build.yml\` does not run on pull requests."
+            echo
             echo "Branch lifecycle: deleted when this PR merges or closes."
             echo
             echo "Read AGENTS.md at $(git merge-base HEAD origin/main)"
           } > "$RUNNER_TEMP/pr.md"
-          gh pr create --base main --head "$branch" \
-            --title "chore(symcache): echo-symbols $short" \
-            --body-file "$RUNNER_TEMP/pr.md"
+
+          if [ "$action" = "update" ]; then
+            gh pr edit "$pr" --body-file "$RUNNER_TEMP/pr.md"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(symcache): echo-symbols $short" \
+              --body-file "$RUNNER_TEMP/pr.md"
+          fi
