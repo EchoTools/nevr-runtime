@@ -458,6 +458,36 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
         self.assertTrue(backups[0].exists(), "the backup is kept")
 
+    def ps_typed(self, typed, script, *args):
+        return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
+                              input=typed, capture_output=True, text=True, timeout=60)
+
+    def test_without_dir_a_missing_drive_is_skipped_and_the_folder_is_asked_for(self):
+        # #679: the search list names D: and E:; Join-Path on a drive that does not exist threw
+        # DriveNotFoundException before anything was looked at.
+        result = self.ps_typed(str(self.game) + "\n", "install.ps1")
+        self.assertNotIn("DriveNotFound", result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
+
+    def test_a_quoted_answer_naming_the_folder_installs(self):
+        result = self.ps_typed('"' + str(self.game) + '"\n', "install.ps1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
+
+    def test_without_dir_an_empty_answer_stops_with_the_usual_message(self):
+        result = self.ps_typed("\n", "install.ps1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("DriveNotFound", result.stdout + result.stderr)
+        self.assertIn("pass -Dir", result.stdout + result.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
+    def test_a_quoted_answer_naming_a_missing_folder_is_refused_cleanly(self):
+        result = self.ps_typed('"Z:\\nowhere\\bin\\win10"\n', "install.ps1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("DriveNotFound", result.stdout + result.stderr)
+        self.assertIn("no echovr.exe in", result.stdout + result.stderr)
+
     def test_an_existing_release_output_is_never_overwritten(self):
         (self.pkg / "BugSplat64.dll").write_bytes(b"TAMPERED")
         result = self.ps("install.ps1", "-Dir", str(self.game))

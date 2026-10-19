@@ -291,7 +291,7 @@ just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 just worktree-setup            # Make a fresh git worktree buildable (copies extern/ and gen/ from the main checkout)
 just install-hooks             # Once per clone: link the tracked post-checkout hook so a new linked worktree gets the files .worktreeinclude lists (.mcp.json, .claude/settings.local.json)
 just release-preflight           # Refuse unless this clone is exactly origin/main: no local-only tag, no uncommitted or untracked change, nothing unpushed, not behind (read-only; run before any release step)
-just package-dev <keystore>      # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes)
+just package-dev                 # LOCAL dev package from a clean tree: Windows zip + Quest APK in build/package-dev/<sha>/, stamped -dev (a release is only a CI build of a v<x.y.z> tag; never tags or publishes); the Quest APK is signed with the key stored in pass by `just import-quest-keystore`
 just reap-merged         # Dry run: worktrees whose work has landed and the proofs each passes or fails; add --apply to remove them (skill: merge-cleanup)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing

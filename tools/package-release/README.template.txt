@@ -10,7 +10,9 @@ Install
   2. Unzip this package anywhere.
   3. Run, in a PowerShell window opened in the unzipped folder:
        powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-     If you have more than one Echo VR install, or the script cannot find yours, add
+     If the script cannot find your install it asks for the folder that holds echovr.exe
+     (...\ready-at-dawn-echo-arena\bin\win10); type or paste it. If you have more than one Echo VR
+     install, add
        -Dir "C:\...\ready-at-dawn-echo-arena\bin\win10"
   The script checks the package against SHA256SUMS, copies your original BugSplat64.dll to
   BugSplat64.dll.original-<timestamp> next to it, renames a legacy dbgcore.dll to
