@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +16,7 @@
 // ---------------------------------------------------------------------------
 
 static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
+static std::atomic<bool> g_boot_active{false};  // Init() to Close(), the boot phase
 static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for the replay (#5)
 
 // Log()'s boot sink (BootLogSink, core/logging.h), set from Init() to Close() whether or not the
@@ -37,6 +39,7 @@ static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
 
 void nevr_boot_log_tee::Init() {
     SetBootLogSink(&ReportBootLog);
+    g_boot_active.store(true, std::memory_order_release);
     // Get the EXE directory
     char exe_path[MAX_PATH];
     DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
@@ -154,8 +157,11 @@ void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
 
 const char* nevr_boot_log_tee::Path() { return g_boot_path; }
 
+bool nevr_boot_log_tee::Active() { return g_boot_active.load(std::memory_order_acquire); }
+
 void nevr_boot_log_tee::Close() {
     SetBootLogSink(nullptr);
+    g_boot_active.store(false, std::memory_order_release);
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);
         g_boot_handle = INVALID_HANDLE_VALUE;

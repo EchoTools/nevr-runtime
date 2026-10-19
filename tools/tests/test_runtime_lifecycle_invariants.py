@@ -208,6 +208,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                         "the host environment line must come before Close(), but it is written after the tee closes")
         self.assertRegex(body[max(0, line - 40):line], r"TeeFprintf\(", "the line must go through the boot tee")
 
+    def test_the_dll_load_hook_reports_through_the_log_never_raw_stderr(self):
+        # #654: four [NEVR.DLLHOOK] lines went to fprintf(stderr) and never reached the JSONL log. The
+        # hook's own lines go through ReportLine (Log() in the boot phase and outside the loader lock, held
+        # until released under it) or, for the install report, the boot tee.
+        source = strip_comments((ROOT / "src/runtime/hook/dll_load_hook.cpp").read_text())
+
+        self.assertNotRegex(source, r"fprintf\s*\(\s*stderr", "a hook line is written to raw stderr again")
+        self.assertGreaterEqual(len(re.findall(r"\bReportLine\s*\(\s*EchoVR::LogLevel::", source)), 4)
+
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
         # hook that never installed could not reach g_bootHookFailed and a server booted as if

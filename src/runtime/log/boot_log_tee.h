@@ -36,6 +36,10 @@ void Init();
 /// Writes to stderr (always) AND to the boot JSONL file (if open).
 void TeeFprintf(const char* fmt, ...);
 
+/// True from Init() to Close(): the boot phase, in which Log() reports through this tee. Code that must
+/// not call the game's CLog under the loader lock asks this to know whether Log() is safe (#654).
+bool Active();
+
 /// Full path of nevr-boot.jsonl once Init() has resolved it ("" before, or when the directory could
 /// not be built). Valid after Close(): the main log replays this run's lines from it (#5).
 const char* Path();
