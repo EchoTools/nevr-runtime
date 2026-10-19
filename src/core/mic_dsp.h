@@ -41,24 +41,51 @@ class MicRingBuffer {
   uint64_t droppedSamples_ = 0;
 };
 
+/// The counters one overflow line is built from, read at the same moment: MicRead calls and samples the
+/// game has taken, and samples the capture side has pushed (#95).
+struct MicFlowCounters {
+  uint64_t droppedTotal = 0;
+  uint64_t readCalls = 0;
+  uint64_t samplesRead = 0;
+  uint64_t samplesPushed = 0;
+};
+
+/// One overflow line's worth of facts, all measured over the same window (the time since the previous line
+/// or since the game started reading). `dropped == 0` means nothing is to be logged.
+struct MicOverflowReport {
+  uint64_t dropped = 0;
+  uint64_t readCalls = 0;
+  uint64_t samplesRead = 0;
+  uint64_t samplesPushed = 0;
+  uint64_t windowMs = 0;
+  /// True when the game made no MicRead call in the window: it stopped reading. False when it read, but
+  /// less than capture produced: a slow reader, which the old wording ("not draining") called a stall.
+  bool readerStalled = false;
+};
+
 /// Decides when ring overflow is worth a log line: the first overflow of a stream the game is reading,
-/// then at most one line per interval carrying how many samples were dropped since the last line (#95).
+/// then at most one line per interval carrying what happened since the last line (#95).
 /// Used from the capture thread only.
 class MicOverflowLogGate {
  public:
   explicit MicOverflowLogGate(uint64_t intervalMs) : intervalMs_(intervalMs) {}
-  /// `droppedTotal` is MicRingBuffer::DroppedSamples(); `nowMs` a monotonic clock. Returns the samples
-  /// dropped since the last reported line when one should be logged now, otherwise 0.
-  uint64_t Poll(uint64_t droppedTotal, uint64_t nowMs);
-  /// Treats everything dropped so far as already accounted for (the game is not reading yet, so a full
-  /// ring is the normal state and not a stall).
-  void Rebase(uint64_t droppedTotal) { reported_ = droppedTotal; }
+  /// Call on every capture packet while the game is reading. `now` is the counters at this moment; `nowMs`
+  /// a monotonic clock. Returns the report to log now, otherwise one whose `dropped` is 0. While nothing
+  /// is waiting to be reported the window slides forward, so it opens where an overflow begins.
+  MicOverflowReport Poll(const MicFlowCounters& now, uint64_t nowMs);
+  /// Treats everything counted so far as already accounted for (the game is not reading yet, so a full
+  /// ring is the normal state and not a stall) and starts the next window at `nowMs`.
+  void Rebase(const MicFlowCounters& now, uint64_t nowMs) {
+    reported_ = now;
+    windowStartMs_ = nowMs;
+  }
   /// A new stream starts: its first overflow logs at once. Keeps what was already accounted for.
   void Reset() { hasLogged_ = false; }
 
  private:
   uint64_t intervalMs_;
-  uint64_t reported_ = 0;
+  MicFlowCounters reported_;
+  uint64_t windowStartMs_ = 0;
   uint64_t lastLogMs_ = 0;
   bool hasLogged_ = false;
 };

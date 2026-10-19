@@ -270,8 +270,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
         self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
         # #95: the capture side is in the periodic line and the overflow warning is counted, not one-shot.
-        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}result\.ringOverflow")
+        # The gate is polled on every packet while the game reads, so its window slides while nothing waits.
+        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}g_overflowGate\.Poll\(")
+        self.assertNotRegex(source, r"result\.ringOverflow", "the gate is polled only on overflow packets")
         self.assertNotIn("g_ringOverflowLogged", source)
+        # The overflow line reports what the game did in the window (stalled or slow), not that it "is not
+        # draining"; the window's read counters reach the gate from the live counters.
+        self.assertIn("ring overflow reader=%s", source)
+        self.assertNotIn("is not draining", source)
+        self.assertRegex(source, r"flow\.readCalls\s*=\s*g_readCalls\.load\(\)")
+        self.assertRegex(source, r"flow\.samplesRead\s*=\s*g_samplesRead\.load\(\)")
+        self.assertRegex(source, r"g_overflowGate\.Poll\(\s*flow\s*,")
         for field in ("packets=", "silent=", "discontinuities=", "samples_pushed=", "samples_dropped=",
                       "max_poll_gap_ms="):
             self.assertIn(field, source, field)

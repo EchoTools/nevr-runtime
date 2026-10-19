@@ -199,25 +199,36 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
   }
   g_samplesPushed.fetch_add(result.producedSamples, std::memory_order_relaxed);
   // A full ring before the game's first read of this stream is expected (nobody is listening yet,
-  // the oldest audio is simply not wanted); the warning is for a game that read and then stopped.
-  // It is counted: the first overflow logs at once, later ones at most every kOverflowLogIntervalMs
-  // with how many samples were dropped since the previous line.
+  // the oldest audio is simply not wanted); the warning is for a game that read and then fell behind.
+  // It is counted: the first overflow logs at once, later ones at most every kOverflowLogIntervalMs,
+  // with everything measured over that window: whether the game read at all (a stalled reader) or read
+  // less than capture produced (a slow one), and how much of each.
+  const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+  MicFlowCounters flow;
+  flow.droppedTotal = g_ring.DroppedSamples();
+  flow.readCalls = g_readCalls.load();
+  flow.samplesRead = g_samplesRead.load();
+  flow.samplesPushed = g_samplesPushed.load();
   if (!g_ring.ReaderActive()) {
-    g_overflowGate.Rebase(g_ring.DroppedSamples());
-  } else if (result.ringOverflow) {
-    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-    const uint64_t droppedSinceLast = g_overflowGate.Poll(g_ring.DroppedSamples(), nowMs);
-    if (droppedSinceLast > 0) {
+    g_overflowGate.Rebase(flow, nowMs);
+  } else {
+    const MicOverflowReport report = g_overflowGate.Poll(flow, nowMs);
+    if (report.dropped > 0) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
-          "(dropped %llu samples since the last warning, %llu in total; game calls so far: "
-          "MicAvailable=%llu MicRead=%llu samples_read=%llu)",
-          static_cast<unsigned long long>(droppedSinceLast),
-          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          "[NEVR.MIC] ring overflow reader=%s: in %llu ms the game made %llu MicRead call(s) and read %llu of "
+          "%llu captured samples; dropped %llu (%llu in total; game calls so far: MicAvailable=%llu "
+          "MicRead=%llu samples_read=%llu)",
+          report.readerStalled ? "stalled" : "slow",
+          static_cast<unsigned long long>(report.windowMs),
+          static_cast<unsigned long long>(report.readCalls),
+          static_cast<unsigned long long>(report.samplesRead),
+          static_cast<unsigned long long>(report.samplesPushed),
+          static_cast<unsigned long long>(report.dropped),
+          static_cast<unsigned long long>(flow.droppedTotal),
           static_cast<unsigned long long>(g_availableCalls.load()),
-          static_cast<unsigned long long>(g_readCalls.load()),
-          static_cast<unsigned long long>(g_samplesRead.load()));
+          static_cast<unsigned long long>(flow.readCalls),
+          static_cast<unsigned long long>(flow.samplesRead));
     }
   }
 }
