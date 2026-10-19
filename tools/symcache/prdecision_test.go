@@ -36,6 +36,14 @@ func TestDecidePR(t *testing.T) {
 			wantNote:   "#17",
 		},
 		{
+			name:       "open PR with no readable branch pin",
+			pr:         17,
+			prHead:     "",
+			head:       testPinSHA,
+			wantAction: "update",
+			wantNote:   "#17",
+		},
+		{
 			name:       "open PR at an older head sha",
 			pr:         17,
 			prHead:     testOlderSHA,

@@ -29,6 +29,11 @@ func DecidePR(pr int, prHead, head string) (action, note string, err error) {
 		}
 		return prActionCreate, fmt.Sprintf("no open PR for %s; will open one", head), nil
 	}
+	if prHead == "" {
+		// An open PR whose branch pin cannot be read: update it in place rather
+		// than open a second PR. The caller force-pushes the automation branch.
+		return prActionUpdate, fmt.Sprintf("PR #%d has no readable branch pin; updating it to %s", pr, head), nil
+	}
 	if !shaPattern.MatchString(prHead) {
 		return "", "", fmt.Errorf("PR head %q is not a 40-character lowercase sha", prHead)
 	}

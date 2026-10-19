@@ -107,16 +107,20 @@ jobs:
           pin='${{ steps.pin.outputs.pin }}'
           head='${{ steps.pin.outputs.head }}'
           short=$(printf '%s' "$head" | cut -c1-12)
-          branch="automation/echo-symbols-$short"
 
-          # A re-run must never open a second PR. Ask the tool what to do:
-          # create (no open PR), skip (open PR already at this sha) or update
-          # (open PR at an older sha; force-push this workflow's own branch and
-          # edit that PR's body).
+          # One stable automation branch: a re-run updates the open PR instead of
+          # opening a second one. The pin on that branch records the echo-symbols
+          # sha the PR currently tracks (the branch commit is a nevr-runtime sha,
+          # not comparable to the echo-symbols head).
+          branch="automation/echo-symbols-sync"
           pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // 0')
           pr_head=""
+          remote_tip=""
           if [ "$pr" != "0" ]; then
-            pr_head=$(gh pr list --head "$branch" --state open --json headRefOid --jq '.[0].headRefOid // ""')
+            if git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
+              remote_tip=$(git rev-parse --verify -q "refs/remotes/origin/$branch" || true)
+              pr_head=$(git show "refs/remotes/origin/$branch:tools/symbols.pin" 2>/dev/null | tr -d '[:space:]' || true)
+            fi
           fi
           decision=$(cd tools/symcache && go run . pr-decision --pr "$pr" --pr-head "$pr_head" --head "$head")
           action=$(printf '%s\n' "$decision" | sed -n 's/^action=//p')
@@ -133,31 +137,31 @@ jobs:
           git add tools/symbols.pin src/runtime/log/symcache_data.cpp
           git commit -m "chore(symcache): echo-symbols $pin -> $short"
 
-          if [ "$action" = "update" ]; then
-            git push --force-with-lease="refs/heads/$branch:$pr_head" origin "HEAD:refs/heads/$branch"
-          else
-            git push --force-with-lease="refs/heads/$branch:" origin "HEAD:refs/heads/$branch"
+          # A closed PR can leave the branch behind even though no open PR
+          # remains; pick up its tip so the lease protects that case too.
+          if [ -z "$remote_tip" ] && git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
+            remote_tip=$(git rev-parse --verify -q "refs/remotes/origin/$branch" || true)
           fi
+          git push --force-with-lease="refs/heads/$branch:${remote_tip}" origin "HEAD:refs/heads/$branch"
 
           {
             echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
             echo
-            echo "Data: the \`echo_vr-pc\` subset. Validation parsed every key, re-hashed every name with CSymbol64, and required the count to stay within 20% of the previous pin."
+            echo "echo-symbols-sha: $head"
+            echo
+            echo "Data: the \`echo_vr-pc\` subset."
             echo
             cat "$RUNNER_TEMP/diff.md"
             echo
-            echo "## Checks run here"
+            echo "## What ran on this change"
             echo
             echo "- \`go test ./...\` in \`tools/symcache\`"
+            echo "- \`go run . validate\` on the corpus at \`$head\`: keys, strings, every name re-hashed with CSymbol64, count within 20% of \`$pin\`"
+            echo "- \`go run . regenerate\`: wrote \`src/runtime/log/symcache_data.cpp\` (the table in this commit)"
+            echo "- \`go run . diff\`: produced the lists above"
             echo "- \`g++ -std=c++17 -fsyntax-only -I../../src src/runtime/log/symcache_data.cpp\`"
-            echo "- \`go run . validate\` and \`go run . regenerate\` on the fetched corpora"
             echo
-            echo "Checks don't auto-run on this PR: a PR opened with GITHUB_TOKEN starts no workflow runs, so \`build.yml\` and \`pr-read-check.yml\` do not fire. The reviewer runs the quick check:"
-            echo
-            echo "- \`just build\`"
-            echo "- \`cd tools/symcache && go test ./...\`"
-            echo "- \`python3 -m pytest -q tools/tests\`"
-            echo "- \`python3 tools/verify_doc_paths.py\`"
+            echo "The full build is the reviewer's quick check: \`just build\`. \`build.yml\` does not run on pull requests (it runs on workflow_dispatch and release)."
             echo
             echo "Branch lifecycle: deleted when this PR merges or closes."
             echo
@@ -165,7 +169,7 @@ jobs:
           } > "$RUNNER_TEMP/pr.md"
 
           if [ "$action" = "update" ]; then
-            gh pr edit "$pr" --body-file "$RUNNER_TEMP/pr.md"
+            gh pr edit "$pr" --title "chore(symcache): echo-symbols $short" --body-file "$RUNNER_TEMP/pr.md"
           else
             gh pr create --base main --head "$branch" \
               --title "chore(symcache): echo-symbols $short" \
