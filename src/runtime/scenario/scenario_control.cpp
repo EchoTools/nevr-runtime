@@ -89,7 +89,7 @@ std::atomic<SOCKET> g_client{INVALID_SOCKET};
 // join at DLL detach runs under the loader lock. Stop() is the real teardown.
 std::thread* g_thread = nullptr;
 std::mutex g_fireMutex;
-std::string g_lastFireUser;  // the user id a fire resolved ("self", "friend"), under g_fireMutex
+std::string g_lastFireUser;  // the user id a fire resolved ("self", "other"), under g_fireMutex
 std::deque<std::shared_ptr<FireRequest>> g_fireQueue;
 
 void* NetGame() {
@@ -395,10 +395,23 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
     const std::uint64_t self = nevr_social_party::Global().Snapshot().selfId;
     if (self == 0) return "no local user yet";
     user = "OVR-ORG-" + std::to_string(self);
-  } else if (user == "friend") {  // the first friend in the roster: a real player, read-only use
-    std::uint64_t friendId = 0;
-    if (!nevr_social_roster::Global().IdAt(0, &friendId) || friendId == 0) return "the roster has no friend yet";
-    user = "OVR-ORG-" + std::to_string(friendId);
+  } else if (user == "other") {
+    // Another player the game can show a profile for: the first friend in the roster, else the first
+    // person in the recently-met list. The roster is empty on an account with no confirmed friends
+    // (the friend list response it was built from carried none), and the recently-met list is still
+    // the game's own list of real players, each with the profile action the scenario exercises.
+    std::uint64_t otherId = 0;
+    if (!nevr_social_roster::Global().IdAt(0, &otherId) || otherId == 0) {
+      const std::uint64_t selfId = nevr_social_party::Global().Snapshot().selfId;
+      for (const nevr_social_facade::RecentlyMetForTest& person : nevr_social_facade::RecentlyMetUsersForTest()) {
+        if (person.id != 0 && person.id != selfId) {
+          otherId = person.id;
+          break;
+        }
+      }
+    }
+    if (otherId == 0) return "no other player known yet: no friend in the roster and no one recently met";
+    user = "OVR-ORG-" + std::to_string(otherId);
   }
   {
     std::lock_guard<std::mutex> lock(g_fireMutex);

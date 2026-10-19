@@ -96,6 +96,74 @@ class ControlPatienceTest(unittest.TestCase):
             thread.join(5)
 
 
+class TeardownRaceTest(unittest.TestCase):
+    """A client that outlives its Wine server makes the next launch refuse to start (launch-client.sh
+    exit 4), which cost the invite scenario in suite 20261018T061805 (#674)."""
+
+    def fake_bin(self, tmp, pgrep_body: str):
+        import os
+        import pathlib
+        bin_dir = pathlib.Path(tmp) / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "pgrep").write_text("#!/bin/bash\n" + pgrep_body)
+        kill_log = pathlib.Path(tmp) / "killed"
+        (bin_dir / "kill").write_text(f'#!/bin/bash\necho "$@" >> "{kill_log}"\n')
+        (bin_dir / "wineserver").write_text("#!/bin/bash\nexit 0\n")
+        for f in bin_dir.iterdir():
+            f.chmod(0o755)
+        old = os.environ["PATH"]
+        os.environ["PATH"] = f"{bin_dir}:{old}"
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", old))
+        return kill_log
+
+    def test_waits_for_a_client_that_goes_away_and_never_kills_it(self):
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            state = f"{tmp}/count"
+            kill_log = self.fake_bin(
+                tmp, f'n=$(cat "{state}" 2>/dev/null || echo 0); echo $((n+1)) > "{state}"\n'
+                     'if [ "$n" -lt 1 ]; then echo 4242; fi\n')
+            started = time.monotonic()
+            self.assertTrue(run_scenario.wait_for_game_exit(timeout=10))
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertFalse(kill_log.exists())
+
+    def test_teardown_waits_for_the_client_after_the_wine_server(self):
+        import os
+        import pathlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            state = f"{tmp}/count"
+            self.fake_bin(tmp, f'n=$(cat "{state}" 2>/dev/null || echo 0); echo $((n+1)) > "{state}"\n'
+                              'if [ "$n" -eq 0 ]; then echo 4242; fi\n')
+            root = pathlib.Path(tmp) / "game"
+            (root / "echovr/bin/win10").mkdir(parents=True)
+            old = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT",)}
+            os.environ["NEVR_GAME_ROOT"] = str(root)
+            run_scenario.wineprefix.cache_clear()
+            try:
+                run = run_scenario.Run({"name": "teardown"}, pathlib.Path("/nonexistent.dll"), pathlib.Path(tmp))
+                run.teardown()
+            finally:
+                for k, v in old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+                run_scenario.wineprefix.cache_clear()
+            # pgrep ran during teardown, i.e. it waited for the client after the Wine server.
+            self.assertTrue(pathlib.Path(state).exists(), "teardown never looked for a live client")
+            self.assertGreaterEqual(int(pathlib.Path(state).read_text().strip()), 1)
+
+    def test_kills_a_client_that_never_goes_away(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            kill_log = self.fake_bin(tmp, "echo 4242\n")
+            self.assertFalse(run_scenario.wait_for_game_exit(timeout=0.1))
+            self.assertIn("4242", kill_log.read_text())
+
+
 class StateMatchesTest(unittest.TestCase):
     def test_friend_invitable(self):
         state = {"friends": [{"id": 7, "online": True, "invitable": 1}]}
@@ -168,6 +236,19 @@ class WaitStopsOnFailureTest(unittest.TestCase):
             with self.assertRaises(run_scenario.StepFailed) as caught:
                 log.wait("to in game", None)
             self.assertIn("no driver could be loaded", str(caught.exception))
+
+    def test_a_client_that_lost_its_lobby_ends_the_wait(self):
+        """Suite 20261018T065159 hung 38 minutes on this line: the client was dropped by its lobby
+        host and the first step waited without a timeout (#674)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "console.log"
+            path.write_text("2026-10-18T12:16:27.680Z error [EVR] [NETGAME] Disconnected from server "
+                            "due to timeout\n")
+            log = run_scenario.ConsoleLog(path)
+            # A bounded wait: without the pattern this test would hang forever, not fail.
+            with self.assertRaises(run_scenario.StepFailed) as caught:
+                log.wait("to in game", 0.2)
+            self.assertIn("Disconnected from server due to timeout", str(caught.exception))
 
     def test_a_game_that_exited_ends_the_wait(self):
         with tempfile.TemporaryDirectory() as tmp:
