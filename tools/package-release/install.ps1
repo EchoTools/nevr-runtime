@@ -26,19 +26,54 @@ if ($null -eq $want) { throw 'SHA256SUMS has no entry for BugSplat64.dll' }
 $ours = Get-Sha $dll
 if ($ours -ne $want) { throw "BugSplat64.dll does not match SHA256SUMS (got $ours): the package is damaged, download it again" }
 
+# Join-Path throws DriveNotFoundException for a drive this PC does not have (#679), so a candidate
+# folder is joined by plain concatenation and tested with File.Exists, which answers False instead.
+function Get-ExePath([string]$Folder) { [System.IO.Path]::Combine($Folder, 'echovr.exe') }
+function Test-Echo([string]$Folder) { [System.IO.File]::Exists((Get-ExePath $Folder)) }
+
+# The library folders the Oculus / Meta Horizon app records for this user (value Path, or
+# OriginalPath when the library was moved). A missing key or an unreadable one adds nothing.
+function Get-LibraryRoots {
+  $out = @()
+  try {
+    $key = 'HKCU:\Software\Oculus VR, LLC\Oculus\Libraries'
+    if (Test-Path -LiteralPath $key) {
+      foreach ($lib in Get-ChildItem -LiteralPath $key) {
+        foreach ($name in 'Path', 'OriginalPath') {
+          $value = $lib.GetValue($name)
+          if ($value) { $out += ([string]$value) -replace '^\\\\\?\\', '' }
+        }
+      }
+    }
+  } catch {
+    Write-Output ('note: the Oculus library list could not be read: ' + $_.Exception.Message)
+  }
+  return $out
+}
+
 if ($Dir -eq '') {
   $roots = @('C:\Program Files\Meta Horizon', 'C:\Program Files\Oculus', 'C:\Program Files (x86)\Oculus',
-             'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon')
+             'D:\Oculus', 'D:\Meta Horizon', 'E:\Oculus', 'E:\Meta Horizon') + @(Get-LibraryRoots)
+  $suffixes = @('Software\Software\ready-at-dawn-echo-arena\bin\win10', 'Software\ready-at-dawn-echo-arena\bin\win10',
+                'ready-at-dawn-echo-arena\bin\win10')
   $found = @()
   foreach ($root in $roots) {
-    $location = Join-Path $root 'Software\Software\ready-at-dawn-echo-arena\bin\win10'
-    if (Test-Path -LiteralPath (Join-Path $location 'echovr.exe')) { $found += $location }
+    foreach ($suffix in $suffixes) {
+      $location = $root.TrimEnd('\', '/') + '\' + $suffix
+      if ((Test-Echo $location) -and ($found -inotcontains $location)) { $found += $location }
+    }
   }
-  if ($found.Count -eq 0) { throw 'Echo VR was not found in the usual places; pass -Dir <...\bin\win10>' }
   if ($found.Count -gt 1) { throw ('more than one Echo VR install found; pass -Dir with one of: ' + ($found -join '; ')) }
-  $Dir = $found[0]
+  if ($found.Count -eq 1) {
+    $Dir = $found[0]
+  } else {
+    $answer = Read-Host 'Echo VR was not found in the usual places. Type the folder that holds echovr.exe (...\ready-at-dawn-echo-arena\bin\win10)'
+    if ($null -ne $answer) { $answer = $answer.Trim().Trim('"') }
+    if (-not $answer) { throw 'Echo VR was not found in the usual places; pass -Dir <...\bin\win10>' }
+    $Dir = $answer
+  }
 }
-if (-not (Test-Path -LiteralPath (Join-Path $Dir 'echovr.exe'))) { throw "no echovr.exe in $Dir" }
+if (-not (Test-Echo $Dir)) { throw "no echovr.exe in $Dir" }
 if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { throw 'echovr.exe is running; close the game first' }
 
 $target = Join-Path $Dir 'BugSplat64.dll'
