@@ -44,6 +44,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runResolve(args[1:], stdout)
 	case "pr-decision":
 		return runPRDecision(args[1:], stdout)
+	case "pr-cleanup":
+		return runPRCleanup(args[1:], stdout)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -59,7 +61,8 @@ commands:
   diff        compare two corpus JSON files and print the added/removed/changed markdown
   hash        print CSymbol64 for each name
   resolve     resolve hashes through the generated C++ table
-  pr-decision decide create/skip/update for the automation PR`)
+  pr-decision decide create/skip/update for the automation PR
+  pr-cleanup  list automation branches whose PRs are merged or closed`)
 }
 
 func runRegenerate(args []string, stderr io.Writer) error {

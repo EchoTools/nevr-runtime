@@ -38,6 +38,22 @@ jobs:
           go-version-file: tools/symcache/go.mod
           cache: false
 
+      - name: Delete merged or closed automation branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr list --state all --limit 200 --json headRefName,state > "$RUNNER_TEMP/prs.json"
+          mapfile -t stale < <(cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json")
+          if [ "${#stale[@]}" -eq 0 ]; then
+            echo "no merged or closed automation branches"
+            exit 0
+          fi
+          for branch in "${stale[@]}"; do
+            echo "deleting $branch"
+            git push origin --delete "$branch"
+          done
+
       - name: Compare the pin with echo-symbols main
         id: pin
         run: |
@@ -130,13 +146,18 @@ jobs:
             echo
             cat "$RUNNER_TEMP/diff.md"
             echo
-            echo "## Checks run in this workflow"
+            echo "## Checks run here"
             echo
             echo "- \`go test ./...\` in \`tools/symcache\`"
             echo "- \`g++ -std=c++17 -fsyntax-only -I../../src src/runtime/log/symcache_data.cpp\`"
             echo "- \`go run . validate\` and \`go run . regenerate\` on the fetched corpora"
             echo
-            echo "The full \`just build\` / quick check is the reviewer's: \`build.yml\` does not run on pull requests."
+            echo "Checks don't auto-run on this PR: a PR opened with GITHUB_TOKEN starts no workflow runs, so \`build.yml\` and \`pr-read-check.yml\` do not fire. The reviewer runs the quick check:"
+            echo
+            echo "- \`just build\`"
+            echo "- \`cd tools/symcache && go test ./...\`"
+            echo "- \`python3 -m pytest -q tools/tests\`"
+            echo "- \`python3 tools/verify_doc_paths.py\`"
             echo
             echo "Branch lifecycle: deleted when this PR merges or closes."
             echo
