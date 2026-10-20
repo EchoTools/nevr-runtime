@@ -2459,6 +2459,23 @@ void TestGateAwaitingWhenTheSessionOpensDefersTheLogin() {
   QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
 }
 
+// G1: a frame the runtime makes (a party update) goes on the session remote like a game frame: queued behind
+// the login while the session is not open, sent in order once it is, and refused when there is no session.
+void TestSendToSessionQueuesBehindTheLoginAndThenSends() {
+  const CaseScope scope("send to session");
+  Rig rig(WithLogin(kLogin));
+  QCHECK(!rig.router->SendToSession(Msg(kSymSomething, "no session")));
+  rig.router->OnGameOpen(1, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  QCHECK(rig.router->SendToSession(Msg(kSymSomething, "early")));  // the session is not open: queued
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 0);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 1);  // behind the login
+  QCHECK(rig.router->SendToSession(Msg(kSymSomething, "late")));
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 2);
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -3327,6 +3344,7 @@ int main() {
   TestLobbyFramesFollowTheMatchmakerThatAsked();
   TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
   TestGateRefusedEndsADeferredInjection();
+  TestSendToSessionQueuesBehindTheLoginAndThenSends();
   TestGateAwaitingWhenTheSessionOpensDefersTheLogin();
   TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest();
   TestStandaloneMatchmakerRemoteEndDoesNotEndTheSession();

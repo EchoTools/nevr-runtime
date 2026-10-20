@@ -851,6 +851,34 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
   Run(fx);
 }
 
+bool Router::SendToSession(std::string frame) {
+  Effects fx;
+  bool accepted = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto rit = sessionRemote_ == kNoRemote ? remoteTable_.end() : remoteTable_.find(sessionRemote_);
+    if (shutdown_ || rit == remoteTable_.end()) {
+      Log(fx, LogLevel::Warning, Fmt("[router] runtime frame dropped: no session bytes=%llu", Ull(frame.size())));
+    } else {
+      Remote& r = rit->second;
+      auto data = std::make_shared<const std::string>(std::move(frame));
+      if (r.open && !r.loginPending) {
+        accepted = PushToRemoteLocked(sessionRemote_, r, std::move(data), true, kNoGame, fx);
+      } else if (r.pending.size() >= options_.limits.maxPendingFrames ||
+                 r.pendingBytes + data->size() > options_.limits.maxPendingBytes) {
+        Log(fx, LogLevel::Warning,
+            Fmt("[router] runtime frame dropped: queue full while remote=%llu is not open", Ull(sessionRemote_)));
+      } else {
+        r.pendingBytes += data->size();
+        r.pending.push_back({std::move(data), true, kNoGame});
+        accepted = true;
+      }
+    }
+  }
+  Run(fx);
+  return accepted;
+}
+
 void Router::OnGameClose(GameId game) {
   Effects fx;
   {

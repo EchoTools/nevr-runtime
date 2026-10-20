@@ -243,6 +243,9 @@ class Router {
   // `hint.hinted`: the adapter names the role and it is final. Otherwise the role is provisional (by order).
   void OnGameOpen(GameId game, OpenHint hint = OpenHint());
   void OnGameFrame(GameId game, std::string frame, bool binary);
+  // A frame the runtime itself makes (not a game's): queued on the session remote in order with the game's
+  // frames. False when there is no session or its queue is full.
+  bool SendToSession(std::string frame);
   void OnGameClose(GameId game);
   void OnGameWritable(GameId game);
   // The connection has been upgraded for the wiring's silent period and has sent no data frame: the login
