@@ -156,7 +156,7 @@ namespace nevr_export_tracer {
 
 void ConfigureFromCommandLineText(const wchar_t* commandLine) {
   char list[64];
-  if (!Policy::ExtractFlagValue(commandLine, L"-traceexports", list, sizeof(list))) list[0] = '\0';
+  if (!Policy::ExtractTraceExportsValue(commandLine, list, sizeof(list))) list[0] = '\0';
   Configure(list);
 }
 
@@ -178,7 +178,7 @@ void Configure(const char* list) {
   const std::uint32_t mask = Policy::ParseModules(list, &unknown);
   if (unknown) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.TRACE] -traceexports names a module that is not traced (pnsrad, pnsovr, pnsdemo, all): %s",
+        "[NEVR.TRACE] -trace-exports names a module that is not traced (pnsrad, pnsovr, pnsdemo, all): %s",
         list != nullptr ? list : "");
   }
   if (mask == 0) return;

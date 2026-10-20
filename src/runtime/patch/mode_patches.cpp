@@ -250,7 +250,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
         "[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected");
   }
 
-  // Skip console creation if -noconsole was specified
+  // Skip console creation if -no-console was specified
   if (g_noConsole) {
     return;
   }

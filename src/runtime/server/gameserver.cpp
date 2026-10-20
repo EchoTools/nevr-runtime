@@ -269,7 +269,7 @@ VOID GameServerLib::Terminate() {
   }
 }
 
-// File-static state for -exitonerror disconnect detection
+// File-static state for -exit-on-error disconnect detection
 static bool s_wasConnectedToServerDb = false;
 static bool s_exitPending = false;
 
@@ -303,13 +303,13 @@ VOID GameServerLib::Update() {
     m_telemetry->RunDiagnostics();
   }
 
-  // -exitonerror: detect serverdb disconnect and trigger graceful shutdown
+  // -exit-on-error: detect serverdb disconnect and trigger graceful shutdown
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();
     if (s_wasConnectedToServerDb && !nowConnected) {
       s_exitPending = true;
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- beginning graceful shutdown");
+          "[NEVR.GAMESERVER] ServerDB disconnected with -exit-on-error -- beginning graceful shutdown");
       BeginGracefulShutdown(false);
     }
     s_wasConnectedToServerDb = nowConnected;

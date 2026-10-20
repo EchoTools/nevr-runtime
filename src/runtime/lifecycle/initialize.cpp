@@ -121,7 +121,7 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 }
 
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
-  // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
+  // The export tracer (#20; off unless -trace-exports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
   static const bool tracerConfigured = (nevr_export_tracer::ConfigureFromCommandLine(), true);
   static_cast<void>(tracerConfigured);

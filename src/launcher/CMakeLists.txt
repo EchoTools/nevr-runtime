@@ -1,5 +1,5 @@
 # echovr_server.exe — console CreateProcess wrapper for echovr.exe -server
-# -headless -noconsole.
+# -headless -no-console.
 add_executable(echovr_server echovr_server_launcher.cpp)
 
 # The launcher is intentionally a console application. The root sets the

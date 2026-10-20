@@ -162,11 +162,11 @@ class LaunchClientTest(unittest.TestCase):
         env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
         result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad,pnsovr", env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("-traceexports pnsrad,pnsovr", args_file.read_text())
+        self.assertIn("-trace-exports pnsrad,pnsovr", args_file.read_text())
         self.assertIn("tracing platform DLL exports: pnsrad,pnsovr", result.stdout)
         result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("-traceexports", args_file.read_text())
+        self.assertNotIn("-trace-exports", args_file.read_text())
 
     def test_trace_exports_refuses_a_list_with_other_characters(self):
         result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad;rm -rf")
@@ -447,7 +447,7 @@ class VerifyServerTest(unittest.TestCase):
         result = subprocess.run([str(self.checkout / "verify-server.sh"), "run-ts", "timestep", "1"], env=self.env,
                                 cwd=self.checkout, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("args=-server -headless -noconsole -fixedtimestep -timestep 120",
+        self.assertIn("args=-server -headless -no-console -fixedtimestep -timestep 120",
                       (self.tmp / "server-runs/run-ts/context.txt").read_text().splitlines())
 
     def started_fifo(self) -> Fifo:

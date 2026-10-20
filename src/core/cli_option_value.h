@@ -1,9 +1,9 @@
 #pragma once
 
 // #587: which token of a command line is the value of a value option. boot.cpp's parse used to take
-// argv[i + 1] whatever it was, so `-timestep -noconsole` lost -noconsole. A token is an option by the
+// argv[i + 1] whatever it was, so `-timestep -no-console` lost -no-console. A token is an option by the
 // game's own rule (cmdline_strip.h, the game's tokenizer FUN_1400d9000): it starts with '-' or '+' and the
-// next character is not a digit, so `-5` is a value and `-noconsole` is not. Pure, so the parse is
+// next character is not a digit, so `-5` is a value and `-no-console` is not. Pure, so the parse is
 // unit-tested without the game.
 
 #include <cstddef>

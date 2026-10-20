@@ -309,7 +309,7 @@ auth:
 #
 # When enabled (via the "-telemetry" CLI flag, which is the default for
 # servers), the server streams match telemetry over a dedicated WebSocket
-# to a telemetry ingest server. Disable with "-notelemetry".
+# to a telemetry ingest server. Disable with "-no-telemetry".
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/server/gameserver_telemetry.cpp (telemetry streamer)
@@ -372,8 +372,8 @@ arena:
 #
 # When true, the game process calls ExitProcess on fatal errors (e.g.
 # ServerDB disconnection) rather than showing a crash dialog. This is the
-# default behavior for dedicated servers. CLI flag "-noexitonerror" overrides
-# to false; "-exitonerror" is deprecated (it's now the default).
+# default behavior for dedicated servers. CLI flag "-no-exit-on-error" overrides
+# to false; "-exit-on-error" has no effect (it's now the default).
 # Absent: true (exit on error).
 # Not a secret.
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)

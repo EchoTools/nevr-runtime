@@ -346,15 +346,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN", "win11-dev"),
                     help="libvirt domain, used to find the IP when WINVM_HOST is unset")
     ap.add_argument("--dll", type=pathlib.Path, default=REPO / "build/mingw-release/bin/BugSplat64.dll")
-    ap.add_argument("--game-args", default="-noovr -server -headless -noconsole",
-                    help="note: -noconsole is rejected by the game unless -headless is also given")
+    ap.add_argument("--game-args", default="-noovr -server -headless -no-console",
+                    help="note: the legacy dbgcore.dll rejects its no-console flag unless -headless is also given")
     ap.add_argument("--wait", type=int, default=90, help="seconds to observe the boot (minimum 45)")
     ap.add_argument("--expect", choices=["alive", "exit"], default="alive")
     ap.add_argument("--require-stage", default="broadcaster",
                     choices=[n for n, _ in checks.ENGINE_STAGES])
     ap.add_argument("--with-legacy-dbgcore", action="store_true",
                     help="put the guest install's legacy Echo Relay dbgcore.dll in the rig "
-                         "(NEVR refuses to run beside it unless -allow-dbgcore is in --game-args)")
+                         "(NEVR refuses to run beside it unless -skip-dbgcore-check is in --game-args)")
     ap.add_argument("--dump-on-fail", action="store_true", help="fetch a minidump if the game is stuck")
     ap.add_argument("--out", type=pathlib.Path)
     args = ap.parse_args(argv)

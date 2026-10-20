@@ -145,7 +145,7 @@ if [[ -n "$CONFIG" ]]; then
 fi
 if [[ -n "$TRACE_EXPORTS" ]]; then
   [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }
-  game_args+=(-traceexports "$TRACE_EXPORTS")
+  game_args+=(-trace-exports "$TRACE_EXPORTS")
   echo "=== tracing platform DLL exports: $TRACE_EXPORTS (docs/reference/export-tracer.md) ==="
 fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a

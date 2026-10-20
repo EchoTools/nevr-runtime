@@ -38,9 +38,9 @@ void GameServerLib::ConnectTelemetry(const std::string& wsToken) {
     }
   } else {
     // N124. The OUTER guard was silent too, and it is the commoner case: with
-    // -notelemetry (or no streamer) the whole block is skipped, so the most usual
+    // -no-telemetry (or no streamer) the whole block is skipped, so the most usual
     // way telemetry ends up off produced no output at all. Found by writing a
-    // smoke flagset that passed -notelemetry to observe the disabled state — and
+    // smoke flagset that passed -no-telemetry to observe the disabled state — and
     // thereby disabled the very branch that reports it.
     Log(EchoVR::LogLevel::Info,
         "[NEVR.GAMESERVER] telemetry disabled (enabled=%d streamer=%s) — not connecting",
