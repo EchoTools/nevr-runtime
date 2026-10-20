@@ -18,7 +18,7 @@ jobs:
       packages: read
     # The builder image build.yml uses (.github/builder/Dockerfile).
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:efc0fae19a98
+      image: ghcr.io/echotools/nevr-runtime-builder:1c303e5bfe7d
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
