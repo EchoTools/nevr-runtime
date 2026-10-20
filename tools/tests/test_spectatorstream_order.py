@@ -17,7 +17,13 @@ ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_CALL = "EchoVR::PreprocessCommandLine(pGame)"
 ROUTINE = "PatchSpectatorStreamCheck("
 ROUTINE_SIGNATURE = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
-DEFERRED_BOOTSTRAP = "RunDeferredRuntimeBootstrap(pGame,"
+# Bare names, so a second call in another spelling or through a function pointer is still seen.
+DEFERRED_BOOTSTRAP = re.compile(r"\bRunDeferredRuntimeBootstrap\b")
+ENABLE_SERVER = re.compile(r"\bPatchEnableServer\b")
+# The site's RVA as a literal (addresses.h holds the one definition).
+SITE_RVA = re.compile(r"\b0x0*116f3d\b", re.IGNORECASE)
+# Ways to write game memory; the hook uses none of them.
+WRITE_PRIMITIVES = re.compile(r"\b(?:ApplyPatch|ProcessMemcpy|nevr_checked_patch::Apply|memcpy|WriteProcessMemory|VirtualProtect)\b")
 # A routine that builds its own {expected, patched} pair, in any initialization form.
 OWN_SITE = re.compile(r"\bSite\s*\{|\bSite\s+\w+\s*(?:=\s*)?[{(]")
 # The record's result argument: the last argument of FormatSpectatorStreamRecord must be `result`.
@@ -50,14 +56,18 @@ class SpectatorStreamOrder(unittest.TestCase):
         self.assertIn(ORIGINAL_CALL, body)
         self.assertNotIn(ROUTINE, body, "PreprocessCommandLineHook applies the spectator-stream patch itself")
         self.assertNotIn("SPECTATORSTREAM_CHECK", body, "PreprocessCommandLineHook writes the spectator-stream site")
-        self.assertNotRegex(
-            body, r"\bPatchEnableServer\s*\(", "PreprocessCommandLineHook calls PatchEnableServer (and with it the write) itself"
-        )
+        self.assertNotRegex(body, ENABLE_SERVER, "PreprocessCommandLineHook reaches PatchEnableServer (and with it the write) itself")
+        self.assertNotRegex(body, WRITE_PRIMITIVES, "PreprocessCommandLineHook writes game memory itself")
+        self.assertNotRegex(body, SITE_RVA, "PreprocessCommandLineHook names the spectator-stream site by its RVA")
 
     def test_patchenableserver_is_called_only_from_the_deferred_bootstrap(self):
-        callers = [(path, len(re.findall(r"\bPatchEnableServer\s*\(\s*\)\s*;", code)))
-                   for path, code in runtime_sources()]
-        self.assertEqual([c for c in callers if c[1]], [("src/runtime/lifecycle/boot.cpp", 1)])
+        # Every use of the name, not only `PatchEnableServer();`: a function pointer to it is a caller too.
+        definition = "VOID PatchEnableServer() {"
+        users = []
+        for path, code in runtime_sources():
+            code = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)  # the phase string "PatchEnableServer" is not a use
+            users.append((path, len(ENABLE_SERVER.findall(code)) - code.count(definition)))
+        self.assertEqual([u for u in users if u[1]], [("src/runtime/lifecycle/boot.cpp", 1)])
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         deferred = extract_braced_function(boot, "void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger)")
         self.assertEqual(len(re.findall(r"\bPatchEnableServer\s*\(\s*\)\s*;", deferred)), 1)
@@ -72,7 +82,7 @@ class SpectatorStreamOrder(unittest.TestCase):
             if path == "src/runtime/patch/mode_patches.cpp":
                 self.assertEqual(code.count(routine), 1)
                 code = code.replace(routine, "")
-            if re.search(r"\bSPECTATORSTREAM_CHECK\b", code):
+            if re.search(r"\bSPECTATORSTREAM_CHECK\b", code) or SITE_RVA.search(code):
                 users.append(path)
         self.assertEqual(users, [], "the spectator-stream site is named outside PatchSpectatorStreamCheck")
 
@@ -99,10 +109,11 @@ class SpectatorStreamOrder(unittest.TestCase):
         deferred = extract_braced_function(boot, "void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger)")
         self.assertIn("PatchEnableServer()", deferred)
         body = hook_body()
-        self.assertEqual(body.count(DEFERRED_BOOTSTRAP), 1)
+        uses = list(DEFERRED_BOOTSTRAP.finditer(body))
+        self.assertEqual(len(uses), 1, "the hook reaches RunDeferredRuntimeBootstrap more than once (a second, earlier call?)")
         self.assertLess(
             body.index(ORIGINAL_CALL),
-            body.index(DEFERRED_BOOTSTRAP),
+            uses[0].start(),
             "the deferred bootstrap (and with it the spectator-stream write) runs before the original call",
         )
 
