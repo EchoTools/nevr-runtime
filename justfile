@@ -324,19 +324,20 @@ test-winvm *ARGS:
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
-scenario NAME:
+scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
     cmake --build --preset mingw-scenario
-    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml"
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
 
-scenario-all:
+# ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
+scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
     cmake --build --preset mingw-scenario
-    python3 tools/scenario/run_all.py
+    python3 tools/scenario/run_all.py {{ARGS}}
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:

@@ -328,8 +328,8 @@ def wait_for_wineserver_exit() -> None:
 
 
 class Run:
-    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path):
-        self.scenario, self.dll, self.out = scenario, dll, out
+    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None):
+        self.scenario, self.dll, self.out, self.config = scenario, dll, out, config
         self.results: list[dict] = []
         self.console: ConsoleLog | None = None
         self.control: Control | None = None
@@ -364,6 +364,8 @@ class Run:
         # -mp is the game's own multiplayer flag: with -windowed alone a client reaches the menu
         # and waits for a hand on Play, so no scenario waiting for "in game" can ever pass (#674).
         command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll), "--game-arg", "-mp"]
+        if self.config is not None:
+            command += ["--config", str(self.config)]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -501,6 +503,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("scenario", type=pathlib.Path)
     parser.add_argument("--dll", type=pathlib.Path, default=DEFAULT_DLL)
     parser.add_argument("--out", type=pathlib.Path)
+    parser.add_argument("--config", type=pathlib.Path,
+                        help="a config.json whose directory holds the run's config.yaml (launch-client.sh --config), "
+                             "e.g. to run the suite with network.session_router: all (#708)")
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
@@ -512,7 +517,7 @@ def main(argv: list[str]) -> int:
     out = args.out or SCRATCH / f"{stamp}-{scenario['name']}"
     out.mkdir(parents=True, exist_ok=True)
 
-    run = Run(scenario, args.dll, out)
+    run = Run(scenario, args.dll, out, args.config)
     try:
         passed = run.execute()
     finally:

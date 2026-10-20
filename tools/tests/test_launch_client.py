@@ -401,6 +401,39 @@ class LaunchClientTest(unittest.TestCase):
             run_scenario.wineprefix.cache_clear()
         self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed -mp")
 
+    def test_the_scenario_runner_hands_its_config_to_the_launcher(self):
+        """`--config` reaches launch-client.sh and so the game's `-config`, which is how a suite runs with
+        network.session_router set (#708); without it the game gets no -config."""
+        import sys
+        sys.path.insert(0, str(REPO / "tools/scenario"))
+        import run_scenario
+        config = self.tmp / "cfg" / "config.json"
+        config.parent.mkdir()
+        config.write_text("{}")
+        args_file = self.tmp / "wine-args.txt"
+        env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
+        out = self.tmp / "scenario-out"
+        out.mkdir()
+        old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
+                                                  "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
+                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL")}
+        os.environ.update(env)
+        try:
+            run = run_scenario.Run({"name": "launch-config"}, self.dll, out, config)
+            try:
+                run.launch()
+            finally:
+                run.teardown()
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            run_scenario.wineprefix.cache_clear()
+        expected = "./echovr.exe -windowed -mp -config Z:" + str(config).replace("/", "\\")
+        self.assertEqual(args_file.read_text().strip(), expected)
+
 
 class VerifyServerTest(unittest.TestCase):
     """verify-server.sh deploys the test DLL and a plugin, runs a (fake) game, and restores."""
