@@ -740,7 +740,7 @@ TEST(SelectBuiltinDefaults, ANullValueCountsAsNotEmbedded) {
 }
 
 // #708: network.session_router values. An absent key is legacy with no complaint; a misspelling is legacy with a
-// sentence for the log; "all" is not available until S2.
+// sentence for the log, which the bridge makes fatal.
 TEST(SessionRouterMode, ParsesEachValueAndNeverGuesses) {
   using nevr_session_router_mode::Mode;
   using nevr_session_router_mode::ParseMode;
@@ -753,8 +753,8 @@ TEST(SessionRouterMode, ParsesEachValueAndNeverGuesses) {
   EXPECT_TRUE(problem.empty());
   EXPECT_EQ(ParseMode("config", &problem), Mode::Config);
   EXPECT_TRUE(problem.empty());
-  EXPECT_EQ(ParseMode("all", &problem), Mode::Legacy);
-  EXPECT_FALSE(problem.empty());
+  EXPECT_EQ(ParseMode("all", &problem), Mode::All);
+  EXPECT_TRUE(problem.empty());
   EXPECT_EQ(ParseMode("Config", &problem), Mode::Legacy);
   EXPECT_NE(problem.find("Config"), std::string::npos);
   EXPECT_EQ(ParseMode("config", nullptr), Mode::Config);
@@ -768,4 +768,14 @@ TEST(SessionRouterMode, OnlyConfigSocketsAreRoutedInConfigMode) {
   EXPECT_FALSE(RoutesRole(Mode::Config, Role::Login));
   EXPECT_FALSE(RoutesRole(Mode::Config, Role::Matchmaker));
   EXPECT_FALSE(RoutesRole(Mode::Legacy, Role::Config));
+}
+
+TEST(SessionRouterMode, EverySocketIsRoutedInAllModeAndNoneInLegacy) {
+  using nevr_session_router_mode::Mode;
+  using nevr_session_router_mode::RoutesRole;
+  using nevr_socket_role::Role;
+  for (const Role role : {Role::Config, Role::Login, Role::Matchmaker}) {
+    EXPECT_TRUE(RoutesRole(Mode::All, role));
+    EXPECT_FALSE(RoutesRole(Mode::Legacy, role));
+  }
 }

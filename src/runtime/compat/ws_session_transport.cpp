@@ -50,7 +50,10 @@ SendResult GameSockets::Send(GameId game, std::string_view frame, bool binary) {
   }
   const std::shared_ptr<ix::WebSocket> socket = lookup_(raw);  // keeps it alive for the send
   if (!socket) return SendResult::Failed;
-  const std::string data(frame);
+  std::string data(frame);
+  if (rewrite_) {
+    if (std::optional<std::string> replacement = rewrite_(data, binary)) data = std::move(*replacement);
+  }
   const ix::WebSocketSendInfo info = binary ? socket->sendBinary(data) : socket->sendText(data);
   return info.success ? SendResult::Sent : SendResult::Failed;
 }
