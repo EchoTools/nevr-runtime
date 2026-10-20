@@ -110,8 +110,9 @@ void PreflightRuntimeBootstrap() {
   //
   // The bit is keyed on -windowed, not on -server: it is a client flag.  A
   // -server run begins multiplayer after its login through the state machine
-  // (state_machine.cpp, issue #45: no menu runs on a server to begin it); this
-  // bit plays no part in that.
+  // (state_machine.cpp, issue #45: no menu runs on a server to begin it), and
+  // only there: a server must not get 0x2100000 either, because the spectator
+  // flow begins multiplayer a second time (see PreprocessCommandLineHook).
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + nevr_patch_addresses::GAME_WINDOWED_FLAGS_OFFSET);
@@ -153,21 +154,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     Log(vehResult == nevr_veh_policy::InstallResult::Failed ? EchoVR::LogLevel::Error : EchoVR::LogLevel::Info,
         "[NEVR.CRASH] veh post_cli status=%s mode=%s", status, g_isServer ? "server" : "client");
   }
-  // #519: the -spectatorstream check is a JE inside PreprocessCommandLine itself, so on a server
-  // the NOP is written here, before the first original call, rather than only from
-  // RunDeferredRuntimeBootstrap after that call returns. Established: the write precedes the
-  // first original call (tools/tests/test_spectatorstream_order.py). The NOP does not begin
-  // multiplayer: what begins it on a server is the call the state machine queues when the login
-  // completes (state_machine.cpp, #514). Not part of this write: PatchEnableHeadless,
-  // PatchBypassOvrPlatform and PatchBlockOculusSDK run in RunDeferredRuntimeBootstrap, after the
-  // original call returns; whether any of them has to run earlier is not established. Server only:
-  // the client's first original call initializes D3D and is left alone (N146). This hook may be
-  // entered more than once, so the write is attempted on the first server entry only and its
-  // record is emitted once.
-  static std::atomic_bool s_spectatorStreamPatchAttempted{false};
-  if (g_isServer && !s_spectatorStreamPatchAttempted.exchange(true, std::memory_order_acq_rel)) {
-    PatchSpectatorStreamCheck("pre-preprocess");
-  }
+  // The -spectatorstream check (SPECTATORSTREAM_CHECK, a JE inside PreprocessCommandLine) is not
+  // NOPped here, before the first original call, on a server or a client. With the JE NOPped that
+  // call falls through to `or qword [game+0x7AE0], 0x2100000` (echovr.exe 0x140116F4D), the
+  // spectator flow, and in that flow the game begins multiplayer by itself (on a server against
+  // the production services, about ten seconds after the login). On a server the call the state
+  // machine queues when the login completes (state_machine.cpp, #514) has begun it already, so the
+  // game's begin is a second one: it rebinds the HTTP API listener, the bind fails and the server
+  // exits (ForceFatalExit(62)). The checked NOP is applied by PatchEnableServer in
+  // RunDeferredRuntimeBootstrap, after this call returns.
   // #496: plugins marked `early: true` load here, once, before the original call: the
   // game reads its manifests and opens its packages during it, before the graphics
   // device exists (where the rest load), so a plugin that serves game data from
