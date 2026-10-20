@@ -291,6 +291,7 @@ TEST_F(AssetCache, StaleTempFilesAreRemovedAndFreshOnesKept) {
   WriteRaw(stale, Bytes("x"));
   WriteRaw(fresh, Bytes("y"));
   SetAge(stale, 2 * 24 * 60 * 60);
+  SetAge(fresh, 60);  // an hour is not a day, and a stamp younger than the clock's tick would hide the age test
   const cache::EvictReport r = cache::Evict(dir_, cache::kDefaultCapBytes, {});
   EXPECT_EQ(r.staleTempsRemoved, 1u);
   EXPECT_FALSE(Exists(stale));
@@ -302,11 +303,17 @@ TEST_F(AssetCache, FilesThatAreNotBlobsAreNeverCountedOrRemoved) {
   WriteRaw(dir_ + L"\\index.json", Bytes("{}"));
   WriteRaw(dir_ + L"\\notes.txt", Filler(5000, 1));
   WriteRaw(dir_ + L"\\" + std::wstring(63, L'a') + L".blob", Filler(5000, 2));  // 63 characters: not a key
+  WriteRaw(dir_ + L"\\" + std::wstring(65, L'a') + L".blob", Filler(5000, 3));  // 65 characters: not a key
+  WriteRaw(dir_ + L"\\" + std::wstring(64, L'g') + L".blob", Filler(5000, 4));  // 64 characters, not hex
+  WriteRaw(dir_ + L"\\" + std::wstring(64, L'A') + L".blob", Filler(5000, 5));  // 64 hex characters, upper case
   const cache::EvictReport r = cache::Evict(dir_, 0, {});
   EXPECT_EQ(r.blobBytesBefore, 0u);
   EXPECT_TRUE(Exists(dir_ + L"\\index.json"));
   EXPECT_TRUE(Exists(dir_ + L"\\notes.txt"));
   EXPECT_TRUE(Exists(dir_ + L"\\" + std::wstring(63, L'a') + L".blob"));
+  EXPECT_TRUE(Exists(dir_ + L"\\" + std::wstring(65, L'a') + L".blob"));
+  EXPECT_TRUE(Exists(dir_ + L"\\" + std::wstring(64, L'g') + L".blob"));
+  EXPECT_TRUE(Exists(dir_ + L"\\" + std::wstring(64, L'A') + L".blob"));
 }
 
 TEST_F(AssetCache, TheDefaultDirectoryIsUnderLocalAppDataNevrEchovrCache) {
