@@ -54,20 +54,37 @@ class WerrorFlagTest(unittest.TestCase):
         self.assertIn("gamepatcheslegacy", offenders[0][2])
 
 
-def compile_with(entry: dict, fixture: pathlib.Path) -> subprocess.CompletedProcess:
-    """The recorded command with its source and outputs replaced: -fsyntax-only on the fixture."""
-    argv = shlex.split(entry["command"])
+def recorded_flags(argv: list, source: str) -> list:
+    """The recorded argv without its source, outputs and dependency scanning. -fdeps-* only works with a -M
+    option, which is removed with the dependency outputs, so GCC rejects the command if it stays (#713)."""
     kept = []
     skip = 0
-    for index, arg in enumerate(argv):
+    for arg in argv:
         if skip:
             skip -= 1
         elif arg in ("-o", "-MF", "-MT", "-MQ"):
             skip = 1
-        elif arg in ("-c", "-MD", "-MMD") or arg == entry["file"]:
+        elif arg in ("-c", "-MD", "-MMD") or arg == source or arg.startswith(("-fdeps-format=", "-fdeps-file=", "-fdeps-output=")):
             continue
         else:
             kept.append(arg)
+    return kept
+
+
+class RecordedFlagsTest(unittest.TestCase):
+    """Needs no build tree: the filter that every live compile below depends on."""
+
+    ARGV = ["g++", "-fmodules-ts", "-MD", "-MT", "x.obj", "-MF", "x.obj.d", "-fdeps-format=p1689r5",
+            "-fdeps-file=x.ddi", "-fdeps-output=x.obj", "-Wall", "-Werror", "-o", "x.obj", "-c", "a.cpp"]
+
+    def test_dependency_scanning_flags_are_removed_with_the_dependency_outputs(self):
+        kept = recorded_flags(self.ARGV, "a.cpp")
+        self.assertEqual(kept, ["g++", "-fmodules-ts", "-Wall", "-Werror"])
+
+
+def compile_with(entry: dict, fixture: pathlib.Path) -> subprocess.CompletedProcess:
+    """The recorded command with its source and outputs replaced: -fsyntax-only on the fixture."""
+    kept = recorded_flags(shlex.split(entry["command"]), entry["file"])
     return subprocess.run(
         kept + ["-fsyntax-only", str(fixture)], cwd=entry["directory"], capture_output=True, text=True, timeout=120
     )
