@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put a file into the nEVR asset cache, or verify a cache. The layout is src/runtime/patch/asset_cache.h's:
+"""Put a file into the asset cache, or verify a cache. The layout is src/runtime/patch/asset_cache.h's:
 
   <sha256>.blob   the bytes, named by their SHA-256
   index.json      {"version":1,"overrides":[{"type":"0x..","name":"0x..","sha256":"..","label":".."}]}
