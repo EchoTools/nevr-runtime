@@ -20,6 +20,7 @@ DEFAULT_CMAKE = REPO / "src/runtime/CMakeLists.txt"
 # Updating this list is an intentional review point: adding or removing a
 # runtime patch must update the expected inventory in the same reviewed change.
 EXPECTED_PATCH_SOURCES = (
+    "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
@@ -36,7 +37,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/social_facade_object.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 15
+EXPECTED_PATCH_SOURCE_COUNT = 16
 
 
 class InventoryError(Exception):
