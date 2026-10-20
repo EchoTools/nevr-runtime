@@ -83,7 +83,7 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"arena_celebration_time", "arena.celebration_time"},
       {"arena_mercy_score", "arena.mercy_score"},
       // misc — deprecated + inert (default TRUE, config only ever sets TRUE;
-      // -noexitonerror is the live control). No first-class section is invented
+      // -no-exit-on-error is the live control). No first-class section is invented
       // for a deprecated flag: it rides the schema's x- extension namespace.
       {"exitonerror", "x-exitonerror"},
   };

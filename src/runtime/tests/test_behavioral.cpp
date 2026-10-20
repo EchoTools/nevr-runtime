@@ -3202,9 +3202,9 @@ TEST(CliOptionValue, ATokenThatIsNotAnOptionIsTheValue) {
 }
 
 TEST(CliOptionValue, AnOptionAfterAValueOptionIsNotItsValue) {
-    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", next[] = L"-noconsole", plus[] = L"+x", dash[] = L"-";
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", next[] = L"-no-console", plus[] = L"+x", dash[] = L"-";
     wchar_t* argv[] = {exe, flag, next};
-    EXPECT_EQ(nevr_cli::OptionValue(3, argv, 1), nullptr) << "-timestep -noconsole must leave -noconsole to the parse";
+    EXPECT_EQ(nevr_cli::OptionValue(3, argv, 1), nullptr) << "-timestep -no-console must leave -no-console to the parse";
     wchar_t* argvPlus[] = {exe, flag, plus};
     EXPECT_EQ(nevr_cli::OptionValue(3, argvPlus, 1), nullptr);
     wchar_t* argvDash[] = {exe, flag, dash};

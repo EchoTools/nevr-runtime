@@ -23,7 +23,7 @@ says how to check each one and which log line proves it.
 - **Sign in with Discord.** A device-code sign-in in your browser; the saved sign-in is reused on the next start and refreshed in the background. (PC)
 - **Saved sign-in on the headset.** The Quest build reuses its saved sign-in, and shows a sign-in code on the game's own login-error screen when it has none. (Quest)
 - **Windowed, no headset.** `-windowed` runs the game in a window with the headset checks patched out. (PC)
-- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-noconsole` default apply. (PC) Tested clean: Proton Experimental 11.0 and Wine 11. Proton 8.0 (8.0-103) crashes in its own `dxgi.dll` right after the graphics device is created, with the stock `BugSplat64.dll` too, so use Proton Experimental or a recent Wine (#673). The boot log's `[NEVR.BOOT] host environment:` line records the Wine version.
+- **Works on Wine and Proton.** Wine is detected; the `_temp` directory fix and `-no-console` default apply. (PC) Tested clean: Proton Experimental 11.0 and Wine 11. Proton 8.0 (8.0-103) crashes in its own `dxgi.dll` right after the graphics device is created, with the stock `BugSplat64.dll` too, so use Proton Experimental or a recent Wine (#673). The boot log's `[NEVR.BOOT] host environment:` line records the Wine version.
 - **A wrong `echovr.exe` is refused.** A wrong or damaged game image is refused instead of patched. (PC)
 
 ### Friends, party and the social lobby
@@ -55,11 +55,11 @@ says how to check each one and which log line proves it.
 - **Structured logs.** One JSON line per event: `nevr-boot.jsonl` and a timestamped `nevr-<timestamp>.jsonl` under `%LOCALAPPDATA%\EchoVR\logs` on PC; logcat tag `NEVR-Sentinel` and `nevr-sentinel.log` on Quest.
 - **The game's own log, filtered.** The built-in filter captures the game's log lines, folds repeats and reports its own health. (PC)
 - **Hook accounting.** Each hook reports whether it was ever entered; overwritten hooks are detected; counters are reported once the game runs. (both)
-- **Export tracing.** `-traceexports` records the platform DLL calls. (PC)
+- **Export tracing.** `-trace-exports` records the platform DLL calls. (PC)
 - **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
 
 ### Game server mode
-The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -noconsole` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
+The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -no-console` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
 
 - **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
 - **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
@@ -171,7 +171,7 @@ already built into the runtime.
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
 - `src/extension/` — header-only published C ABI for third-party plugins/modules
 - `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
-  `echovr.exe -server -headless -noconsole` (a dedicated game server)
+  `echovr.exe -server -headless -no-console` (a dedicated game server)
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub, built
   separately from the community beta package
 - `src/quest/` — separate Android/Quest arm64 target

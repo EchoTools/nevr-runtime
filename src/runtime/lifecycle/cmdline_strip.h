@@ -19,8 +19,8 @@
 // removing an option removes the parameters that follow it too.
 //
 // Which "server" wins: StripServerTimestepArgs follows NEVR's own reading of `-server`, not the game's
-// name lookup. It requires an option token whose text is exactly "-server" (what boot.cpp's exact
-// lstrcmpW means), where the game's lookup would also match `--server` or `+SERVER` (leading dashes
+// name lookup. It requires an option token whose text is "-server" or "--server" (what boot.cpp's
+// nevr_cli::Resolve means), where the game's lookup would also match `---server` or `+SERVER` (leading dashes
 // skipped, A-Z lower-cased, CSymbol64::Lookup 0x1400ce120): server mode is NEVR's, and the game has no
 // -server token. The tokenization is the game's, because the strip edits the string the game parses.
 // boot.cpp decides g_isServer from CommandLineToArgvW, which differs on quotes: `[-server]` is not a server there and here, `"-server"`
@@ -109,11 +109,12 @@ inline std::vector<Token> Tokenize(std::string_view commandLine) {
   return tokens;
 }
 
-/// True when the game's parser reads `-server` in `commandLine`: an option token exactly "-server". See the
-/// header comment for how this differs from boot.cpp's CommandLineToArgvW reading.
+/// True when the game's parser reads `-server` in `commandLine`: an option token that is "-server" or
+/// "--server" (#697: NEVR reads one extra leading dash, as nevr_cli::Resolve does; `---server` and `+server`
+/// are not NEVR's). See the header comment for how this differs from boot.cpp's CommandLineToArgvW reading.
 inline bool HasServerToken(std::string_view commandLine) {
   for (const Token& t : Tokenize(commandLine)) {
-    if (t.option && t.text == "-server") return true;
+    if (t.option && (t.text == "-server" || t.text == "--server")) return true;
   }
   return false;
 }

@@ -216,7 +216,7 @@ void TelemetryStreamer::ProcessResponses() {
 }
 
 // ============================================================================
-// Game thread: Diagnostic mode (-telemetrydiag)
+// Game thread: Diagnostic mode (-telemetry-diag)
 // ============================================================================
 
 void TelemetryStreamer::RunDiagnostics() {

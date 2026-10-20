@@ -6,14 +6,14 @@ BOOL g_noConsole = FALSE;
 BOOL g_isHeadless = FALSE;
 /// Whether the game should exit when the serverdb connection is lost.
 /// If a round is active, the exit is deferred until the round ends (plus a 30-second grace period).
-/// Default TRUE — suppress with -noexitonerror.
+/// Default TRUE — suppress with -no-exit-on-error.
 BOOL g_exitOnError = TRUE;
 /// A dedicated server's tick rate (ticks/second). Set from config network.tick_rate_hz (default 120, range
 /// 10..1000). Zero keeps the game's own fixed step (30 a second); a server is always fixed-timestep.
 UINT32 g_headlessTickRateHz = 120;
-/// Whether telemetry streaming is enabled (default TRUE). Disabled by -notelemetry.
+/// Whether telemetry streaming is enabled (default TRUE). Disabled by -no-telemetry.
 BOOL g_telemetryEnabled = TRUE;
-/// Telemetry streaming rate in Hz (default 10). Set by -telemetryrate <N>.
+/// Telemetry streaming rate in Hz (default 10). Set by -telemetry-rate <N>.
 UINT32 g_telemetryRateHz = 30;
 /// Telemetry diagnostic mode. Logs snapshot data instead of sending over WS.
 BOOL g_telemetryDiag = FALSE;

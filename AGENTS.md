@@ -380,7 +380,7 @@ The game has a ~15-20 second splash-screen delay at startup before any nEVR code
 - **Minimum patience window: 45 seconds from process start** before concluding the server is hung.
 - The splash screen runs BEFORE `DllMain` / `WinMain` — nEVR has no control over this phase.
 - Startup timeout checks must account for this delay. A server that hasn't logged anything at t=10s is normal; a server with no output at t=60s is dead.
-- The `-noconsole` flag suppresses the splash UI but NOT the delay — the game still runs its startup sequence.
+- The `-no-console` flag suppresses the splash UI but NOT the delay — the game still runs its startup sequence.
 
 ## Architecture
 
@@ -495,7 +495,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 ### Other Components
 
 - **`src/launcher/`** — `echovr_server.exe`, a thin `CreateProcess` wrapper that
-  spawns `echovr.exe -server -headless -noconsole` (built; root
+  spawns `echovr.exe -server -headless -no-console` (built; root
   `CMakeLists.txt`, `just launcher`).
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.

@@ -255,7 +255,7 @@ target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 
 add_subdirectory(src/libovr-stub)
 
-# Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -noconsole
+# Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -no-console
 add_subdirectory(src/launcher)
 
 add_subdirectory(plugins)

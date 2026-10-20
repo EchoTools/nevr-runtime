@@ -43,6 +43,7 @@ const char* TokenAuth_GetUsername(void);
 #include "runtime/lifecycle/server_timestep.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 #include "runtime/lifecycle/timestep_log.h"
+#include "core/cli_flags.h"
 #include "core/cli_option_value.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -80,14 +81,14 @@ void PreflightRuntimeBootstrap() {
 
   for (int i = 0; i < argc; ++i) {
     const LPWSTR arg = argv[i];
-    if (lstrcmpW(arg, L"-server") == 0) {
+    if (nevr_cli::IsFlag(arg, L"-server")) {
       g_isServer = TRUE;
       g_isHeadless = TRUE;
       g_noOvr = TRUE;  // -server implies -noovr unconditionally
-    } else if (lstrcmpW(arg, L"-windowed") == 0) {
+    } else if (nevr_cli::IsFlag(arg, L"-windowed")) {
       g_isWindowed = TRUE;
       g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
-    } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
+    } else if (nevr_cli::IsFlag(arg, L"-config") || nevr_cli::IsFlag(arg, L"-config-path")) {
       // #587: `-config -server` gives -config no value; -server is still read. The main parse below
       // logs the missing value; this early pass runs before the log exists.
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
@@ -195,6 +196,26 @@ static void LogOptionWithoutValue(const char* option) {
   Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %s was given without a value; it is ignored", option);
 }
 
+// #697: what the command line's spelling of a NEVR flag earns. A deprecated alias is reported once per run
+// per alias (the text is nevr_cli::kAliasWarningFormat, pinned by test_cmdline_strip); a token with three or
+// more leading dashes on a NEVR flag is rejected, since the game's own lookup would still read it.
+static void NoteCommandLineToken(const wchar_t* token, const nevr_cli::Resolved& named) {
+  static bool s_aliasReported[nevr_cli::kFlagCount] = {};
+  if (named.rejected) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] %ls has more than two leading dashes; NEVR ignores it (write -name or --name)", token);
+    return;
+  }
+  if (named.alias == nullptr) return;
+  for (std::size_t i = 0; i < nevr_cli::kFlagCount; ++i) {
+    if (nevr_cli::kFlags[i].alias != named.alias) continue;
+    if (s_aliasReported[i]) return;
+    s_aliasReported[i] = true;
+    Log(EchoVR::LogLevel::Warning, nevr_cli::kAliasWarningFormat, named.alias, named.flag);
+    return;
+  }
+}
+
 static void LogTimestepArgs() {
   try {
     const nevr_timestep_log::Inputs in = nevr_timestep_log::BuildInputs(
@@ -239,7 +260,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 0; i < argc; ++i) {
-      if (lstrcmpW(argv[i], L"-server") == 0) {
+      if (nevr_cli::IsFlag(argv[i], L"-server")) {
         g_isServer = TRUE;
         g_noOvr = TRUE;  // -server implies -noovr unconditionally
         break;
@@ -354,73 +375,76 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   for (int i = 0; i < argc; ++i) {
     const LPWSTR arg = argv[i];
+    const nevr_cli::Resolved named = nevr_cli::Resolve(arg);
+    NoteCommandLineToken(arg, named);
+    const wchar_t* const flag = named.flag != nullptr ? named.flag : L"";
 
-    if (lstrcmpW(arg, L"-server") == 0) {
+    if (lstrcmpW(flag, L"-server") == 0) {
       g_isServer = TRUE;
       g_isHeadless = TRUE;  // -server forces -headless unconditionally (never separable)
-    } else if (lstrcmpW(arg, L"-offline") == 0) {
+    } else if (lstrcmpW(flag, L"-offline") == 0) {
       g_isOffline = TRUE;
-    } else if (lstrcmpW(arg, L"-noconsole") == 0) {
+    } else if (lstrcmpW(flag, L"-no-console") == 0) {
       g_noConsole = TRUE;
-    } else if (lstrcmpW(arg, L"-windowed") == 0) {
+    } else if (lstrcmpW(flag, L"-windowed") == 0) {
       g_isWindowed = TRUE;
-    } else if (lstrcmpW(arg, L"-noexitonerror") == 0) {
+    } else if (lstrcmpW(flag, L"-no-exit-on-error") == 0) {
       g_exitOnError = FALSE;
-    } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
+    } else if (lstrcmpW(flag, L"-exit-on-error") == 0) {
       // Deprecated — exit-on-error is now the default
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] -exitonerror is deprecated (now default)");
-    } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] -exit-on-error is a no-op (exiting on error is the default)");
+    } else if (lstrcmpW(flag, L"-no-telemetry") == 0) {
       g_telemetryEnabled = FALSE;
-    } else if (lstrcmpW(arg, L"-telemetryrate") == 0) {
+    } else if (lstrcmpW(flag, L"-telemetry-rate") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         g_telemetryRateHz = std::wcstoul(value, nullptr, 10);
         if (g_telemetryRateHz == 0) g_telemetryRateHz = 10;
         ++i;
       } else {
-        LogOptionWithoutValue("-telemetryrate");
+        LogOptionWithoutValue("-telemetry-rate");
       }
-    } else if (lstrcmpW(arg, L"-telemetrydiag") == 0) {
+    } else if (lstrcmpW(flag, L"-telemetry-diag") == 0) {
       g_telemetryDiag = TRUE;
-    } else if (lstrcmpW(arg, L"-timestamps") == 0) {
+    } else if (lstrcmpW(flag, L"-timestamps") == 0) {
       g_timestampLogs = TRUE;
-    } else if (lstrcmpW(arg, L"-upnp") == 0) {
+    } else if (lstrcmpW(flag, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
-    } else if (lstrcmpW(arg, L"-allow-dbgcore") == 0) {
+    } else if (lstrcmpW(flag, L"-skip-dbgcore-check") == 0) {
       g_allowDbgCore = TRUE;
-    } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
+    } else if (lstrcmpW(flag, L"-config") == 0 || lstrcmpW(flag, L"-config-path") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_customConfigPath, MAX_PATH, NULL, NULL);
         ++i;
       } else {
         LogOptionWithoutValue("-config");
       }
-    } else if (lstrcmpW(arg, L"-region") == 0 || lstrcmpW(arg, L"-serverregion") == 0) {
+    } else if (lstrcmpW(flag, L"-region") == 0 || lstrcmpW(flag, L"-serverregion") == 0) {
       if (const wchar_t* value = nevr_cli::OptionValue(argc, argv, i)) {
         WideCharToMultiByte(CP_UTF8, 0, value, -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
         ++i;
       } else {
         LogOptionWithoutValue("-region");
       }
-    } else if (lstrcmpW(arg, L"-traceexports") == 0) {
+    } else if (lstrcmpW(flag, L"-trace-exports") == 0) {
       // Consumed here so it is not mistaken for anything else; the tracer reads its own value from the
       // command line (runtime/hook/export_tracer.cpp), so no ordering with this parse can matter.
       if (nevr_cli::OptionValue(argc, argv, i) != nullptr) {
         ++i;
       } else {
-        LogOptionWithoutValue("-traceexports");
+        LogOptionWithoutValue("-trace-exports");
       }
-    } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
+    } else if (lstrcmpW(flag, L"-timestep") == 0 || lstrcmpW(flag, L"-fixedtimestep") == 0) {
       // #515: a server's time step is NEVR's. GameMainWrapperHook (crash_recovery.cpp) removed these
       // arguments from the string the game parses, before the game read it; LogTimestepArgs reports it
       // once, from what the hook recorded. Here the value is only consumed so it is not read as an option.
-      if (lstrcmpW(arg, L"-timestep") == 0) {
+      if (lstrcmpW(flag, L"-timestep") == 0) {
         if (nevr_cli::OptionValue(argc, argv, i) != nullptr) {
           ++i;
         } else {
           LogOptionWithoutValue("-timestep");
         }
       }
-    } else if (lstrcmpW(arg, L"-headless") == 0) {
+    } else if (lstrcmpW(flag, L"-headless") == 0) {
       // N99: -headless is never "redundant", and the log must not tell the
       // operator to remove it: removing the flag opens a window.
       // -headless is a NATIVE echovr.exe token; the game's
@@ -432,7 +456,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same "
           "engine-flags mask, so this token is a harmless no-op here.");
-    } else if (lstrcmpW(arg, L"-noovr") == 0) {
+    } else if (lstrcmpW(flag, L"-noovr") == 0) {
       // Native token, and the game handles it itself: a single flag write,
       // orq $0x8000000, 0x7ae0(%rdi) at 0x1401168BA. NOT pGame+0x178 — that is
       // the CMainArgs POINTER, and the claim that it was a flag field is what
@@ -462,12 +486,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server mode — headless + noovr applied");
   }
 
-  // Auto-enable -noconsole on Wine/Linux
+  // Auto-enable -no-console on Wine/Linux
   if (!g_noConsole) {
     HMODULE ntdll = GetModuleHandleA("ntdll.dll");
     if (ntdll && GetProcAddress(ntdll, "wine_get_version") != NULL) {
       g_noConsole = TRUE;
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wine detected — defaulting to -noconsole");
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wine detected — defaulting to -no-console");
     }
   }
 
@@ -480,7 +504,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
   // leftover dbgcore.dll is also present in the game directory, the OS loader
   // resolves it during import resolution BEFORE the launcher can intervene,
-  // causing a double-load condition. The -allow-dbgcore flag permits this
+  // causing a double-load condition. The -skip-dbgcore-check flag permits this
   // intentionally for the legacy injection path.
   {
     char exePath[MAX_PATH];
@@ -497,17 +521,17 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
             if (g_allowDbgCore) {
               Log(EchoVR::LogLevel::Info,
                   "[NEVR.PATCH] dbgcore.dll present in game directory — "
-                  "legacy injection permitted (-allow-dbgcore)");
+                  "legacy injection permitted (-skip-dbgcore-check)");
             } else if (g_isServer) {
               FatalError(
                   "dbgcore.dll detected in game directory — legacy DLL hijack artifact; remove "
-                  "it or pass -allow-dbgcore",
+                  "it or pass -skip-dbgcore-check",
                   "dbgcore.dll hijack detected");
             } else {
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
                   "This file is a legacy DLL hijack artifact. If you are intentionally using "
-                  "the legacy injection path, add -allow-dbgcore to your command line.\n\n"
+                  "the legacy injection path, add -skip-dbgcore-check to your command line.\n\n"
                   "If you are using the NEVR launcher, remove dbgcore.dll from the game "
                   "directory and use BugSplat64.dll instead.",
                   "dbgcore.dll hijack detected");
