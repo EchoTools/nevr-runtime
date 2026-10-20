@@ -1388,7 +1388,19 @@ class RemoteService {
             if (isLogin) ++loginRequests_;
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
             if (isLogin) reply = loginReply_.load();
-            if (symbol == nevr_evr_codec::kSymConfigRequest) reply = nevr_evr_codec::kSymConfigSuccess;
+            if (symbol == nevr_evr_codec::kSymConfigRequest) {
+              reply = nevr_evr_codec::kSymConfigSuccess;
+              if (message->str.find("main_menu") != std::string::npos) {
+                // The service echoes the request's type and id, as symbols, ahead of the resource.
+                std::string payload;
+                for (int copy = 0; copy < 2; ++copy) {
+                  for (int i = 0; i < 8; ++i) payload.push_back(static_cast<char>((0x1509ee27440e1d7bULL >> (8 * i)) & 0xFF));
+                }
+                payload += "{}";
+                socket.sendBinary(nevr_evr_codec::BuildMessage(reply, payload));
+                return;
+              }
+            }
             if (symbol == nevr_evr_codec::kSymFindSessionRequest) {
               if (holdLobbyReplies_.load()) {
                 ++heldLobbyReplies_;
@@ -1549,7 +1561,10 @@ class GameSocket {
     return Received(symbol);
   }
   void SendRequest() { Send(nevr_evr_codec::kSymDocumentRequest); }
-  void Send(uint64_t symbol) { socket_.sendBinary(nevr_evr_codec::BuildMessage(symbol, "")); }
+  void Send(uint64_t symbol) { Send(symbol, std::string()); }
+  void Send(uint64_t symbol, const std::string& payload) {
+    socket_.sendBinary(nevr_evr_codec::BuildMessage(symbol, payload));
+  }
 
  private:
   ix::WebSocket socket_;
@@ -2015,6 +2030,19 @@ TEST_F(RouterAllTest, ASecondLoginSocketSharesTheSessionAndInjectsNothing) {
   EXPECT_EQ(remote_.Opens(), 1);
   EXPECT_EQ(LogLinesContaining("login injected xpid=").size(), 1U);
   EXPECT_EQ(second.Count(nevr_evr_codec::kSymLoginSettings), 0);
+}
+
+// The game's first config request has a '{' where the pad byte is: `{` + `{"type":"main_menu","id":"main_menu"}` + NUL. Its reply
+// is matched to the request by type and id, so the router must read the key out of it, or the game never gets
+// its main_menu config (seen live, #708 S2b).
+TEST_F(RouterAllTest, AConfigRequestWhosePadByteIsABraceIsAnswered) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::string payload = std::string(1, '{') + R"({"type":"main_menu","id":"main_menu"})" + std::string(1, '\0');
+  config.Send(nevr_evr_codec::kSymConfigRequest, payload);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess)) << "the reply was dropped as unmatched";
+  EXPECT_TRUE(LogLinesContaining("config reply dropped").empty());
+  EXPECT_TRUE(LogLinesContaining("no usable type and id").empty());
 }
 
 // L4: the reply to a request on the login socket goes to the login socket.

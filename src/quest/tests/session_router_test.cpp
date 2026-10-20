@@ -2822,6 +2822,16 @@ void TestConfigRequestKeyMatchesTheServicesDecoder() {
   }
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("").has_value());
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("x").has_value());  // a pad byte and no JSON
+  // The pad byte is whatever the game left there, '{' included: seen live (#708 S2b) on the game's first request,
+  // `{` + `{"type":"main_menu","id":"main_menu"}` + NUL, 39 bytes. Failure caught: that request keyed as unreadable, so
+  // the service's reply matched nothing and the game never got its main_menu config.
+  const std::string braced = std::string(1, '{') + R"({"type":"main_menu","id":"main_menu"})" + std::string(1, '\0');
+  const std::optional<nevr_evr_codec::ConfigKey> bracedKey = nevr_evr_codec::ParseConfigRequestKey(braced);
+  QCHECK(bracedKey.has_value());
+  if (bracedKey.has_value()) {
+    QCHECK(bracedKey->type == nevr_evr_codec::ConfigSymbol("main_menu"));
+    QCHECK(bracedKey->id == nevr_evr_codec::ConfigSymbol("main_menu"));
+  }
 }
 
 // The key of a reply: the success carries the two symbols, the failure the two strings.

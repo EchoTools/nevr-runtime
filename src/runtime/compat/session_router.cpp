@@ -412,10 +412,17 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
       ++configRepliesUnmatched_;
       *quietDrop = true;
       *logged = true;
+      std::string open;  // the open requests' keys, so a reply that matches none can be compared with them
+      for (std::size_t i = 0; i < configRequests_.size() && i < 4; ++i) {
+        const ConfigRequestRecord& entry = configRequests_[i];
+        open += Fmt(" game=%llu:%016llx/%016llx", Ull(entry.owner), Ull(entry.key ? entry.key->type : 0),
+                    Ull(entry.key ? entry.key->id : 0));
+      }
       Log(fx, LogLevel::Warning,
           Fmt("[router] config reply dropped: no open config request has its type and id: symbol=0x%016llx "
-              "type=0x%016llx id=0x%016llx (%llu such replies in total)",
-              Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_)));
+              "type=0x%016llx id=0x%016llx (%llu such replies in total); %llu open request(s):%s",
+              Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_),
+              Ull(configRequests_.size()), open.c_str()));
     } else {
       GameId owner = request->owner;
       // Both entries are erased by position, the later one first. Erasing a deque element that is neither the
@@ -494,9 +501,21 @@ bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<cons
     nevr_evr_codec::Message message;
     while (nevr_evr_codec::ReadMessage(*data, offset, &message) == nevr_evr_codec::ReadStatus::Ok) {
       if (message.symbol == nevr_evr_codec::kSymConfigRequest) {
-        configRequests_.push_back(
-            {from, nevr_evr_codec::ParseConfigRequestKey(std::string_view(
-                       reinterpret_cast<const char*>(message.payload), static_cast<std::size_t>(message.length)))});
+        const std::string_view requestPayload(reinterpret_cast<const char*>(message.payload),
+                                              static_cast<std::size_t>(message.length));
+        const std::optional<nevr_evr_codec::ConfigKey> requestKey = nevr_evr_codec::ParseConfigRequestKey(requestPayload);
+        if (!requestKey || requestKey->type == 0 || requestKey->id == 0) {
+          // A request the reply cannot be matched to by its key. The payload names a resource (never a credential).
+          std::string shown;
+          for (std::size_t i = 0; i < requestPayload.size() && i < 160; ++i) {
+            const char c = requestPayload[i];
+            shown += (c >= 0x20 && c < 0x7f) ? c : '.';
+          }
+          Log(fx, LogLevel::Warning,
+              Fmt("[router] game=%llu config request has no usable type and id (%s): bytes=%llu payload=\"%s\"", Ull(from),
+                  requestKey ? "empty field" : "unreadable", Ull(requestPayload.size()), shown.c_str()));
+        }
+        configRequests_.push_back({from, requestKey});
         while (configRequests_.size() > kMaxConfigRequests) {
           ++configRequestsEvicted_;
           Log(fx, LogLevel::Warning,

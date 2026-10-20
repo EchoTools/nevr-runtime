@@ -232,7 +232,7 @@ struct ConfigKey {
 // changes to match the game, this changes in the same release.
 uint64_t ConfigSymbol(std::string_view text);
 
-// The key of a config request payload; nullopt when the payload is not a pad byte and a JSON object whose
+// The key of a config request payload; nullopt when the payload is not a pad byte (any value, '{' included) and a JSON object whose
 // "type" and "id" (matched without regard to ASCII case, the last one winning, null leaving the value empty)
 // are strings.
 std::optional<ConfigKey> ParseConfigRequestKey(std::string_view payload);
