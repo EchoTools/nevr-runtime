@@ -58,7 +58,7 @@
  *     block holds anything else, so a genuine error is shown, and dies for good when the game reaches
  *     "loading global". Skipping is a plain return.
  *
- * It never logs on the game's call path. Its fourteen counters (hook_report.h), registered by
+ * It never logs on the game's call path. Its sixteen counters (hook_report.h), registered by
  * RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
  *   login_prompt_text_refreshed     the followed block was rewritten or restored after a change
@@ -79,13 +79,17 @@
  *                                   the game's error event (CR15NetGame::QuitOnError) was sent once so
  *                                   the status script copies the new text to the screen
  *   login_prompt_error_resend_unavailable  an event was due and QuitOnError was not resolved
+ *   login_prompt_login_restarted    the game sat in "login failed" with the signed-in notice on screen and
+ *                                   the login could proceed: the game's own BeginLogIn (what RETRY runs) was
+ *                                   called once for that notice, so the player need not select RETRY (#672)
+ *   login_prompt_login_restart_unavailable  that call was due and BeginLogIn was not resolved
  *
  * Integration surface. The sentinel's own entry.cpp installs the hooks, but nothing in it creates
  * QuestTokenAuth, so there the board stays empty and the game's text always passes through. A
  * startup sequence that links token auth into the same shared object and creates it
  * (QuestTokenAuth::Create, whose presenters publish to the board) calls, in this order:
  *   1. RegisterCounters()  before sentinel::StartReporter. Returns false, after one JSON line, when
- *                          the reporter refused any of the fourteen.
+ *                          the reporter refused any of the sixteen.
  *   2. InstallIfCounted(<result of 1>)  after QuestTokenAuth::Create; nothing else needs
  *                          attaching. Skips, with one JSON line, when the counters were refused;
  *                          otherwise Install(). Both slots are in
@@ -109,8 +113,9 @@ using ErrorThunk = sentinel::pinned::LibR15SetDelimitedErrorMessageThunk;
 using UpdateThunk = sentinel::pinned::LibR15NetGameUpdateThunk;
 using EnablePageThunk = sentinel::pinned::LibR15EnablePageNodeEnterThunk;
 using QuitFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
+using BeginLogInFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
 
-inline constexpr int kCounterCount = 14;
+inline constexpr int kCounterCount = 16;
 
 // Registers the counters. Call before sentinel::StartReporter. Returns false, having logged one
 // line {"event":"login_prompt_counters","result":"refused",...}, when any was refused.
@@ -137,6 +142,8 @@ void ResetLatchForTest() noexcept;
 // Test support: the function the hook calls as CR15NetGame::QuitOnError (null: unavailable), and the
 // monotonic clock (nanoseconds) it spaces those calls with (null: the steady clock).
 void SetQuitOnErrorForTest(QuitFn quit) noexcept;
+// The function the hook calls as CR15NetGame::BeginLogIn (null: unavailable); also forgets which notice it restarted.
+void SetBeginLogInForTest(BeginLogInFn begin) noexcept;
 void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept;
 
 // Test support: forgets which pages the page-enter log has seen (each is logged again at its next enable).
@@ -150,7 +157,7 @@ void ReleaseBlockWriterForTest() noexcept;
 // The counters' current values, in the order of the comment above.
 struct Counts {
   std::uint64_t shown, refreshed, kept, not_local, busy, not_ours, resent, resend_unavailable, error_page_dropped,
-      logging_in_page_dropped, page_passed_armed;
+      logging_in_page_dropped, page_passed_armed, login_restarted, login_restart_unavailable;
 };
 Counts CurrentCounts() noexcept;
 

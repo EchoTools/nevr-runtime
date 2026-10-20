@@ -241,6 +241,16 @@ inline constexpr std::uint64_t kQuitOnErrorVaddr = 0x12713f8;
 inline constexpr std::uint32_t kQuitOnErrorCode[4] = {0xa9bf7bf3, 0xaa0003f3, 0xf9400400, 0xf956d268};
 using QuitOnErrorSig = void(CR15NetGameOpaque* self);
 
+// NRadEngine::NRadGame::CR15NetGame::BeginLogIn(), defined in libr15 at 0x13917b8 (member: `this` in x0, no
+// other argument, no return value). It is the task the RETRY page's script schedules on the NetGame (echovr.exe
+// FUN_140dd9950 passes FUN_140157bd0, the same body, to FUN_140198460): it returns when the state is above 1,
+// so "login failed" (-94) passes; it then calls LogIn ("[NETGAME] Logging in...") and switches to "logging
+// in". Reached like QuitOnError: build ID, first four instructions, then base + this address.
+// str x28, [sp, #-0x40]!; stp x23, x22, [sp, #0x10]; stp x21, x20, [sp, #0x20]; stp x19, x30, [sp, #0x30].
+inline constexpr std::uint64_t kBeginLogInVaddr = 0x13917b8;
+inline constexpr std::uint32_t kBeginLogInCode[4] = {0xf81c0ffc, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+using BeginLogInSig = void(CR15NetGameOpaque* self);
+
 // CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
 namespace game_layout {
 // EState at offset 0: SwitchTo (0x125b8b4) compares `ldr w0, [x0]` with the new state and stores

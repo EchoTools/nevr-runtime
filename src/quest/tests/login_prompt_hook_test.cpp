@@ -426,7 +426,7 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A nearly full reporter table (two slots left, the hook needs fourteen): the counters are refused,
+  // A nearly full reporter table (two slots left, the hook needs sixteen): the counters are refused,
   // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
   constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
@@ -1148,6 +1148,111 @@ void APageTableThatIsFullStillPassesEveryEnable() {
   lp::SetClockForTest(nullptr);
 }
 
+// #672: the device code was accepted, the screen shows the signed-in notice ("Select RETRY to finish") and the
+// login may proceed. RETRY runs the game's BeginLogIn; the hook runs it once for the notice so the player does not
+// have to. Never before the gate is ready (the logging-in page would be held back), never for the prompt, never
+// when the game left "login failed", and once per notice.
+int g_beginCalls = 0;
+CR15NetGameOpaque* g_beginSelf = nullptr;
+std::int32_t g_beginSawState = 0;
+void FakeBeginLogIn(CR15NetGameOpaque* self) noexcept {
+  ++g_beginCalls;
+  g_beginSelf = self;
+  std::memcpy(&g_beginSawState, reinterpret_cast<unsigned char*>(self) + layout::kStateOffset, sizeof(g_beginSawState));
+  SetState(g_game, layout::kStateLoggingIn);  // what the game's BeginLogIn does
+}
+
+void TheSignedInNoticeStartsTheLoginOnce() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  g_beginCalls = 0;
+  board::Withdraw();
+  Publish(Prompt("RST1-CODE"));
+  FailLocally(g_game);
+  const lp::Counts before = lp::CurrentCounts();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);  // the prompt is on screen: the account does not exist yet
+
+  Publish(kNotice, board::Mode::kNotice);  // the code was accepted
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
+  QCHECK(g_beginCalls == 1 && g_beginSelf == Obj(g_game));
+  QCHECK(g_beginSawState == layout::kStateLoginFailed);  // called while the game sits in "login failed"
+  QCHECK(lp::CurrentCounts().login_restarted == before.login_restarted + 1);
+  for (int i = 0; i < 3; ++i) UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 1);  // the game is now logging in: nothing more
+
+  // The same notice on a game that stays in "login failed" (the login failed again, locally): once per notice.
+  FailLocally(g_game);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 1);
+  Publish(kNotice, board::Mode::kNotice);  // a new publish is a new version
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 2);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
+void TheLoginIsNotStartedBeforeItMayProceedOrWhenTheGameMovedOn() {
+  lp::ResetLatchForTest();
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  g_beginCalls = 0;
+  // Not ready: the notice is not even on screen yet, and BeginLogIn would only strand the player.
+  gate::SetReady(false);
+  board::Withdraw();
+  Publish(Prompt("RST2-CODE"));
+  FailLocally(g_game);
+  Publish(kNotice, board::Mode::kNotice);
+  for (int i = 0; i < 3; ++i) UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);
+  gate::SetReady(true);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 1);
+
+  // The game left "login failed" on its own (the player selected RETRY first): no second login.
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  g_beginCalls = 0;
+  board::Withdraw();
+  Publish(Prompt("RST3-CODE"));
+  FailLocally(g_game);
+  Publish(kNotice, board::Mode::kNotice);
+  SetState(g_game, layout::kStateLoggingIn);  // RETRY pressed in this very frame
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);
+
+  // An instance that is not followed is left alone.
+  FailLocally(g_game);
+  SetState(g_other, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(g_other), 16);
+  QCHECK(g_beginCalls == 0 || g_beginSelf == Obj(g_game));
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
+void AnUnresolvedBeginLogInIsCountedAndNotCalled() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetBeginLogInForTest(nullptr);
+  board::Withdraw();
+  Publish(Prompt("RST4-CODE"));
+  FailLocally(g_game);
+  Publish(kNotice, board::Mode::kNotice);
+  const lp::Counts before = lp::CurrentCounts();
+  UpdateEntry()(Obj(g_game), 16);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(lp::CurrentCounts().login_restart_unavailable == before.login_restart_unavailable + 1);  // once per notice
+  QCHECK(lp::CurrentCounts().login_restarted == before.login_restarted);
+  QCHECK(Line(g_game, 1) == "Select RETRY to finish.");  // the screen still tells the player what to do
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -1184,6 +1289,9 @@ int main() {
   AGenuineErrorWrittenInTheSameFrameIsNotDropped();
   WithoutAPromptOnScreenNothingIsHeldBack();
   ANoticeWaitsForTheLoginToBeAbleToProceed();
+  TheSignedInNoticeStartsTheLoginOnce();
+  TheLoginIsNotStartedBeforeItMayProceedOrWhenTheGameMovedOn();
+  AnUnresolvedBeginLogInIsCountedAndNotCalled();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   TheHoldBitIsPublishedWithReadyAndReadsBackOnlyWhenNothingElseDecides();
