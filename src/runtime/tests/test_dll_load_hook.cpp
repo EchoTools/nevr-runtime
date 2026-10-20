@@ -831,3 +831,65 @@ TEST_F(DllLoadHookFilter, ARefusalMadeUnderTheLoaderLockInTheBootPhaseIsWrittenA
   EXPECT_NE(boot.find("[NEVR.DLLHOOK] info; load refused by filter 'test-filter': version.dll"), std::string::npos)
       << "boot file was:\n" << boot;
 }
+
+// #688: the buffer for lines made under the loader lock holds eight. A ninth is counted, and the drain says
+// how many were dropped, once.
+namespace {
+
+RTL_CRITICAL_SECTION* LoaderLockForTest() {
+  auto* peb = reinterpret_cast<std::uint8_t*>(NtCurrentTeb()->ProcessEnvironmentBlock);
+  return *reinterpret_cast<RTL_CRITICAL_SECTION**>(peb + 0x110);
+}
+
+std::size_t ClogCount(const std::string& needle) {
+  std::size_t n = 0;
+  for (const ClogLine& line : g_clogLines) {
+    if (line.text.find(needle) != std::string::npos) ++n;
+  }
+  return n;
+}
+
+}  // namespace
+
+TEST_F(DllLoadHookFilter, NineLinesUnderTheLoaderLockKeepEightAndCountTheDroppedOne) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  nevr_dll_load_hook::Install();
+  nevr_dll_load_hook::AddLoadFilter("test-filter", BlocksVersionDll);
+  RecordingClogScope clog;
+  RTL_CRITICAL_SECTION* const lock = LoaderLockForTest();
+  ASSERT_NE(lock, nullptr);
+  EnterCriticalSection(lock);
+  for (int i = 0; i < 9; ++i) EXPECT_EQ(LoadLibraryW(L"version.dll"), nullptr);
+  LeaveCriticalSection(lock);
+  ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
+
+  EXPECT_EQ(ClogCount("load refused by filter 'test-filter'"), 8u) << AllClogText();
+  EXPECT_TRUE(ClogHas(EchoVR::LogLevel::Warning, "[NEVR.DLLHOOK] 1 line(s) made under the loader lock were dropped"))
+      << AllClogText();
+
+  // The count is reported once: the next drain finds nothing to say.
+  g_clogLines.clear();
+  ASSERT_NE(LoadLibraryW(L"ws2_32.dll"), nullptr);
+  EXPECT_EQ(ClogCount("dropped"), 0u) << AllClogText();
+}
+
+// #688: graceful shutdown writes what a load under the lock left waiting, and does not touch CLog while
+// the calling thread still holds the lock.
+TEST_F(DllLoadHookFilter, FlushPendingLinesWritesAHeldLineOutsideTheLockOnly) {
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  nevr_dll_load_hook::Install();
+  nevr_dll_load_hook::AddLoadFilter("test-filter", BlocksVersionDll);
+  RecordingClogScope clog;
+  RTL_CRITICAL_SECTION* const lock = LoaderLockForTest();
+  ASSERT_NE(lock, nullptr);
+  EnterCriticalSection(lock);
+  EXPECT_EQ(LoadLibraryW(L"version.dll"), nullptr);
+  nevr_dll_load_hook::FlushPendingLines();
+  const std::size_t writtenUnderLock = g_clogLines.size();
+  LeaveCriticalSection(lock);
+  EXPECT_EQ(writtenUnderLock, 0u) << "FlushPendingLines wrote while this thread held the loader lock";
+
+  nevr_dll_load_hook::FlushPendingLines();
+  EXPECT_TRUE(ClogHas(EchoVR::LogLevel::Info, "[NEVR.DLLHOOK] load refused by filter 'test-filter': version.dll"))
+      << AllClogText();
+}

@@ -217,6 +217,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(source, r"fprintf\s*\(\s*stderr", "a hook line is written to raw stderr again")
         self.assertGreaterEqual(len(re.findall(r"\bReportLine\s*\(\s*EchoVR::LogLevel::", source)), 4)
 
+    def test_graceful_shutdown_writes_the_dll_hook_lines_held_under_the_loader_lock(self):
+        # #688: a line made by a load under the loader lock waits in dll_load_hook.cpp's buffer. The graceful
+        # shutdown writes it, outside the lock, before the process is ended.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void PerformGracefulShutdown(")
+        flush = body.index("nevr_dll_load_hook::FlushPendingLines()")
+        self.assertLess(flush, body.index("ForceFatalExit(exitCode)"),
+                        "the held lines must be written before ForceFatalExit ends the process")
+
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
         # hook that never installed could not reach g_bootHookFailed and a server booted as if
