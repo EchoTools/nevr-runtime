@@ -1,5 +1,6 @@
 #include "runtime/log/boot_log_tee.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <atomic>

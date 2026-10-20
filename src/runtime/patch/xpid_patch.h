@@ -1,5 +1,6 @@
 #pragma once
 
+#include <winsock2.h>
 #include <windows.h>
 
 /// Replace PSN- provider prefix with DSC- across all three string tables

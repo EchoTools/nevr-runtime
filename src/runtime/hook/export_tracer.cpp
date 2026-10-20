@@ -1,5 +1,6 @@
 #include "runtime/hook/export_tracer.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include <atomic>

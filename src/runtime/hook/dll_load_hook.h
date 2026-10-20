@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #endif
 #ifdef NEVR_DLL_LOAD_HOOK_TESTING

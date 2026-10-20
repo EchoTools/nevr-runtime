@@ -4,6 +4,7 @@
 // (src/runtime/log/boot_log_tee.cpp) and stand a recording function in for CLog.
 
 #include <gtest/gtest.h>
+#include <winsock2.h>
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
@@ -84,7 +85,9 @@ TEST(BootLogRouting, TheOpeningLineEndsInANewlineOnStderr) {
   const std::string::size_type end = err.find('\n', at);
   ASSERT_NE(end, std::string::npos) << "the opening line has no newline; stderr was:\n" << err;
   const std::string::size_type next = err.find("[NEVR", at + 1);
-  if (next != std::string::npos) EXPECT_EQ(err[next - 1], '\n') << "the next line runs onto the opening line:\n" << err;
+  if (next != std::string::npos) {
+    EXPECT_EQ(err[next - 1], '\n') << "the next line runs onto the opening line:\n" << err;
+  }
 }
 
 TEST(BootLogRouting, ALogCallDuringBootReachesTheTeeNotClog) {
