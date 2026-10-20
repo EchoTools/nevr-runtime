@@ -19,7 +19,8 @@
 // A held session. While the player has not signed in there is no account token. The login connection (the
 // game's long-lived, silent one) must not fail then, and neither does the config connection beside it:
 // Config::loginGate says whether the account is available, and while it answers Awaiting the router keeps
-// the session without a remote, whichever connection opened it, and queues what the connections send (and the
+// the session without a remote when the login connection opened it (a config connection opens its remote at
+// once and is refused when there is no account, #704), and queues what the connections send (and the
 // loopback server exempts the login connection from the idle close). The owner calls ReevaluateLoginGate()
 // when the gate's answer changes: Ready opens the remote and the queued frames and the game's login go
 // through, Refused closes every connection on the session.
