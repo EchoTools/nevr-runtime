@@ -112,21 +112,27 @@ class TheLayoutIsNamed(unittest.TestCase):
 
 
 class StaleTextIsFixed(unittest.TestCase):
-    def test_spectator_stream_comment_does_not_say_it_might_start_the_lobby(self):
+    def test_spectator_stream_comment_says_the_early_write_begins_multiplayer_twice(self):
         source = read("src/runtime/lifecycle/boot.cpp")
         self.assertNotIn("neither confirmed nor refuted", source)
         self.assertNotRegex(source, r"what lets a server start its lobby")
         self.assertIn("ValidateServerBringup", source)
         hook = " ".join(
             re.sub(r"^\s*//", "", line).strip()
-            for line in source[source.index("#519: the -spectatorstream check"):source.index("#496: plugins marked")].splitlines()
+            for line in source[source.index("The -spectatorstream check"):source.index("#496: plugins marked")].splitlines()
         )
-        self.assertIn("does not begin multiplayer", hook)
+        self.assertNotIn("does not begin multiplayer", hook)
+        self.assertIn("is not NOPped here", hook)
         self.assertIn("state_machine.cpp", hook)
+        self.assertIn("second one", hook)
+        self.assertIn("PatchEnableServer", hook)
+        self.assertNotIn("plays no part in that", source)
 
     def test_spectator_stream_sensor_docstring_says_the_same(self):
         text = read("tools/tests/test_spectatorstream_order.py")
         self.assertNotIn("neither confirmed nor refuted", text)
+        self.assertNotIn("it does not: the call the state machine", text)
+        self.assertIn("begins multiplayer", text)
 
     def test_sysnet_check_comment_does_not_claim_it_stops_multiplayer_from_beginning(self):
         text = read("src/runtime/hook/addresses.h")

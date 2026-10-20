@@ -1,8 +1,10 @@
-"""#519: the -spectatorstream NOP sits inside PreprocessCommandLine itself, so on a server it
-is written BEFORE the original call, not only from RunDeferredRuntimeBootstrap (which runs after
-that call), and once.  These are source-order sensors; they pin where the write is made, not
-whether it starts the lobby (it does not: the call the state machine queues after the login
-does).  The byte logic is covered by src/runtime/tests/test_checked_patch.cpp."""
+"""The -spectatorstream NOP sits inside PreprocessCommandLine itself. Written before the first
+original call it puts a server in the spectator flow, and in that flow the game begins multiplayer
+by itself (on a server against the production services, about ten seconds after the login), a
+second time after the begin the state machine queues (state_machine.cpp, #514): the second begin
+rebinds the HTTP API listener and the server exits. So the hook never writes it; the one write is
+PatchEnableServer's, in the deferred bootstrap that runs after the original call returns. These
+are source-order sensors; the byte logic is covered by src/runtime/tests/test_checked_patch.cpp."""
 
 import re
 import unittest
@@ -14,15 +16,14 @@ from tools.tests.test_runtime_lifecycle_invariants import extract_braced_functio
 ROOT = Path(__file__).resolve().parents[2]
 ORIGINAL_CALL = "EchoVR::PreprocessCommandLine(pGame)"
 ROUTINE = "PatchSpectatorStreamCheck("
-PREFLIGHT = "PreflightRuntimeBootstrap()"
 ROUTINE_SIGNATURE = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
-# The server guard: `if (g_isServer && !<flag>.exchange(true, ...)) {`.  The flag is a run-once
-# latch, so a re-entered hook does not emit a second pre-preprocess record.
-SERVER_ONCE_GUARD = r"if\s*\(\s*g_isServer\s*&&\s*!\s*(?P<flag>\w+)\.exchange\(\s*true\b[^)]*\)\s*\)\s*\{"
+DEFERRED_BOOTSTRAP = "RunDeferredRuntimeBootstrap(pGame,"
 # A routine that builds its own {expected, patched} pair, in any initialization form.
 OWN_SITE = re.compile(r"\bSite\s*\{|\bSite\s+\w+\s*(?:=\s*)?[{(]")
 # The record's result argument: the last argument of FormatSpectatorStreamRecord must be `result`.
 RECORD_RESULT = re.compile(r"FormatSpectatorStreamRecord\([^;]*,\s*result\s*\)\s*;")
+# The bits the spectator-stream path sets in game+0x7AE0 (echovr.exe 0x140116F4D).
+SPECTATOR_BITS = re.compile(r"\b0x0*2[01]00000\b", re.IGNORECASE)
 
 
 def hook_body() -> str:
@@ -31,61 +32,59 @@ def hook_body() -> str:
 
 
 class SpectatorStreamOrder(unittest.TestCase):
-    def test_server_applies_the_patch_before_the_original_preprocess_call(self):
+    def test_the_hook_never_writes_the_spectator_stream_site(self):
+        # Neither the routine nor a write of its own: on a server or a client, before the original
+        # call or after it, PreprocessCommandLineHook leaves the site to PatchEnableServer.
         body = hook_body()
         self.assertIn(ORIGINAL_CALL, body)
-        self.assertIn(ROUTINE, body, "PreprocessCommandLineHook never applies the spectator-stream patch")
+        self.assertNotIn(ROUTINE, body, "PreprocessCommandLineHook applies the spectator-stream patch itself")
+        self.assertNotIn("SPECTATORSTREAM_CHECK", body, "PreprocessCommandLineHook writes the spectator-stream site")
+
+    def test_boot_never_sets_the_spectator_bits_itself(self):
+        # The same flow, reached by setting game+0x7AE0's bits directly instead of through the NOP.
+        code = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        self.assertIsNone(SPECTATOR_BITS.search(code), "boot.cpp sets the spectator-stream bits in game+0x7AE0")
+
+    def test_the_one_write_is_patchenableserver_after_the_original_call(self):
+        callers = []
+        for path in sorted((ROOT / "src").rglob("*.cpp")):
+            if "legacy" in path.relative_to(ROOT / "src").parts:
+                continue
+            code = strip_comments(path.read_text(errors="replace"))
+            calls = len(re.findall(r"\b" + re.escape(ROUTINE), code)) - code.count(ROUTINE_SIGNATURE)
+            if calls:
+                callers.append((path.relative_to(ROOT).as_posix(), calls))
+        self.assertEqual(callers, [("src/runtime/patch/mode_patches.cpp", 1)])
+        server = extract_braced_function(
+            (ROOT / "src/runtime/patch/mode_patches.cpp").read_text(), "VOID PatchEnableServer()"
+        )
+        self.assertIn(ROUTINE, server)
+        boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
+        deferred = extract_braced_function(boot, "void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger)")
+        self.assertIn("PatchEnableServer()", deferred)
+        body = hook_body()
+        self.assertEqual(body.count(DEFERRED_BOOTSTRAP), 1)
         self.assertLess(
-            body.index(ROUTINE),
             body.index(ORIGINAL_CALL),
-            "the spectator-stream patch is applied after the original PreprocessCommandLine call",
+            body.index(DEFERRED_BOOTSTRAP),
+            "the deferred bootstrap (and with it the spectator-stream write) runs before the original call",
         )
 
-    def test_server_applies_the_patch_after_preflight_sets_g_isserver(self):
-        # g_isServer is set inside PreflightRuntimeBootstrap(); the `if (g_isServer)` guarding the
-        # patch reads it, so the guard must come after the preflight, not just before the call.
-        body = hook_body()
-        self.assertEqual(body.count(PREFLIGHT), 1)
-        self.assertLess(
-            body.index(PREFLIGHT),
-            body.index(ROUTINE),
-            "the spectator-stream patch is applied before PreflightRuntimeBootstrap() has set g_isServer",
-        )
-        guard = re.search(SERVER_ONCE_GUARD + r"[^{}]*" + re.escape(ROUTINE), body)
-        self.assertIsNotNone(guard)
-        self.assertLess(body.index(PREFLIGHT), guard.start())
+    def test_spectator_bits_pattern_matches_both_spellings(self):
+        for literal in ("0x2100000", "0x02100000", "0x2000000", "0X2100000"):
+            with self.subTest(literal=literal):
+                self.assertRegex(literal, SPECTATOR_BITS)
+        for literal in ("0x0100000", "0x8000000", "0x21000000"):
+            with self.subTest(literal=literal):
+                self.assertNotRegex(literal, SPECTATOR_BITS)
 
-    def test_patch_before_the_call_is_server_only(self):
-        # N146: a client's first original call initializes D3D; nothing client-side may change there.
-        body = hook_body()
-        match = re.search(SERVER_ONCE_GUARD + r"(?P<then>[^{}]*)\}", body)
-        self.assertIsNotNone(match, "no `if (g_isServer && !<latch>.exchange(true)) { ... }` block in PreprocessCommandLineHook")
-        self.assertIn(ROUTINE, match.group("then"))
-        self.assertLess(match.start(), body.index(ORIGINAL_CALL))
-        self.assertEqual(body.count(ROUTINE), 1, "the patch must be applied in exactly one place in the hook")
-        self.assertNotIn("BeginMultiplayer", body, "no synthesized begin next to the patch (#519)")
-
-    def test_the_pre_preprocess_record_is_emitted_once_per_process(self):
-        # The hook is entered per PreprocessCommandLine call; without a latch every entry would
-        # write a record (and re-validate the site).
-        body = hook_body()
-        match = re.search(SERVER_ONCE_GUARD, body)
-        self.assertIsNotNone(match, "the server guard has no run-once latch")
-        flag = match.group("flag")
-        self.assertRegex(
-            body,
-            r"static\s+std::atomic_bool\s+" + re.escape(flag) + r"\s*\{\s*false\s*\}\s*;",
-            "the latch is not a function-static std::atomic_bool starting false",
-        )
-        self.assertLess(body.index("static std::atomic_bool"), match.start())
-
-    def test_deferred_bootstrap_reaches_the_patch_only_as_a_verified_noop(self):
+    def test_patchenableserver_writes_the_site_only_through_the_checked_routine(self):
         source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
         body = extract_braced_function(source, "VOID PatchEnableServer()")
         self.assertNotRegex(
             body,
             r"ApplyPatch\s*\(\s*SPECTATORSTREAM_CHECK",
-            "PatchEnableServer still blind-writes the spectator-stream site",
+            "PatchEnableServer blind-writes the spectator-stream site",
         )
         self.assertIn(ROUTINE, body)
 

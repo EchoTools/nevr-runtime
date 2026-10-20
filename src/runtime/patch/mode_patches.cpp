@@ -637,12 +637,11 @@ VOID PatchEnableServer() {
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
-  // Hypothesis (#45): this check is what keeps a server out of the "load lobby" state at startup.
-  // Not established either way.
-  // #519: PreprocessCommandLineHook writes the site before the first original call on a server,
-  // so this pass is expected to report already_applied. If that earlier write did not happen,
-  // this pass validates the bytes and writes them; whether a write at this point has any effect
-  // on the lobby is not established (#45 is neither confirmed nor refuted).
+  // This pass runs after the first original PreprocessCommandLine call has returned, so it is the
+  // only write of the site and is expected to report applied. It is never made before that call:
+  // there the NOPped check sets the spectator flow, which begins multiplayer a second time
+  // (PreprocessCommandLineHook in boot.cpp). Whether this later write has any effect is not
+  // established.
   PatchSpectatorStreamCheck("PatchEnableServer");
 }
 
@@ -773,12 +772,12 @@ VOID PatchDisableWwise() {
 }
 
 // Patch the PreprocessCommandLine spectator-stream check so the game acts as if
-// -spectatorstream was provided. Hypothesis (#45, neither confirmed nor refuted): on a server
-// this lets it enter "load lobby" and begin by itself. The site (FUN_140116720 + 0x81D) is
-// inside PreprocessCommandLine, so PreprocessCommandLineHook calls this before the original on a
-// server (#519). Validated against kSpectatorStreamExpected, written only on a match, and
-// recorded as one key=value line on every call. Callers run both in the boot phase and after it;
-// Log() routes the record by phase itself (the boot tee, then the game's CLog).
+// -spectatorstream was provided. The site (FUN_140116720 + 0x81D) is inside
+// PreprocessCommandLine; its one caller, PatchEnableServer, runs after the first original call
+// has returned. Written before that call it puts a server in the spectator flow, which begins
+// multiplayer a second time (PreprocessCommandLineHook in boot.cpp). Validated against
+// kSpectatorStreamExpected, written only on a match, and recorded as one key=value line on every
+// call. Log() routes the record by phase itself (the boot tee, then the game's CLog).
 nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase) {
   uint8_t* const site = reinterpret_cast<uint8_t*>(EchoVR::g_GameBaseAddress) + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
   static_assert(sizeof(nevr_checked_patch::kSpectatorStreamExpected) == nevr_patch_addresses::SPECTATORSTREAM_CHECK_SIZE,
