@@ -4,7 +4,7 @@
 //
 //   legacy  every game socket takes the bridge's own routing rules (the default until #708 S3)
 //   config  the /config sockets route through the router; login and matchmaker stay on the bridge's rules
-//   all     every game socket routes through the router (#708 S2; not available in this build)
+//   all     every game socket routes through the router (#708 S2b)
 
 #include <string>
 
