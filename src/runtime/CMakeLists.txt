@@ -34,6 +34,8 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
     "compat/ws_bridge.cpp"
+    # #708 S0: the session router Quest ships, compiled in; nothing routes through it yet.
+    "compat/session_router.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
     "compat/self_check.cpp"
@@ -202,7 +204,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -905,6 +907,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_evr_codec PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
+
+    # Session router (compat/session_router.cpp, #708 S0): the source the Quest target compiles, with its host
+    # test (plain main, no framework: the Quest NDK build shares the file), run under Wine here.
+    add_executable(test_session_router
+      ../quest/tests/session_router_test.cpp
+      compat/session_router.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(../quest/tests/session_router_test.cpp compat/session_router.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_session_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_session_router PRIVATE nlohmann_json::nlohmann_json)
 
     # Self-check unit (compat/self_check.cpp): the registry that reports a run-card check's result as one
     # remote log string, and the SNSRemoteLogSetv3 frame builder it sends through. Platform neutral, the same

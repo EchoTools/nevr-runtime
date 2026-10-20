@@ -52,7 +52,7 @@
 //   * remote end (close or error): every game socket on that session, config included, is closed and the
 //     session is forgotten, so the game's next connection is a new login rather than a matchmaker.
 //   * a held session: while the wiring says the account the login needs is still being obtained
-//     (Options::loginGate answers Awaiting) the session remote is not opened, whichever connection opened the
+//     (Options::loginGate answers Awaiting) the session remote is not opened when the login connection opened the
 //     session, and the connections on it are neither failed nor closed; their frames queue. When the gate
 //     answers Ready the remote opens and the queued frames follow; when it answers Refused the hold ends with a
 //     close of every connection on the session (kCloseInternalError). A standalone matchmaker is never held.

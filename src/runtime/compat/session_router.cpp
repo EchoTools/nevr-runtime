@@ -288,8 +288,8 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     removalDue_ = removalDue;
   }
   Log(fx, LogLevel::Warning,
-      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %zu game socket(s)%s%s",
-          Ull(remote), ownerConn, static_cast<unsigned>(code), why, bound.size(),
+      Fmt("[router] remote session ended remote=%llu owner_conn=%d code=%u (%s): closing %llu game socket(s)%s%s",
+          Ull(remote), ownerConn, static_cast<unsigned>(code), why, Ull(bound.size()),
           wasSession ? "; login session forgotten, next connection is a new login" : "",
           removalDue ? "; each socket that reconnects is sent one login-removed notice (the game drops it on all but its login peer)" : ""));
   remoteTable_.erase(rit);
@@ -495,9 +495,9 @@ bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<cons
         while (configRequests_.size() > kMaxConfigRequests) {
           ++configRequestsEvicted_;
           Log(fx, LogLevel::Warning,
-              Fmt("[router] config request list full (%zu): the oldest unanswered request, game=%llu, is forgotten "
+              Fmt("[router] config request list full (%llu): the oldest unanswered request, game=%llu, is forgotten "
                   "(%llu forgotten in total)",
-                  kMaxConfigRequests, Ull(configRequests_.front().owner), Ull(configRequestsEvicted_)));
+                  Ull(kMaxConfigRequests), Ull(configRequests_.front().owner), Ull(configRequestsEvicted_)));
           configRequests_.pop_front();
         }
       }
@@ -703,8 +703,8 @@ void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& 
   }
   if (observed == Role::Matchmaker && LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
     Log(fx, LogLevel::Warning,
-        Fmt("[router] game=%llu refused: %zu matchmaker connections are already open", Ull(game),
-            options_.limits.maxMatchmakerConnections));
+        Fmt("[router] game=%llu refused: %llu matchmaker connections are already open", Ull(game),
+            Ull(options_.limits.maxMatchmakerConnections)));
     CloseGameLocked(game, kCloseTryAgainLater, "too many matchmaker connections", fx);
     return;
   }
@@ -732,8 +732,8 @@ void Router::OnGameOpen(GameId game, OpenHint hint) {
       Log(fx, LogLevel::Error, Fmt("[router] duplicate open for game=%llu ignored", Ull(game)));
     } else if (next == Role::Matchmaker && LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
       Log(fx, LogLevel::Warning,
-          Fmt("[router] game=%llu refused: %zu matchmaker connections are already open", Ull(game),
-              options_.limits.maxMatchmakerConnections));
+          Fmt("[router] game=%llu refused: %llu matchmaker connections are already open", Ull(game),
+              Ull(options_.limits.maxMatchmakerConnections)));
       fx.gameCloses.push_back({game, kCloseTryAgainLater, "too many matchmaker connections"});
     } else {
       Game g;
@@ -767,13 +767,13 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
       const uint64_t dropped = ++droppedGameFrames_;
       if (dropped == 1 || dropped % 100 == 0) {
         Log(fx, LogLevel::Warning,
-            Fmt("[router] game->server frame DROPPED: game=%llu has no live session bytes=%zu (%llu total)",
-                Ull(game), frame.size(), Ull(dropped)));
+            Fmt("[router] game->server frame DROPPED: game=%llu has no live session bytes=%llu (%llu total)",
+                Ull(game), Ull(frame.size()), Ull(dropped)));
       }
     } else if (frame.size() > options_.limits.maxFrameBytes) {
       Log(fx, LogLevel::Error,
-          Fmt("[router] game->server frame too large: game=%llu bytes=%zu limit=%zu", Ull(game), frame.size(),
-              options_.limits.maxFrameBytes));
+          Fmt("[router] game->server frame too large: game=%llu bytes=%llu limit=%llu", Ull(game), Ull(frame.size()),
+              Ull(options_.limits.maxFrameBytes)));
       CloseGameLocked(game, kCloseMessageTooBig, "frame exceeds the size limit", fx);
     } else {
       if (!git->second.classified) ClassifyGameLocked(game, git->second, nevr_evr_codec::FirstSymbol(frame), fx);
@@ -809,8 +809,8 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
           } else if (r.pending.size() >= options_.limits.maxPendingFrames ||
                      r.pendingBytes + data->size() > options_.limits.maxPendingBytes) {
             Log(fx, LogLevel::Warning,
-                Fmt("[router] game->server queue full while remote=%llu is not open: frames=%zu bytes=%zu",
-                    Ull(remoteId), r.pending.size(), r.pendingBytes));
+                Fmt("[router] game->server queue full while remote=%llu is not open: frames=%llu bytes=%llu",
+                    Ull(remoteId), Ull(r.pending.size()), Ull(r.pendingBytes)));
             CloseGameLocked(game, kCloseTryAgainLater, "pending queue is full", fx);
           } else {
             r.pendingBytes += data->size();
@@ -867,9 +867,9 @@ void Router::SendLoginRemovedLocked(GameId game, Game& g, Effects& fx) {
                                                               options_.loginRemovedJson);
   ++loginsRemoved_;
   Log(fx, LogLevel::Info,
-      Fmt("[router] login removed notice sent game=%llu conn=%d size=%zu (the game reconnected without a login: it "
+      Fmt("[router] login removed notice sent game=%llu conn=%d size=%llu (the game reconnected without a login: it "
           "shows RETRY and logs in itself)",
-          Ull(game), g.connIdx, frame.size()));
+          Ull(game), g.connIdx, Ull(frame.size())));
   if (g.out.bytes + frame.size() > options_.limits.maxOutboundBytes) {
     CloseGameLocked(game, kCloseTryAgainLater, "outbound buffer to the game is full", fx);
     return;
@@ -946,7 +946,7 @@ void Router::BuildAndSendLogin(RemoteId remote) {
     if (login.has_value()) {
       r.loginSent = true;
       Log(fx, LogLevel::Info,
-          Fmt("[router] login injected remote=%llu conn=%d size=%zu", Ull(remote), r.ownerConn, login->size()));
+          Fmt("[router] login injected remote=%llu conn=%d size=%llu", Ull(remote), r.ownerConn, Ull(login->size())));
     } else {
       Log(fx, LogLevel::Error,
           Fmt("[router] login NOT injected remote=%llu conn=%d: no login frame available (identity missing)",
@@ -968,8 +968,8 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
     }
     if (frame.size() > options_.limits.maxFrameBytes) {
       Log(fx, LogLevel::Error,
-          Fmt("[router] server->game frame too large: remote=%llu bytes=%zu limit=%zu", Ull(remote), frame.size(),
-              options_.limits.maxFrameBytes));
+          Fmt("[router] server->game frame too large: remote=%llu bytes=%llu limit=%llu", Ull(remote), Ull(frame.size()),
+              Ull(options_.limits.maxFrameBytes)));
       FailSessionLocked(remote, kCloseMessageTooBig, "remote frame exceeds the size limit", true, fx);
     } else {
       const uint64_t symbol = nevr_evr_codec::FirstSymbol(frame);
@@ -977,8 +977,8 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
         // Numeric diagnostics only: the server's message text can carry private data.
         const std::optional<nevr_evr_codec::LoginFailure> failure = nevr_evr_codec::ParseLoginFailure(frame);
         Log(fx, LogLevel::Warning,
-            Fmt("[router] LOGIN FAILURE remote=%llu status=%llu message_bytes=%zu", Ull(remote),
-                Ull(failure ? failure->statusCode : 0), failure ? failure->messageBytes : static_cast<std::size_t>(0)));
+            Fmt("[router] LOGIN FAILURE remote=%llu status=%llu message_bytes=%llu", Ull(remote),
+                Ull(failure ? failure->statusCode : 0), Ull(failure ? failure->messageBytes : static_cast<std::size_t>(0))));
         if (!options_.loginRemovedJson.empty() && remote == sessionRemote_) ForgetLoginUserLocked();
       } else if (symbol == nevr_evr_codec::kSymLoginSuccess) {
         Log(fx, LogLevel::Info, Fmt("[router] LOGIN SUCCESS remote=%llu", Ull(remote)));
@@ -1022,8 +1022,8 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
           const uint64_t dropped = ++droppedRemoteFrames_;
           if (dropped == 1 || dropped % 100 == 0) {
             Log(fx, LogLevel::Warning,
-                Fmt("[router] server->game frame DROPPED: no game connection is open on remote=%llu bytes=%zu "
-                    "(%llu total)", Ull(remote), frame.size(), Ull(dropped)));
+                Fmt("[router] server->game frame DROPPED: no game connection is open on remote=%llu bytes=%llu "
+                    "(%llu total)", Ull(remote), Ull(frame.size()), Ull(dropped)));
           }
         } else {
           Game& g = gameTable_[target];
@@ -1118,8 +1118,8 @@ void Router::Shutdown() {
     configRequests_.clear();
     ForgetLoginUserLocked();
     connectionCount_ = 0;
-    Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
-                                fx.gameCloses.size()));
+    Log(fx, LogLevel::Info, Fmt("[router] shutdown: %llu remote(s), %llu game(s) closed", Ull(fx.remoteCloses.size()),
+                                Ull(fx.gameCloses.size())));
   }
   Run(fx);
 }
