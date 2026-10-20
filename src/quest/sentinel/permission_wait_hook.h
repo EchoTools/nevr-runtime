@@ -35,7 +35,7 @@ using RequestThunk = sentinel::pinned::LibR15RequestPermissionsThunk;
 using CheckFn = bool (*)(const char* permission) noexcept;
 
 inline constexpr unsigned kPollMs = 500;
-inline constexpr unsigned kTimeoutMs = 180000;
+inline constexpr unsigned kTimeoutMs = 30000;
 
 // Arms the handler and installs the thunk in libr15's RequestPermissions slot. One line
 // {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found. True when the

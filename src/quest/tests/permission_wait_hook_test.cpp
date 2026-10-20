@@ -164,7 +164,14 @@ void ANullNameListIsSafe() {
 
 }  // namespace
 
+// A player who taps Deny waits out the cap before the game's own error: it is what a person waits (30 s).
+void TheProductionCapIsWhatAPlayerWaits() {
+  QCHECK(pw::kTimeoutMs == 30000);
+  QCHECK(pw::kPollMs <= 500);
+}
+
 int main() {
+  TheProductionCapIsWhatAPlayerWaits();
   ARequestWithoutTheHookIsJustTheGamesCall();
   TheBootRequestWaitsOnTheCallersThreadUntilTheStoragePermissionsAreGranted();
   ARequestForPermissionsAlreadyGrantedDoesNotWait();
