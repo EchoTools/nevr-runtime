@@ -2476,6 +2476,28 @@ void TestSendToSessionQueuesBehindTheLoginAndThenSends() {
   QCHECK(CountUpstream(rig, session, kSymSomething) == 2);
 }
 
+// G3: a dedicated server's LoginFailure is replaced by the frame the option returns; the game gets it as a
+// LoginSuccess, the log says it was synthesized, and no friend-list subscribe follows. Without the option the
+// failure reaches the game unchanged.
+void TestLoginFailureReplacementIsDeliveredAndNotSubscribed() {
+  const CaseScope scope("login failure replacement");
+  Options o = WithLogin(kLogin);
+  o.subscribeFriendList = true;
+  o.replaceLoginFailure = []() { return std::optional<std::string>(Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0'))); };
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoginFailure, std::string(24, '\0')), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && nevr_evr_codec::FirstSymbol(sent[0].data) == nevr_evr_codec::kSymLoginSuccess);
+  QCHECK(sent.empty() || sent[0].id == 2);
+  QCHECK(rig.logs.Has("synthesized"));
+  QCHECK(!rig.logs.Has("LOGIN SUCCESS"));
+  QCHECK(rig.remotes.Sent().size() == 1);  // the login only: no subscribe
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -3344,6 +3366,7 @@ int main() {
   TestLobbyFramesFollowTheMatchmakerThatAsked();
   TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
   TestGateRefusedEndsADeferredInjection();
+  TestLoginFailureReplacementIsDeliveredAndNotSubscribed();
   TestSendToSessionQueuesBehindTheLoginAndThenSends();
   TestGateAwaitingWhenTheSessionOpensDefersTheLogin();
   TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest();

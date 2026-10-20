@@ -1043,6 +1043,15 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
             Fmt("[router] LOGIN FAILURE remote=%llu status=%llu message_bytes=%llu", Ull(remote),
                 Ull(failure ? failure->statusCode : 0), Ull(failure ? failure->messageBytes : static_cast<std::size_t>(0))));
         if (!options_.loginRemovedJson.empty() && remote == sessionRemote_) ForgetLoginUserLocked();
+        if (options_.replaceLoginFailure) {
+          if (std::optional<std::string> replacement = options_.replaceLoginFailure()) {
+            // Synthesized, not the service's: logged as such, and no friend-list subscribe follows it.
+            Log(fx, LogLevel::Warning,
+                Fmt("[router] LOGIN FAILURE remote=%llu replaced by a synthesized LoginSuccess for the game",
+                    Ull(remote)));
+            frame = std::move(*replacement);
+          }
+        }
       } else if (symbol == nevr_evr_codec::kSymLoginSuccess) {
         Log(fx, LogLevel::Info, Fmt("[router] LOGIN SUCCESS remote=%llu", Ull(remote)));
         if (!options_.loginRemovedJson.empty() && remote == sessionRemote_) {

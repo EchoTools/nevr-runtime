@@ -176,6 +176,9 @@ using LogSink = std::function<void(LogLevel level, const std::string& line)>;
 // Produces the complete EVR LoginRequest message for the login session, or nullopt when the identity is
 // not available (no token, no configured credentials). The router never fabricates one.
 using LoginFrameBuilder = std::function<std::optional<std::string>()>;
+// Called with the router lock held (lock-free and fast, like LoginGateFn) when the service answers a login with
+// a LoginFailure: a frame returned replaces the failure for the game.
+using LoginFailureReplacement = std::function<std::optional<std::string>()>;
 
 // Whether the account a login needs is available. Awaiting: not yet (the player has not signed in); the
 // session is held. Ready: it is. Refused: it will not be (the sign-in failed for good).
@@ -200,6 +203,7 @@ struct Options {
   Limits limits;
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
   LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
+  LoginFailureReplacement replaceLoginFailure;  // null (default): the failure reaches the game (a dedicated server sets it)
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
   // Non-empty: the JSON document of the SNSLoginRemovedNotify sent to a game whose login session was lost
   // under it (Quest). Built by the wiring (nlohmann::json); empty (default) sends no notice (PC).
