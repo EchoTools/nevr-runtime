@@ -29,7 +29,7 @@ inline bool RoutesRole(Mode mode, nevr_socket_role::Role role) {
 }
 
 // The mode `value` names. A null or empty value is Legacy with no problem (the key is absent). A value that names
-// no mode, and `all` while the build cannot run it, is Legacy with *problem set to a sentence for the log: the
+// no mode, and `all` while the build cannot run it, is Legacy with *problem set to a sentence; the bridge treats it as fatal at boot: the
 // bridge never guesses a router mode from a misspelling.
 inline Mode ParseMode(const char* value, std::string* problem) {
   if (problem != nullptr) problem->clear();

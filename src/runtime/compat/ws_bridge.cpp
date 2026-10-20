@@ -1220,13 +1220,16 @@ void InstallWebSocketBridge() {
 
   WireSelfChecks();
 
-  // #708: which sockets the router takes. An unreadable value is a logged problem and legacy, never a guess.
+  // #708: which sockets the router takes. A value that names no mode (or one this build cannot run) is fatal at
+  // boot: a typo that silently ran the legacy routing would be a test that proves nothing about the router.
   {
     std::string problem;
     const nevr_session_router_mode::Mode mode =
         nevr_session_router_mode::ParseMode(NevrCfgGetFlat("nevr_session_router"), &problem);
     if (!problem.empty()) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] network.session_router ignored: %s", problem.c_str());
+      Log(EchoVR::LogLevel::Error, "[NEVR.WS] network.session_router refused: %s", problem.c_str());
+      FatalError(problem.c_str(), "network.session_router");
+      return;
     }
     Log(EchoVR::LogLevel::Info, "[NEVR.WS] network.session_router=%s", nevr_session_router_mode::ModeName(mode));
     // A fresh router per install: a stopped one has shut down for good. The old one is leaked on purpose (see
@@ -1859,6 +1862,7 @@ void StopWebSocketBridgeListener() {
   // thread, which may itself be waiting on g_pairsMutex — holding it here
   // deadlocks shutdown.
   std::vector<std::shared_ptr<ix::WebSocket>> remotes;
+  std::size_t stoppedRouterRemotes = 0;
   {
     std::lock_guard<std::mutex> lk(g_pairsMutex);
     for (auto& pair : g_pairs) {
@@ -1872,7 +1876,7 @@ void StopWebSocketBridgeListener() {
   }
   if (RouterPath* routed = g_routerPath.load(); routed != nullptr) {
     // Remotes first: once stopped, their events no longer reach the router, so Shutdown's closes race nothing.
-    remotes.resize(remotes.size() + routed->remotes.StopAll());
+    stoppedRouterRemotes = routed->remotes.StopAll();
     routed->router.Shutdown();
   }
 
@@ -1888,7 +1892,7 @@ void StopWebSocketBridgeListener() {
   g_matchPort = 0;
   Log(EchoVR::LogLevel::Info,
       "[NEVR.WS] listeners stopped, %zu remote connection(s) closed — sockets released",
-      remotes.size());
+      remotes.size() + stoppedRouterRemotes);
 }
 
 // ============================================================================
