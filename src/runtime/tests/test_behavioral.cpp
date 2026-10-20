@@ -1380,12 +1380,25 @@ class RemoteService {
             }
             if (message->type != ix::WebSocketMessageType::Message || !message->binary) return;
             const uint64_t symbol = nevr_evr_codec::FirstSymbol(message->str);
+            {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              received_.push_back(symbol);
+            }
             const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
             if (isLogin) ++loginRequests_;
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
             if (isLogin) reply = loginReply_.load();
             if (symbol == nevr_evr_codec::kSymConfigRequest) reply = nevr_evr_codec::kSymConfigSuccess;
             if (symbol == nevr_evr_codec::kSymFindSessionRequest) reply = kLobbyReplySymbol;
+            std::string customLogin;
+            {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              customLogin = loginReplyFrame_;
+            }
+            if (isLogin && !customLogin.empty()) {
+              socket.sendBinary(customLogin);
+              return;
+            }
             socket.sendBinary(nevr_evr_codec::BuildMessage(reply, ""));
           });
       if (server_->listen().first) {
@@ -1421,6 +1434,16 @@ class RemoteService {
   }
   // What the service answers a LoginRequest with (LoginSettings by default).
   void SetLoginReply(uint64_t symbol) { loginReply_ = symbol; }
+  // A whole frame to answer a LoginRequest with, in place of the symbol above.
+  void SetLoginReplyFrame(std::string frame) {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    loginReplyFrame_ = std::move(frame);
+  }
+  // How many frames led with `symbol` among those the bridge sent the service.
+  int ReceivedCount(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return static_cast<int>(std::count(received_.begin(), received_.end(), symbol));
+  }
   // Sends `symbol` to every connection, unasked.
   void PushToClients(uint64_t symbol) {
     for (const auto& client : server_->getClients()) client->sendBinary(nevr_evr_codec::BuildMessage(symbol, ""));
@@ -1432,8 +1455,10 @@ class RemoteService {
   std::atomic<int> loginRequests_{0};
   std::atomic<int> opens_{0};
   std::atomic<uint64_t> loginReply_{nevr_evr_codec::kSymLoginSettings};
-  std::mutex urisMutex_;
+  std::mutex urisMutex_;  // guards uris_, received_ and loginReplyFrame_
   std::vector<std::string> uris_;
+  std::vector<uint64_t> received_;
+  std::string loginReplyFrame_;
 };
 
 // A game-side socket: connects to the bridge at a request target and counts the frames the bridge sends it.
@@ -1454,6 +1479,7 @@ class GameSocket {
       if (message->type == ix::WebSocketMessageType::Message) {
         ++frames_;
         symbols_.push_back(nevr_evr_codec::FirstSymbol(message->str));
+        payloads_.push_back(message->str);
       }
       changed_.notify_all();
     });
@@ -1478,6 +1504,14 @@ class GameSocket {
   int CloseCode() {
     std::lock_guard<std::mutex> lock(mutex_);
     return closeCode_;
+  }
+  // The first frame that led with `symbol`, whole; empty when none did.
+  std::string FrameWith(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t index = 0; index < symbols_.size(); ++index) {
+      if (symbols_[index] == symbol) return payloads_[index];
+    }
+    return std::string();
   }
   // How many frames led with `symbol`.
   int Count(uint64_t symbol) {
@@ -1511,6 +1545,7 @@ class GameSocket {
   int closeCode_ = 0;
   int frames_ = 0;
   std::vector<uint64_t> symbols_;
+  std::vector<std::string> payloads_;
 };
 
 constexpr const char* kConnectedLine = "Proxy: game connected (conn=";
@@ -2014,6 +2049,17 @@ TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
   EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
 }
 
+// A login the service accepted is followed by the friend-list subscription, sent once, on the session.
+TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess));
+  const uint64_t subscribe = nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe());
+  ASSERT_TRUE(YieldUntil([&] { return remote_.ReceivedCount(subscribe) >= 1; })) << "no friend-list subscription";
+  EXPECT_EQ(remote_.ReceivedCount(subscribe), 1);
+}
+
 // L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
 // service, and its reply reaches the login socket.
 TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
@@ -2376,6 +2422,25 @@ TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
   ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
   EXPECT_EQ(statusCode, 400U);
   EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+// A client (not a server) gets the service's LoginFailure itself, with the code line first: the game reads the
+// first line of the message.
+TEST_F(RouterAllTest, AClientsLoginFailureReachesTheGameWithTheCodeLineFirst) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;
+  remote_.SetLoginReplyFrame(
+      FrameWithText("[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+                    "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<"));
+  GameSocket login;
+  Admit(login, "/login");
+  const bool failed = login.WaitForSymbol(nevr_evr_codec::kSymLoginFailure);
+  g_isServer = wasServer;
+  ASSERT_TRUE(failed) << "the game never saw the LoginFailure";
+  EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginSuccess));
+  EXPECT_EQ(login.FrameWith(nevr_evr_codec::kSymLoginFailure),
+            FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                          "location.\nCheck your Discord DMs from @EchoVRCE."));
 }
 
 TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
