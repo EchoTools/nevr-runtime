@@ -507,6 +507,14 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_by
     return loaded;
 }
 
+/* Overrides from the asset cache come first: a cached override for a resource the built-in also covers (the
+ * splash) wins, and the built-in is then not registered at all, so shutdown does not warn that it was never
+ * applied. */
+static void RegisterInitialOverrides(const wchar_t* cache_dir) {
+    RegisterCachedResourceOverrides(cache_dir);
+    RegisterBuiltInSplash();
+}
+
 void InstallResourceOverride() {
     {
         std::lock_guard<std::mutex> lock(g_overrides_mutex);
@@ -517,12 +525,7 @@ void InstallResourceOverride() {
 
     /* ── Register built-in overrides ──────────────────────────────── */
 
-    /* Overrides from the asset cache come first: a cached override for a resource the built-in also covers
-     * (the splash) wins, and the built-in is then not registered at all, so shutdown does not warn that it
-     * was never applied. */
-    RegisterCachedResourceOverrides(nevr_asset_cache::DefaultDir().c_str());
-
-    RegisterBuiltInSplash();
+    RegisterInitialOverrides(nevr_asset_cache::DefaultDir().c_str());
 
     /* ── Scan _overrides/ directory for additional files ──────────── */
 
@@ -760,7 +763,7 @@ void TestHook_InitResourceOverrides(void (*original)(void*)) {
     g_orig = original;
 }
 
-void TestHook_RegisterBuiltInSplash() { RegisterBuiltInSplash(); }
+void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir) { RegisterInitialOverrides(cache_dir); }
 void TestHook_SetDeregisterWaitMs(unsigned ms) { g_deregister_wait_ms = ms; }
 unsigned long long TestHook_DeregisterTimeouts() { return g_deregister_timeouts; }
 

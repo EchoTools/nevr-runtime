@@ -403,8 +403,7 @@ TEST_F(CachedOverrides, NoCacheDirectoryNoIndexAndABrokenIndexEachSayWhy) {
 TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeftUnapplied) {
   const std::vector<std::uint8_t> image = Image(500, 9);
   Cache(image, kSplashType, kSplashName, "cache_splash");
-  ASSERT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
-  TestHook_RegisterBuiltInSplash();
+  TestHook_RegisterInitialOverrides(dir_.c_str());
   EXPECT_TRUE(TestLogContains("built-in splash_texture not registered reason=a cached override covers it"));
   EXPECT_FALSE(TestLogContains("Registered embedded override: splash_texture"));
   char original[4] = {};
@@ -417,7 +416,7 @@ TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeft
 }
 
 TEST_F(CachedOverrides, WithNothingCachedTheBuiltInSplashIsRegistered) {
-  TestHook_RegisterBuiltInSplash();
+  TestHook_RegisterInitialOverrides(dir_.c_str());
   EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
   EXPECT_FALSE(TestLogContains("not registered reason"));
 }
@@ -493,6 +492,15 @@ TEST_F(CachedOverrides, ABlobOverTheSizeLimitIsRefusedWithItsReason) {
   EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 0u);
   EXPECT_TRUE(TestLogContains("cache refused reason=blob over the size limit sha256=" + sha));
   EXPECT_TRUE(TestLogContains("entries=1 loaded=0 refused=1 missing=0"));
+}
+
+TEST_F(CachedOverrides, ACachedOverrideIsAnOwnedBufferTheShutdownReportCounts) {
+  Cache(Image(120, 8), kSplashType, kSplashName, "cache_splash");
+  ASSERT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
+  ClearTestLogs();
+  const ResourceOverrideShutdownReport report = ShutdownResourceOverride();
+  EXPECT_EQ(report.registered, 1u);
+  EXPECT_TRUE(TestLogContains("owned_buffers_process_lifetime=1"));
 }
 
 TEST_F(CachedOverrides, AnEntryWithoutALabelIsNamedAfterItsHash) {
