@@ -254,6 +254,21 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CR15NetGame::BeginLogIn, which the login prompt hook calls once the device code is accepted (#672; not a hook
+  // target): its symbol is defined at the pinned address and its first four instructions are the ones the install
+  // proves before using it. (ReVault lists libr15 at these addresses plus 0x100000: the first headset run of the
+  // restart found the pin 0x100000 too high, `prologue_mismatch`.)
+  if (DynamicSymbolValue(r15, pinned::kBeginLogInSymbol) != pinned::kBeginLogInVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kBeginLogInSymbol,
+                 static_cast<unsigned long long>(pinned::kBeginLogInVaddr));
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kBeginLogInVaddr, pinned::kBeginLogInCode,
+                  sizeof(pinned::kBeginLogInCode)) != 0) {
+    std::fprintf(stderr, "libr15 CR15NetGame::BeginLogIn: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
   // The permission-wait hook (#640): RequestPermissions is defined where the slot's comment says, and
   // CheckPermission, which the hook calls (not a hook target), is defined at the pinned address with the first four
   // instructions the install proves before using it.

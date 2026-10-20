@@ -1162,6 +1162,8 @@ void FakeBeginLogIn(CR15NetGameOpaque* self) noexcept {
   SetState(g_game, layout::kStateLoggingIn);  // what the game's BeginLogIn does
 }
 
+bool HoldBlockWriterForTestOrFail() { return lp::HoldBlockWriterForTest(); }
+
 void TheSignedInNoticeStartsTheLoginOnce() {
   lp::ResetLatchForTest();
   gate::SetReady(true);
@@ -1223,11 +1225,34 @@ void TheLoginIsNotStartedBeforeItMayProceedOrWhenTheGameMovedOn() {
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(g_beginCalls == 0);
 
-  // An instance that is not followed is left alone.
+  // The notice was applied by the error hook (the board held it when the attempt failed), and the login may not
+  // proceed any more by the next frame: nothing is started.
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  g_beginCalls = 0;
+  board::Withdraw();
+  Publish(kNotice, board::Mode::kNotice);
   FailLocally(g_game);
-  SetState(g_other, layout::kStateLoginFailed);
-  UpdateEntry()(Obj(g_other), 16);
-  QCHECK(g_beginCalls == 0 || g_beginSelf == Obj(g_game));
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
+  gate::SetReady(false);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);
+  gate::SetReady(true);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 1);
+
+  // The game left "login failed" while the other hook held the block writer (so the followed instance was not
+  // dropped this frame): no second login.
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  g_beginCalls = 0;
+  board::Withdraw();
+  Publish(kNotice, board::Mode::kNotice);
+  FailLocally(g_game);
+  QCHECK(g_beginCalls == 0);
+  SetState(g_game, layout::kStateLoggingIn);
+  QCHECK(HoldBlockWriterForTestOrFail());
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ReleaseBlockWriterForTest();
+  QCHECK(g_beginCalls == 0);
   board::Withdraw();
   UpdateEntry()(Obj(g_game), 16);
   lp::SetBeginLogInForTest(nullptr);

@@ -450,7 +450,7 @@ void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
 // On the game's thread, inside the Update hook.
 void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
   if (g_kind != Kind::kNotice || State(self) != layout::kStateLoginFailed) return;
-  if (g_object.load(std::memory_order_acquire) != self || !gate::IsReady()) return;
+  if (!gate::IsReady()) return;  // the caller has checked that `self` is the followed instance
   const std::uint64_t applied = g_applied.load(std::memory_order_relaxed);
   if (applied == kNothingApplied || applied == g_restartedVersion) return;
   g_restartedVersion = applied;
