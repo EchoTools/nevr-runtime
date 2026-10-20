@@ -1227,6 +1227,11 @@ static std::shared_ptr<ix::WebSocket> FindGameSocket(const ix::WebSocket* raw) {
   return nullptr;
 }
 
+#ifdef NEVR_TEST_HOOKS
+static std::atomic<int> g_testRouterGate{-1};
+static std::atomic<bool> g_testRefuseRemoteOpens{false};
+#endif
+
 // The platform code a login uses: URL credentials in the config pick the bridge's login platform.
 static uint64_t CurrentPlatformCode() {
   const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
@@ -1319,6 +1324,9 @@ static void LogRemoteFrameDetails(const std::string& frame) {
 static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
   nevr_ws_transport::RemoteHooks hooks;
   hooks.prepare = [](const nevr_session_router::RemoteOpenRequest& request) -> std::shared_ptr<ix::WebSocket> {
+#ifdef NEVR_TEST_HOOKS
+    if (g_testRefuseRemoteOpens.load()) return nullptr;
+#endif
     return PrepareRemote(request.role, request.connIdx).remote;
   };
   hooks.tap = [](const nevr_session_router::RemoteOpenRequest& request, const std::string& frame) {
@@ -1352,6 +1360,15 @@ struct RouterPath {
       Log(RouterLogLevel(level), "[NEVR.WS] %s", line.c_str());
     };
     if (m == nevr_session_router_mode::Mode::All) {
+#ifdef NEVR_TEST_HOOKS
+      options.loginGate = []() {
+        switch (g_testRouterGate.load()) {
+          case 0: return nevr_session_router::LoginGate::Awaiting;
+          case 2: return nevr_session_router::LoginGate::Refused;
+          default: return nevr_session_router::LoginGate::Ready;
+        }
+      };
+#endif
       options.buildLogin = &BuildRouterLogin;
       options.subscribeFriendList = true;
       options.replaceLoginFailure = &ServerModeLoginSuccess;
@@ -2361,7 +2378,27 @@ size_t TestHook_ConnectedGameSockets() {
 }
 
 // Reset all internal bridge state for the next test.
+void TestHook_SetRouterGate(int gate) { g_testRouterGate = gate; }
+void TestHook_SetRefuseRemoteOpens(bool refuse) { g_testRefuseRemoteOpens = refuse; }
+void TestHook_ReevaluateRouterGate() {
+  if (RouterPath* routed = g_routerPath.load(); routed != nullptr) routed->router.ReevaluateHeldLogins();
+}
+bool TestHook_RouterStats(uint64_t* droppedGame, uint64_t* droppedRemote, uint64_t* droppedUnrequires,
+                          uint64_t* loginsRemoved, uint64_t* heldRemotes) {
+  RouterPath* routed = g_routerPath.load();
+  if (routed == nullptr) return false;
+  const nevr_session_router::Stats stats = routed->router.GetStats();
+  if (droppedGame != nullptr) *droppedGame = stats.droppedGameFrames;
+  if (droppedRemote != nullptr) *droppedRemote = stats.droppedRemoteFrames;
+  if (droppedUnrequires != nullptr) *droppedUnrequires = stats.droppedUnrequires;
+  if (loginsRemoved != nullptr) *loginsRemoved = stats.loginsRemoved;
+  if (heldRemotes != nullptr) *heldRemotes = stats.heldRemotes;
+  return true;
+}
+
 void TestHook_N61_ResetState() {
+  g_testRouterGate = -1;
+  g_testRefuseRemoteOpens = false;
   std::lock_guard<std::mutex> lk(g_pairsMutex);
   g_pairs.clear();
   g_loginRemoteWs.reset();

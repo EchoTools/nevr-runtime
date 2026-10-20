@@ -79,4 +79,13 @@ int   TestHook_SharedRouteConn();  // the conn frames from the shared login sess
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 size_t TestHook_ConnectedGameSockets();  // game sockets the bridge's two listeners still hold
+// #708 S2b: the router's account gate and remote-open policy, for a test (production wires neither).
+// gate: -1 none (the account is always available), 0 awaiting, 1 ready, 2 refused. Read on every decision; call
+// TestHook_ReevaluateRouterGate after changing it to release or end a held session.
+void TestHook_SetRouterGate(int gate);
+void TestHook_SetRefuseRemoteOpens(bool refuse);  // the adapter refuses to start a remote, as Quest's does with no token
+void TestHook_ReevaluateRouterGate();
+// The live router's counters; false when the bridge routes nothing through it.
+bool TestHook_RouterStats(uint64_t* droppedGame, uint64_t* droppedRemote, uint64_t* droppedUnrequires,
+                          uint64_t* loginsRemoved, uint64_t* heldRemotes);
 #endif
