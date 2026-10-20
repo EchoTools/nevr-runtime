@@ -1244,6 +1244,7 @@ static uint64_t CurrentPlatformCode() {
 // identity, the CNSUser login-state patch that lets LogInSuccessCB accept the reply, the social identity and the
 // request. Nothing is returned (and an Error logged) when the request cannot be built.
 static std::optional<std::string> BuildRouterLogin() {
+  constexpr int kLoginConnIdx = 1;  // the login connection's number (ConnLabel names it "login")
   const LoginIdentity identity = ReadLoginIdentity(false);
   PatchCnsUserLoginState(identity.discordId);
   const uint64_t platformCode = CurrentPlatformCode();
@@ -1257,9 +1258,9 @@ static std::optional<std::string> BuildRouterLogin() {
     Log(EchoVR::LogLevel::Error, "[NEVR.WS] login NOT injected conn=1 (login): the request could not be built");
     return std::nullopt;
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login injected xpid=%s-%llu platform=%d conn=1 (login) size=%zu",
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login injected xpid=%s-%llu platform=%d conn=%d (%s) size=%zu",
       nevr_evr_codec::PlatformPrefix(platformCode), static_cast<unsigned long long>(identity.discordId),
-      static_cast<int>(platformCode), loginMsg.size());
+      static_cast<int>(platformCode), kLoginConnIdx, ConnLabel(kLoginConnIdx), loginMsg.size());
   return loginMsg;
 }
 
