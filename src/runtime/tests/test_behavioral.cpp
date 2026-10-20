@@ -1360,6 +1360,9 @@ bool WaitForLogLines(const std::string& needle, size_t count) {
 // which game socket the bridge routed a reply to and which request the reply answers.
 class RemoteService {
  public:
+  // The answer to a FindSessionRequest: a symbol the router does not read, so it is routed as lobby traffic.
+  static constexpr uint64_t kLobbyReplySymbol = 0x7e57104410bb9001ULL;
+
   bool Start() {
     std::random_device device;
     std::mt19937 generator(device());
@@ -1370,14 +1373,19 @@ class RemoteService {
       server_->disablePerMessageDeflate();
       server_->setOnClientMessageCallback(
           [this](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& socket, const ix::WebSocketMessagePtr& message) {
-            if (message->type == ix::WebSocketMessageType::Open) ++opens_;
+            if (message->type == ix::WebSocketMessageType::Open) {
+              ++opens_;
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              uris_.push_back(message->openInfo.uri);
+            }
             if (message->type != ix::WebSocketMessageType::Message || !message->binary) return;
             const uint64_t symbol = nevr_evr_codec::FirstSymbol(message->str);
             const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
             if (isLogin) ++loginRequests_;
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
-            if (isLogin) reply = nevr_evr_codec::kSymLoginSettings;
+            if (isLogin) reply = loginReply_.load();
             if (symbol == nevr_evr_codec::kSymConfigRequest) reply = nevr_evr_codec::kSymConfigSuccess;
+            if (symbol == nevr_evr_codec::kSymFindSessionRequest) reply = kLobbyReplySymbol;
             socket.sendBinary(nevr_evr_codec::BuildMessage(reply, ""));
           });
       if (server_->listen().first) {
@@ -1406,12 +1414,26 @@ class RemoteService {
   int LoginRequests() const { return loginRequests_.load(); }
   // Connections the bridge has opened to the service.
   int Opens() const { return opens_.load(); }
+  // The request target (path and query) of each connection the bridge opened, in order.
+  std::vector<std::string> Uris() {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return uris_;
+  }
+  // What the service answers a LoginRequest with (LoginSettings by default).
+  void SetLoginReply(uint64_t symbol) { loginReply_ = symbol; }
+  // Sends `symbol` to every connection, unasked.
+  void PushToClients(uint64_t symbol) {
+    for (const auto& client : server_->getClients()) client->sendBinary(nevr_evr_codec::BuildMessage(symbol, ""));
+  }
 
  private:
   std::unique_ptr<ix::WebSocketServer> server_;
   int port_ = 0;
   std::atomic<int> loginRequests_{0};
   std::atomic<int> opens_{0};
+  std::atomic<uint64_t> loginReply_{nevr_evr_codec::kSymLoginSettings};
+  std::mutex urisMutex_;
+  std::vector<std::string> uris_;
 };
 
 // A game-side socket: connects to the bridge at a request target and counts the frames the bridge sends it.
@@ -1425,7 +1447,10 @@ class GameSocket {
     socket_.setOnMessageCallback([this](const ix::WebSocketMessagePtr& message) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (message->type == ix::WebSocketMessageType::Open) open_ = true;
-      if (message->type == ix::WebSocketMessageType::Close) closed_ = true;
+      if (message->type == ix::WebSocketMessageType::Close) {
+        closed_ = true;
+        closeCode_ = message->closeInfo.code;
+      }
       if (message->type == ix::WebSocketMessageType::Message) {
         ++frames_;
         symbols_.push_back(nevr_evr_codec::FirstSymbol(message->str));
@@ -1448,6 +1473,16 @@ class GameSocket {
   int Frames() {
     std::lock_guard<std::mutex> lock(mutex_);
     return frames_;
+  }
+  // The close code the bridge sent, 0 until it closed the socket.
+  int CloseCode() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closeCode_;
+  }
+  // How many frames led with `symbol`.
+  int Count(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<int>(std::count(symbols_.begin(), symbols_.end(), symbol));
   }
   // Waits for a frame whose first message is `symbol`.
   bool WaitForSymbol(uint64_t symbol) {
@@ -1473,6 +1508,7 @@ class GameSocket {
   std::condition_variable changed_;
   bool open_ = false;
   bool closed_ = false;
+  int closeCode_ = 0;
   int frames_ = 0;
   std::vector<uint64_t> symbols_;
 };
@@ -1811,6 +1847,259 @@ TEST_F(RouterBogusModeTest, ANonsenseModeIsFatalAndInstallsNothing) {
   EXPECT_EQ(g_fatalErrorCalls, fatalBefore_ + 1);
   EXPECT_FALSE(LogLinesContaining("network.session_router refused").empty());
   EXPECT_EQ(GetWebSocketBridgePort(), 0);
+}
+
+// ============================================================================
+// #708 S2b: network.session_router=all. Every socket the bridge admits (config, login, matchmaker) is the
+// router's: one shared remote session, one LoginRequest per login session, and the account gate.
+// ============================================================================
+
+namespace {
+
+class RouterAllTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+  void TearDown() override {
+    TestHook_SetRouterGate(-1);
+    TestHook_SetRefuseRemoteOpens(false);
+    RolesByPathTest::TearDown();
+  }
+  struct Stats {
+    uint64_t droppedGame = 0, droppedRemote = 0, droppedUnrequires = 0, loginsRemoved = 0, heldRemotes = 0;
+  };
+  Stats RouterStats() {
+    Stats stats;
+    EXPECT_TRUE(TestHook_RouterStats(&stats.droppedGame, &stats.droppedRemote, &stats.droppedUnrequires,
+                                     &stats.loginsRemoved, &stats.heldRemotes));
+    return stats;
+  }
+  // The bridge's login socket, admitted and answered.
+  void AdmitLogin(GameSocket& login) {
+    Admit(login, "/login");
+    ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
+  }
+};
+
+enum class Kind { Config, Login, Matchmaker };
+
+const char* KindName(Kind kind) {
+  switch (kind) {
+    case Kind::Config: return "config";
+    case Kind::Login: return "login";
+    case Kind::Matchmaker: return "matchmaker";
+  }
+  return "?";
+}
+
+// Each of the six orders the game's three sockets can open in.
+class RouterAllOrderTest : public RouterAllTest, public ::testing::WithParamInterface<std::array<Kind, 3>> {};
+
+std::string OrderName(const ::testing::TestParamInfo<std::array<Kind, 3>>& info) {
+  std::string name;
+  for (const Kind kind : info.param) name += std::string(KindName(kind)) + "_";
+  name.pop_back();
+  return name;
+}
+
+}  // namespace
+
+// L1: whatever the open order, the service sees one LoginRequest, and the login socket gets its reply. A
+// matchmaker that opens before any login is attached has no session to share, so it keeps a connection of its
+// own: that is the only reason for a second connection to the service.
+TEST_P(RouterAllOrderTest, TheThreeSocketsShareOneLoginInAnyOrder) {
+  const std::array<Kind, 3> order = GetParam();
+  GameSocket config, login, matchmaker;
+  for (const Kind kind : order) {
+    switch (kind) {
+      case Kind::Config: Admit(config, "/config"); break;
+      case Kind::Login: Admit(login, "/login"); break;
+      case Kind::Matchmaker: ASSERT_NE(GetMatchmakerBridgePort(), 0); Admit(matchmaker, "/", GetMatchmakerBridgePort()); break;
+    }
+  }
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login socket never received its reply";
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  const auto at = [&order](Kind kind) { return std::find(order.begin(), order.end(), kind) - order.begin(); };
+  const int expectedOpens = at(Kind::Matchmaker) < at(Kind::Login) ? 2 : 1;
+  EXPECT_TRUE(YieldUntil([&] { return remote_.Opens() >= expectedOpens; }));
+  EXPECT_EQ(remote_.Opens(), expectedOpens);
+  EXPECT_EQ(LogLinesContaining("path=router").size(), 6U) << "three admissions and three connects, all the router's";
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_FALSE(matchmaker.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(RouterStats().droppedGame, 0U);
+  EXPECT_EQ(RouterStats().droppedRemote, 0U);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Orders, RouterAllOrderTest,
+    ::testing::Values(std::array<Kind, 3>{Kind::Config, Kind::Login, Kind::Matchmaker},
+                      std::array<Kind, 3>{Kind::Config, Kind::Matchmaker, Kind::Login},
+                      std::array<Kind, 3>{Kind::Login, Kind::Config, Kind::Matchmaker},
+                      std::array<Kind, 3>{Kind::Login, Kind::Matchmaker, Kind::Config},
+                      std::array<Kind, 3>{Kind::Matchmaker, Kind::Config, Kind::Login},
+                      std::array<Kind, 3>{Kind::Matchmaker, Kind::Login, Kind::Config}),
+    OrderName);
+
+// L2: a standalone matchmaker's connection is a protobuf one (format=evr is stripped from the target); the
+// session's connection keeps it.
+TEST_F(RouterAllTest, AStandaloneMatchmakerConnectionDropsFormatEvr) {
+  SetWebSocketBridgeTarget((remote_.Uri() + "?format=evr").c_str());
+  GameSocket matchmaker, login;
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  ASSERT_TRUE(YieldUntil([this] { return remote_.Opens() >= 2; }));
+  const std::vector<std::string> uris = remote_.Uris();
+  ASSERT_EQ(uris.size(), 2U);
+  EXPECT_EQ(uris[0].find("format=evr"), std::string::npos) << "the matchmaker's connection: " << uris[0];
+  EXPECT_NE(uris[1].find("format=evr"), std::string::npos) << "the session's connection: " << uris[1];
+}
+
+// L3 (N91): a second /login while a login session exists is a matchmaker on the shared session; it injects nothing.
+TEST_F(RouterAllTest, ASecondLoginSocketSharesTheSessionAndInjectsNothing) {
+  GameSocket first, second;
+  AdmitLogin(first);
+  Admit(second, "/login");
+  EXPECT_TRUE(WaitForLogLines("(matchmaker) shares login session", 1));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_EQ(remote_.Opens(), 1);
+  EXPECT_EQ(LogLinesContaining("login injected xpid=").size(), 1U);
+  EXPECT_EQ(second.Count(nevr_evr_codec::kSymLoginSettings), 0);
+}
+
+// L4: the reply to a request on the login socket goes to the login socket.
+TEST_F(RouterAllTest, TheReplyToTheLoginSocketsRequestGoesToTheLoginSocket) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  AdmitLogin(login);
+  login.SendRequest();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess));
+  EXPECT_EQ(config.Count(nevr_evr_codec::kSymDocumentSuccess), 0);
+}
+
+// T706 through the bridge: the lobby reply goes to the matchmaker that last asked.
+TEST_F(RouterAllTest, ALobbyReplyGoesToTheMatchmakerThatAsked) {
+  GameSocket login, first, second;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(first, "/", GetMatchmakerBridgePort());
+  Admit(second, "/", GetMatchmakerBridgePort());
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol));
+  second.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(second.WaitForSymbol(RemoteService::kLobbyReplySymbol));
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(first.WaitForFrames(2));
+  EXPECT_EQ(first.Count(RemoteService::kLobbyReplySymbol), 2);
+  EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 1);
+  EXPECT_FALSE(LogLinesContaining("sent symbol=0x312c2a01819aa3f5").empty()) << "the sender of the find is not on record";
+  EXPECT_FALSE(LogLinesContaining("-> game=").empty()) << "the destination of the reply is not on record";
+}
+
+// L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
+TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginFailure);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the game was left at the login gate";
+  EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginFailure));
+}
+
+// L6: an Unrequire nobody asked for is dropped and counted, not handed to a socket.
+TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
+  GameSocket login;
+  AdmitLogin(login);
+  remote_.PushToClients(nevr_evr_codec::kSymConnectionUnrequire);
+  ASSERT_TRUE(YieldUntil([this] { return RouterStats().droppedUnrequires == 1; })) << "the Unrequire was not counted";
+  EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
+}
+
+// L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
+// service, and its reply reaches the login socket.
+TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
+  const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
+  ASSERT_NE(sender, nullptr);
+  const std::string frame = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "");
+  EXPECT_FALSE(sender(frame));
+  EXPECT_FALSE(LogLinesContaining("game->server frame not sent").empty());
+  GameSocket login;
+  AdmitLogin(login);
+  EXPECT_TRUE(sender(frame));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the reply to the runtime frame was lost";
+}
+
+// L8: the ninth matchmaker is closed with 1013, and the first eight share the session's one connection.
+TEST_F(RouterAllTest, ANinthMatchmakerIsClosedTryAgainLater) {
+  GameSocket login;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  std::vector<std::unique_ptr<GameSocket>> matchmakers;
+  for (int index = 0; index < 8; ++index) {
+    matchmakers.push_back(std::make_unique<GameSocket>());
+    Admit(*matchmakers.back(), "/", GetMatchmakerBridgePort());
+  }
+  GameSocket ninth;
+  Admit(ninth, "/", GetMatchmakerBridgePort());
+  EXPECT_TRUE(ninth.WaitForClose());
+  EXPECT_EQ(ninth.CloseCode(), 1013);
+  EXPECT_EQ(remote_.Opens(), 1);
+}
+
+// L9: the remote ending ends the login session once, and removes no login (that is Quest's, not the PC's).
+TEST_F(RouterAllTest, TheRemoteEndingEndsTheSessionOnceAndRemovesNoLogin) {
+  GameSocket first, second;
+  AdmitLogin(first);
+  remote_.CloseEveryClient();
+  ASSERT_TRUE(WaitForLogLines("login session ended", 1));
+  ASSERT_TRUE(first.WaitForClose());
+  EXPECT_EQ(LogLinesContaining("login session ended").size(), 1U);
+  EXPECT_EQ(RouterStats().loginsRemoved, 0U);
+  EXPECT_FALSE(LogLinesContaining("router stats (session ended)").empty());
+  Admit(second, "/login");
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the game's next login was not a new login";
+  EXPECT_EQ(remote_.LoginRequests(), 2);
+}
+
+// T704-A: the account is awaited and the adapter refuses to open a connection. The config socket is closed (the
+// game sees a failed connect), nothing reaches the service, and the login socket stays open with its session held.
+// When the account arrives the held session opens and carries the login.
+TEST_F(RouterAllTest, AHeldLoginSessionOpensWhenTheAccountArrives) {
+  TestHook_SetRouterGate(0);
+  TestHook_SetRefuseRemoteOpens(true);
+  GameSocket config, login;
+  Admit(config, "/config");
+  ASSERT_TRUE(config.WaitForClose());
+  EXPECT_EQ(config.CloseCode(), 1011);
+  Admit(login, "/login");
+  ASSERT_TRUE(WaitForLogLines("(login) held", 1));
+  EXPECT_EQ(remote_.Opens(), 0);
+  EXPECT_EQ(remote_.LoginRequests(), 0);
+  EXPECT_EQ(RouterStats().heldRemotes, 1U);
+  EXPECT_EQ(login.Frames(), 0);
+
+  TestHook_SetRefuseRemoteOpens(false);
+  TestHook_SetRouterGate(1);
+  TestHook_ReevaluateRouterGate();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the held session never opened";
+  EXPECT_EQ(remote_.Opens(), 1);
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_EQ(RouterStats().heldRemotes, 0U);
+}
+
+// T704-B: the adapter opens the session but the account is still awaited: the login waits; the config socket
+// is served meanwhile. No LoginRequest is sent until the gate is ready.
+TEST_F(RouterAllTest, AnOpenSessionWaitsForTheAccountBeforeItsLogin) {
+  TestHook_SetRouterGate(0);
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(WaitForLogLines("login deferred", 1));
+  EXPECT_EQ(remote_.LoginRequests(), 0);
+  TestHook_SetRouterGate(1);
+  TestHook_ReevaluateRouterGate();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_FALSE(LogLinesContaining("the account is available; injecting the deferred login").empty());
 }
 
 // ============================================================================
