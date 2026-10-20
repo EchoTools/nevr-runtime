@@ -1146,6 +1146,8 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      # #703: resource_override registers the cache's overrides through the production cache.
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
@@ -1195,6 +1197,7 @@ if(BUILD_TESTING)
       tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
@@ -1236,7 +1239,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
-      ws2_32 psapi
+      ws2_32 psapi advapi32
     )
 
     # Hermetic DLL fixtures for the real LoadLibraryExA path in
