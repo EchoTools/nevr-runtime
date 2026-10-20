@@ -1832,7 +1832,6 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
 
 // ---- the config reply owner ----------------------------------------------------------------
 
-// Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
 // T706 (nakama issue 706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
 // follow the matchmaker socket that last sent a request, not the newest one by order: the game disconnects a
 // socket it never asked ("from non-matchmaker peer"). Failure caught: replies going to the newest socket.
@@ -1849,6 +1848,8 @@ void TestLobbyFramesFollowTheMatchmakerThatAsked() {
   rig.router->OnRemoteFrame(session, Msg(kSymSomething, "a"), true);
   auto sent = rig.games.Sent();
   QCHECK(sent.size() == 1 && sent[0].id == 3);
+  QCHECK(rig.logs.Has("game=3 conn=2 (matchmaker) sent symbol="));  // the sender of the find is on record
+  QCHECK(rig.logs.Has("-> game=3 conn=2 (matchmaker)"));            // and so is where the reply went
   rig.router->OnGameFrame(4, Msg(kSymSomething, "find again"), true);
   rig.router->OnRemoteFrame(session, Msg(kSymSomething, "b"), true);
   sent = rig.games.Sent();
@@ -1877,6 +1878,7 @@ void TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest() {
   QCHECK(sent.size() == 1 && sent[0].id == 4);
 }
 
+// Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
 // Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
 // it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
 void TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst() {
@@ -2498,6 +2500,31 @@ void TestLoginFailureReplacementIsDeliveredAndNotSubscribed() {
   QCHECK(rig.remotes.Sent().size() == 1);  // the login only: no subscribe
 }
 
+// S2b: the adapter learns when the SESSION ends (not when a standalone matchmaker's remote does), once, after
+// the router's lock is released, and can ask which remote is the session.
+void TestSessionEndedCallbackFiresOncePerSession() {
+  const CaseScope scope("session ended callback");
+  int ended = 0;
+  Options o = WithLogin(kLogin);
+  o.onSessionEnded = [&ended]() { ++ended; };
+  Rig rig(std::move(o));
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnGameOpen(1, Hinted(Role::Matchmaker));  // standalone remote: not the session
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  QCHECK(rig.router->SessionRemote().has_value() && *rig.router->SessionRemote() == session);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 2);
+  if (opens.size() != 2) return;
+  rig.router->OnRemoteClose(opens[0].remote, 1000);  // the standalone matchmaker's remote
+  QCHECK(ended == 0);
+  rig.router->OnRemoteClose(session, 1006);
+  QCHECK(ended == 1);
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnRemoteClose(session, 1006);  // already gone
+  QCHECK(ended == 1);
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -2795,6 +2822,16 @@ void TestConfigRequestKeyMatchesTheServicesDecoder() {
   }
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("").has_value());
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("x").has_value());  // a pad byte and no JSON
+  // The pad byte is whatever the game left there, '{' included: seen live (#708 S2b) on the game's first request,
+  // `{` + `{"type":"main_menu","id":"main_menu"}` + NUL, 39 bytes. Failure caught: that request keyed as unreadable, so
+  // the service's reply matched nothing and the game never got its main_menu config.
+  const std::string braced = std::string(1, '{') + R"({"type":"main_menu","id":"main_menu"})" + std::string(1, '\0');
+  const std::optional<nevr_evr_codec::ConfigKey> bracedKey = nevr_evr_codec::ParseConfigRequestKey(braced);
+  QCHECK(bracedKey.has_value());
+  if (bracedKey.has_value()) {
+    QCHECK(bracedKey->type == nevr_evr_codec::ConfigSymbol("main_menu"));
+    QCHECK(bracedKey->id == nevr_evr_codec::ConfigSymbol("main_menu"));
+  }
 }
 
 // The key of a reply: the success carries the two symbols, the failure the two strings.
@@ -3366,6 +3403,7 @@ int main() {
   TestLobbyFramesFollowTheMatchmakerThatAsked();
   TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
   TestGateRefusedEndsADeferredInjection();
+  TestSessionEndedCallbackFiresOncePerSession();
   TestLoginFailureReplacementIsDeliveredAndNotSubscribed();
   TestSendToSessionQueuesBehindTheLoginAndThenSends();
   TestGateAwaitingWhenTheSessionOpensDefersTheLogin();

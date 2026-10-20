@@ -204,6 +204,8 @@ struct Options {
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
   LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
   LoginFailureReplacement replaceLoginFailure;  // null (default): the failure reaches the game (a dedicated server sets it)
+  // Called once, with no router lock held, when the shared session's remote ends (the login session is gone).
+  std::function<void()> onSessionEnded;
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
   // Non-empty: the JSON document of the SNSLoginRemovedNotify sent to a game whose login session was lost
   // under it (Quest). Built by the wiring (nlohmann::json); empty (default) sends no notice (PC).
@@ -275,6 +277,8 @@ class Router {
   void Shutdown();
 
   Stats GetStats() const;
+  // The remote that carries the shared session, if there is one.
+  std::optional<RemoteId> SessionRemote() const;
 
  private:
   struct Item {

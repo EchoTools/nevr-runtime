@@ -449,9 +449,13 @@ bool ExtractStringFields(std::string_view json, const char* first, const char* s
 // (or a different one), and its reply, which carries the service's key, is dropped as unmatched.
 std::optional<ConfigKey> ParseConfigRequestKey(std::string_view payload) {
   if (payload.empty()) return std::nullopt;
-  const std::string_view json = payload[0] == '{' ? payload : payload.substr(1);  // one pad byte first
+  // One pad byte first, whatever its value: the game's first request has '{' there, so a payload that starts with
+  // '{' is read as it stands first and, when that is not a JSON object, without its first byte.
   std::string type, id;
-  if (!ExtractStringFields(json, "type", "id", &type, &id)) return std::nullopt;
+  if (payload[0] == '{' && ExtractStringFields(payload, "type", "id", &type, &id)) {
+    return ConfigKey{ConfigSymbol(type), ConfigSymbol(id)};
+  }
+  if (!ExtractStringFields(payload.substr(1), "type", "id", &type, &id)) return std::nullopt;
   return ConfigKey{ConfigSymbol(type), ConfigSymbol(id)};
 }
 

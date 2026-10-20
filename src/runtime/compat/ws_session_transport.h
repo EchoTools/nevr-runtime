@@ -42,6 +42,10 @@ class GameSockets final : public nevr_session_router::GameTransport {
   std::optional<GameId> IdOf(const ix::WebSocket* socket) const;
   int ConnIdxOf(const ix::WebSocket* socket) const;  // -1 when unknown
   void Forget(const ix::WebSocket* socket);
+  // A rewrite applied to every frame sent to a game (returns the replacement, or nothing to send it unchanged).
+  // Set once, before the first Send.
+  using OutboundRewrite = std::function<std::optional<std::string>(const std::string& frame, bool binary)>;
+  void SetOutboundRewrite(OutboundRewrite rewrite) { rewrite_ = std::move(rewrite); }
 
   nevr_session_router::SendResult Send(GameId game, std::string_view frame, bool binary) override;
   void Close(GameId game, uint16_t code, std::string_view reason) override;
@@ -52,6 +56,7 @@ class GameSockets final : public nevr_session_router::GameTransport {
     int connIdx = -1;
   };
   GameSocketLookup lookup_;
+  OutboundRewrite rewrite_;
   mutable std::mutex mutex_;
   std::unordered_map<GameId, Entry> byId_;
   std::unordered_map<const ix::WebSocket*, GameId> bySocket_;

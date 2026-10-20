@@ -186,6 +186,7 @@ struct Router::Effects {
   std::vector<GameClose> gameCloses;
   std::vector<std::pair<GameId, bool>> holds;  // SetIdleExempt calls
   std::vector<RemoteId> injections;  // sessions that need the login builder run (no lock held)
+  bool sessionEnded = false;         // the shared session's remote ended (Options::onSessionEnded)
 };
 
 Router::Router(GameTransport* games, RemoteTransport* remotes, Options options)
@@ -208,6 +209,7 @@ void Router::Run(Effects& fx) {
   for (const auto& close : fx.remoteCloses) remotes_->Close(close.first, close.second);
   for (const auto& close : fx.gameCloses) games_->Close(close.game, close.code, close.reason);
   for (const RemoteId remote : fx.injections) BuildAndSendLogin(remote);
+  if (fx.sessionEnded && options_.onSessionEnded) options_.onSessionEnded();
 }
 
 void Router::DrainRemote(RemoteId remote) {
@@ -275,6 +277,7 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     outstanding = !loginSocketGone && lit->second.required != 0;
   }
   if (wasSession) {
+    fx.sessionEnded = true;
     sessionRemote_ = kNoRemote;
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
@@ -409,10 +412,17 @@ GameId Router::RouteSessionFrameLocked(const std::string& frame, bool* quietDrop
       ++configRepliesUnmatched_;
       *quietDrop = true;
       *logged = true;
+      std::string open;  // the open requests' keys, so a reply that matches none can be compared with them
+      for (std::size_t i = 0; i < configRequests_.size() && i < 4; ++i) {
+        const ConfigRequestRecord& entry = configRequests_[i];
+        open += Fmt(" game=%llu:%016llx/%016llx", Ull(entry.owner), Ull(entry.key ? entry.key->type : 0),
+                    Ull(entry.key ? entry.key->id : 0));
+      }
       Log(fx, LogLevel::Warning,
           Fmt("[router] config reply dropped: no open config request has its type and id: symbol=0x%016llx "
-              "type=0x%016llx id=0x%016llx (%llu such replies in total)",
-              Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_)));
+              "type=0x%016llx id=0x%016llx (%llu such replies in total); %llu open request(s):%s",
+              Ull(symbol), Ull(key ? key->type : 0), Ull(key ? key->id : 0), Ull(configRepliesUnmatched_),
+              Ull(configRequests_.size()), open.c_str()));
     } else {
       GameId owner = request->owner;
       // Both entries are erased by position, the later one first. Erasing a deque element that is neither the
@@ -491,9 +501,21 @@ bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<cons
     nevr_evr_codec::Message message;
     while (nevr_evr_codec::ReadMessage(*data, offset, &message) == nevr_evr_codec::ReadStatus::Ok) {
       if (message.symbol == nevr_evr_codec::kSymConfigRequest) {
-        configRequests_.push_back(
-            {from, nevr_evr_codec::ParseConfigRequestKey(std::string_view(
-                       reinterpret_cast<const char*>(message.payload), static_cast<std::size_t>(message.length)))});
+        const std::string_view requestPayload(reinterpret_cast<const char*>(message.payload),
+                                              static_cast<std::size_t>(message.length));
+        const std::optional<nevr_evr_codec::ConfigKey> requestKey = nevr_evr_codec::ParseConfigRequestKey(requestPayload);
+        if (!requestKey || requestKey->type == 0 || requestKey->id == 0) {
+          // A request the reply cannot be matched to by its key. The payload names a resource (never a credential).
+          std::string shown;
+          for (std::size_t i = 0; i < requestPayload.size() && i < 160; ++i) {
+            const char c = requestPayload[i];
+            shown += (c >= 0x20 && c < 0x7f) ? c : '.';
+          }
+          Log(fx, LogLevel::Warning,
+              Fmt("[router] game=%llu config request has no usable type and id (%s): bytes=%llu payload=\"%s\"", Ull(from),
+                  requestKey ? "empty field" : "unreadable", Ull(requestPayload.size()), shown.c_str()));
+        }
+        configRequests_.push_back({from, requestKey});
         while (configRequests_.size() > kMaxConfigRequests) {
           ++configRequestsEvicted_;
           Log(fx, LogLevel::Warning,
@@ -817,6 +839,13 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
         } else {
           Remote& r = rit->second;
           CountRequirementsLocked(git->second, frame);
+          if (git->second.role == Role::Matchmaker) {
+            // Which socket sent each lobby request, so a reply that the game rejects can be tied to the socket
+            // that asked (the headset re-find hang has no record of the sender).
+            Log(fx, LogLevel::Info,
+                Fmt("[router] game=%llu conn=%d (matchmaker) sent symbol=0x%016llx bytes=%llu", Ull(game),
+                    git->second.connIdx, Ull(nevr_evr_codec::FirstSymbol(frame)), Ull(frame.size())));
+          }
           if (git->second.role == Role::Matchmaker && remoteId == sessionRemote_ && activeGame_ != game) {
             // The game disconnects a matchmaker socket that gets a reply to a request it never sent. Lobby frames
             // carry no request id the router can match, so "the matchmaker that last sent a frame" stands in for
@@ -877,6 +906,12 @@ bool Router::SendToSession(std::string frame) {
   }
   Run(fx);
   return accepted;
+}
+
+std::optional<RemoteId> Router::SessionRemote() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (sessionRemote_ == kNoRemote) return std::nullopt;
+  return sessionRemote_;
 }
 
 void Router::OnGameClose(GameId game) {
@@ -1099,6 +1134,11 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
           }
         } else {
           Game& g = gameTable_[target];
+          if (g.role == Role::Matchmaker) {
+            Log(fx, LogLevel::Info,
+                Fmt("[router] reply symbol=0x%016llx bytes=%llu -> game=%llu conn=%d (matchmaker)", Ull(symbol),
+                    Ull(frame.size()), Ull(target), g.connIdx));
+          }
           if (g.out.bytes + frame.size() > options_.limits.maxOutboundBytes) {
             CloseGameLocked(target, kCloseTryAgainLater, "outbound buffer to the game is full", fx);
           } else {
