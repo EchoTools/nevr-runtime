@@ -28,6 +28,9 @@
 //                                    (step 3).
 //      InstallProcessEnd             the process ends when the game's android_main returns (#621): one libr15
 //                                    slot, on every launch, right after the OBB skip; no counters
+//      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
+//                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
+//                                    the process-end hook; no counters
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -76,6 +79,7 @@ enum class StepId : std::uint8_t {
   kInstallClockHook,
   kInstallObbSkip,
   kInstallProcessEnd,
+  kInstallPermissionWait,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -125,6 +129,8 @@ class Steps {
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
   // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
   virtual bool InstallProcessEnd() = 0;
+  // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
+  virtual bool InstallPermissionWait() = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

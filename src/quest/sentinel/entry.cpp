@@ -16,6 +16,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "obb_skip_hook.h"
+#include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "pinned_targets.h"
 #include "quest/integration/entry_hooks.h"
@@ -86,6 +87,10 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept {
 // the game's call intact.
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::process_end::SetBeforeExit(callback); }
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
+
+// The game waits for the storage permission it just asked for (#640). A refused install is logged by GotHook and
+// leaves the game's call intact.
+bool InstallPermissionWaitHook() noexcept { return nevr_quest::permission_wait::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

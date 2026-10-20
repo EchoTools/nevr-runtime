@@ -1390,15 +1390,19 @@ void UiEventBegin(void* self, std::uint32_t slot, std::uint64_t target, UiEventJ
   if (impl == nullptr || job == nullptr) return;
   try {
     bool post = false;
+    const auto send = g_sendComponentEvent.load(std::memory_order_acquire);
     if (slot == kOpenNewSendInviteUI) {
       SlotInviteUINoTarget(self, 0);
       post = true;
     } else if (slot == kOpenPartyUITarget) {
       SlotPartyUITarget(self, 0, target);
-      const std::uint64_t selfId = CurrentView(*impl)->selfId;
-      post = selfId != 0 && target == selfId;
+      // Probe off (no post function): the view copy is not taken at all.
+      if (send != nullptr) {
+        const std::uint64_t selfId = CurrentView(*impl)->selfId;
+        post = selfId != 0 && target == selfId;
+      }
     }
-    job->game.send = g_sendComponentEvent.load(std::memory_order_acquire);
+    job->game.send = send;
     job->slot = slot;
     // Probe off (no post function): the slot is exactly what it was, and logs nothing more.
     job->symbol = post && job->game.send != nullptr ? kSymEvtArmComputerFriends : 0;
