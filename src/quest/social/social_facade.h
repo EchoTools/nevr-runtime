@@ -48,6 +48,10 @@ const Ports& ProductionPorts();
 // loads and shares nothing, leaves the CJson alone and counts a Reset (jsonFailed). A test sets fakes.
 void SetGameJson(const GameJson& json) noexcept;
 
+// The game function that posts a script event by symbol (social_abi.h GameEvents). The installer sets it once it has
+// found libr15 of the pinned build; the default (nullptr) posts nothing and the press is logged as no_function.
+void SetGameEvents(const GameEvents& events) noexcept;
+
 // The load address of the pinned libpnsovr, set when the Social() hook selected the facade (0: not known). The facade's
 // Initialize reads pnsovr's provider symbol from it and logs whether the game will derive the platform code the login
 // carries (social_abi.h, "provider identity").

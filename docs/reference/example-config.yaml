@@ -15,7 +15,7 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta and diagnostics.hardware_dump. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump and diagnostics.ui_event_probe. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -80,6 +80,11 @@ diagnostics:
   # Quest only. Write the hardware/environment dump (docs/adr/0006-quest-hardware-dump.md) at start-up.
   # Default (absent): false.
   # hardware_dump: true
+
+  # Quest only. The invite/party UI probe: the party tab's Invite Members and the main-menu FRIENDS LIST press also
+  # ask the tablet to switch to its Friends list, to measure whether that opens an invite path. Needs social.facade.
+  # Default (absent): false.
+  # ui_event_probe: true
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints

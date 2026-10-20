@@ -565,6 +565,34 @@ void RedirectIsGatedByActivation() {
 
 }  // namespace
 
+// The UI event probe (#391, #318): `diagnostics.ui_event_probe`, off unless the file says true, and it needs social.
+void UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial() {
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: true\n");
+    CHECK(r.config.requested.uiEventProbe && r.config.effective.uiEventProbe);
+    CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kUiEventProbe));
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=on effective=on"));
+    CHECK(!HasLevel(r, LogLevel::kWarn));
+  }
+  {
+    const LoadResult r = Load(Full(), "social:\n  facade: false\ndiagnostics:\n  ui_event_probe: true\n");
+    CHECK(r.config.requested.uiEventProbe && !r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe forced off reason=social_not_enabled"));
+  }
+  {
+    const LoadResult r = Load(Full(), "diagnostics:\n  ui_event_probe: maybe\n");
+    CHECK(!r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "config file key=diagnostics.ui_event_probe rejected reason=not_a_boolean"));
+  }
+  for (const char* text : {"diagnostics:\n  ui_event_probe: false\n", "social:\n  ui_event_probe: true\n",
+                           "ui_event_probe: true\n", "diagnostics: {}\n"}) {
+    const LoadResult r = Load(Full(), text);
+    CHECK(!r.config.effective.uiEventProbe);
+    CHECK(EventsContain(r, "feature=ui_event_probe requested=off effective=off"));
+  }
+  CHECK(std::string(nevr_quest::FeatureName(Feature::kUiEventProbe)) == "ui_event_probe");
+}
+
 int main() {
   DefaultsWithoutFile();
   NothingEmbeddedAndNoFileTurnsTheNetworkFeaturesOff();
@@ -578,6 +606,7 @@ int main() {
   ABooleanThatIsNotOneKeepsItsDefaultAndIsRejectedByName();
   SendPresenceToMetaFalseIsTheLocalPresencePath();
   HardwareDumpIsOnlyEverOnByTheDiagnosticsKey();
+  UiEventProbeIsOnlyEverOnByTheDiagnosticsKeyAndNeedsSocial();
   MalformedFileFallsBackToDefaults();
   ARejectedFileNeverEchoesWhatItHeld();
   AnUnknownKeyInsideAKnownSectionIsNotAnError();

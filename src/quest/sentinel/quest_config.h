@@ -17,7 +17,7 @@
 // resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
 // `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
 // `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
-// turns the hardware dump on. A feature whose prerequisite is off or missing is forced off with a logged reason.
+// turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
 #pragma once
 
 #include <cstddef>
@@ -32,7 +32,7 @@ inline constexpr const char* kConfigFileName = "config.yaml";
 inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -68,6 +68,10 @@ struct Features {
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
   // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
+  // The invite/party UI probe (#391, #318): the Invite Members and own-id Party slots also post the friends script
+  // event, to see whether the tablet switches to its Friends list. `diagnostics.ui_event_probe: true` turns it on;
+  // never on unless the file asks, and it needs the social facade.
+  bool uiEventProbe = false;
 };
 
 struct LogEvent {
