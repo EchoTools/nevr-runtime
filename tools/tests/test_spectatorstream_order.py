@@ -22,8 +22,19 @@ DEFERRED_BOOTSTRAP = "RunDeferredRuntimeBootstrap(pGame,"
 OWN_SITE = re.compile(r"\bSite\s*\{|\bSite\s+\w+\s*(?:=\s*)?[{(]")
 # The record's result argument: the last argument of FormatSpectatorStreamRecord must be `result`.
 RECORD_RESULT = re.compile(r"FormatSpectatorStreamRecord\([^;]*,\s*result\s*\)\s*;")
-# The bits the spectator-stream path sets in game+0x7AE0 (echovr.exe 0x140116F4D).
-SPECTATOR_BITS = re.compile(r"\b0x0*2[01]00000\b", re.IGNORECASE)
+# The bits the spectator-stream path sets in game+0x7AE0 (echovr.exe 0x140116F4D), as a hex literal or as
+# bit 25 (0x2000000) shifted into place. Scoped to boot.cpp: elsewhere 0x2000000 is also the fixed-time-step
+# flag at another offset (server_timestep.h) and an image-size bound (crash_recovery.cpp).
+SPECTATOR_BITS = re.compile(r"\b0x0*2[01]00000\b|<<\s*25\b", re.IGNORECASE)
+
+
+def runtime_sources():
+    """The shipped C++ sources under src/, comments stripped: no src/legacy, no tests."""
+    for path in sorted((ROOT / "src").rglob("*.cpp")):
+        parts = path.relative_to(ROOT / "src").parts
+        if "legacy" in parts or "tests" in parts:
+            continue
+        yield path.relative_to(ROOT).as_posix(), strip_comments(path.read_text(errors="replace"))
 
 
 def hook_body() -> str:
@@ -39,6 +50,31 @@ class SpectatorStreamOrder(unittest.TestCase):
         self.assertIn(ORIGINAL_CALL, body)
         self.assertNotIn(ROUTINE, body, "PreprocessCommandLineHook applies the spectator-stream patch itself")
         self.assertNotIn("SPECTATORSTREAM_CHECK", body, "PreprocessCommandLineHook writes the spectator-stream site")
+        self.assertNotRegex(
+            body, r"\bPatchEnableServer\s*\(", "PreprocessCommandLineHook calls PatchEnableServer (and with it the write) itself"
+        )
+
+    def test_patchenableserver_is_called_only_from_the_deferred_bootstrap(self):
+        callers = [(path, len(re.findall(r"\bPatchEnableServer\s*\(\s*\)\s*;", code)))
+                   for path, code in runtime_sources()]
+        self.assertEqual([c for c in callers if c[1]], [("src/runtime/lifecycle/boot.cpp", 1)])
+        boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
+        deferred = extract_braced_function(boot, "void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger)")
+        self.assertEqual(len(re.findall(r"\bPatchEnableServer\s*\(\s*\)\s*;", deferred)), 1)
+
+    def test_only_the_routine_names_the_site_in_shipped_code(self):
+        # Any other use of SPECTATORSTREAM_CHECK in a .cpp, in any spelling (ApplyPatch(SPECTATORSTREAM_CHECK, ...),
+        # nevr_patch_addresses::SPECTATORSTREAM_CHECK, a pointer to it), is a second writer of the site.
+        source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
+        routine = extract_braced_function(source, ROUTINE_SIGNATURE)
+        users = []
+        for path, code in runtime_sources():
+            if path == "src/runtime/patch/mode_patches.cpp":
+                self.assertEqual(code.count(routine), 1)
+                code = code.replace(routine, "")
+            if re.search(r"\bSPECTATORSTREAM_CHECK\b", code):
+                users.append(path)
+        self.assertEqual(users, [], "the spectator-stream site is named outside PatchSpectatorStreamCheck")
 
     def test_boot_never_sets_the_spectator_bits_itself(self):
         # The same flow, reached by setting game+0x7AE0's bits directly instead of through the NOP.
@@ -71,21 +107,17 @@ class SpectatorStreamOrder(unittest.TestCase):
         )
 
     def test_spectator_bits_pattern_matches_both_spellings(self):
-        for literal in ("0x2100000", "0x02100000", "0x2000000", "0X2100000"):
+        for literal in ("0x2100000", "0x02100000", "0x2000000", "0X2100000", "1ull << 25", "(1<<25)"):
             with self.subTest(literal=literal):
                 self.assertRegex(literal, SPECTATOR_BITS)
-        for literal in ("0x0100000", "0x8000000", "0x21000000"):
+        for literal in ("0x0100000", "0x8000000", "0x21000000", "1ull << 250", "1 << 2"):
             with self.subTest(literal=literal):
                 self.assertNotRegex(literal, SPECTATOR_BITS)
 
     def test_patchenableserver_writes_the_site_only_through_the_checked_routine(self):
         source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
         body = extract_braced_function(source, "VOID PatchEnableServer()")
-        self.assertNotRegex(
-            body,
-            r"ApplyPatch\s*\(\s*SPECTATORSTREAM_CHECK",
-            "PatchEnableServer blind-writes the spectator-stream site",
-        )
+        self.assertNotIn("SPECTATORSTREAM_CHECK", body, "PatchEnableServer writes the spectator-stream site itself")
         self.assertIn(ROUTINE, body)
 
     def routine_body(self) -> str:
