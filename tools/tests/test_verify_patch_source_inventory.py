@@ -11,6 +11,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 EXPECTED_PATCH_SOURCES = (
+    "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
@@ -65,7 +66,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=15", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=16", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (
