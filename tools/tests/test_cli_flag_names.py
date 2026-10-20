@@ -69,6 +69,11 @@ class FlagTable(unittest.TestCase):
                          "an exact comparison of a raw token reads only one spelling (#697)")
         self.assertIn("nevr_cli::Resolve(arg)", boot)
         self.assertIn("NoteCommandLineToken(arg, named)", boot)
+        note = boot[boot.index("static void NoteCommandLineToken"):boot.index("static void LogTimestepArgs")]
+        self.assertIn("s_reports.First(named)", note, "an alias warns once per run (nevr_cli::AliasReports)")
+        self.assertIn("nevr_cli::kAliasWarningFormat", note)
+        self.assertIn("named.rejected", note)
+        self.assertIn("more than two leading dashes", note, "three dashes are refused with a Warning")
 
 
 class GameParserRegistration(unittest.TestCase):
