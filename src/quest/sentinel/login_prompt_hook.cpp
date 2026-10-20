@@ -39,6 +39,8 @@ std::atomic<std::uint64_t> g_loggingInPageDropped{0};
 std::atomic<std::uint64_t> g_pagePassedArmed{0};
 std::atomic<std::uint64_t> g_resent{0};
 std::atomic<std::uint64_t> g_resendUnavailable{0};
+std::atomic<sentinel::pinned::SendComponentEventSig*> g_sendEvent{nullptr};
+std::atomic<BeginLogInFn> g_retryEvent{nullptr};  // sends the RETRY button's event (null: unavailable)
 std::atomic<std::uint64_t> g_loginRestarted{0};
 std::atomic<std::uint64_t> g_loginRestartUnavailable{0};
 
@@ -48,6 +50,10 @@ std::atomic<QuitFn> g_quit{nullptr};
 std::atomic<BeginLogInFn> g_beginLogIn{nullptr};
 // The board version whose notice already restarted the login (game thread only): one call per notice.
 std::uint64_t g_restartedVersion = ~static_cast<std::uint64_t>(0);
+std::int64_t g_retrySentNs = 0;  // when the RETRY select was sent for that notice; game thread only
+bool g_retrySent = false;       // the RETRY select was sent for that notice; game thread only
+bool g_fallbackDone = false;     // BeginLogIn was called directly for that notice; game thread only
+constexpr std::int64_t kRetryFallbackNs = 2'000'000'000;
 // A rewrite of the block while the game sits in "login failed" is followed by one error event, so the
 // UI status script copies the new text again; pending until it is sent. Events are spaced by at least
 // kResendSpacingNs, which is longer than a game-loop iteration (CR15NetGame::Update runs up to four
@@ -448,12 +454,7 @@ void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
 // does not have to (#672). Only with the notice on screen (the login may proceed, so the logging-in page is not
 // held back), only while the followed instance sits in "login failed", and only once per notice version.
 // On the game's thread, inside the Update hook.
-void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
-  if (g_kind != Kind::kNotice || State(self) != layout::kStateLoginFailed) return;
-  if (!gate::IsReady()) return;  // the caller has checked that `self` is the followed instance
-  const std::uint64_t applied = g_applied.load(std::memory_order_relaxed);
-  if (applied == kNothingApplied || applied == g_restartedVersion) return;
-  g_restartedVersion = applied;
+void StartLogin(CR15NetGameOpaque* self) noexcept {
   const BeginLogInFn begin = g_beginLogIn.load(std::memory_order_acquire);
   if (begin == nullptr) {
     g_loginRestartUnavailable.fetch_add(1, std::memory_order_relaxed);
@@ -461,6 +462,51 @@ void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
   }
   g_loginRestarted.fetch_add(1, std::memory_order_relaxed);
   begin(self);
+}
+
+// BeginLogIn alone moves the game to "logged in" but leaves the page the player sees on LOGGING IN: the page
+// script that enters the next pages is the RETRY select's (#672), and its BeginLogin node starts the login
+// itself. So the select is sent alone when it can be; BeginLogIn is called directly only when it cannot, or
+// when the game is still in "login failed" kRetryFallbackNs after the select (the select did nothing).
+void RestartLoginAfterSignIn(CR15NetGameOpaque* self) noexcept {
+  if (g_kind != Kind::kNotice || State(self) != layout::kStateLoginFailed) return;
+  if (!gate::IsReady()) return;  // the caller has checked that `self` is the followed instance
+  const std::uint64_t applied = g_applied.load(std::memory_order_relaxed);
+  if (applied == kNothingApplied) return;
+  const BeginLogInFn retry = g_retryEvent.load(std::memory_order_acquire);
+  if (applied != g_restartedVersion) {
+    g_restartedVersion = applied;
+    g_retrySent = false;
+    g_fallbackDone = false;
+    if (retry == nullptr) {
+      g_fallbackDone = true;
+      StartLogin(self);
+      return;
+    }
+    g_retrySent = true;
+    g_retrySentNs = g_clock.load(std::memory_order_relaxed)();
+    retry(self);
+    return;
+  }
+  if (!g_retrySent || g_fallbackDone) return;
+  if (g_clock.load(std::memory_order_relaxed)() - g_retrySentNs < kRetryFallbackNs) return;
+  g_fallbackDone = true;
+  StartLogin(self);
+}
+
+// Sends the event the RETRY button sends. On the game's thread, inside the Update hook.
+void SendRetrySelect(CR15NetGameOpaque* self) noexcept {
+  const auto send = g_sendEvent.load(std::memory_order_acquire);
+  if (send == nullptr || self == nullptr) return;
+  const unsigned char* const bytes = reinterpret_cast<const unsigned char*>(self);
+  const unsigned char* game = nullptr;
+  std::memcpy(&game, bytes + sentinel::pinned::game_layout::kGameOffset, sizeof(game));
+  if (game == nullptr) return;
+  void* space = nullptr;
+  std::memcpy(&space, game + sentinel::pinned::game_layout::kGameSpaceOffset, sizeof(space));
+  if (space == nullptr) return;
+  send(space, sentinel::pinned::kRetrySelectEvent, sentinel::pinned::kAllActors,
+       sentinel::pinned::kRetrySelectKey, 1);
 }
 
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
@@ -654,6 +700,27 @@ const char* ResolveBeginLogIn() noexcept {
   return "resolved";
 }
 
+// The same proof for SendComponentEvent, which carries the RETRY select. Optional too.
+const char* ResolveSendEvent() noexcept {
+  sentinel::ElfImage image;
+  if (!sentinel::FindLoadedImage(sentinel::pinned::kLibR15, &image)) return "module_not_loaded";
+  char id[64] = {};
+  if (!sentinel::ReadBuildId(image, id, sizeof(id))) return "no_build_id";
+  if (!Equal(id, sentinel::pinned::kLibR15BuildId)) return "build_id_mismatch";
+  const unsigned char* fn =
+      reinterpret_cast<const unsigned char*>(image.base) + sentinel::pinned::kSendComponentEventVaddr;
+  if (std::memcmp(fn, sentinel::pinned::kSendComponentEventCode,
+                  sizeof(sentinel::pinned::kSendComponentEventCode)) != 0) {
+    return "prologue_mismatch";
+  }
+  sentinel::pinned::SendComponentEventSig* send = nullptr;
+  static_assert(sizeof(send) == sizeof(fn), "function pointer size");
+  std::memcpy(&send, &fn, sizeof(send));
+  g_sendEvent.store(send, std::memory_order_release);
+  g_retryEvent.store(&SendRetrySelect, std::memory_order_release);
+  return "resolved";
+}
+
 bool Install() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
@@ -670,13 +737,15 @@ bool Install() noexcept {
                    enable == sentinel::GotStatus::kOk;
   const char* const quit = ResolveQuitOnError();
   const char* const begin = ResolveBeginLogIn();
+  const char* const retry = ResolveSendEvent();
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "login_prompt_install",
                       {{"result", ok ? "installed" : (any ? "partial" : "failed")},
                        {"error_text", sentinel::GotStatusName(error)},
                        {"update", sentinel::GotStatusName(update)},
                        {"enable_page", sentinel::GotStatusName(enable)},
                        {"quit_on_error", quit},
-                       {"begin_login", begin}});
+                       {"begin_login", begin},
+                       {"retry_event", retry}});
   return ok;
 }
 
@@ -713,7 +782,10 @@ void SetQuitOnErrorForTest(QuitFn quit) noexcept {
 void SetBeginLogInForTest(BeginLogInFn begin) noexcept {
   g_beginLogIn.store(begin, std::memory_order_release);
   g_restartedVersion = ~static_cast<std::uint64_t>(0);
+  g_retrySent = false;
+  g_fallbackDone = false;
 }
+void SetRetryEventForTest(BeginLogInFn retry) noexcept { g_retryEvent.store(retry, std::memory_order_release); }
 void ResetPageLogForTest() noexcept {
   for (PageLogSlot& slot : g_pageLog) {
     slot.key.store(0, std::memory_order_relaxed);

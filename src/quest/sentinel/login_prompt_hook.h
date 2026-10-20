@@ -144,6 +144,8 @@ void ResetLatchForTest() noexcept;
 void SetQuitOnErrorForTest(QuitFn quit) noexcept;
 // The function the hook calls as CR15NetGame::BeginLogIn (null: unavailable); also forgets which notice it restarted.
 void SetBeginLogInForTest(BeginLogInFn begin) noexcept;
+// The function the hook calls after BeginLogIn to send the RETRY select (null: none); a test's fake replaces it.
+void SetRetryEventForTest(BeginLogInFn retry) noexcept;
 void SetClockForTest(std::int64_t (*clock)() noexcept) noexcept;
 
 // Test support: forgets which pages the page-enter log has seen (each is logged again at its next enable).

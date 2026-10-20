@@ -269,6 +269,14 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CncaGameSpace::SendComponentEvent, through which the hook sends the RETRY select after BeginLogIn (#672): the
+  // first four instructions are the ones the install proves before calling it.
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kSendComponentEventVaddr,
+                  pinned::kSendComponentEventCode, sizeof(pinned::kSendComponentEventCode)) != 0) {
+    std::fprintf(stderr, "libr15 CncaGameSpace::SendComponentEvent: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
   // The permission-wait hook (#640): RequestPermissions is defined where the slot's comment says, and
   // CheckPermission, which the hook calls (not a hook target), is defined at the pinned address with the first four
   // instructions the install proves before using it.

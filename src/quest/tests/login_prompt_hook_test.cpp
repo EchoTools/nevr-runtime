@@ -1259,6 +1259,78 @@ void TheLoginIsNotStartedBeforeItMayProceedOrWhenTheGameMovedOn() {
   lp::ResetLatchForTest();
 }
 
+int g_retryCalls = 0;
+void FakeRetry(CR15NetGameOpaque*) noexcept {
+  ++g_retryCalls;
+}
+
+// With the RETRY select available the restart sends it alone (#672): the page script that follows "logged in"
+// runs only for the select, and its BeginLogin node starts the login. BeginLogIn is the fallback: called once if
+// the game is still in "login failed" two seconds after the select.
+void TheRestartSendsTheRetrySelectAloneAndFallsBackToBeginLogIn() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetRetryEventForTest(&FakeRetry);
+  g_beginCalls = 0;
+  g_retryCalls = 0;
+  g_now = 1'000'000'000;
+  board::Withdraw();
+  Publish(Prompt("RST5-CODE"));
+  FailLocally(g_game);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_retryCalls == 0 && g_beginCalls == 0);  // the prompt is on screen: nothing
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_retryCalls == 1 && g_beginCalls == 0);  // the select alone
+  g_now += 1'900'000'000;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_retryCalls == 1 && g_beginCalls == 0);  // inside the window
+  g_now += 200'000'000;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_retryCalls == 1 && g_beginCalls == 1);  // the select did nothing: the direct call, once
+  for (int i = 0; i < 3; ++i) {
+    g_now += 5'000'000'000;
+    UpdateEntry()(Obj(g_game), 16);
+  }
+  QCHECK(g_retryCalls == 1 && g_beginCalls == 1);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
+// The select starting the login (the game leaves "login failed") ends the wait: no direct call afterwards.
+void ASelectThatStartsTheLoginIsNotFollowedByBeginLogIn() {
+  lp::ResetLatchForTest();
+  gate::SetReady(true);
+  lp::SetClockForTest(&FakeClock);
+  lp::SetBeginLogInForTest(&FakeBeginLogIn);
+  lp::SetRetryEventForTest(&FakeRetry);
+  g_beginCalls = 0;
+  g_retryCalls = 0;
+  g_now = 1'000'000'000;
+  board::Withdraw();
+  Publish(Prompt("RST6-CODE"));
+  FailLocally(g_game);
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_retryCalls == 1);
+  SetState(g_game, layout::kStateLoggingIn);  // what the script's BeginLogin node does
+  g_now += 10'000'000'000;
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(g_beginCalls == 0);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::SetRetryEventForTest(nullptr);
+  lp::SetBeginLogInForTest(nullptr);
+  lp::SetClockForTest(nullptr);
+  lp::ResetLatchForTest();
+}
+
 void AnUnresolvedBeginLogInIsCountedAndNotCalled() {
   lp::ResetLatchForTest();
   gate::SetReady(true);
@@ -1317,6 +1389,8 @@ int main() {
   TheSignedInNoticeStartsTheLoginOnce();
   TheLoginIsNotStartedBeforeItMayProceedOrWhenTheGameMovedOn();
   AnUnresolvedBeginLogInIsCountedAndNotCalled();
+  TheRestartSendsTheRetrySelectAloneAndFallsBackToBeginLogIn();
+  ASelectThatStartsTheLoginIsNotFollowedByBeginLogIn();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   TheHoldBitIsPublishedWithReadyAndReadsBackOnlyWhenNothingElseDecides();
