@@ -424,6 +424,13 @@ TEST_F(CachedOverrides, ACachedSplashReplacesTheBuiltInOneAndTheBuiltInIsNotLeft
   EXPECT_EQ(report.never_applied, 0u);
 }
 
+TEST_F(CachedOverrides, ACachedOverrideOfAnotherTypeDoesNotSuppressTheBuiltInSplash) {
+  Cache(Image(90, 3), kSplashType + 1, kSplashName, "other_type");
+  TestHook_RegisterInitialOverrides(dir_.c_str());
+  EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
+  EXPECT_FALSE(TestLogContains("not registered reason"));
+}
+
 TEST_F(CachedOverrides, WithNothingCachedTheBuiltInSplashIsRegistered) {
   TestHook_RegisterInitialOverrides(dir_.c_str());
   EXPECT_TRUE(TestLogContains("Registered embedded override: splash_texture"));
