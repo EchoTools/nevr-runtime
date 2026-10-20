@@ -1833,6 +1833,32 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
 // ---- the config reply owner ----------------------------------------------------------------
 
 // Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
+// T706 (#706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
+// follow the matchmaker socket that last sent a request, not the newest one by order: the game disconnects a
+// socket it never asked ("from non-matchmaker peer"). Failure caught: replies going to the newest socket.
+void TestLobbyFramesFollowTheMatchmakerThatAsked() {
+  const CaseScope scope("lobby follows requester");
+  Rig rig(WithLogin(kLogin));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  rig.router->OnGameOpen(4, Hinted(Role::Matchmaker));  // opened, but sends nothing yet
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "a"), true);
+  auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && sent[0].id == 3);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "find again"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "b"), true);
+  sent = rig.games.Sent();
+  QCHECK(sent.size() == 2 && sent[1].id == 4);
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find on the first"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "c"), true);
+  sent = rig.games.Sent();
+  QCHECK(sent.size() == 3 && sent[2].id == 3);
+}
+
 // Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
 // it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
 void TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst() {
@@ -3219,6 +3245,7 @@ int main() {
     return 1;
   }
   TestConnectionIdentity();
+  TestLobbyFramesFollowTheMatchmakerThatAsked();
   TestStandaloneMatchmakerRemoteEndDoesNotEndTheSession();
   TestLoginIsFirstThenQueuedFramesInOrder();
   TestFrameDuringLoginBuildStaysBehindLogin();

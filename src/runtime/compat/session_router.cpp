@@ -318,8 +318,10 @@ bool Router::OnSessionLocked(GameId id) const {
   return it != gameTable_.end() && !it->second.closing && it->second.remote == sessionRemote_;
 }
 
-// The newest live matchmaker connection on the session becomes the lobby-traffic target.
+// The newest live matchmaker connection on the session becomes the lobby-traffic target until one asks.
 void Router::RecomputeActiveLocked() {
+  const auto current = gameTable_.find(activeGame_);
+  if (current != gameTable_.end() && current->second.role == Role::Matchmaker && OnSessionLocked(activeGame_)) return;
   activeGame_ = kNoGame;
   int newest = -1;
   for (const auto& entry : gameTable_) {
@@ -610,7 +612,8 @@ void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
   if (g.role == Role::Matchmaker) {
     if (sessionLive && sit->second.loginAttached) {
       g.remote = sessionRemote_;
-      activeGame_ = game;
+      // A new socket takes the lobby traffic only when no live matchmaker is carrying it already.
+      if (!OnSessionLocked(activeGame_) || gameTable_.at(activeGame_).role != Role::Matchmaker) activeGame_ = game;
       Log(fx, LogLevel::Info,
           Fmt("[router] game=%llu conn=%d (matchmaker) shares login session remote=%llu (no LoginRequest)", Ull(game),
               g.connIdx, Ull(sessionRemote_)));
@@ -801,6 +804,14 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
         } else {
           Remote& r = rit->second;
           CountRequirementsLocked(git->second, frame);
+          if (git->second.role == Role::Matchmaker && remoteId == sessionRemote_ && activeGame_ != game) {
+            // The game disconnects a matchmaker socket that gets a reply to a request it never sent: lobby
+            // frames follow the matchmaker connection that last asked, not the newest one.
+            Log(fx, LogLevel::Info,
+                Fmt("[router] server->game routing: game=%llu asked, lobby frames now go to it (was game=%llu)",
+                    Ull(game), Ull(activeGame_)));
+            activeGame_ = game;
+          }
           auto data = std::make_shared<const std::string>(std::move(frame));
           // While the login is being built the other connections' frames wait behind it; a config
           // connection's pass.
