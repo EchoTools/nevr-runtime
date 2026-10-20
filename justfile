@@ -944,6 +944,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/process_end_hook_test" -ldl
     timeout 300 "$out/process_end_hook_test" "$out"
+    # The game waits for the storage permission it just asked for (#640): the real handler through the thunk entry,
+    # against a stand-in for RequestPermissions and a model of CheckPermission.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/permission_wait_hook_test.cpp \
+        src/quest/sentinel/permission_wait_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/permission_wait_hook_test" -ldl
+    timeout 120 "$out/permission_wait_hook_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs

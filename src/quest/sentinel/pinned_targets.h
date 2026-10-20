@@ -127,6 +127,33 @@ using AndroidMainSig = void(AndroidAppOpaque* app);
 struct LibR15AndroidMainTag {};
 using LibR15AndroidMainThunk = CallbackThunk<LibR15AndroidMainTag, AndroidMainSig>;
 
+// NRadEngine::CSysInfo::RequestPermissions(CArrayView<char const*>), defined in libr15 at 0xf873ec (128 bytes) and
+// called through libr15's own PLT (0xf19870, JUMP_SLOT 0x36e4320) from CR15Game::Initialize (bl at 0x11f9ce8),
+// CRequestPermissionNode::Enter (0x2722814) and BindBranchingNode<..RequestPermission..> (0x2699e28). The array view
+// is two words, passed by value in x0 (the element pointer) and x1 (the count), as CR15Game::Initialize loads them
+// (0x11f9cb8-0x11f9ce4: three entries, w1 = 3). It logs "Requesting %llu android permissions", builds a
+// CJavaStringArray and makes one JNI CallVoidMethod("requestPermissions", "([Ljava/lang/String;I)V") on the
+// NativeActivity, then returns. It keeps no state and does not wait for the answer; the boot call in
+// CR15Game::Initialize is followed at once by CncaGame::Initialize, whose package-manifest read needs the storage
+// permissions (#640). The three names it gets there are RECORD_AUDIO, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE.
+using RequestPermissionsSig = void(const char* const* names, std::uint64_t count);
+struct LibR15RequestPermissionsTag {};
+using LibR15RequestPermissionsThunk = CallbackThunk<LibR15RequestPermissionsTag, RequestPermissionsSig>;
+
+// NRadEngine::CSysInfo::CheckPermission(char const*), defined in libr15 at 0xf87298 (204 bytes, exported): one JNI
+// ContextWrapper.checkSelfPermission on the NativeActivity, logs "Checking android permission: '%s' (Result: %d)",
+// returns true when the result is 0 (w0 holds 0 or 1). Synchronous; it needs a JNI environment on the calling thread
+// (CSysJava::JNI attaches one). Not hooked and with no slot of its own to pin: the hook that waits for a grant
+// reaches it the way the install proves it, by the module's build ID, then the first four instructions, then base +
+// this address (as QuitOnError above).
+inline constexpr const char* kCheckPermissionSymbol = "_ZN10NRadEngine8CSysInfo15CheckPermissionEPKc";
+inline constexpr std::uint64_t kCheckPermissionVaddr = 0xf87298;
+// sub sp, sp, #0x40; str x20, [sp, #0x20]; stp x19, x30, [sp, #0x30]; add x8, sp, #0x10.
+inline constexpr std::uint32_t kCheckPermissionCode[4] = {0xd10103ff, 0xf90013f4, 0xa9037bf3, 0x910043e8};
+using CheckPermissionSig = bool(const char* permission);
+inline constexpr const char* kRequestPermissionsSymbol =
+    "_ZN10NRadEngine8CSysInfo18RequestPermissionsENS_10CArrayViewIPKcLy0EEE";
+
 // NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
 // libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
 // data record plus 0x20 (`node == data + 0x20`, checked by the hook), and `data` (x1) is the record. It
@@ -270,6 +297,12 @@ inline GotTarget LibR15NetGameUpdate() {
 // image: `R_AARCH64_JUMP_SLOT 0xf784c4 android_main`).
 inline GotTarget LibR15AndroidMain() {
   return {kLibR15, kAndroidMainSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36eb4c8ULL};
+}
+
+// libr15.so's slot for CSysInfo::RequestPermissions, defined in libr15 itself (JUMP_SLOT 0x36e4320, `readelf -rW` on
+// the pinned image).
+inline GotTarget LibR15RequestPermissions() {
+  return {kLibR15, kRequestPermissionsSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e4320ULL};
 }
 
 // libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).

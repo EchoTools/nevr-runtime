@@ -276,6 +276,7 @@ Quest rows read logcat tag `NEVR-Sentinel` / `nevr-sentinel.log`; each stage is 
 | [ ] | Q21 | The always-on clock hook is installed (proof the sentinel can hook libr15) | Quest | Log-only | `clock_hook_installed` (src/quest/integration/stage_log.h) |
 | [ ] | Q22 | The login hook on libpnsovr is installed | Quest | Log-only: read logcat | `event quest_login_install` (src/quest/login/login_hook.cpp) |
 | [ ] | Q23 | Quest probe (#391, #318): with the UI event probe on, FRIENDS LIST and Invite Members switch the tablet list to Friends | Quest | Start with `diagnostics.ui_event_probe: true`; press FRIENDS LIST in the main menu, then Invite Members in the party tab | `event social_ui_event slot=44 name=evt_debug_arm_computer_friends result=posted` (src/quest/social/social_facade.cpp)<br>`event social_install ... ui_event_probe=armed` (src/quest/social/social_install.cpp) |
+| [ ] | Q24 | Fresh install (uninstall, install): the first launch waits for the storage permission and reaches the main menu (#640) | Quest | Uninstall the game, install it, start it; grant the permission prompt | `{"event":"permission_wait","state":"waiting"...}` then `{"event":"permission_wait","state":"granted","waited_ms":...}` (src/quest/sentinel/permission_wait_hook.cpp)<br>`Displayed com.readyatdawn.r15` with no `Initialization Error` (docs/adr/0009-quest-permission-wait.md) |
 
 ## PC-only
 
