@@ -2498,6 +2498,31 @@ void TestLoginFailureReplacementIsDeliveredAndNotSubscribed() {
   QCHECK(rig.remotes.Sent().size() == 1);  // the login only: no subscribe
 }
 
+// S2b: the adapter learns when the SESSION ends (not when a standalone matchmaker's remote does), once, after
+// the router's lock is released, and can ask which remote is the session.
+void TestSessionEndedCallbackFiresOncePerSession() {
+  const CaseScope scope("session ended callback");
+  int ended = 0;
+  Options o = WithLogin(kLogin);
+  o.onSessionEnded = [&ended]() { ++ended; };
+  Rig rig(std::move(o));
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnGameOpen(1, Hinted(Role::Matchmaker));  // standalone remote: not the session
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  QCHECK(rig.router->SessionRemote().has_value() && *rig.router->SessionRemote() == session);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 2);
+  if (opens.size() != 2) return;
+  rig.router->OnRemoteClose(opens[0].remote, 1000);  // the standalone matchmaker's remote
+  QCHECK(ended == 0);
+  rig.router->OnRemoteClose(session, 1006);
+  QCHECK(ended == 1);
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnRemoteClose(session, 1006);  // already gone
+  QCHECK(ended == 1);
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -3366,6 +3391,7 @@ int main() {
   TestLobbyFramesFollowTheMatchmakerThatAsked();
   TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
   TestGateRefusedEndsADeferredInjection();
+  TestSessionEndedCallbackFiresOncePerSession();
   TestLoginFailureReplacementIsDeliveredAndNotSubscribed();
   TestSendToSessionQueuesBehindTheLoginAndThenSends();
   TestGateAwaitingWhenTheSessionOpensDefersTheLogin();

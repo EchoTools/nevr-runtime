@@ -186,6 +186,7 @@ struct Router::Effects {
   std::vector<GameClose> gameCloses;
   std::vector<std::pair<GameId, bool>> holds;  // SetIdleExempt calls
   std::vector<RemoteId> injections;  // sessions that need the login builder run (no lock held)
+  bool sessionEnded = false;         // the shared session's remote ended (Options::onSessionEnded)
 };
 
 Router::Router(GameTransport* games, RemoteTransport* remotes, Options options)
@@ -208,6 +209,7 @@ void Router::Run(Effects& fx) {
   for (const auto& close : fx.remoteCloses) remotes_->Close(close.first, close.second);
   for (const auto& close : fx.gameCloses) games_->Close(close.game, close.code, close.reason);
   for (const RemoteId remote : fx.injections) BuildAndSendLogin(remote);
+  if (fx.sessionEnded && options_.onSessionEnded) options_.onSessionEnded();
 }
 
 void Router::DrainRemote(RemoteId remote) {
@@ -275,6 +277,7 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     outstanding = !loginSocketGone && lit->second.required != 0;
   }
   if (wasSession) {
+    fx.sessionEnded = true;
     sessionRemote_ = kNoRemote;
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
@@ -877,6 +880,12 @@ bool Router::SendToSession(std::string frame) {
   }
   Run(fx);
   return accepted;
+}
+
+std::optional<RemoteId> Router::SessionRemote() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (sessionRemote_ == kNoRemote) return std::nullopt;
+  return sessionRemote_;
 }
 
 void Router::OnGameClose(GameId game) {
