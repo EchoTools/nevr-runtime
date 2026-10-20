@@ -97,7 +97,7 @@ void nevr_boot_log_tee::Init() {
     // N80: this file accumulates every run. Without a delimiter an operator reading
     // it cannot tell where the current run's boot lines begin — the previous five
     // runs sit directly above them with nothing separating the sequences.
-    TeeFprintf("[NEVR.PATCH] boot log opened run=%s", GetRunId());
+    TeeFprintf("[NEVR.PATCH] boot log opened run=%s\n", GetRunId());
 }
 
 void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {

@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -50,7 +52,40 @@ std::string ReadFrom(const std::string& path, std::streamoff start) {
   return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// Runs `fn` with the process's stderr (fd 2) pointed at a scratch file and returns what it wrote.
+template <typename Fn>
+std::string CaptureStderr(Fn fn) {
+  char dir[MAX_PATH];
+  char path[MAX_PATH];
+  GetTempPathA(sizeof(dir), dir);
+  GetTempFileNameA(dir, "tee", 0, path);
+  std::fflush(stderr);
+  const int saved = _dup(2);
+  const int fd = _open(path, _O_WRONLY | _O_TRUNC | _O_BINARY);
+  _dup2(fd, 2);
+  _close(fd);
+  fn();
+  std::fflush(stderr);
+  _dup2(saved, 2);
+  _close(saved);
+  const std::string out = ReadFrom(path, 0);
+  DeleteFileA(path);
+  return out;
+}
+
 }  // namespace
+
+// #653: the first stderr line the tee writes ends in a newline, so the next stderr line starts on its own.
+TEST(BootLogRouting, TheOpeningLineEndsInANewlineOnStderr) {
+  const std::string err = CaptureStderr([] { nevr_boot_log_tee::Init(); });
+  nevr_boot_log_tee::Close();
+  const std::string::size_type at = err.find("[NEVR.PATCH] boot log opened run=");
+  ASSERT_NE(at, std::string::npos) << "stderr was:\n" << err;
+  const std::string::size_type end = err.find('\n', at);
+  ASSERT_NE(end, std::string::npos) << "the opening line has no newline; stderr was:\n" << err;
+  const std::string::size_type next = err.find("[NEVR", at + 1);
+  if (next != std::string::npos) EXPECT_EQ(err[next - 1], '\n') << "the next line runs onto the opening line:\n" << err;
+}
 
 TEST(BootLogRouting, ALogCallDuringBootReachesTheTeeNotClog) {
   RecordingClogScope clog;
