@@ -31,6 +31,7 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
 

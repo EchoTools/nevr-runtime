@@ -45,8 +45,8 @@ feels risky":
    NEVER" clauses are enforced constraints, not advice: no C-style casts; no
    `catch(...)`; never throw across a DLL boundary; no I/O from DllMain; Ninja-only;
    vcpkg-manifest deps only; PE VERSIONINFO in every DLL; sign release DLLs. The
-   addendum says `-Werror`; the tree does not apply it everywhere (see "Compiler
-   warnings" in the primer). A change that violates a Hard-Stop is rejected
+   addendum says `-Werror`; the MinGW targets apply it, with the frozen legacy
+   target exempt (see "Compiler warnings" in the primer). A change that violates a Hard-Stop is rejected
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
@@ -165,21 +165,22 @@ stale snapshot.
 
 ## Compiler warnings — what `-Werror` actually covers
 
-The C++ addendum says warnings are errors; the tree does not apply a blanket `-Werror` to
-the MinGW targets. Measured with `git grep -n Werror origin/main -- CMakeLists.txt src
-plugins justfile cmake`:
+The C++ addendum says warnings are errors. The MinGW targets apply it; check with
+`git grep -n Werror -- CMakeLists.txt src plugins justfile cmake`:
 
-- Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra
-  -Werror=unused-function -Werror=unused-variable -Werror=unused-but-set-variable ...)`
-  with several `-Wno-*` entries. Only those three warnings are errors.
-- `gamepatcheslegacy` (frozen `src/legacy/`) opts out of those three with
-  `-Wno-error=unused-*` (comment in root `CMakeLists.txt`).
-- `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only.
+- Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra -Werror ...)`
+  with several `-Wno-*` entries. Every other warning is an error.
+- `gamepatcheslegacy` (frozen `src/legacy/`) opts out with `-Wno-error` (comment in root
+  `CMakeLists.txt`). It still prints its warnings.
+- `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only
+  (plain `-Werror` does not enable that warning).
 - `-Wall -Wextra -Werror` is set per target in `src/quest/**/CMakeLists.txt` and on the
   host `g++` test recipes in `justfile`.
-- Reviewers report warnings that still exit 0 (`-Wunused-variable` in legacy, `-Wcomment`
-  in `plugins/example`, a `#warning` from winsock2.h); I did not reproduce them. Do not
-  write "builds with `-Werror`" without naming the target.
+- A source that includes `<windows.h>` (directly or through a project header) before
+  `<winsock2.h>` fails the build with `#warning Please include winsock2.h before windows.h`:
+  put `#include <winsock2.h>` first (`tools/tests/test_header_include_order.py`).
+- `tools/tests/test_werror_live.py` compiles a deliberate `#warning` with the project's own flags
+  and expects it to fail; it needs `build/mingw-release/compile_commands.json`.
 
 ## Modules vs plugins — the distinction that causes hangs
 

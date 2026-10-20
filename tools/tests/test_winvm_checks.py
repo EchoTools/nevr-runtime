@@ -33,7 +33,9 @@ def by_name(results, name):
 class FixtureProvenanceTest(unittest.TestCase):
     """tools/winvm/README.md asks for a fixture taken from a real run: a captured log, not a
     hand-edited one. The healthy-boot capture is CRLF throughout (it came off the Windows VM) and its
-    bridge warning is the wording that build printed."""
+    bridge warning is the wording that build printed. One edit is known: the capture's first line was
+    `boot log opened run=...` run onto the next line (the tee wrote no newline, #653); the fixture splits
+    it, so it does not teach the fixed bug."""
 
     def test_healthy_boot_is_an_unedited_windows_capture(self):
         raw = (FIX / "healthy_boot.txt").read_bytes()
@@ -46,6 +48,11 @@ class FixtureProvenanceTest(unittest.TestCase):
         bridge = [line for line in lines if b"[NEVR.WS] no services.socket_uri" in line]
         self.assertEqual(len(bridge), 1)
         self.assertIn(b"login injection cannot fire", bridge[0])
+
+    def test_the_boot_log_opening_line_stands_alone(self):
+        raw = (FIX / "healthy_boot.txt").read_bytes()
+        first = raw.split(b"\r\n", 1)[0]
+        self.assertRegex(first, rb"^\[NEVR\.PATCH\] boot log opened run=[0-9a-z-]+$")
 
 
 class ModalDialogTest(unittest.TestCase):

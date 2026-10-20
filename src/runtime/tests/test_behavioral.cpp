@@ -2983,7 +2983,7 @@ const XpidSite kXpidSites[] = {
     {nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", "DSC"},
     {nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "PSN-", "DSC-"},
     {nevr_patch_addresses::XPID_PLATFORM_COMPACT_NAME, "PSN", "DSC"},
-    {nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "???-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "??\?-", "DSC-"},
     {nevr_patch_addresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME, "???", "DSC"},
 };
 

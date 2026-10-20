@@ -2,6 +2,7 @@
 // nesting, exceptions, threads), the lock-free ring, the policy decisions, and that it is off by default.
 // The thunk is assembly, so the transparency tests run it: under Wine in `just test-auth-unit`.
 
+#include <winsock2.h>
 #include <windows.h>
 #include <emmintrin.h>
 
