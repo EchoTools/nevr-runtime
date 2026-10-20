@@ -21,7 +21,7 @@ ROUTINE_SIGNATURE = "nevr_checked_patch::Result PatchSpectatorStreamCheck("
 DEFERRED_BOOTSTRAP = re.compile(r"\bRunDeferredRuntimeBootstrap\b")
 ENABLE_SERVER = re.compile(r"\bPatchEnableServer\b")
 # The site's RVA as a literal (addresses.h holds the one definition).
-SITE_RVA = re.compile(r"\b0x0*116f3d\b", re.IGNORECASE)
+SITE_RVA = re.compile(r"\b(?:0x0*116f3d|1142589)\b", re.IGNORECASE)
 # Ways to write game memory; the hook uses none of them.
 WRITE_PRIMITIVES = re.compile(r"\b(?:ApplyPatch|ProcessMemcpy|nevr_checked_patch::Apply|memcpy|WriteProcessMemory|VirtualProtect)\b")
 # A routine that builds its own {expected, patched} pair, in any initialization form.
@@ -41,6 +41,10 @@ def runtime_sources():
         if "legacy" in parts or "tests" in parts:
             continue
         yield path.relative_to(ROOT).as_posix(), strip_comments(path.read_text(errors="replace"))
+
+
+def without_strings(code: str) -> str:
+    return re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)
 
 
 def hook_body() -> str:
@@ -65,12 +69,35 @@ class SpectatorStreamOrder(unittest.TestCase):
         definition = "VOID PatchEnableServer() {"
         users = []
         for path, code in runtime_sources():
-            code = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', code)  # the phase string "PatchEnableServer" is not a use
+            code = without_strings(code)  # the phase string "PatchEnableServer" is not a use
             users.append((path, len(ENABLE_SERVER.findall(code)) - code.count(definition)))
         self.assertEqual([u for u in users if u[1]], [("src/runtime/lifecycle/boot.cpp", 1)])
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         deferred = extract_braced_function(boot, "void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger)")
         self.assertEqual(len(re.findall(r"\bPatchEnableServer\s*\(\s*\)\s*;", deferred)), 1)
+
+    def test_the_deferred_bootstrap_is_reached_only_from_its_two_known_sites(self):
+        # A call anywhere else (in PreflightRuntimeBootstrap, in a helper the hook calls, in another file) can run
+        # first; the bootstrap's one-time latch then turns the hook's call after the original into a no-op, and
+        # PatchEnableServer writes the site before the first PreprocessCommandLine. So every use of the name in shipped
+        # code is pinned: the definition and the hook's call (boot.cpp), and the client's device hook, which a server
+        # never takes (headless_graphics.cpp).
+        uses = {path: len(DEFERRED_BOOTSTRAP.findall(without_strings(code))) for path, code in runtime_sources()}
+        self.assertEqual(
+            {path: n for path, n in uses.items() if n},
+            {"src/runtime/lifecycle/boot.cpp": 2, "src/runtime/patch/headless_graphics.cpp": 1},
+        )
+        graphics = (ROOT / "src/runtime/patch/headless_graphics.cpp").read_text()
+        client = extract_braced_function(
+            graphics, "static void CompleteClientRuntimeBootstrap(const char* trigger, HRESULT result, void* device)"
+        )
+        self.assertRegex(client, r"if\s*\(\s*!g_isServer\s*&&[^{]*\{[^{}]*\bRunDeferredRuntimeBootstrap\s*\(")
+
+    def test_the_game_flags_field_is_written_only_from_boot_cpp(self):
+        # game+0x7AE0 (GAME_WINDOWED_FLAGS_OFFSET) holds the spectator bits; boot.cpp never sets them
+        # (test_boot_never_sets_the_spectator_bits_itself), and no other shipped file addresses the field by name.
+        users = [path for path, code in runtime_sources() if "GAME_WINDOWED_FLAGS_OFFSET" in code]
+        self.assertEqual(users, ["src/runtime/lifecycle/boot.cpp"])
 
     def test_only_the_routine_names_the_site_in_shipped_code(self):
         # Any other use of SPECTATORSTREAM_CHECK in a .cpp, in any spelling (ApplyPatch(SPECTATORSTREAM_CHECK, ...),
@@ -124,6 +151,12 @@ class SpectatorStreamOrder(unittest.TestCase):
         for literal in ("0x0100000", "0x8000000", "0x21000000", "1ull << 250", "1 << 2"):
             with self.subTest(literal=literal):
                 self.assertNotRegex(literal, SPECTATOR_BITS)
+        for literal in ("0x116F3D", "0x00116f3d", "1142589"):
+            with self.subTest(literal=literal):
+                self.assertRegex(literal, SITE_RVA)
+        for literal in ("0x116F3E", "11425890"):
+            with self.subTest(literal=literal):
+                self.assertNotRegex(literal, SITE_RVA)
 
     def test_patchenableserver_writes_the_site_only_through_the_checked_routine(self):
         source = (ROOT / "src/runtime/patch/mode_patches.cpp").read_text()
