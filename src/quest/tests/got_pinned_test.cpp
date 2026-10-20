@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15NetGameUpdate(), "libr15 CR15NetGame::Update JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15AndroidMain(), "libr15 android_main JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnablePageNodeEnter(), "libr15 CR15UIPage2EnablePageNode::Enter JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
@@ -250,6 +251,24 @@ int main(int argc, char** argv) {
   if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kQuitOnErrorVaddr, pinned::kQuitOnErrorCode,
                   sizeof(pinned::kQuitOnErrorCode)) != 0) {
     std::fprintf(stderr, "libr15 CR15NetGame::QuitOnError: first instructions differ from the pinned ones\n");
+    QCHECK(false);
+  }
+
+  // The permission-wait hook (#640): RequestPermissions is defined where the slot's comment says, and
+  // CheckPermission, which the hook calls (not a hook target), is defined at the pinned address with the first four
+  // instructions the install proves before using it.
+  if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != 0xf873ecULL) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not 0xf873ec\n", pinned::kRequestPermissionsSymbol);
+    QCHECK(false);
+  }
+  if (DynamicSymbolValue(r15, pinned::kCheckPermissionSymbol) != pinned::kCheckPermissionVaddr) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not %#llx\n", pinned::kCheckPermissionSymbol,
+                 static_cast<unsigned long long>(pinned::kCheckPermissionVaddr));
+    QCHECK(false);
+  }
+  if (std::memcmp(static_cast<const unsigned char*>(r15.mem) + pinned::kCheckPermissionVaddr,
+                  pinned::kCheckPermissionCode, sizeof(pinned::kCheckPermissionCode)) != 0) {
+    std::fprintf(stderr, "libr15 CSysInfo::CheckPermission: first instructions differ from the pinned ones\n");
     QCHECK(false);
   }
 

@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
+## Commits, versions and requirement words
+
+- **Commits and PR titles** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+  `<type>[(scope)][!]: <description>`. Types: `feat` (a feature), `fix` (a bug fix), `docs`, `style`, `refactor`,
+  `perf`, `test`, `build`, `ci`, `chore`, `revert`. A breaking change is marked with `!` before the colon or a
+  `BREAKING CHANGE:` footer. Per spec item 15, types are case-insensitive. `.github/workflows/pr-title-check.yml`
+  (`tools/check_pr_title.py`) checks the PR title.
+- **Versions** follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Tags stay `vX.Y.Z`.
+- **Requirement words** (MUST, SHALL, SHOULD, MAY and their negations) follow
+  [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) as clarified by
+  [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174): normative only in all capitals. The same notice opens each file
+  in `docs/standards/`.
+- **The changelog is the git log.** There is no `CHANGELOG` file; release notes are generated per release (git-cliff
+  is planned; no tooling yet).
+
 ## Project
 
 nEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
@@ -905,7 +925,7 @@ When something fails, the first act is reading the failing program's **own** log
   single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
   conventional prefix, and one logical change per commit. Exception: work by
   Teth, Spritz or Glow Sprock is authored by that sister, with
-  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **shall** verify after each
+  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **SHALL** verify after each
   commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
 - **C++ pre-read.** Before C++ or build work, read the C++ Mingw Addendum below;
   its hard stops bind every build and configuration change.
