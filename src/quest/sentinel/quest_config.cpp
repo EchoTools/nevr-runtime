@@ -35,6 +35,7 @@ constexpr std::array<KeySpec, 4> kKeys = {{
 constexpr const char* kSocialFacadeKey = "social.facade";                      // PC's key and default (true)
 constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
 constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
+constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
 
 struct FeatureSpec {
   const char* name;
@@ -42,7 +43,7 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 7> kFeatures = {{
+constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
@@ -50,6 +51,7 @@ constexpr std::array<FeatureSpec, 7> kFeatures = {{
     {"hwdump", Feature::kHwDump, &Features::hwdump},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
+    {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -118,6 +120,7 @@ void SetDefaultRequests(ResolvedConfig& config) {
   config.requested.presenceNames = true;
   config.requested.presenceLocal = false;
   config.requested.hwdump = false;
+  config.requested.uiEventProbe = false;
 }
 
 // A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
@@ -164,6 +167,7 @@ void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& 
   want.social = ReadBool(cfg, kSocialFacadeKey, true, r);
   want.presenceNames = want.social;
   want.hwdump = ReadBool(cfg, kHardwareDumpKey, false, r);
+  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, false, r);
   want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
 }
 
@@ -233,6 +237,11 @@ void Derive(LoadResult& r) {
   if (c.effective.presenceLocal && !c.effective.social) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
+  }
+  // The probe works through the social facade's slots, so it follows social.
+  if (c.effective.uiEventProbe && !c.effective.social) {
+    c.effective.uiEventProbe = false;
+    force_off("ui_event_probe", "social_not_enabled");
   }
 }
 
