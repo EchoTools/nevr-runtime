@@ -1832,7 +1832,6 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
 
 // ---- the config reply owner ----------------------------------------------------------------
 
-// Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
 // T706 (nakama issue 706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
 // follow the matchmaker socket that last sent a request, not the newest one by order: the game disconnects a
 // socket it never asked ("from non-matchmaker peer"). Failure caught: replies going to the newest socket.
@@ -1849,6 +1848,8 @@ void TestLobbyFramesFollowTheMatchmakerThatAsked() {
   rig.router->OnRemoteFrame(session, Msg(kSymSomething, "a"), true);
   auto sent = rig.games.Sent();
   QCHECK(sent.size() == 1 && sent[0].id == 3);
+  QCHECK(rig.logs.Has("game=3 conn=2 (matchmaker) sent symbol="));  // the sender of the find is on record
+  QCHECK(rig.logs.Has("-> game=3 conn=2 (matchmaker)"));            // and so is where the reply went
   rig.router->OnGameFrame(4, Msg(kSymSomething, "find again"), true);
   rig.router->OnRemoteFrame(session, Msg(kSymSomething, "b"), true);
   sent = rig.games.Sent();
@@ -1877,6 +1878,7 @@ void TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest() {
   QCHECK(sent.size() == 1 && sent[0].id == 4);
 }
 
+// Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
 // Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
 // it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
 void TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst() {

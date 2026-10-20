@@ -820,6 +820,13 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
         } else {
           Remote& r = rit->second;
           CountRequirementsLocked(git->second, frame);
+          if (git->second.role == Role::Matchmaker) {
+            // Which socket sent each lobby request, so a reply that the game rejects can be tied to the socket
+            // that asked (the headset re-find hang has no record of the sender).
+            Log(fx, LogLevel::Info,
+                Fmt("[router] game=%llu conn=%d (matchmaker) sent symbol=0x%016llx bytes=%llu", Ull(game),
+                    git->second.connIdx, Ull(nevr_evr_codec::FirstSymbol(frame)), Ull(frame.size())));
+          }
           if (git->second.role == Role::Matchmaker && remoteId == sessionRemote_ && activeGame_ != game) {
             // The game disconnects a matchmaker socket that gets a reply to a request it never sent. Lobby frames
             // carry no request id the router can match, so "the matchmaker that last sent a frame" stands in for
@@ -1108,6 +1115,11 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
           }
         } else {
           Game& g = gameTable_[target];
+          if (g.role == Role::Matchmaker) {
+            Log(fx, LogLevel::Info,
+                Fmt("[router] reply symbol=0x%016llx bytes=%llu -> game=%llu conn=%d (matchmaker)", Ull(symbol),
+                    Ull(frame.size()), Ull(target), g.connIdx));
+          }
           if (g.out.bytes + frame.size() > options_.limits.maxOutboundBytes) {
             CloseGameLocked(target, kCloseTryAgainLater, "outbound buffer to the game is full", fx);
           } else {
