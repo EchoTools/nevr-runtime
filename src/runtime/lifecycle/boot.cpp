@@ -200,20 +200,13 @@ static void LogOptionWithoutValue(const char* option) {
 // per alias (the text is nevr_cli::kAliasWarningFormat, pinned by test_cmdline_strip); a token with three or
 // more leading dashes on a NEVR flag is rejected, since the game's own lookup would still read it.
 static void NoteCommandLineToken(const wchar_t* token, const nevr_cli::Resolved& named) {
-  static bool s_aliasReported[nevr_cli::kFlagCount] = {};
+  static nevr_cli::AliasReports s_reports;
   if (named.rejected) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] %ls has more than two leading dashes; NEVR ignores it (write -name or --name)", token);
     return;
   }
-  if (named.alias == nullptr) return;
-  for (std::size_t i = 0; i < nevr_cli::kFlagCount; ++i) {
-    if (nevr_cli::kFlags[i].alias != named.alias) continue;
-    if (s_aliasReported[i]) return;
-    s_aliasReported[i] = true;
-    Log(EchoVR::LogLevel::Warning, nevr_cli::kAliasWarningFormat, named.alias, named.flag);
-    return;
-  }
+  if (s_reports.First(named)) Log(EchoVR::LogLevel::Warning, nevr_cli::kAliasWarningFormat, named.alias, named.flag);
 }
 
 static void LogTimestepArgs() {

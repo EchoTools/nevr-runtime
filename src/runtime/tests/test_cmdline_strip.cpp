@@ -446,3 +446,21 @@ TEST(CliFlags, ThreeDashesIsNotAServerToNevrAndTheDisagreementIsPinned) {
   EXPECT_TRUE(nevr_cmdline::detail::NameIs("---server", "server"));
   EXPECT_FALSE(HasServerToken("echovr.exe +server"));
 }
+
+TEST(CliFlags, AnAliasIsReportedOncePerRunPerAlias) {
+  nevr_cli::AliasReports reports;
+  const nevr_cli::Resolved noConsole = nevr_cli::Resolve(L"-noconsole");
+  const nevr_cli::Resolved noConsoleTwoDashes = nevr_cli::Resolve(L"--noconsole");
+  const nevr_cli::Resolved rate = nevr_cli::Resolve(L"-telemetryrate");
+  EXPECT_TRUE(reports.First(noConsole)) << "the first use warns";
+  EXPECT_FALSE(reports.First(noConsole)) << "the second does not";
+  EXPECT_FALSE(reports.First(noConsoleTwoDashes)) << "another spelling of the same alias does not";
+  EXPECT_TRUE(reports.First(rate)) << "a different alias warns on its own";
+  EXPECT_FALSE(reports.First(rate));
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-no-console"))) << "the new name never warns";
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-unknown")));
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"---noconsole"))) << "a refused token is not an alias use";
+
+  nevr_cli::AliasReports another;
+  EXPECT_TRUE(another.First(noConsole)) << "each run starts clean";
+}

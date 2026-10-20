@@ -99,6 +99,26 @@ inline Resolved Resolve(const wchar_t* token) {
   return r;
 }
 
+/// Which aliases have been reported in this run: the warning is once per run per alias, however often the line
+/// repeats the alias or mixes the two spellings.
+class AliasReports {
+ public:
+  /// True the first time `named` is a use of an alias, false for every later use and for anything else.
+  bool First(const Resolved& named) {
+    if (named.alias == nullptr) return false;
+    for (std::size_t i = 0; i < kFlagCount; ++i) {
+      if (kFlags[i].alias != named.alias) continue;
+      if (reported_[i]) return false;
+      reported_[i] = true;
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  bool reported_[kFlagCount] = {};
+};
+
 /// True when `token` names the flag `canonical` (its spelling with one dash), through its name or its alias.
 inline bool IsFlag(const wchar_t* token, const wchar_t* canonical) {
   const Resolved r = Resolve(token);
