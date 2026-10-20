@@ -573,7 +573,10 @@ void Router::OpenRemoteLocked(GameId game, Game& g, bool session, Effects& fx) {
   r.request.standaloneMatchmaker = !session && g.role == Role::Matchmaker;
   r.request.session = session;
   r.loginAttached = session && g.role == Role::Login;
-  const bool hold = session && GateAwaitingLocked();
+  // Only the login connection waits for the account. A config connection opens its remote at once, so with no
+  // account the transport refuses it and the game sees a failed connect (1011), as it did before the session was
+  // shared; the login connection then opens (and holds) the session of its own (#704).
+  const bool hold = session && g.role == Role::Login && GateAwaitingLocked();
   r.deferred = hold;
   const RemoteOpenRequest request = r.request;
   remoteTable_.emplace(remote, std::move(r));
