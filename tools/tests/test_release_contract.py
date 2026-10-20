@@ -232,8 +232,8 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("pacman -Syu", workflow, "the toolchain is installed in the builder image, not per run")
         dockerfile = (REPO / ".github/builder/Dockerfile").read_text()
         self.assertIn("FROM archlinux:base-devel", dockerfile)
-        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", dockerfile)
-        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -Syu")
+        pacman = re.search(r"pacman -S --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", dockerfile)
+        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -S of pinned name=version packages (#695)")
         for pkg in ("mingw-w64-gcc", "cmake", "ninja", "wine", "zstd", "openssl", "python-yaml"):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
         self.assertIn("mtrojnar/osslsigncode.git", dockerfile)  # not in Arch's official repos: pinned build
