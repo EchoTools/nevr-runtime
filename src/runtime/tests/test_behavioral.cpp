@@ -178,7 +178,9 @@ void SetBootLogSink(BootLogSink) {}
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
 
+int g_fatalErrorCalls = 0;
 void FatalError(const char* msg, const char* title) {
+  ++g_fatalErrorCalls;
   fprintf(stderr, "[TEST] FatalError: %s: %s\n", title ? title : "?", msg ? msg : "?");
 }
 
@@ -1484,11 +1486,14 @@ class RolesByPathTest : public ::testing::Test {
     TestHook_N61_ResetState();
     ClearTestLogs();
     g_testRouterMode = RouterMode();
+    fatalBefore_ = g_fatalErrorCalls;
     ASSERT_TRUE(remote_.Start());
     SetWebSocketBridgeTarget(remote_.Uri().c_str());
     InstallWebSocketBridge();
     port_ = GetWebSocketBridgePort();
-    ASSERT_NE(port_, 0);
+    if (BridgeExpected()) {
+      ASSERT_NE(port_, 0);
+    }
   }
   void TearDown() override {
     // The game-side sockets are closed by now; stop the bridge once its server has let go of them (the
@@ -1505,6 +1510,8 @@ class RolesByPathTest : public ::testing::Test {
   }
   // The value network.session_router has for this test: null is the key being absent.
   virtual const char* RouterMode() const { return nullptr; }
+  virtual bool BridgeExpected() const { return true; }
+  int fatalBefore_ = 0;
   // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
   void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
     ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
@@ -1696,6 +1703,7 @@ class RouterConfigTest : public RolesByPathTest {
 class RouterBogusModeTest : public RolesByPathTest {
  protected:
   const char* RouterMode() const override { return "bogus"; }
+  bool BridgeExpected() const override { return false; }
 };
 
 }  // namespace
@@ -1798,15 +1806,11 @@ TEST_F(RouterConfigTest, StoppingTheBridgeStopsTheRouterSessionAndCountsIt) {
   EXPECT_FALSE(LogLinesContaining("1 remote connection(s) closed").empty());
 }
 
-// C6: a value that names no mode is a warning and the bridge's own routing, never a guess.
-TEST_F(RouterBogusModeTest, ANonsenseModeIsLoggedAndUsesLegacy) {
-  GameSocket config;
-  Admit(config, "/config");
-  EXPECT_FALSE(LogLinesContaining("network.session_router ignored").empty());
-  EXPECT_FALSE(LogLinesContaining("network.session_router=legacy").empty());
-  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
-  ASSERT_EQ(lines.size(), 1U);
-  EXPECT_NE(lines[0].find("path=legacy"), std::string::npos) << lines[0];
+// C6: a value that names no mode is fatal at boot and installs nothing, never a guess.
+TEST_F(RouterBogusModeTest, ANonsenseModeIsFatalAndInstallsNothing) {
+  EXPECT_EQ(g_fatalErrorCalls, fatalBefore_ + 1);
+  EXPECT_FALSE(LogLinesContaining("network.session_router refused").empty());
+  EXPECT_EQ(GetWebSocketBridgePort(), 0);
 }
 
 // ============================================================================
