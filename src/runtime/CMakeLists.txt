@@ -32,6 +32,7 @@ set(PATCHES_SOURCES
     "ext/plugin_manifest.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
+    "patch/asset_cache.cpp"
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
@@ -110,6 +111,7 @@ set(PATCHES_HEADERS
     "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/asset_cache.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
@@ -200,7 +202,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -880,6 +882,17 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
+    # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
+    add_executable(test_asset_cache
+      tests/test_asset_cache.cpp
+      patch/asset_cache.cpp)
+    set_source_files_properties(tests/test_asset_cache.cpp patch/asset_cache.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_asset_cache PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_cache PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json advapi32)
+    gtest_discover_tests(test_asset_cache DISCOVERY_MODE PRE_TEST)
+
     # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
     # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
     add_executable(test_evr_codec
@@ -1133,6 +1146,8 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      # #703: resource_override registers the cache's overrides through the production cache.
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
@@ -1182,6 +1197,7 @@ if(BUILD_TESTING)
       tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
@@ -1223,7 +1239,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
-      ws2_32 psapi
+      ws2_32 psapi advapi32
     )
 
     # Hermetic DLL fixtures for the real LoadLibraryExA path in
