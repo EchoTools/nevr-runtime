@@ -1833,7 +1833,7 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
 // ---- the config reply owner ----------------------------------------------------------------
 
 // Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
-// T706 (#706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
+// T706 (nakama issue 706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
 // follow the matchmaker socket that last sent a request, not the newest one by order: the game disconnects a
 // socket it never asked ("from non-matchmaker peer"). Failure caught: replies going to the newest socket.
 void TestLobbyFramesFollowTheMatchmakerThatAsked() {
