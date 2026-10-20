@@ -415,12 +415,9 @@ class CSymbol64InputTest(unittest.TestCase):
         env = self._non_utf8_env()
         if env is None:
             self.skipTest("no non-UTF-8 locale installed (needs en_US.iso88591; see `locale -a`)")
-        # Only stdout is forced to UTF-8, so the generator can finish: its header text has a non-latin-1 dash.
-        # The readers under test keep the non-UTF-8 default.
-        launcher = ("import sys,runpy;sys.stdout.reconfigure(encoding='utf-8');sys.argv=[sys.argv[1]]+sys.argv[2:];"
-                    "runpy.run_path(sys.argv[0],run_name='__main__')")
-        done = subprocess.run([sys.executable, "-c", launcher, str(self.tool)] + extra_args, env=env,
-                              input=stdin_bytes, capture_output=True, check=True)
+        done = subprocess.run([sys.executable, str(self.tool)] + extra_args, env=env,
+                              input=stdin_bytes, capture_output=True)
+        self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
         return done.stdout.decode("utf-8")
 
     def test_candidates_file_is_read_as_utf8_under_a_non_utf8_locale(self):
@@ -434,6 +431,21 @@ class CSymbol64InputTest(unittest.TestCase):
     def test_candidates_on_stdin_are_read_as_utf8_under_a_non_utf8_locale(self):
         out = self._run_tool([], "caf\u00e9\n".encode("utf-8"))
         self.assertIn('{0x%016xULL, "caf\u00e9"}' % self.CAFE, out)
+
+    def test_stdout_is_written_as_utf8_under_a_non_utf8_locale(self):
+        # The generated header's comment carries an em dash (U+2014), which latin-1 cannot encode (#663).
+        out = self._run_tool([], b"main_menu\n")
+        self.assertIn("\u2014 DO NOT EDIT BY HAND", out)
+
+    def test_split_dir_files_are_written_as_utf8_under_a_non_utf8_locale(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._run_tool(["--split-dir", d], "caf\u00e9\n".encode("utf-8"))
+            with open(os.path.join(d, "symbol_corpus.h"), "rb") as f:
+                header = f.read().decode("utf-8")
+            with open(os.path.join(d, "symbol_corpus.cpp"), "rb") as f:
+                source = f.read().decode("utf-8")
+        self.assertIn("\u2014 DO NOT EDIT BY HAND", header)
+        self.assertIn('"caf\u00e9"', source)
 
 
 # The strings of rad-protocol/src/message_registry.rs (nevr-server-rs), sorted, one per message type.
