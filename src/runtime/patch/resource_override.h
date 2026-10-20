@@ -46,8 +46,10 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
 
 /// Registers every override the asset cache (patch/asset_cache.h) names in its index.json: the blob is read and
 /// hashed again, and only bytes that match their key are registered; a mismatch, a missing blob and a bad
-/// index each log a Warning and register nothing. Returns how many were registered. Applies the cache size cap.
+/// index each log a Warning and register nothing. Returns how many were registered. Then applies the size cap
+/// (`cap_bytes`; the production value unless a test narrows it): blobs the index names are never evicted.
 size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir);
+size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_bytes);
 
 /// Reset all applied flags so overrides can re-trigger on next level load.
 void ResetResourceOverrides();

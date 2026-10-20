@@ -427,6 +427,10 @@ static void RegisterBuiltInSplash() {
 }
 
 size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir) {
+    return RegisterCachedResourceOverrides(cache_dir, nevr_asset_cache::kDefaultCapBytes);
+}
+
+size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_bytes) {
     const std::wstring dir = cache_dir ? cache_dir : L"";
     if (dir.empty()) {
         Log(EchoVR::LogLevel::Info,
@@ -493,12 +497,12 @@ size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir) {
         dirUtf8.c_str(), index.entries.size(), loaded, refused, missing);
 
     const nevr_asset_cache::EvictReport ev =
-        nevr_asset_cache::Evict(dir, nevr_asset_cache::kDefaultCapBytes, referenced);
+        nevr_asset_cache::Evict(dir, cap_bytes, referenced);
     Log(ev.overCapAllReferenced ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] cache size blob_bytes_before=%llu blob_bytes_after=%llu cap=%llu evicted=%u "
         "stale_temps_removed=%u over_cap_all_referenced=%s",
         static_cast<unsigned long long>(ev.blobBytesBefore), static_cast<unsigned long long>(ev.blobBytesAfter),
-        static_cast<unsigned long long>(nevr_asset_cache::kDefaultCapBytes), ev.blobsEvicted, ev.staleTempsRemoved,
+        static_cast<unsigned long long>(cap_bytes), ev.blobsEvicted, ev.staleTempsRemoved,
         ev.overCapAllReferenced ? "true" : "false");
     return loaded;
 }

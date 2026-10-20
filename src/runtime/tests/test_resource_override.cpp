@@ -462,4 +462,43 @@ TEST_F(CachedOverrides, TheLabelIsCopiedSoACallersBufferMayBeReusedBeforeTheGame
   EXPECT_NE(DeleteFileA(path), 0);
 }
 
+TEST_F(CachedOverrides, TheSizeCapEvictsAStrayBlobAndNeverOneTheIndexNames) {
+  const std::vector<std::uint8_t> kept = Image(4000, 3);
+  const std::string keptSha = Cache(kept, kSplashType, kSplashName, "cache_splash");
+  const std::vector<std::uint8_t> strayBytes = Image(4000, 4);
+  const nevr_asset_cache::StoreResult stray = nevr_asset_cache::Store(dir_, strayBytes.data(), strayBytes.size());
+  ASSERT_EQ(stray.status, nevr_asset_cache::StoreStatus::Stored);
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str(), 1000), 1u);
+  EXPECT_NE(GetFileAttributesW(nevr_asset_cache::BlobPath(dir_, keptSha).c_str()), INVALID_FILE_ATTRIBUTES)
+      << "a blob the index names is in use";
+  EXPECT_EQ(GetFileAttributesW(nevr_asset_cache::BlobPath(dir_, stray.sha256).c_str()), INVALID_FILE_ATTRIBUTES)
+      << "an unreferenced blob over the cap goes";
+  EXPECT_TRUE(TestLogContains("cache size blob_bytes_before=8000 blob_bytes_after=4000 cap=1000 evicted=1"));
+  EXPECT_TRUE(TestLogContains("over_cap_all_referenced=true"));
+}
+
+TEST_F(CachedOverrides, ABlobOverTheSizeLimitIsRefusedWithItsReason) {
+  const std::string sha(64, 'c');
+  std::string err;
+  ASSERT_NE(CreateDirectoryW(dir_.c_str(), nullptr), 0);
+  ASSERT_TRUE(nevr_asset_cache::SetIndexEntry(dir_, {kSplashType, kSplashName, sha, "huge"}, &err)) << err;
+  HANDLE f = CreateFileW(nevr_asset_cache::BlobPath(dir_, sha).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(f, INVALID_HANDLE_VALUE);
+  LARGE_INTEGER end;
+  end.QuadPart = static_cast<LONGLONG>(nevr_asset_cache::kMaxBlobBytes) + 1;
+  ASSERT_NE(SetFilePointerEx(f, end, nullptr, FILE_BEGIN), 0);
+  ASSERT_NE(SetEndOfFile(f), 0);
+  CloseHandle(f);
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 0u);
+  EXPECT_TRUE(TestLogContains("cache refused reason=blob over the size limit sha256=" + sha));
+  EXPECT_TRUE(TestLogContains("entries=1 loaded=0 refused=1 missing=0"));
+}
+
+TEST_F(CachedOverrides, AnEntryWithoutALabelIsNamedAfterItsHash) {
+  const std::string sha = Cache(Image(80, 6), kSplashType, kSplashName, "");
+  EXPECT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
+  EXPECT_TRUE(TestLogContains("Registered file override: cache:" + sha.substr(0, 12) + " ("));
+}
+
 }  // namespace
