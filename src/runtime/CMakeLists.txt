@@ -34,8 +34,9 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
     "compat/ws_bridge.cpp"
-    # #708 S0: the session router Quest ships, compiled in; nothing routes through it yet.
+    # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
     "compat/session_router.cpp"
+    "compat/ws_session_transport.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
     "compat/self_check.cpp"
@@ -204,7 +205,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -1182,6 +1183,8 @@ if(BUILD_TESTING)
       # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
       log/boot_log_tee.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
       # self-checks: ws_bridge.cpp wires the sender and the login gate through the unit.
@@ -1218,6 +1221,8 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
       compat/self_check.cpp
