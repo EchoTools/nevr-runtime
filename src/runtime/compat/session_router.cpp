@@ -562,7 +562,8 @@ Role Router::ProvisionalRoleLocked() const {
 
 // Creates a remote for `g` (whose connIdx and role are set). The session remote is the one config and login
 // connections share; a matchmaker's remote of its own is never the session. A held session (the gate answers
-// Awaiting) is not opened yet, whichever connection created it; a standalone matchmaker is never held.
+// Awaiting) is not opened yet when a login connection created it; a session a config connection created opens at
+// once (#704, #705), and a standalone matchmaker is never held.
 void Router::OpenRemoteLocked(GameId game, Game& g, bool session, Effects& fx) {
   const RemoteId remote = nextRemote_++;
   Remote r;

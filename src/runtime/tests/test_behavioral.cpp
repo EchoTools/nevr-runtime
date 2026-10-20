@@ -213,7 +213,11 @@ void* g_earlyConfigPtr = nullptr;
 // file discovery). A null return == "key absent", so ws_bridge's guard skips the
 // URL-credential path exactly as an absent identity.discord_id/auth.password
 // would. The N61 tests drive the Close handler, not login injection.
-const char* NevrCfgGetFlat(const char* /*flatKey*/) { return nullptr; }
+// #708: nevr_session_router answers from g_testRouterMode, so a test picks the bridge's routing mode.
+const char* g_testRouterMode = nullptr;
+const char* NevrCfgGetFlat(const char* flatKey) {
+  return std::strcmp(flatKey, "nevr_session_router") == 0 ? g_testRouterMode : nullptr;
+}
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
 // service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
@@ -1364,11 +1368,15 @@ class RemoteService {
       server_->disablePerMessageDeflate();
       server_->setOnClientMessageCallback(
           [this](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& socket, const ix::WebSocketMessagePtr& message) {
+            if (message->type == ix::WebSocketMessageType::Open) ++opens_;
             if (message->type != ix::WebSocketMessageType::Message || !message->binary) return;
-            const bool isLogin = nevr_evr_codec::FirstSymbol(message->str) == nevr_evr_codec::kSymLoginRequest;
+            const uint64_t symbol = nevr_evr_codec::FirstSymbol(message->str);
+            const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
             if (isLogin) ++loginRequests_;
-            socket.sendBinary(nevr_evr_codec::BuildMessage(
-                isLogin ? nevr_evr_codec::kSymLoginSettings : nevr_evr_codec::kSymDocumentSuccess, ""));
+            uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
+            if (isLogin) reply = nevr_evr_codec::kSymLoginSettings;
+            if (symbol == nevr_evr_codec::kSymConfigRequest) reply = nevr_evr_codec::kSymConfigSuccess;
+            socket.sendBinary(nevr_evr_codec::BuildMessage(reply, ""));
           });
       if (server_->listen().first) {
         port_ = port;
@@ -1394,11 +1402,14 @@ class RemoteService {
   }
   std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
   int LoginRequests() const { return loginRequests_.load(); }
+  // Connections the bridge has opened to the service.
+  int Opens() const { return opens_.load(); }
 
  private:
   std::unique_ptr<ix::WebSocketServer> server_;
   int port_ = 0;
   std::atomic<int> loginRequests_{0};
+  std::atomic<int> opens_{0};
 };
 
 // A game-side socket: connects to the bridge at a request target and counts the frames the bridge sends it.
@@ -1412,6 +1423,7 @@ class GameSocket {
     socket_.setOnMessageCallback([this](const ix::WebSocketMessagePtr& message) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (message->type == ix::WebSocketMessageType::Open) open_ = true;
+      if (message->type == ix::WebSocketMessageType::Close) closed_ = true;
       if (message->type == ix::WebSocketMessageType::Message) {
         ++frames_;
         symbols_.push_back(nevr_evr_codec::FirstSymbol(message->str));
@@ -1421,6 +1433,11 @@ class GameSocket {
     socket_.start();
     std::unique_lock<std::mutex> lock(mutex_);
     return changed_.wait_for(lock, kRoleWait, [this] { return open_; });
+  }
+  // The bridge ended this socket (a close frame, or the connection dropping).
+  bool WaitForClose() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [this] { return closed_; });
   }
   bool WaitForFrames(int count) {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1453,6 +1470,7 @@ class GameSocket {
   std::mutex mutex_;
   std::condition_variable changed_;
   bool open_ = false;
+  bool closed_ = false;
   int frames_ = 0;
   std::vector<uint64_t> symbols_;
 };
@@ -1465,6 +1483,7 @@ class RolesByPathTest : public ::testing::Test {
     ix::initNetSystem();
     TestHook_N61_ResetState();
     ClearTestLogs();
+    g_testRouterMode = RouterMode();
     ASSERT_TRUE(remote_.Start());
     SetWebSocketBridgeTarget(remote_.Uri().c_str());
     InstallWebSocketBridge();
@@ -1476,6 +1495,7 @@ class RolesByPathTest : public ::testing::Test {
     // same ixwebsocket stop hazard as the service's, below).
     EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
     StopWebSocketBridgeListener();
+    g_testRouterMode = nullptr;
     // The login session's remote outlives the game sockets that used it; dropping it closes the service's
     // connection, which the service's stop waits for.
     TestHook_N61_ResetState();
@@ -1483,6 +1503,8 @@ class RolesByPathTest : public ::testing::Test {
     EXPECT_TRUE(remote_.WaitForNoClients());
     remote_.Stop();
   }
+  // The value network.session_router has for this test: null is the key being absent.
+  virtual const char* RouterMode() const { return nullptr; }
   // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
   void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
     ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
@@ -1515,7 +1537,7 @@ TEST_F(RolesByPathTest, LoginSocketThatConnectsFirstIsStillTheLogin) {
   // sent on it first; so once that answer is here, a LoginRequest injected on the config socket would
   // already have been answered too.
   config.Send(nevr_evr_codec::kSymConfigRequest);
-  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess));
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
   EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings)) << "a LoginRequest was injected on the /config socket";
   EXPECT_EQ(remote_.LoginRequests(), 1);
 }
@@ -1657,6 +1679,134 @@ TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
   EXPECT_NE(AdmittedLine(0).find("(conn=0, config"), std::string::npos) << AdmittedLine(0);
   EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
   EXPECT_TRUE(second.WaitForFrames(1));
+}
+
+// ============================================================================
+// #708 S1: network.session_router. The same real bridge, with the /config sockets handed to
+// nevr_session_router. Login and matchmaker sockets keep the bridge's own rules in this mode.
+// ============================================================================
+
+namespace {
+
+class RouterConfigTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "config"; }
+};
+
+class RouterBogusModeTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "bogus"; }
+};
+
+}  // namespace
+
+// The default (the key absent) is the bridge's own routing, and each admission line says which path took it.
+TEST_F(RolesByPathTest, EveryAdmissionNamesTheRoutingPath) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("path=legacy game=0"), std::string::npos) << lines[0];
+  EXPECT_EQ(LogLinesContaining("path=router").size(), 0U);
+  EXPECT_FALSE(LogLinesContaining("network.session_router=legacy").empty());
+}
+
+// C1: a /config socket in config mode is taken by the router, and its request is answered.
+TEST_F(RouterConfigTest, AConfigSocketIsRoutedAndItsRequestIsAnswered) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("conn=0 role=config basis=path listener=service target=/config"), std::string::npos) << lines[0];
+  EXPECT_NE(lines[0].find("path=router"), std::string::npos) << lines[0];
+  EXPECT_FALSE(LogLinesContaining("network.session_router=config").empty());
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess)) << "the router never delivered the reply";
+}
+
+// C2: the login socket is not the router's in this mode: the bridge injects its LoginRequest as before, and the
+// config socket, which the router owns, sees none of the login session's traffic.
+TEST_F(RouterConfigTest, ALoginSocketStaysOnTheBridgesRulesAndTheConfigSocketSeesNoLoginReply) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[0].find("path=router"), std::string::npos) << lines[0];
+  EXPECT_NE(lines[1].find("conn=1 role=login basis=path listener=service target=/login"), std::string::npos) << lines[1];
+  EXPECT_NE(lines[1].find("path=legacy"), std::string::npos) << lines[1];
+  EXPECT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// C3: the router gives every config socket one shared remote session, and each reply goes to the socket whose
+// request it answers.
+TEST_F(RouterConfigTest, TwoConfigSocketsShareOneRemoteSessionAndEachGetsItsOwnReply) {
+  GameSocket first, second;
+  Admit(first, "/config");
+  first.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(first.Frames(), 1);
+  EXPECT_EQ(second.Frames(), 1);
+  EXPECT_EQ(remote_.Opens(), 1) << "the router opened more than one remote session for the config sockets";
+}
+
+// C4: when the remote session ends, the router closes the config socket, and the game's next /config opens a
+// new session.
+TEST_F(RouterConfigTest, TheRemoteEndingClosesTheConfigSocketAndTheNextOneOpensANewSession) {
+  GameSocket first, second;
+  Admit(first, "/config");
+  first.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  remote_.CloseEveryClient();
+  EXPECT_TRUE(first.WaitForClose()) << "the config socket outlived its remote session";
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(remote_.Opens(), 2);
+}
+
+// C5: a game socket closing releases it from the router (the log says so) and the session stays up for the next.
+TEST_F(RouterConfigTest, AClosedConfigSocketIsReleasedAndTheSessionServesTheNext) {
+  auto first = std::make_unique<GameSocket>();
+  GameSocket second;
+  Admit(*first, "/config");
+  first->Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first->WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  first.reset();
+  ASSERT_TRUE(WaitForLogLines("Proxy: game disconnected (conn=0, config) path=router", 1));
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(remote_.Opens(), 1);
+}
+
+// C7: the graceful stop (N38/N64/N105) stops the router's remote session itself, on the caller, and counts it.
+TEST_F(RouterConfigTest, StoppingTheBridgeStopsTheRouterSessionAndCountsIt) {
+  GameSocket config;
+  Admit(config, "/config");
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  ClearTestLogs();
+  StopWebSocketBridgeListener();
+  EXPECT_FALSE(LogLinesContaining("1 remote connection(s) closed").empty());
+}
+
+// C6: a value that names no mode is a warning and the bridge's own routing, never a guess.
+TEST_F(RouterBogusModeTest, ANonsenseModeIsLoggedAndUsesLegacy) {
+  GameSocket config;
+  Admit(config, "/config");
+  EXPECT_FALSE(LogLinesContaining("network.session_router ignored").empty());
+  EXPECT_FALSE(LogLinesContaining("network.session_router=legacy").empty());
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("path=legacy"), std::string::npos) << lines[0];
 }
 
 // ============================================================================

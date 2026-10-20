@@ -6,6 +6,9 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/socket_role.h"
+#include "runtime/compat/session_router.h"
+#include "runtime/compat/session_router_mode.h"
+#include "runtime/compat/ws_session_transport.h"
 #include "runtime/hook/symbol_corpus.h"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -949,14 +952,240 @@ static AdmittedSocket AdmitGameSocket(const ix::WebSocket* gameWs, const std::st
     admitted.admission = g_roles.Admit(listener, nevr_socket_role::RoleFromRequestTarget(target));
     admitted.loginRemote = g_loginRemoteWs;
   }
+  return admitted;
+}
+
+// The admission decision as one structured line: the slot, the role, why, the path the game asked for, which
+// routing path took the socket (#708: `router` when nevr_session_router owns it, `legacy` otherwise) and the
+// router's id for it (0 on the legacy path).
+static void LogAdmission(const AdmittedSocket& admitted, const ix::WebSocket* gameWs, const std::string& target,
+                         nevr_socket_role::Listener listener, const char* path, uint64_t game) {
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] game socket admitted conn=%d role=%s basis=%s listener=%s target=%s has_query=%s ws=%p",
+      "[NEVR.WS] game socket admitted conn=%d role=%s basis=%s listener=%s target=%s has_query=%s ws=%p path=%s game=%llu",
       admitted.admission.connIdx, nevr_socket_role::RoleName(admitted.admission.role),
       nevr_socket_role::BasisName(admitted.admission.basis), nevr_socket_role::ListenerName(listener),
       LoggableTarget(target).c_str(), target.find('?') != std::string::npos ? "true" : "false",
-      static_cast<const void*>(gameWs));
-  return admitted;
+      static_cast<const void*>(gameWs), path, static_cast<unsigned long long>(game));
 }
+
+// The remote ws for one game socket: URL (with the percent-encoded credentials), the Bearer header and the
+// identity the login is built from. Shared by the legacy path (one remote per socket) and the router path
+// (RemoteTransport::Open), so both put the same bytes on the wire. `connIdx` is only for log lines.
+struct PreparedRemote {
+  std::shared_ptr<ix::WebSocket> remote;
+  std::string bearerToken;
+  std::string accountName;  // N123 - empty means "not known", never a placeholder
+  uint64_t discordId = 0;
+};
+
+static PreparedRemote PrepareRemote(nevr_socket_role::Role role, int connIdx) {
+  auto remote = std::make_shared<ix::WebSocket>();
+
+  // Build remote URL with optional query param auth
+  // (workaround: production nginx strips Bearer JWT and forces format=evr)
+  std::string remoteUrl = g_remoteUri;
+  // N133 S4a: discord id + password come from config.yaml
+  // (identity.discord_id / auth.password) via nevr_config, not the game
+  // JSON. Both must be present and non-empty to attach URL credentials.
+  // An unset required auth.password already failed the server loud at
+  // config load (service_config.cpp), so reaching here with an empty
+  // password just means "no URL credentials" — we fall through to the
+  // Bearer/JWT path and never put an empty secret on the wire (N115).
+  // The password value is never logged.
+  // Issue #41: both values are percent-encoded (ServerDbUri, the same
+  // encoder the ServerDB registration URI uses), so a password with
+  // '&', '=', '#', '%', '+' or whitespace reaches Nakama byte-for-byte.
+  {
+    const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+    const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+    std::optional<std::string> withCredentials = nevr_serverdb_uri::BuildBridgeCredentialUri(
+        remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
+        cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+    if (withCredentials) {
+      remoteUrl = std::move(*withCredentials);
+    } else {
+      // Allocation failure in the encoder: connect without URL credentials
+      // (Bearer path below) rather than put an unencoded secret on the wire.
+      Log(EchoVR::LogLevel::Error,
+          "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
+          connIdx, ConnLabel(connIdx));
+    }
+  }
+  // Matchmaker: pnsradmatchmaking uses protobuf, not EchoVR
+  // binary. Strip format=evr so the server uses default protobuf handling.
+  // Issue #116: format=evr is routinely the FIRST query param here: a configured
+  // socket_uri such as "wss://host/ws?format=evr&token=..." already
+  // carries it before the credentials block above appends
+  // discordid/password. A naive "delete the preceding
+  // ? or &" deleted the URI's only '?' and glued the path to the
+  // remaining query. nevr_serverdb_uri::RemoveQueryParam handles leading/
+  // middle/trailing/sole position correctly; see its own tests.
+  if (role == nevr_socket_role::Role::Matchmaker) {
+    remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
+    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
+  }
+  remote->setUrl(remoteUrl);
+  remote->disableAutomaticReconnection();
+  remote->disablePerMessageDeflate();
+
+  // Get auth token from token_auth module (resolved via cross-module procs)
+  std::string bearerToken;
+  std::string accountName;  // N123 — empty means "not known", never a placeholder
+  uint64_t discordId = 0;
+  {
+    auto getTokenFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetToken"));
+    auto getDiscordIdFn = reinterpret_cast<uint64_t (*)()>(ResolveModuleProc("TokenAuth_GetDiscordId"));
+    // N123. Optional by design: an older token_auth.dll without this
+    // export must still load. A null here means "no name available",
+    // which BuildLoginRequest already handles.
+    auto getUsernameFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetUsername"));
+    if (getTokenFn) {
+      const char* tok = getTokenFn();
+      if (tok) bearerToken = tok;
+    }
+    if (getDiscordIdFn) discordId = getDiscordIdFn();
+    if (getUsernameFn) {
+      const char* name = getUsernameFn();
+      if (name) accountName = name;
+    }
+  }
+  // N92 + N20: config fallback, ported from the ws-bridge module during the
+  // monolithic fold. Without it the fold logs in with account id 0 —
+  // measured: "login injected xpid=DSC-NOVR-0". The module had this and
+  // this copy did not, which is the divergence N92 is about.
+  //
+  // N20 (owner decision, 2026-07-27): the fallback applies in CLIENT mode
+  // too, not only when g_isServer. JWT first, config second, regardless of
+  // mode.
+  if (discordId == 0) {
+    // N133 S4a: fallback discord id from config.yaml identity.discord_id
+    // (was the game JSON nevr_discord_id). NOT gated on g_isServer — N20
+    // (owner, 2026-07-27) applies the fallback in client mode too.
+    const char* cfgId = NevrCfgGetFlat("nevr_discord_id");
+    if (cfgId && cfgId[0] != '\0') {
+      discordId = strtoull(cfgId, nullptr, 10);
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.WS] Using nevr_discord_id from config: %llu",
+          static_cast<unsigned long long>(discordId));
+    }
+  }
+  if (discordId == 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] No discord ID from JWT or config — LoginRequest will use "
+        "account ID 0");
+  }
+  // Only attach Bearer token if the URL doesn't already have credentials.
+  // The /spr endpoint authenticates via URL query params (discordid/password).
+  // Sending Bearer on top may cause the server to use the JWT session instead
+  // of the URL-credential session, breaking matchmaker state.
+  bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
+  std::string serverKey;
+  if (hasUrlCredentials) {
+    const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
+    if (cfgServerKey) serverKey = cfgServerKey;
+  }
+  const std::string remoteBearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
+  if (!remoteBearer.empty()) {
+    ix::WebSocketHttpHeaders headers;
+    headers["Authorization"] = "Bearer " + remoteBearer;
+    remote->setExtraHeaders(headers);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.WS] remote auth: %s (value not logged)",
+        hasUrlCredentials ? "server key + URL credentials" : "token-auth JWT");
+    if (!hasUrlCredentials && nevr_evr_codec::IsBearerReplacingPath(remoteUrl)) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] remote auth: token-auth JWT sent to the /ws path, whose front replaces "
+          "the Bearer with the server key; the login will arrive unauthenticated. Use the "
+          "/nevr ingress (services.socket_uri or the build default, #52)");
+    }
+  } else if (hasUrlCredentials) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] remote auth: URL credentials but no server key configured — the /nevr "
+        "ingress will reject the upgrade (auth.server_key, or the embedded build default)");
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] remote auth: no token and no URL credentials — the session will be "
+        "unauthenticated");
+  }
+
+  PreparedRemote prepared;
+  prepared.remote = std::move(remote);
+  prepared.bearerToken = std::move(bearerToken);
+  prepared.accountName = std::move(accountName);
+  prepared.discordId = discordId;
+  return prepared;
+}
+
+// ============================================================================
+// The session-router path (#708)
+// ============================================================================
+//
+// network.session_router (flat key nevr_session_router) hands game sockets to nevr_session_router, the rules
+// the Quest build ships. `config` hands it the /config sockets; login and matchmaker sockets keep the bridge's
+// own rules until the later stages. One RouterPath is built per InstallWebSocketBridge and is never destroyed:
+// ixwebsocket threads call into it until the process ends, and destroying a remote from its own thread joins
+// itself. Stop shuts it down (Router::Shutdown ignores every event after) and stops its remotes on the caller.
+
+static EchoVR::LogLevel RouterLogLevel(nevr_session_router::LogLevel level) {
+  switch (level) {
+    case nevr_session_router::LogLevel::Debug: return EchoVR::LogLevel::Debug;
+    case nevr_session_router::LogLevel::Info: return EchoVR::LogLevel::Info;
+    case nevr_session_router::LogLevel::Warning: return EchoVR::LogLevel::Warning;
+    case nevr_session_router::LogLevel::Error: return EchoVR::LogLevel::Error;
+  }
+  return EchoVR::LogLevel::Info;
+}
+
+// The live shared_ptr of a game-side socket, found in the servers' client sets (they own the sockets).
+static std::shared_ptr<ix::WebSocket> FindGameSocket(const ix::WebSocket* raw) {
+  for (ix::WebSocketServer* server : {g_server.get(), g_matchServer.get()}) {
+    if (server == nullptr) continue;
+    for (const auto& client : server->getClients()) {
+      if (client.get() == raw) return client;
+    }
+  }
+  return nullptr;
+}
+
+static nevr_ws_transport::RemoteHooks MakeRemoteHooks() {
+  nevr_ws_transport::RemoteHooks hooks;
+  hooks.prepare = [](const nevr_session_router::RemoteOpenRequest& request) -> std::shared_ptr<ix::WebSocket> {
+    return PrepareRemote(request.role, request.connIdx).remote;
+  };
+  hooks.tap = [](const nevr_session_router::RemoteOpenRequest& request, const std::string& frame) {
+    ObserveSocialFrames("server->game", request.connIdx, frame);
+    LogFrameMessages("server->game", request.connIdx, frame);
+  };
+  hooks.guard = [](std::function<void(const ix::WebSocketMessagePtr&)> fn) {
+    return std::function<void(const ix::WebSocketMessagePtr&)>(GuardWsCallback("ws_bridge.cpp:routerRemote", std::move(fn)));
+  };
+  hooks.log = [](nevr_session_router::LogLevel level, const std::string& line) {
+    Log(RouterLogLevel(level), "[NEVR.WS] %s", line.c_str());
+  };
+  return hooks;
+}
+
+struct RouterPath {
+  explicit RouterPath(nevr_session_router_mode::Mode m)
+      : mode(m), games(&FindGameSocket), remotes(MakeRemoteHooks()), router(&games, &remotes, MakeOptions()) {
+    remotes.SetRouter(&router);
+  }
+  static nevr_session_router::Options MakeOptions() {
+    nevr_session_router::Options options;
+    options.log = [](nevr_session_router::LogLevel level, const std::string& line) {
+      Log(RouterLogLevel(level), "[NEVR.WS] %s", line.c_str());
+    };
+    return options;
+  }
+  nevr_session_router_mode::Mode mode;
+  nevr_ws_transport::GameSockets games;
+  nevr_ws_transport::RemoteSockets remotes;
+  nevr_session_router::Router router;
+};
+
+static std::atomic<RouterPath*> g_routerPath{nullptr};
 
 // ============================================================================
 // Public API
@@ -990,6 +1219,20 @@ void InstallWebSocketBridge() {
   }
 
   WireSelfChecks();
+
+  // #708: which sockets the router takes. An unreadable value is a logged problem and legacy, never a guess.
+  {
+    std::string problem;
+    const nevr_session_router_mode::Mode mode =
+        nevr_session_router_mode::ParseMode(NevrCfgGetFlat("nevr_session_router"), &problem);
+    if (!problem.empty()) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] network.session_router ignored: %s", problem.c_str());
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] network.session_router=%s", nevr_session_router_mode::ModeName(mode));
+    // A fresh router per install: a stopped one has shut down for good. The old one is leaked on purpose (see
+    // RouterPath); a bridge is installed once per process outside tests.
+    g_routerPath.store(mode == nevr_session_router_mode::Mode::Legacy ? nullptr : new RouterPath(mode));
+  }
 
   // One-time WSA init
   static bool netInit = false;
@@ -1048,6 +1291,19 @@ void InstallWebSocketBridge() {
             const int connIdx = admitted.admission.connIdx;
             const nevr_socket_role::Role role = admitted.admission.role;
             const std::shared_ptr<ix::WebSocket>& loginRemote = admitted.loginRemote;
+
+            // #708: a socket whose role the router takes is registered with it and gets no ProxyPair; the
+            // router opens, shares and ends the remote session. The role is the bridge's decision (hinted).
+            if (RouterPath* routed = g_routerPath.load(); routed != nullptr &&
+                nevr_session_router_mode::RoutesRole(routed->mode, role)) {
+              const nevr_session_router::GameId id = routed->games.Register(&gameWs, connIdx);
+              LogAdmission(admitted, &gameWs, msg->openInfo.uri, listener, "router", id);
+              routed->router.OnGameOpen(id, nevr_session_router::OpenHint{role, true});
+              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p) path=router game=%llu",
+                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs), static_cast<unsigned long long>(id));
+              break;
+            }
+            LogAdmission(admitted, &gameWs, msg->openInfo.uri, listener, "legacy", 0);
 
             // A socket that shares the login session (the matchmaker, or a further /login): reuse the
             // login connection's remote WS.
@@ -1120,136 +1376,11 @@ void InstallWebSocketBridge() {
             }
 
             // A config or login socket, or a matchmaker with no login session to share: create a new remote ws
-            auto remote = std::make_shared<ix::WebSocket>();
-
-            // Build remote URL with optional query param auth
-            // (workaround: production nginx strips Bearer JWT and forces format=evr)
-            std::string remoteUrl = g_remoteUri;
-            // N133 S4a: discord id + password come from config.yaml
-            // (identity.discord_id / auth.password) via nevr_config, not the game
-            // JSON. Both must be present and non-empty to attach URL credentials.
-            // An unset required auth.password already failed the server loud at
-            // config load (service_config.cpp), so reaching here with an empty
-            // password just means "no URL credentials" — we fall through to the
-            // Bearer/JWT path and never put an empty secret on the wire (N115).
-            // The password value is never logged.
-            // Issue #41: both values are percent-encoded (ServerDbUri, the same
-            // encoder the ServerDB registration URI uses), so a password with
-            // '&', '=', '#', '%', '+' or whitespace reaches Nakama byte-for-byte.
-            {
-              const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
-              const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-              std::optional<std::string> withCredentials = nevr_serverdb_uri::BuildBridgeCredentialUri(
-                  remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
-                  cfgPassword ? std::string_view(cfgPassword) : std::string_view());
-              if (withCredentials) {
-                remoteUrl = std::move(*withCredentials);
-              } else {
-                // Allocation failure in the encoder: connect without URL credentials
-                // (Bearer path below) rather than put an unencoded secret on the wire.
-                Log(EchoVR::LogLevel::Error,
-                    "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
-                    connIdx, ConnLabel(connIdx));
-              }
-            }
-            // Matchmaker: pnsradmatchmaking uses protobuf, not EchoVR
-            // binary. Strip format=evr so the server uses default protobuf handling.
-            // Issue #116: format=evr is routinely the FIRST query param here: a configured
-            // socket_uri such as "wss://host/ws?format=evr&token=..." already
-            // carries it before the credentials block above appends
-            // discordid/password. A naive "delete the preceding
-            // ? or &" deleted the URI's only '?' and glued the path to the
-            // remaining query. nevr_serverdb_uri::RemoveQueryParam handles leading/
-            // middle/trailing/sole position correctly; see its own tests.
-            if (role == nevr_socket_role::Role::Matchmaker) {
-              remoteUrl = nevr_serverdb_uri::RemoveQueryParam(remoteUrl, "format=evr");
-              const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
-                  "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
-              Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
-            }
-            remote->setUrl(remoteUrl);
-            remote->disableAutomaticReconnection();
-            remote->disablePerMessageDeflate();
-
-            // Get auth token from token_auth module (resolved via cross-module procs)
-            std::string bearerToken;
-            std::string accountName;  // N123 — empty means "not known", never a placeholder
-            uint64_t discordId = 0;
-            {
-              auto getTokenFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetToken"));
-              auto getDiscordIdFn = reinterpret_cast<uint64_t (*)()>(ResolveModuleProc("TokenAuth_GetDiscordId"));
-              // N123. Optional by design: an older token_auth.dll without this
-              // export must still load. A null here means "no name available",
-              // which BuildLoginRequest already handles.
-              auto getUsernameFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetUsername"));
-              if (getTokenFn) {
-                const char* tok = getTokenFn();
-                if (tok) bearerToken = tok;
-              }
-              if (getDiscordIdFn) discordId = getDiscordIdFn();
-              if (getUsernameFn) {
-                const char* name = getUsernameFn();
-                if (name) accountName = name;
-              }
-            }
-            // N92 + N20: config fallback, ported from the ws-bridge module during the
-            // monolithic fold. Without it the fold logs in with account id 0 —
-            // measured: "login injected xpid=DSC-NOVR-0". The module had this and
-            // this copy did not, which is the divergence N92 is about.
-            //
-            // N20 (owner decision, 2026-07-27): the fallback applies in CLIENT mode
-            // too, not only when g_isServer. JWT first, config second, regardless of
-            // mode.
-            if (discordId == 0) {
-              // N133 S4a: fallback discord id from config.yaml identity.discord_id
-              // (was the game JSON nevr_discord_id). NOT gated on g_isServer — N20
-              // (owner, 2026-07-27) applies the fallback in client mode too.
-              const char* cfgId = NevrCfgGetFlat("nevr_discord_id");
-              if (cfgId && cfgId[0] != '\0') {
-                discordId = strtoull(cfgId, nullptr, 10);
-                Log(EchoVR::LogLevel::Info,
-                    "[NEVR.WS] Using nevr_discord_id from config: %llu",
-                    static_cast<unsigned long long>(discordId));
-              }
-            }
-            if (discordId == 0) {
-              Log(EchoVR::LogLevel::Warning,
-                  "[NEVR.WS] No discord ID from JWT or config — LoginRequest will use "
-                  "account ID 0");
-            }
-            // Only attach Bearer token if the URL doesn't already have credentials.
-            // The /spr endpoint authenticates via URL query params (discordid/password).
-            // Sending Bearer on top may cause the server to use the JWT session instead
-            // of the URL-credential session, breaking matchmaker state.
-            bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-            std::string serverKey;
-            if (hasUrlCredentials) {
-              const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
-              if (cfgServerKey) serverKey = cfgServerKey;
-            }
-            const std::string remoteBearer = nevr_evr_codec::SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
-            if (!remoteBearer.empty()) {
-              ix::WebSocketHttpHeaders headers;
-              headers["Authorization"] = "Bearer " + remoteBearer;
-              remote->setExtraHeaders(headers);
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] remote auth: %s (value not logged)",
-                  hasUrlCredentials ? "server key + URL credentials" : "token-auth JWT");
-              if (!hasUrlCredentials && nevr_evr_codec::IsBearerReplacingPath(remoteUrl)) {
-                Log(EchoVR::LogLevel::Warning,
-                    "[NEVR.WS] remote auth: token-auth JWT sent to the /ws path, whose front replaces "
-                    "the Bearer with the server key; the login will arrive unauthenticated. Use the "
-                    "/nevr ingress (services.socket_uri or the build default, #52)");
-              }
-            } else if (hasUrlCredentials) {
-              Log(EchoVR::LogLevel::Warning,
-                  "[NEVR.WS] remote auth: URL credentials but no server key configured — the /nevr "
-                  "ingress will reject the upgrade (auth.server_key, or the embedded build default)");
-            } else {
-              Log(EchoVR::LogLevel::Warning,
-                  "[NEVR.WS] remote auth: no token and no URL credentials — the session will be "
-                  "unauthenticated");
-            }
+            PreparedRemote prepared = PrepareRemote(role, connIdx);
+            const std::shared_ptr<ix::WebSocket> remote = prepared.remote;
+            const std::string& bearerToken = prepared.bearerToken;
+            const std::string& accountName = prepared.accountName;
+            const uint64_t discordId = prepared.discordId;
 
             auto pair = std::make_unique<ProxyPair>();
             pair->remoteWs = remote;
@@ -1544,11 +1675,19 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
-            ObserveSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
-            LogFrameMessages("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
+            RouterPath* routed = g_routerPath.load();
+            const std::optional<nevr_session_router::GameId> routedId =
+                routed != nullptr ? routed->games.IdOf(&gameWs) : std::nullopt;
+            const int logConn = routedId ? routed->games.ConnIdxOf(&gameWs) : ConnIdxOfGameWs(&gameWs);
+            ObserveSocialFrames("game->server", logConn, msg->str);
+            LogFrameMessages("game->server", logConn, msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             LogGameToServerFrame(msg->str, connState->getId());
+            if (routedId) {
+              routed->router.OnGameFrame(*routedId, msg->str, msg->binary);
+              break;
+            }
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
@@ -1596,6 +1735,16 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Close: {
+            if (RouterPath* routed = g_routerPath.load(); routed != nullptr) {
+              if (const std::optional<nevr_session_router::GameId> id = routed->games.IdOf(&gameWs)) {
+                const int closedConn = routed->games.ConnIdxOf(&gameWs);
+                routed->games.Forget(&gameWs);
+                routed->router.OnGameClose(*id);
+                Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected (conn=%d, %s) path=router game=%llu",
+                    closedConn, ConnLabel(closedConn), static_cast<unsigned long long>(*id));
+                break;
+              }
+            }
             // N60: snapshot the ProxyPair's remoteWs under the lock, then
             // release the lock BEFORE calling stop(). stop() blocks until the
             // remote thread exits, and the remote callback may be waiting on
@@ -1720,6 +1869,11 @@ void StopWebSocketBridgeListener() {
   }
   for (auto& ws : remotes) {
     ws->stop();
+  }
+  if (RouterPath* routed = g_routerPath.load(); routed != nullptr) {
+    // Remotes first: once stopped, their events no longer reach the router, so Shutdown's closes race nothing.
+    remotes.resize(remotes.size() + routed->remotes.StopAll());
+    routed->router.Shutdown();
   }
 
   if (g_server) {

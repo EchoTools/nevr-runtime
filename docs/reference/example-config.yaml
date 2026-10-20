@@ -216,6 +216,14 @@ network:
   # Not a secret.
   # tick_rate_hz: 120
 
+  # Which game sockets the PC bridge hands to the session router (the rules the Quest build ships).
+  # legacy: the bridge's own rules for every socket. config: the /config sockets route through the router;
+  # login and matchmaker sockets keep the bridge's rules. all: not available in this build. Any other value is
+  # ignored with a warning in the log, and the bridge uses legacy.
+  # Absent: legacy.
+  # Not a secret.
+  # session_router: legacy
+
 # ---------------------------------------------------------------------------
 # identity — server identity fields sent during ServerDB registration
 #

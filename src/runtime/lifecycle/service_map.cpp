@@ -63,6 +63,8 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       // #595 — a server's tick rate in Hz (config.cpp ApplyServerTimestep): default 120, range-checked,
       // 0 keeps the game's own step.
       {"nevr_tick_rate_hz", "network.tick_rate_hz"},
+      // #708 — which game sockets the PC bridge hands to nevr_session_router: legacy (default), config, all.
+      {"nevr_session_router", "network.session_router"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
