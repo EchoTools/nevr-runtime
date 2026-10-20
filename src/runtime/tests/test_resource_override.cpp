@@ -352,6 +352,15 @@ TEST_F(CachedOverrides, ACachedFileForAnotherResourceIsNotDeliveredForThisOne) {
   EXPECT_FALSE(TestLogContains("override applied"));
 }
 
+TEST_F(CachedOverrides, ACachedFileForAnotherTypeWithTheSameNameIsNotDelivered) {
+  Cache(Image(100, 1), kSplashType, kSplashName, "cache_splash");
+  ASSERT_EQ(RegisterCachedResourceOverrides(dir_.c_str()), 1u);
+  char original[4] = {};
+  GameFinishesReading(kSplashType + 1, kSplashName, original, sizeof(original));
+  EXPECT_EQ(g_seenBuffer, static_cast<const void*>(original));
+  EXPECT_FALSE(TestLogContains("override applied"));
+}
+
 TEST_F(CachedOverrides, AOneByteFlippedCachedFileIsRefusedLoggedAndNeverDelivered) {
   const std::vector<std::uint8_t> image = Image(2048, 5);
   const std::string sha = Cache(image, kSplashType, kSplashName, "cache_splash");
