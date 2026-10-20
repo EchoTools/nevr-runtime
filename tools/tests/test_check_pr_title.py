@@ -72,6 +72,7 @@ class CheckPrTitleTest(unittest.TestCase):
 
     def test_a_multi_line_title_fails(self):
         self.assertFails("fix: one\nfix: two")
+        self.assertFails("fix: one\n")
 
     def test_no_capital_rule_the_description_may_start_lower_or_upper(self):
         self.assertPasses("fix(boot): Accept --server")
