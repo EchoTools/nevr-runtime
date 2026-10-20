@@ -1859,6 +1859,24 @@ void TestLobbyFramesFollowTheMatchmakerThatAsked() {
   QCHECK(sent.size() == 3 && sent[2].id == 3);
 }
 
+// The limit of "the matchmaker that last sent a frame" standing in for "the socket whose request this answers":
+// both matchmakers are mid-request, so a reply to the earlier asker goes to the later one. Pins that behavior.
+void TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest() {
+  const CaseScope scope("two askers");
+  Rig rig(WithLogin(kLogin));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameOpen(4, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "find"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "answer to 3"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && sent[0].id == 4);
+}
+
 // Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
 // it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
 void TestTwoConfigSocketsAskingTheSameResourceAreAnsweredOldestFirst() {
@@ -3246,6 +3264,7 @@ int main() {
   }
   TestConnectionIdentity();
   TestLobbyFramesFollowTheMatchmakerThatAsked();
+  TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest();
   TestStandaloneMatchmakerRemoteEndDoesNotEndTheSession();
   TestLoginIsFirstThenQueuedFramesInOrder();
   TestFrameDuringLoginBuildStaysBehindLogin();

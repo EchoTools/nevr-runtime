@@ -805,8 +805,11 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
           Remote& r = rit->second;
           CountRequirementsLocked(git->second, frame);
           if (git->second.role == Role::Matchmaker && remoteId == sessionRemote_ && activeGame_ != game) {
-            // The game disconnects a matchmaker socket that gets a reply to a request it never sent: lobby
-            // frames follow the matchmaker connection that last asked, not the newest one.
+            // The game disconnects a matchmaker socket that gets a reply to a request it never sent. Lobby frames
+            // carry no request id the router can match, so "the matchmaker that last sent a frame" stands in for
+            // "the socket whose request this answers". The limit: with two live matchmakers both mid-request, a
+            // reply to the earlier one goes to the later one (pinned by
+            // TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest).
             Log(fx, LogLevel::Info,
                 Fmt("[router] server->game routing: game=%llu asked, lobby frames now go to it (was game=%llu)",
                     Ull(game), Ull(activeGame_)));
