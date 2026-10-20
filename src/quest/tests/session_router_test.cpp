@@ -2398,6 +2398,67 @@ void TestHeldSessionQueuesLoginThenFlushesOnReady() {
   QCHECK(rig.router->GetStats().pendingFrames == 0);
 }
 
+// G4 (#709): a config connection opened the session and the transport accepted it while the account is
+// awaited; the login connection then attaches to an OPEN session. No login is injected until the gate says
+// Ready; Ready injects it once. Failure caught: the hold being bypassed by a session the config socket opened.
+void TestGateDefersLoginInjectionOnAnAlreadyOpenSession() {
+  const CaseScope scope("gate defers injection");
+  Gate gate;
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 0);  // behind the login that is waiting
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 1);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+}
+
+// G4: the gate ending in Refused ends the session instead of leaving the login waiting forever.
+void TestGateRefusedEndsADeferredInjection() {
+  const CaseScope scope("gate refused after defer");
+  Gate gate;
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  gate.Set(LoginGate::Refused);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  QCHECK(!rig.games.Closes().empty());
+}
+
+// G4: the gate turns Awaiting between the login opening the session and the transport reporting it open. The
+// session opens for the config pass, the login waits, and Ready injects it once.
+void TestGateAwaitingWhenTheSessionOpensDefersTheLogin() {
+  const CaseScope scope("gate awaiting at open");
+  Gate gate;
+  gate.Set(LoginGate::Ready);
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  gate.Set(LoginGate::Awaiting);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -3264,6 +3325,9 @@ int main() {
   }
   TestConnectionIdentity();
   TestLobbyFramesFollowTheMatchmakerThatAsked();
+  TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
+  TestGateRefusedEndsADeferredInjection();
+  TestGateAwaitingWhenTheSessionOpensDefersTheLogin();
   TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest();
   TestStandaloneMatchmakerRemoteEndDoesNotEndTheSession();
   TestLoginIsFirstThenQueuedFramesInOrder();

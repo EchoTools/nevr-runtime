@@ -298,6 +298,7 @@ class Router {
     bool deferred = false;      // a held session: Open has not been called yet
     bool open = false;
     bool loginPending = false;  // login builder running: frames of non-config connections queue behind it
+    bool loginDeferred = false;  // the login waits for the gate: the session was already open when it attached (G4)
     bool loginSent = false;
     bool loginAttached = false;  // a login connection has been attached (never cleared): a matchmaker may share
     // Game frames that arrived before the remote opened or while the login is being built, in arrival order.
@@ -335,6 +336,7 @@ class Router {
   void SendLoginRemovedLocked(GameId game, Game& g, Effects& fx);
   void ForgetLoginUserLocked();
   void RecomputeActiveLocked();
+  void DeferLoginLocked(RemoteId remote, Remote& r, Effects& fx);
   bool OnSessionLocked(GameId id) const;
   GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, bool* logged, Effects& fx);
   bool TakeUnrequireLocked(GameId target);

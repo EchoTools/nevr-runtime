@@ -679,7 +679,20 @@ void Router::MaybeInjectLocked(Effects& fx) {
   Remote& r = rit->second;
   if (!r.open || r.loginSent || r.loginPending || !LoginAttachedLocked(sessionRemote_)) return;
   r.loginPending = true;  // frames of the other connections queue behind it from here
+  if (GateAwaitingLocked()) {
+    DeferLoginLocked(sessionRemote_, r, fx);
+    return;
+  }
   fx.injections.push_back(sessionRemote_);
+}
+
+// The session is open (a config connection opened it and the transport accepted it) but the account is
+// still awaited: the login waits, and the other connections' frames queue behind it, until
+// ReevaluateHeldLogins sees the gate Ready.
+void Router::DeferLoginLocked(RemoteId remote, Remote& r, Effects& fx) {
+  r.loginDeferred = true;
+  Log(fx, LogLevel::Info,
+      Fmt("[router] remote=%llu: login deferred, the account is not available yet", Ull(remote)));
 }
 
 bool Router::GateAwaitingLocked() const {
@@ -929,7 +942,14 @@ void Router::OnRemoteOpen(RemoteId remote) {
       // The session opening with a login connection attached: the login goes first. With none attached yet
       // the login is injected when one attaches (MaybeInjectLocked).
       needLogin = static_cast<bool>(options_.buildLogin) && !r.loginSent && LoginAttachedLocked(remote);
-      if (needLogin) {
+      if (needLogin && GateAwaitingLocked()) {
+        // Open for the connections that need no login (config's pass); the login waits for the gate.
+        Log(fx, LogLevel::Info, Fmt("[router] remote=%llu open", Ull(remote)));
+        FlushOpenLocked(remote, r, std::nullopt, fx);
+        r.loginPending = true;
+        DeferLoginLocked(remote, r, fx);
+        needLogin = false;
+      } else if (needLogin) {
         // Frames the game sends from here until the login is queued stay in `pending`, behind it.
         r.loginPending = true;
       } else {
@@ -1093,6 +1113,22 @@ void Router::ReevaluateHeldLogins() {
     if (shutdown_ || !options_.loginGate) return;
     const LoginGate gate = options_.loginGate();
     if (gate == LoginGate::Awaiting) return;
+    std::vector<RemoteId> deferredLogins;
+    for (const auto& entry : remoteTable_) {
+      if (entry.second.loginDeferred) deferredLogins.push_back(entry.first);
+    }
+    std::sort(deferredLogins.begin(), deferredLogins.end());
+    for (const RemoteId id : deferredLogins) {
+      const auto rit = remoteTable_.find(id);
+      if (rit == remoteTable_.end()) continue;
+      rit->second.loginDeferred = false;
+      if (gate == LoginGate::Ready) {
+        Log(fx, LogLevel::Info, Fmt("[router] remote=%llu: the account is available; injecting the deferred login", Ull(id)));
+        fx.injections.push_back(id);
+      } else {
+        FailSessionLocked(id, kCloseInternalError, "the account the login needs will not be available", false, fx);
+      }
+    }
     std::vector<RemoteId> held;
     for (const auto& entry : remoteTable_) {
       if (entry.second.deferred) held.push_back(entry.first);
