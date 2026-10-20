@@ -1389,7 +1389,13 @@ class RemoteService {
             uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
             if (isLogin) reply = loginReply_.load();
             if (symbol == nevr_evr_codec::kSymConfigRequest) reply = nevr_evr_codec::kSymConfigSuccess;
-            if (symbol == nevr_evr_codec::kSymFindSessionRequest) reply = kLobbyReplySymbol;
+            if (symbol == nevr_evr_codec::kSymFindSessionRequest) {
+              if (holdLobbyReplies_.load()) {
+                ++heldLobbyReplies_;
+                return;
+              }
+              reply = kLobbyReplySymbol;
+            }
             std::string customLogin;
             {
               std::lock_guard<std::mutex> lock(urisMutex_);
@@ -1444,6 +1450,13 @@ class RemoteService {
     std::lock_guard<std::mutex> lock(urisMutex_);
     return static_cast<int>(std::count(received_.begin(), received_.end(), symbol));
   }
+  // While held, a FindSessionRequest is not answered; ReleaseLobbyReplies sends each held answer then.
+  void HoldLobbyReplies(bool hold) { holdLobbyReplies_ = hold; }
+  int HeldLobbyReplies() const { return heldLobbyReplies_.load(); }
+  void ReleaseLobbyReplies() {
+    holdLobbyReplies_ = false;
+    for (int held = heldLobbyReplies_.exchange(0); held > 0; --held) PushToClients(kLobbyReplySymbol);
+  }
   // Sends `symbol` to every connection, unasked.
   void PushToClients(uint64_t symbol) {
     for (const auto& client : server_->getClients()) client->sendBinary(nevr_evr_codec::BuildMessage(symbol, ""));
@@ -1454,6 +1467,8 @@ class RemoteService {
   int port_ = 0;
   std::atomic<int> loginRequests_{0};
   std::atomic<int> opens_{0};
+  std::atomic<bool> holdLobbyReplies_{false};
+  std::atomic<int> heldLobbyReplies_{0};
   std::atomic<uint64_t> loginReply_{nevr_evr_codec::kSymLoginSettings};
   std::mutex urisMutex_;  // guards uris_, received_ and loginReplyFrame_
   std::vector<std::string> uris_;
@@ -2029,6 +2044,21 @@ TEST_F(RouterAllTest, ALobbyReplyGoesToTheMatchmakerThatAsked) {
   EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 1);
   EXPECT_FALSE(LogLinesContaining("sent symbol=0x312c2a01819aa3f5").empty()) << "the sender of the find is not on record";
   EXPECT_FALSE(LogLinesContaining("-> game=").empty()) << "the destination of the reply is not on record";
+}
+
+// A matchmaker that opens while another is waiting for its answer does not take the answer.
+TEST_F(RouterAllTest, ANewMatchmakerDoesNotTakeTheAnswerAnotherIsWaitingFor) {
+  GameSocket login, first, second;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(first, "/", GetMatchmakerBridgePort());
+  remote_.HoldLobbyReplies(true);
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(YieldUntil([this] { return remote_.HeldLobbyReplies() == 1; })) << "the find never reached the service";
+  Admit(second, "/", GetMatchmakerBridgePort());
+  remote_.ReleaseLobbyReplies();
+  ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol)) << "the answer did not reach the asker";
+  EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 0);
 }
 
 // L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
