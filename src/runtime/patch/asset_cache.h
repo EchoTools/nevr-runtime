@@ -106,6 +106,10 @@ struct EvictReport {
   bool overCapAllReferenced = false;  ///< still over the cap, every remaining blob named by the index
 };
 
+/// Test support: every write (a blob, the index) stops with ERROR_DISK_FULL once it has written this many bytes
+/// ("write temp" step) and, like a kill, removes nothing it wrote. The default, UINT64_MAX, never stops.
+void SetWriteFailureAfterBytesForTest(std::uint64_t bytes);
+
 /// Applies the size cap. `referenced` is the set of keys the index names.
 EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::set<std::string>& referenced);
 

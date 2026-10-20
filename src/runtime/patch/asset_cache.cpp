@@ -3,6 +3,7 @@
 #include <wincrypt.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -111,6 +112,8 @@ bool ReadWholeFile(const std::wstring& path, std::uint64_t limit, std::vector<st
   return true;
 }
 
+std::atomic<std::uint64_t> g_failWritesAfterBytes{UINT64_MAX};
+
 /// temp file in `dir` -> flush -> rename over `finalPath`. *step names the failing step.
 bool WriteAtomically(const std::wstring& dir, const std::wstring& finalPath, const std::wstring& tempStem,
                      const void* data, std::size_t len, const char** step, DWORD* error) {
@@ -128,7 +131,14 @@ bool WriteAtomically(const std::wstring& dir, const std::wstring& finalPath, con
   std::size_t done = 0;
   while (done < len) {
     DWORD put = 0;
-    const DWORD want = static_cast<DWORD>(std::min<std::size_t>(len - done, 1u << 20));
+    const std::uint64_t failAfter = g_failWritesAfterBytes.load(std::memory_order_relaxed);
+    DWORD want = static_cast<DWORD>(std::min<std::size_t>(len - done, 1u << 20));
+    if (failAfter != UINT64_MAX) want = static_cast<DWORD>(std::min<std::uint64_t>(want, failAfter > done ? failAfter - done : 0));
+    if (want == 0) {  // only the test hook gets here: the write stops at its limit, and like a kill it cleans up nothing
+      *error = ERROR_DISK_FULL;
+      CloseHandle(file);
+      return false;
+    }
     if (WriteFile(file, bytes + done, want, &put, nullptr) == 0 || put == 0) {
       *error = GetLastError();
       CloseHandle(file);
@@ -374,6 +384,8 @@ bool SetIndexEntry(const std::wstring& dir, const IndexEntry& entry, std::string
   }
   return true;
 }
+
+void SetWriteFailureAfterBytesForTest(std::uint64_t bytes) { g_failWritesAfterBytes.store(bytes, std::memory_order_relaxed); }
 
 EvictReport Evict(const std::wstring& dir, std::uint64_t capBytes, const std::set<std::string>& referenced) {
   EvictReport report;

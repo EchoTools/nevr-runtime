@@ -112,6 +112,51 @@ TEST_F(AssetCache, StoredBytesComeBackUnderTheirOwnHash) {
   EXPECT_EQ(loaded.actualSha256, stored.sha256);
 }
 
+// Temp then rename: a write that stops partway (a kill) leaves a temp file nothing reads, nothing under the trusted
+// name, and an earlier good file whole. A writer that went straight to the final path would leave the short file there.
+struct WriteFailure {
+  explicit WriteFailure(std::uint64_t afterBytes) { cache::SetWriteFailureAfterBytesForTest(afterBytes); }
+  ~WriteFailure() { cache::SetWriteFailureAfterBytesForTest(UINT64_MAX); }
+};
+
+TEST_F(AssetCache, ABlobWriteThatStopsPartwayLeavesNothingUnderItsName) {
+  const std::vector<std::uint8_t> data = Filler(4096, 11);
+  const std::string sha = cache::Sha256Hex(data.data(), data.size());
+  {
+    WriteFailure stop(100);
+    const cache::StoreResult r = cache::Store(dir_, data.data(), data.size());
+    EXPECT_EQ(r.status, cache::StoreStatus::Failed);
+    EXPECT_STREQ(r.failedStep, "write temp");
+    EXPECT_EQ(r.error, static_cast<DWORD>(ERROR_DISK_FULL));
+  }
+  EXPECT_FALSE(Exists(cache::BlobPath(dir_, sha))) << "a short blob sits under the trusted name";
+  EXPECT_EQ(cache::Load(dir_, sha).status, cache::LoadStatus::Missing);
+  EXPECT_EQ(cache::Store(dir_, data.data(), data.size()).status, cache::StoreStatus::Stored);  // and a retry works
+}
+
+TEST_F(AssetCache, AnIndexWriteThatStopsPartwayLeavesTheOldIndexWhole) {
+  cache::IndexEntry first;
+  first.typeHash = 0x1111;
+  first.nameHash = 0x2222;
+  first.sha256 = std::string(64, 'a');
+  first.label = "first";
+  std::string error;
+  ASSERT_TRUE(cache::SetIndexEntry(dir_, first, &error)) << error;
+  cache::IndexEntry second = first;
+  second.nameHash = 0x3333;
+  second.label = "second";
+  {
+    WriteFailure stop(10);
+    EXPECT_FALSE(cache::SetIndexEntry(dir_, second, &error));
+    EXPECT_NE(error.find("write temp"), std::string::npos) << error;
+  }
+  const cache::IndexResult r = cache::ReadIndex(dir_);
+  ASSERT_TRUE(r.ok) << r.error;
+  ASSERT_EQ(r.entries.size(), 1u);
+  EXPECT_EQ(r.entries[0].nameHash, 0x2222u);
+  EXPECT_EQ(r.entries[0].label, "first");
+}
+
 TEST_F(AssetCache, AGoodBlobIsNotWrittenAgain) {
   const std::vector<std::uint8_t> data = Filler(100, 1);
   ASSERT_EQ(cache::Store(dir_, data.data(), data.size()).status, cache::StoreStatus::Stored);
