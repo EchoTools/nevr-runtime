@@ -73,6 +73,8 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle);
 void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired);
 bool  TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr);
 size_t TestHook_GameSocketsBoundTo(void* remoteHandle);
+bool TestHook_SendFrameToServer(const std::string& frame);  // the sender the bridge gives the self-check unit
+void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigned int code);
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx);
 bool  TestHook_N61_HasActiveCallback();
 int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none

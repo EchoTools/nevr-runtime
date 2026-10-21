@@ -235,6 +235,7 @@ static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, 
     wasLoginSession = ForgetLoginSessionLocked(remote);
   }
   if (wasLoginSession) {
+    nevr_self_check::SetLoggedIn(false);  // no result is sent until the next LoginSuccess; outside g_pairsMutex
     Log(EchoVR::LogLevel::Info,
         "[NEVR.WS] login session ended: the game's next login socket is a new login (shared connections renumbered from 2)");
   }
@@ -299,13 +300,15 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 // socket_role.h. When the login session itself ends, the game reconnects to log in again; without
 // forgetting the dead session, that connection is taken for one more socket on it and attached to it (#70,
 // run 20-1dd5334c6f870d2 is the measurement that showed it). Caller holds g_pairsMutex. True when `remote`
-// was the login session.
+// was the login session. The caller ends the self-check session (nevr_self_check::SetLoggedIn(false)) AFTER it
+// releases the mutex: that call flushes the queued results through SendFrameToServer, which takes g_pairsMutex
+// itself, so calling it here deadlocked the remote's thread on its own lock and made WebSocket::stop() wait on
+// that thread forever (#723, #729).
 static bool ForgetLoginSessionLocked(const ix::WebSocket* remote) {
   if (remote == nullptr || remote != g_loginRemoteWs.get()) return false;
   g_loginRemoteWs.reset();
   g_loginGameWs = nullptr;
   g_roles.LoginSessionEnded();
-  nevr_self_check::SetLoggedIn(false);  // no result is sent until the next LoginSuccess
   return true;
 }
 
@@ -2080,6 +2083,15 @@ void ShutdownWebSocketBridge() {
 void StopWebSocketBridgeListener() {
   g_bridgeEnabled = false;
 
+  // #723/#729: every stage that joins a thread logs its begin and its done with the elapsed time, so a stop
+  // that never returns names the stage it is stuck in (the last "begin" with no "done").
+  const ULONGLONG startedMs = GetTickCount64();
+  const auto stage = [startedMs](const char* name, const char* phase, std::size_t count) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] listener stop stage=%s %s count=%zu thread=%lu elapsed_ms=%llu", name, phase,
+        count, static_cast<unsigned long>(GetCurrentThreadId()),
+        static_cast<unsigned long long>(GetTickCount64() - startedMs));
+  };
+
   // N60: collect under the lock, stop OUTSIDE it. stop() joins the callback
   // thread, which may itself be waiting on g_pairsMutex — holding it here
   // deadlocks shutdown.
@@ -2093,23 +2105,33 @@ void StopWebSocketBridgeListener() {
     g_pairs.clear();
     g_activeGameWs = nullptr;
   }
+  stage("legacy_remotes", "begin", remotes.size());
   for (auto& ws : remotes) {
     ws->stop();
   }
+  stage("legacy_remotes", "done", remotes.size());
   if (RouterPath* routed = g_routerPath.load(); routed != nullptr) {
     // Remotes first: once stopped, their events no longer reach the router, so Shutdown's closes race nothing.
+    stage("router_remotes", "begin", 0);
     stoppedRouterRemotes = routed->remotes.StopAll();
+    stage("router_remotes", "done", stoppedRouterRemotes);
+    stage("router_shutdown", "begin", 0);
     routed->router.Shutdown();
+    stage("router_shutdown", "done", 0);
     LogRouterStats(*routed, "stop");
   }
 
   if (g_server) {
+    stage("game_listener", "begin", 1);
     g_server->stop();
     g_server.reset();
+    stage("game_listener", "done", 1);
   }
   if (g_matchServer) {
+    stage("matchmaker_listener", "begin", 1);
     g_matchServer->stop();
     g_matchServer.reset();
+    stage("matchmaker_listener", "done", 1);
   }
   g_proxyPort = 0;
   g_matchPort = 0;
@@ -2313,6 +2335,14 @@ bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx) {
     *nextConnIdx = next.Admit(nevr_socket_role::Listener::Service, nevr_socket_role::Role::Login).connIdx;
   }
   return forgot;
+}
+
+bool TestHook_SendFrameToServer(const std::string& frame) { return SendFrameToServer(frame); }
+
+// Runs the production remote-ended path (the one the remote's Close and Error callbacks call).
+void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigned int code) {
+  auto* remotePtr = static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
+  CloseGameSocketsForRemote(remotePtr->get(), connIdx, code);
 }
 
 size_t TestHook_GameSocketsBoundTo(void* remoteHandle) {
