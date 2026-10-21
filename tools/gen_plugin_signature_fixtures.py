@@ -78,6 +78,69 @@ def build_dll(work, name, marker):
     return out
 
 
+def build_c(work, name, source, extra=(), defs=None):
+    """Compile `source` (C text) into <work>/<name>.dll; `extra` are further linker inputs/flags, `defs` a .def text."""
+    src = work / f"{name}.c"
+    src.write_text(source)
+    out = work / f"{name}.dll"
+    cmd = ["x86_64-w64-mingw32-gcc", "-shared", "-O1", "-nostdlib", "-Wl,--entry=DllMain", "-o", str(out), str(src)]
+    if defs is not None:
+        def_file = work / f"{name}.def"
+        def_file.write_text(defs)
+        cmd.append(str(def_file))
+    run(cmd + list(extra))
+    return out
+
+
+def set_data_dir(path, index, rva, size):
+    """Point data directory `index` of a PE32+ file at (rva, size)."""
+    data = bytearray(Path(path).read_bytes())
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    assert data[pe:pe + 4] == b"PE\0\0" and struct.unpack_from("<H", data, pe + 24)[0] == 0x20B
+    struct.pack_into("<II", data, pe + 24 + 112 + index * 8, rva, size)
+    Path(path).write_bytes(bytes(data))
+
+
+def section_rva(path, name):
+    data = Path(path).read_bytes()
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    count = struct.unpack_from("<H", data, pe + 6)[0]
+    opt_size = struct.unpack_from("<H", data, pe + 20)[0]
+    first = pe + 24 + opt_size
+    for i in range(count):
+        at = first + i * 40
+        if data[at:at + 8].rstrip(b"\0") == name.encode():
+            return struct.unpack_from("<I", data, at + 12)[0]
+    raise SystemExit(f"gen_plugin_signature_fixtures: FAIL no section {name} in {path}")
+
+
+def build_dependency_dlls(work):
+    """The unsigned DLLs the tree fixtures are made of. dep exports Dep; each other names dep.dll (or mid.dll) in
+    the table the test is about: import, delay-load import, or forwarded export."""
+    stub = ('int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return 1;}\n')
+    dep = build_c(work, "dep", '__declspec(dllexport) int Dep(void){return 7;}\n' + stub)
+    build_c(work, "importer", '__declspec(dllimport) int Dep(void);\n'
+            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return Dep();}\n', [str(dep)])
+    build_c(work, "mid", '__declspec(dllimport) int Dep(void);\n__declspec(dllexport) int Mid(void){return Dep();}\n' + stub,
+            [str(dep)])
+    mid = work / "mid.dll"
+    build_c(work, "toplevel", '__declspec(dllimport) int Mid(void);\n'
+            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return Mid();}\n', [str(mid)])
+    build_c(work, "forwarder", stub, defs="EXPORTS\n  Fwd = dep.Dep\n")
+    # A delay-load descriptor (data directory 13) written by hand: this linker has no delay-load support. The
+    # descriptor is the attribute word (1: RVAs, not addresses), the DLL name RVA and six zero words; a zero
+    # descriptor ends the table.
+    build_c(work, "delayer",
+            '__asm__(".section .didat,\\"dr\\"\\nnevr_delay_desc:\\n.long 1\\n.rva nevr_delay_name\\n'
+            '.fill 24,1,0\\n.fill 32,1,0\\n.section .rdata,\\"dr\\"\\nnevr_delay_name:\\n.asciz \\"dep.dll\\"\\n.text\\n");\n' + stub)
+    delayer = work / "delayer.dll"
+    set_data_dir(delayer, 13, section_rva(delayer, ".didat"), 64)
+    # An import directory that points outside the image: a file whose dependencies cannot be listed.
+    build_c(work, "broken", stub)
+    set_data_dir(work / "broken.dll", 1, 0x7FFFF000, 40)
+    return dep
+
+
 def sign(unsigned, out, leaf, chain_pems, tsa=None, tsa_time=None, digest="sha256"):
     """osslsigncode sign; chain_pems are concatenated behind the leaf into the -certs file."""
     certs = Path(str(out) + ".chain.pem")
@@ -360,6 +423,42 @@ def main():
     for name in ("unsigned", "tampered_code", "tampered_signature", "token_copied", "content_swap", "backdated_token"):
         files[name] = f"{name}.dll"
 
+
+    # Dependency trees (PR 4): a directory per case, holding the plugin and what it names. `signed` files carry the
+    # good signature; the manifest says which file a correct tree walk refuses, how it reached it, and why.
+    build_dependency_dlls(out)
+    trees = {}
+
+    def tree(name, root, members, refuses=None, via=None, reason=None):
+        """members: {file name in the directory: (built dll stem, signer leaf or None for unsigned)}."""
+        directory = out / f"tree_{name}"
+        directory.mkdir(exist_ok=True)
+        for fname, (stem, signer) in members.items():
+            if signer is None:
+                shutil.copy(out / f"{stem}.dll", directory / fname)
+            else:
+                sign(out / f"{stem}.dll", directory / fname, signer, pinned_chain, tsa, now)
+        trees[name] = {"dir": f"tree_{name}", "root": root, "refused_file": refuses, "via": via, "reason": reason}
+
+    tree("import_ok", "importer.dll", {"importer.dll": ("importer", good), "dep.dll": ("dep", good)})
+    tree("import_unsigned", "importer.dll", {"importer.dll": ("importer", good), "dep.dll": ("dep", None)},
+         "dep.dll", "import", "Unsigned")
+    tree("import_wrong_signer", "importer.dll", {"importer.dll": ("importer", good), "dep.dll": ("dep", wrong_eku)},
+         "dep.dll", "import", "MissingEku")
+    tree("import_absent", "importer.dll", {"importer.dll": ("importer", good)})       # dep.dll is the OS's to find
+    tree("delay_ok", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", good)})
+    tree("delay_unsigned", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", None)},
+         "dep.dll", "delay-load", "Unsigned")
+    tree("forwarder_ok", "forwarder.dll", {"forwarder.dll": ("forwarder", good), "dep.dll": ("dep", good)})
+    tree("forwarder_unsigned", "forwarder.dll", {"forwarder.dll": ("forwarder", good), "dep.dll": ("dep", None)},
+         "dep.dll", "forwarder", "Unsigned")
+    tree("transitive_ok", "toplevel.dll",
+         {"toplevel.dll": ("toplevel", good), "mid.dll": ("mid", good), "dep.dll": ("dep", good)})
+    tree("transitive_unsigned", "toplevel.dll",
+         {"toplevel.dll": ("toplevel", good), "mid.dll": ("mid", good), "dep.dll": ("dep", None)},
+         "dep.dll", "import", "Unsigned")
+    tree("malformed", "broken.dll", {"broken.dll": ("broken", good)}, "the plugin", "", "MalformedSignature")
+
     manifest = {
         "now": now,
         "root_der": "pinned_root.der",
@@ -370,6 +469,7 @@ def main():
         "stamp_time": {"good": now, "expired_stamped_inside": now - 7 * DAY, "stamped_after_expiry": now - 2 * DAY},
         "files": files,
         "plugins": plugins,
+        "trees": trees,
     }
     (out / "fixtures.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"gen_plugin_signature_fixtures: wrote {len(files)} files and fixtures.json to {out}")

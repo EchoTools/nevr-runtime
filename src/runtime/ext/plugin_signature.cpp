@@ -1130,7 +1130,7 @@ bool ListDependenciesImpl(HANDLE file, Dependencies* out, std::string* error) {
         *error = "a forwarded export names a string outside the file";
         return false;
       }
-      const size_t dot = forward.find('.');
+      const size_t dot = forward.rfind('.');
       if (dot == std::string::npos || dot == 0) {
         *error = "a forwarded export has no DLL name";
         return false;
