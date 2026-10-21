@@ -54,6 +54,47 @@ TEST(ReturnToLobbyQueue, RefusedWithoutANetGame) {
   EXPECT_EQ(Check(nullptr), Verdict::NoNetGame);
 }
 
+// The runtime's g_pGame is the game CONTEXT; the game's function takes the net game, which the context
+// holds at CONTEXT_NETGAME_OFFSET (GetNetGameFromContext, echovr.exe 0x140113a90: mov rax,[rcx+0x8518]).
+struct FakeContext {
+  unsigned char bytes[0x8600] = {};
+  void SetNetGame(const void* netGame) {
+    std::memcpy(bytes + nevr_patch_addresses::CONTEXT_NETGAME_OFFSET, &netGame, sizeof(netGame));
+  }
+};
+
+TEST(ReturnToLobbyQueue, TheContextOffsetIsTheOneGetNetGameFromContextReads) {
+  EXPECT_EQ(nevr_patch_addresses::CONTEXT_NETGAME_OFFSET, 0x8518u);
+}
+
+TEST(ReturnToLobbyQueue, TheNetGameIsTheOneTheContextHolds) {
+  FakeNetGame netGame;
+  FakeContext context;
+  context.SetNetGame(&netGame);
+  EXPECT_EQ(nevr_return_to_lobby_queue::NetGameFromContext(&context), &netGame);
+  EXPECT_EQ(nevr_return_to_lobby_queue::NetGameFromContext(nullptr), nullptr);
+}
+
+// The failure #730 hit: the runtime handed the game the context. A context whose own [+8][+8] chain is
+// empty is refused, while the net game it holds, with a queue, is ready: the check keys on the object the
+// caller names, so a caller that passes the context is refused even when the net game is fine.
+TEST(ReturnToLobbyQueue, PassingTheContextIsNotPassingTheNetGame) {
+  FakeGame game;
+  int storage = 0;
+  game.SetQueueStorage(&storage);
+  FakeNetGame netGame;
+  netGame.SetGame(&game);
+  FakeContext context;
+  context.SetNetGame(&netGame);
+  EXPECT_EQ(Check(nevr_return_to_lobby_queue::NetGameFromContext(&context)), Verdict::Ready);
+  EXPECT_NE(Check(&context), Verdict::Ready);
+}
+
+TEST(ReturnToLobbyQueue, ANullNetGameInTheContextIsRefusedNotDereferenced) {
+  FakeContext context;
+  EXPECT_EQ(Check(nevr_return_to_lobby_queue::NetGameFromContext(&context)), Verdict::NoNetGame);
+}
+
 TEST(ReturnToLobbyQueue, EveryVerdictHasADistinctName) {
   EXPECT_STREQ(Name(Verdict::Ready), "ready");
   EXPECT_STREQ(Name(Verdict::NoNetGame), "no_net_game");

@@ -29,7 +29,18 @@ inline const void* ReadPointer(const void* base, uintptr_t offset) {
   return value;
 }
 
-/// `netGame` is the pointer NetGameScheduleReturnToLobby takes (the runtime's g_pGame).
+/// The net game of the game context (the runtime's g_pGame), as the game's own GetNetGameFromContext
+/// (0x140113a90) reads it; null for a null context. NetGameScheduleReturnToLobby takes this pointer,
+/// and the game's own callers pass it (PartyJoinedCB 0x1401896a0 passes its `this`, whose first field
+/// it compares with a net game state). Passing the context itself makes the game read its call queue
+/// from the wrong object (#730).
+inline void* NetGameFromContext(void* context) {
+  if (context == nullptr) return nullptr;
+  return const_cast<void*>(ReadPointer(context, nevr_patch_addresses::CONTEXT_NETGAME_OFFSET));
+}
+
+/// `netGame` is the pointer NetGameScheduleReturnToLobby takes: the net game, NetGameFromContext(g_pGame),
+/// never g_pGame itself.
 inline Verdict Check(const void* netGame) {
   if (netGame == nullptr) return Verdict::NoNetGame;
   const void* game = ReadPointer(netGame, nevr_patch_addresses::NETGAME_GAME_OFFSET);
