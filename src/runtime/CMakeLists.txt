@@ -1147,6 +1147,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
 
+    # plugin_signature tests (ADR 0010, #741) — the pure verifier over signed fixtures that
+    # tools/gen_plugin_signature_fixtures.py writes into $NEVR_SIGFIX_DIR. Links only the
+    # verifier TU and crypt32/advapi32: no game stubs, no Log.
+    add_executable(test_plugin_signature
+      tests/test_plugin_signature.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_signature PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_signature PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
+
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
     # compiled with NEVR_TEST_HOOKS to enable mock-callback injection into the
