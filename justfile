@@ -2825,11 +2825,12 @@ verify:
         echo "verify: FAIL — #573: nevr_quest_config must compile ../core/nevr_config.cpp and must not compile nevr_config_policy.cpp (src/quest/CMakeLists.txt)." >&2
         exit 1
     fi
-    if ! grep -qF 'yaml-cpp-no-static-init.patch' src/quest/vcpkg-overlay-ports/yaml-cpp/portfile.cmake \
-        || [ ! -s src/quest/vcpkg-overlay-ports/yaml-cpp/yaml-cpp-no-static-init.patch ] \
+    # yaml-cpp 0.8.0's token.h declares TokenNames as a namespace-scope std::string array: six load-time
+    # initializers in the sentinel. 0.9.0 declares it constexpr const char*, so the overlay pins 0.9.0 (or later).
+    if ! grep -qE '"version-semver": "(0\.(9|[1-9][0-9])|[1-9][0-9]*)\.' src/quest/vcpkg-overlay-ports/yaml-cpp/vcpkg.json \
         || ! grep -qF 'vcpkg-overlay-ports' src/quest/vcpkg-configuration.json; then
-        echo "verify: FAIL — #573: the Quest build must take yaml-cpp from src/quest/vcpkg-overlay-ports (portfile lists yaml-cpp-no-static-init.patch," >&2
-        echo "the patch exists, src/quest/vcpkg-configuration.json names the overlay). Stock yaml-cpp adds six load-time initializers to the sentinel." >&2
+        echo "verify: FAIL — #573: the Quest build must take yaml-cpp 0.9.0 or later from src/quest/vcpkg-overlay-ports (its vcpkg.json," >&2
+        echo "and src/quest/vcpkg-configuration.json names the overlay). yaml-cpp 0.8.0 adds six load-time initializers to the sentinel." >&2
         exit 1
     fi
     # (e) the parser no longer logs the unset-variable warning, so the PC caller must (service_config.cpp's NevrCfg is
