@@ -104,7 +104,7 @@ directory to pass the same check. System32 imports are the OS's. Delay loads and
 
 **Plugin-initiated loads.** A plugin that calls `LoadLibrary` after its init is not on the staged path. `DllLoadHook`
 (`src/runtime/hook/dll_load_hook.cpp:308-322`) already hooks all four LoadLibrary variants; in an enforcing build its filter also
-checks any load whose resolved path lies in the plugins directory against the same verifier, and refuses (null, `ERROR_ACCESS_DENIED`)
+checks any load whose resolved path lies in the plugins directory against the same verifier, and refuses (null, `ERROR_MOD_NOT_FOUND`, the refusal `DllLoadHook` makes)
 on a failure. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is not a
 plugin file); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
 anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
