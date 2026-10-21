@@ -43,6 +43,7 @@ set(PATCHES_SOURCES
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
+    "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
@@ -1092,9 +1093,10 @@ if(BUILD_TESTING)
 
     # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
     # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) and
-    # test_return_to_lobby_queue.cpp (#730, header-only lifecycle/return_to_lobby_queue.h) ride in this executable.
+    # test_return_to_lobby_queue.cpp (#730, header-only lifecycle/return_to_lobby_queue.h) and
+    # test_window_watch.cpp (#341, the decision half of frame/window_watch.h) ride in this executable.
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
-                   tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp)
+                   tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp tests/test_window_watch.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
                                ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
