@@ -140,7 +140,11 @@ What the runtime pins. The values come from `release-signer`, which is their aut
 The EKU is confirmed by the same trial: the first certificate the profile issues, read from the run's own stage-60 evidence, is
 compared with `signing.yml:15` before the pipeline or the runtime pins it. If it differs, `signing.yml` and the runtime's pin are both
 corrected to what the certificate shows, and nothing is released against the old value. Until then the runtime's pin table is marked
-`unconfirmed` in the source and the plugin gate does not ship.
+`unconfirmed` in the source (`kPinsConfirmed` is false) and the plugin gate does not ship. The control is merge order, not a packaging
+check: the verifier core (#744, not wired into the loader) can merge on its own, and the loader wiring (#745) stays a draft, unmerged,
+until the first real pipeline-signed file confirms the pins; `kPinsConfirmed=true` then lands in #745 with that certificate as a
+fixture (#745's body, "Merge order is the control, not packaging"). No packaging step refuses releases over the unconfirmed pins, because
+that would hold back unrelated fixes.
 
 **Survival over leaf rotation.** The pin is the EKU plus the root, neither of which changes with the daily renewal. The leaf's
 validity is judged at the signing time, not at load time: the verifier reads the RFC 3161 counter-signature attribute
