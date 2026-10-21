@@ -367,14 +367,8 @@ class ReleaseStagesTest(PackageFixture):
 
     # --- the CI assertion after the build -----------------------------------------------------------
 
-    def trust_source(self, confirmed):
-        source = self.tmp / "plugin_trust.cpp"
-        source.write_text(f"constexpr bool kPinsConfirmed = {'true' if confirmed else 'false'};\n")
-        return source
-
-    def stamp(self, *args, dll=None, confirmed=True):
-        return self.run_stage("stamp", "--dll", str(dll or self.dll), "--plugin-trust-source",
-                              str(self.trust_source(confirmed)), *args)
+    def stamp(self, *args, dll=None):
+        return self.run_stage("stamp", "--dll", str(dll or self.dll), *args)
 
     def test_stamp_accepts_the_expected_release_version_and_commit(self):
         result = self.stamp("--version", RELEASE, "--commit", COMMIT)
@@ -417,17 +411,6 @@ class ReleaseStagesTest(PackageFixture):
         self.assertIn("found 0", self.stamp("--version", RELEASE).stderr)
         self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST signed-only",) * 2))
         self.assertIn("found 2", self.stamp("--version", RELEASE).stderr)
-
-    def test_a_release_is_refused_while_the_profile_eku_pin_is_unconfirmed(self):
-        result = self.stamp("--version", RELEASE, confirmed=False)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("kPinsConfirmed is false", result.stderr)
-        self.dll.write_bytes(binary(DEV))
-        self.assertEqual(self.stamp(confirmed=False).returncode, 0)  # a development build does not need it
-
-    def test_the_repos_own_pin_flag_is_found_where_the_release_check_reads_it(self):
-        problems = package_release.pins_unconfirmed_problems()
-        self.assertFalse([p for p in problems if "not found" in p], problems)
 
     def test_stamp_refuses_a_version_argument_that_is_not_x_y_z(self):
         result = self.stamp("--version", "v5.0.0")

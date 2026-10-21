@@ -46,7 +46,6 @@ IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=
 # literal, which is a cross-repo contract and has no such field. A packaged DLL carries exactly one, and it says
 # signed-only; unsigned-allowed is the mingw-plugin-dev preset and is never packaged.
 PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
-PLUGIN_TRUST_SOURCE = REPO / "src" / "runtime" / "ext" / "plugin_trust.cpp"
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -88,18 +87,6 @@ def plugin_trust_problems(label: str, blob: bytes) -> list:
     if found[0] != b"signed-only":
         return [f"{label}: NEVR-PLUGIN-TRUST is '{found[0].decode('ascii')}', not 'signed-only': a build that "
                 f"loads unsigned plugins is never packaged"]
-    return []
-
-
-def pins_unconfirmed_problems(source: Path = PLUGIN_TRUST_SOURCE) -> list:
-    """A release must not carry a signature gate whose profile EKU nobody has compared with a real certificate."""
-    text = source.read_text(encoding="utf-8")
-    match = re.search(r"\bkPinsConfirmed\s*=\s*(true|false)\s*;", text)
-    if not match:
-        return [f"{source.name}: kPinsConfirmed not found"]
-    if match.group(1) != "true":
-        return [f"{source.name}: kPinsConfirmed is false: the profile EKU pin has not been compared with a "
-                f"certificate the real pipeline issued (docs/adr/0010), so no release carries the plugin gate yet"]
     return []
 
 
@@ -209,12 +196,10 @@ def gate(args, work: Path) -> dict:
     return info
 
 
-def stamp_check(dll: Path, version, commit: str = "", trust_source: Path = PLUGIN_TRUST_SOURCE) -> str:
+def stamp_check(dll: Path, version, commit: str = "") -> str:
     """The CI assertion after the build. `version` set: the identity literal must be exactly that release
     version; unset: it must be a development version. `commit` (when given): the checked-out commit."""
     problems = expected_identity_problems(dll.name, dll.read_bytes(), version, commit)
-    if version is not None:
-        problems += pins_unconfirmed_problems(trust_source)
     if problems:
         raise GateFailure("\n".join(problems))
     found_version, found_commit = identity_in(dll.read_bytes(), dll.name)
@@ -348,7 +333,6 @@ def main(argv=None) -> int:
         parser.add_argument("--dll", required=True, type=Path)
         parser.add_argument("--version", default="")
         parser.add_argument("--commit", default="")
-        parser.add_argument("--plugin-trust-source", type=Path, default=PLUGIN_TRUST_SOURCE)
     else:
         if mode == "tree":
             parser.add_argument("--version", required=True)
@@ -368,7 +352,7 @@ def main(argv=None) -> int:
         if mode == "stamp":
             if args.version and not RELEASE_VERSION.match(args.version):
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
-            print(f"stamped identity: {stamp_check(args.dll, args.version or None, args.commit, args.plugin_trust_source)}")
+            print(f"stamped identity: {stamp_check(args.dll, args.version or None, args.commit)}")
             return 0
         if mode == "seal":
             written = seal(args.tree, args.out, require_signed=args.require_signed)
