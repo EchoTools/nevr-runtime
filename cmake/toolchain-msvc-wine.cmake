@@ -1,7 +1,7 @@
 # CMake Toolchain File for MSVC via Wine (Linux to Windows cross-compilation)
 # Usage: cmake -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-msvc-wine.cmake ..
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 4.0)
 
 # System settings
 set(CMAKE_SYSTEM_NAME Windows)
