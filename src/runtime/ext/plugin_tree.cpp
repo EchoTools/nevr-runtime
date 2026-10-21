@@ -67,7 +67,11 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
         {&deps.imports, "import"}, {&deps.delayImports, "delay-load"}, {&deps.forwarders, "forwarder"}};
     for (const auto& kind : kinds) {
       for (const std::string& name : *kind.first) {
-        if (name.find_first_of("\\/:") != std::string::npos || !seen.insert(name).second) continue;
+        // A name with a path in it is resolved relative to something this walk cannot know, so it cannot be checked.
+        if (name.find_first_of("\\/:") != std::string::npos) {
+          return Refuse(name, kind.second, Reason::Unreadable, "a dependency named by a path cannot be checked");
+        }
+        if (!seen.insert(name).second) continue;
         HANDLE h = CreateFileA((pluginDir + name).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {

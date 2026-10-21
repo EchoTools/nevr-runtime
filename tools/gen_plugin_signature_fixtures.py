@@ -141,6 +141,121 @@ def build_dependency_dlls(work):
     return dep
 
 
+def pe_layout(data):
+    """(offset of the PE header, sections [(name, va, virtual size, raw pointer, raw size)], data directory entries)."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    count = struct.unpack_from("<H", data, pe + 6)[0]
+    opt_size = struct.unpack_from("<H", data, pe + 20)[0]
+    first = pe + 24 + opt_size
+    sections = []
+    for i in range(count):
+        at = first + i * 40
+        vsize, va, rawsize, rawptr = struct.unpack_from("<IIII", data, at + 8)
+        sections.append((data[at:at + 8].rstrip(b"\0").decode(), va, vsize, rawptr, rawsize))
+    return pe, sections
+
+
+def rva_to_offset(data, rva):
+    _, sections = pe_layout(data)
+    for _, va, vsize, rawptr, rawsize in sections:
+        if va <= rva < va + max(vsize, rawsize):
+            return rawptr + (rva - va)
+    raise SystemExit(f"gen_plugin_signature_fixtures: FAIL rva {rva:#x} is in no section")
+
+
+def data_dir(data, index):
+    pe, _ = pe_layout(data)
+    return struct.unpack_from("<II", data, pe + 24 + 112 + index * 8)
+
+
+def patch_dir(data, index, rva, size):
+    pe, _ = pe_layout(data)
+    struct.pack_into("<II", data, pe + 24 + 112 + index * 8, rva, size)
+
+
+def build_corpus(work):
+    """Files a parser must refuse, or survive, made by damaging a good DLL's own tables. `lists` is whether
+    ListDependencies must succeed (False: it must fail and say something), None: only that it returns."""
+    corpus = {}
+
+    def put(name, data, lists, error_contains=""):
+        (work / f"corpus_{name}.dll").write_bytes(bytes(data))
+        corpus[name] = {"file": f"corpus_{name}.dll", "lists": lists, "error_contains": error_contains}
+
+    importer = bytearray((work / "importer.dll").read_bytes())
+    rva, _ = data_dir(importer, 1)
+    table = rva_to_offset(importer, rva)
+    put("truncated_import_table", importer[:table + 10], False, "does not end")
+
+    data = bytearray(importer)
+    pe, sections = pe_layout(data)
+    text = next(sec for sec in sections if sec[0] == ".text")
+    patch_dir(data, 1, text[1], 40)                      # a table that is really code: no end, no sane names
+    put("import_table_is_code", data, False)
+
+    data = bytearray(importer)
+    struct.pack_into("<I", data, table + 12, 0x7FFFF000)  # the first descriptor's DLL name, past the image
+    put("import_name_past_image", data, False, "outside the file")
+
+    delayer = bytearray((work / "delayer.dll").read_bytes())
+    drva, _ = data_dir(delayer, 13)
+    doff = rva_to_offset(delayer, drva)
+    data = bytearray(delayer)
+    struct.pack_into("<I", data, doff + 4, 0x7FFFF000)
+    put("delay_name_past_image", data, False, "outside the file")
+    data = bytearray(delayer)
+    struct.pack_into("<I", data, doff, 0)                # attributes 0: the descriptor holds addresses, not RVAs
+    put("delay_virtual_addresses", data, False, "virtual addresses")
+
+    forwarder = bytearray((work / "forwarder.dll").read_bytes())
+    erva, _ = data_dir(forwarder, 0)
+    eoff = rva_to_offset(forwarder, erva)
+    functions = rva_to_offset(forwarder, struct.unpack_from("<I", forwarder, eoff + 28)[0])
+    string_at = rva_to_offset(forwarder, struct.unpack_from("<I", forwarder, functions)[0])
+    assert forwarder[string_at:string_at + 8] == b"dep.Dep\0"
+    data = bytearray(forwarder)
+    data[string_at + 3] = ord("x")                       # "depxDep": a forwarder with no DLL name
+    put("forward_without_dll", data, False, "no DLL name")
+    data = bytearray(forwarder)
+    struct.pack_into("<I", data, eoff + 28, 0x7FFFF000)  # AddressOfFunctions
+    put("export_table_past_image", data, False, "outside the file")
+    data = bytearray(forwarder)
+    struct.pack_into("<I", data, eoff + 20, 0x7FFFFFFF)  # NumberOfFunctions
+    put("export_count_huge", data, False, "outside the file")
+
+    # The import directory laid over the export directory: its "descriptors" are export-directory bytes, so the
+    # parser reads fields that were never import descriptors. It must return, not crash or run on.
+    data = bytearray(forwarder)
+    erva, esize = data_dir(forwarder, 0)
+    patch_dir(data, 1, erva, esize)
+    put("import_directory_overlaps_export_directory", data, None)
+
+    # A dependency named by a path: the loader resolves that relative to something else, so it cannot be checked.
+    data = bytearray(importer)
+    assert data.count(b"dep.dll\0") == 1
+    put("import_named_by_path", data.replace(b"dep.dll\0", b"a\\b.dll\0"), True)
+    return corpus
+
+
+def build_cap_dlls(work, count):
+    """capdep_001.dll .. capdep_<count>.dll, each exporting one function, and two importers: cap64.dll names the
+    first 64, cap65.dll names all 65."""
+    names = [f"capdep_{i:03d}" for i in range(1, count + 1)]
+    for i, name in enumerate(names, 1):
+        build_c(work, name, f'__declspec(dllexport) int F{i}(void){{return {i};}}\n'
+                'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return 1;}\n')
+
+    def importer(out_name, used):
+        decl = "".join(f"__declspec(dllimport) int F{i}(void);\n" for i in range(1, used + 1))
+        body = "+".join(f"F{i}()" for i in range(1, used + 1))
+        build_c(work, out_name, decl + f'int __stdcall DllMain(void*a,unsigned long b,void*c){{(void)a;(void)b;(void)c;return {body};}}\n',
+                [str(work / f"{n}.dll") for n in names[:used]])
+
+    importer("cap64", 64)
+    importer("cap65", 65)
+    return names
+
+
 def sign(unsigned, out, leaf, chain_pems, tsa=None, tsa_time=None, digest="sha256"):
     """osslsigncode sign; chain_pems are concatenated behind the leaf into the -certs file."""
     certs = Path(str(out) + ".chain.pem")
@@ -459,6 +574,28 @@ def main():
          "dep.dll", "import", "Unsigned")
     tree("malformed", "broken.dll", {"broken.dll": ("broken", good)}, "the plugin", "", "MalformedSignature")
 
+
+    # The 64-file cap: 64 signed dependencies pass, a 65th is refused (and the walk does not fail open).
+    cap_names = build_cap_dlls(out, 65)
+    signed_cap = out / "signed_cap"
+    signed_cap.mkdir(exist_ok=True)
+    for n in cap_names:
+        sign(out / f"{n}.dll", signed_cap / f"{n}.dll", good, pinned_chain, tsa, now)
+    for tree_name, root_stem, used in (("cap_64", "cap64", 64), ("cap_65", "cap65", 65)):
+        directory = out / f"tree_{tree_name}"
+        directory.mkdir(exist_ok=True)
+        sign(out / f"{root_stem}.dll", directory / f"{root_stem}.dll", good, pinned_chain, tsa, now)
+        for n in cap_names[:used]:
+            shutil.copy(signed_cap / f"{n}.dll", directory / f"{n}.dll")
+        trees[tree_name] = {"dir": f"tree_{tree_name}", "root": f"{root_stem}.dll", "refused_file": None if used == 64 else "capdep_065.dll",
+                            "via": "import", "reason": "Unreadable" if used == 65 else None, "cap": used}
+    shutil.rmtree(signed_cap)
+
+    corpus = build_corpus(out)
+    tree("import_named_by_path", "corpus_import_named_by_path.dll",
+         {"corpus_import_named_by_path.dll": ("corpus_import_named_by_path", good)},
+         "a\\b.dll", "import", "Unreadable")
+
     manifest = {
         "now": now,
         "root_der": "pinned_root.der",
@@ -470,6 +607,7 @@ def main():
         "files": files,
         "plugins": plugins,
         "trees": trees,
+        "corpus": corpus,
     }
     (out / "fixtures.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"gen_plugin_signature_fixtures: wrote {len(files)} files and fixtures.json to {out}")

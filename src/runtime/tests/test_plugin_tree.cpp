@@ -41,6 +41,7 @@ Reason ReasonFromName(const std::string& name) {
   if (name == "Unsigned") return Reason::Unsigned;
   if (name == "MissingEku") return Reason::MissingEku;
   if (name == "MalformedSignature") return Reason::MalformedSignature;
+  if (name == "Unreadable") return Reason::Unreadable;
   ADD_FAILURE() << "the manifest names a reason this test does not know: " << name;
   return Reason::Accepted;
 }
@@ -178,6 +179,63 @@ TEST_F(PluginTree, SignedTransitiveTreeIsAccepted) {
 }
 
 TEST_F(PluginTree, UnsignedFileTwoLevelsDownIsRefused) { ExpectRefused("transitive_unsigned"); }
+
+// The 64-file cap: 64 signed dependencies pass, the 65th is refused and the walk does not fail open.
+TEST_F(PluginTree, SixtyFourSignedDependenciesAreAccepted) {
+  size_t held = 0;
+  const TreeVerdict v = Walk("cap_64", &held);
+  EXPECT_TRUE(v.accepted) << v.Describe();
+  EXPECT_EQ(held, 64u);
+}
+
+TEST_F(PluginTree, ASixtyFifthDependencyIsRefused) {
+  ExpectRefused("cap_65");
+  const TreeVerdict v = Walk("cap_65");
+  EXPECT_NE(v.verdict.detail.find("over 64 files"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginTree, ADependencyNamedByAPathIsRefused) {
+  ExpectRefused("import_named_by_path");
+  EXPECT_NE(Walk("import_named_by_path").verdict.detail.find("named by a path"), std::string::npos);
+}
+
+// Damaged tables: each file is a good DLL with one table broken. ListDependencies fails and says so, or (the
+// overlapping directories) at least returns.
+TEST_F(PluginTree, DamagedTablesAreRefusedWithAReason) {
+  const nlohmann::json& corpus = manifest_["corpus"];
+  ASSERT_GE(corpus.size(), 8u);
+  for (auto it = corpus.begin(); it != corpus.end(); ++it) {
+    if (it.key() == "import_named_by_path") continue;  // lists fine; the tree refuses it (above)
+    const nlohmann::json& entry = it.value();
+    Dependencies deps;
+    std::string error;
+    const bool ok = List(entry["file"].get<std::string>(), &deps, &error);
+    if (entry["lists"].is_null()) continue;  // only that it returned
+    EXPECT_EQ(ok, entry["lists"].get<bool>()) << it.key();
+    if (!ok) {
+      EXPECT_FALSE(error.empty()) << it.key();
+      EXPECT_NE(error.find(entry["error_contains"].get<std::string>()), std::string::npos)
+          << it.key() << ": " << error;
+    }
+  }
+}
+
+TEST_F(PluginTree, ADamagedTableInAPluginRefusesItInTheTreeWalk) {
+  // The same files through the walk: a plugin whose table cannot be read is refused, never skipped.
+  const nlohmann::json& corpus = manifest_["corpus"];
+  for (auto it = corpus.begin(); it != corpus.end(); ++it) {
+    if (it.value()["lists"].is_null() || it.value()["lists"].get<bool>()) continue;
+    HANDLE h = Open(dir_ + "/" + it.value()["file"].get<std::string>());
+    if (h == INVALID_HANDLE_VALUE) continue;
+    HeldFiles held;
+    // Unsigned, so a signature refusal would also end the walk: ListDependencies runs first on the root only
+    // inside VerifyPluginTree after the root was verified by the loader; here the root is taken as given.
+    const TreeVerdict v = nevr_plugin_tree::VerifyPluginTree(WinPath(dir_ + "/"), h, policy_, now_, &held);
+    CloseHandle(h);
+    EXPECT_FALSE(v.accepted) << it.key();
+    EXPECT_NE(v.Describe().find("cannot list its dependencies"), std::string::npos) << it.key() << ": " << v.Describe();
+  }
+}
 
 TEST_F(PluginTree, PluginWhoseDependenciesCannotBeListedIsRefused) {
   ExpectRefused("malformed");
