@@ -4,6 +4,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,7 +20,10 @@
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
 #include "runtime/ext/plugin_log.h"             // #598: a plugin's log line, as the host writes it
 #include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
+#include "runtime/ext/plugin_refusal_notice.h"   // #741: the player's notice, once per run
 #include "runtime/ext/plugin_signature.h"       // #741: who signed the file
+#include "runtime/ext/plugin_tree.h"            // #741: and every DLL it names from its own directory
+#include "runtime/hook/dll_load_hook.h"         // #741: loads a plugin makes after init
 #include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
 
 struct LoadedPlugin {
@@ -180,9 +184,186 @@ class HeldFile {
   HANDLE get() const { return handle_; }
   void Adopt(HANDLE h) { handle_ = h; }
 
+  // The plugin's dependencies from its own directory, held the same way across the load.
+  nevr_plugin_tree::HeldFiles deps;
+
  private:
   HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+// ---- the refusal notice (ADR 0010 section 6) -------------------------------------------------------------------
+
+std::mutex g_refusalMutex;
+nevr_plugin_refusal::Tracker g_refusals;
+void (*g_refusalDialogSink)(const std::string& text) = nullptr;  // tests replace the dialog
+
+DWORD WINAPI RefusalDialogThread(LPVOID text) {
+  MessageBoxA(nullptr, static_cast<const char*>(text), "Echo VR - plugin not loaded",
+              MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+  return 0;
+}
+
+void RecordRefusal(const std::string& file) {
+  std::lock_guard<std::mutex> lock(g_refusalMutex);
+  g_refusals.Record(file);
+}
+
+// The record (log line, manifest entry) is already written when this runs. One dialog per run, on its own thread
+// so boot never waits on a modal box; never on a server or a headless run.
+void ShowRefusalNoticeIfDue() {
+  std::string text;
+  {
+    std::lock_guard<std::mutex> lock(g_refusalMutex);
+    text = g_refusals.TakeDialog(g_isServer != FALSE, g_isHeadless != FALSE);
+  }
+  if (text.empty()) return;
+  if (g_refusalDialogSink != nullptr) {
+    g_refusalDialogSink(text);
+    return;
+  }
+  // The text must outlive this call (the thread reads it later); leaked once per process on purpose, as #553's is.
+  char* copy = _strdup(text.c_str());
+  if (copy == nullptr) return;
+  HANDLE thread = CreateThread(nullptr, 0, RefusalDialogThread, copy, 0, nullptr);
+  if (thread != nullptr) CloseHandle(thread);
+}
+
+// ---- loads a plugin makes after its init (ADR 0010 section 1) --------------------------------------------------
+//
+// DllLoadHook runs this predicate before every LoadLibrary* in the process. A path inside the plugins directory
+// has to pass the same check as a staged plugin (and so does everything it names). The loader's own staged loads
+// were checked before they were made and the OS resolves their imports without the hook, so a thread-local flag
+// marks them and they are not checked twice.
+
+thread_local bool t_stagedLoad = false;
+
+struct FilterState {
+  std::mutex mutex;
+  std::wstring dirLower;  // plugins directory, lowercase, backslashes, trailing backslash; empty: filter inactive
+  std::string dirNarrow;  // the same directory as the loader spells it, for the dependency walk
+  // Verified files stay open (FILE_SHARE_READ only) for the life of the process: the bytes that were checked
+  // are the bytes the real load maps, and nobody can swap them in between or afterwards.
+  struct Verified {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    nevr_plugin_tree::HeldFiles deps;
+    Verified() = default;
+    Verified(const Verified&) = delete;
+    Verified& operator=(const Verified&) = delete;
+    ~Verified() {
+      if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    }
+  };
+  std::map<std::wstring, std::unique_ptr<Verified>> verified;
+};
+FilterState& Filter() {
+  static FilterState state;
+  return state;
+}
+
+std::wstring NormalizeWide(const wchar_t* path) {
+  std::wstring out(path);
+  for (wchar_t& c : out) {
+    if (c == L'/') c = L'\\';
+    if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c + 32);
+  }
+  return out;
+}
+
+std::string NarrowName(const std::wstring& wide) {
+  const size_t slash = wide.find_last_of(L'\\');
+  const std::wstring name = slash == std::wstring::npos ? wide : wide.substr(slash + 1);
+  std::string out;
+  for (wchar_t c : name) out.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+  return out;
+}
+
+bool PluginLoadFilter(const wchar_t* lowerPath) {
+  if (t_stagedLoad || lowerPath == nullptr) return false;
+  FilterState& f = Filter();
+  std::lock_guard<std::mutex> lock(f.mutex);
+  if (f.dirLower.empty()) return false;
+  const std::wstring p = NormalizeWide(lowerPath);
+  std::wstring full;
+  if (p.compare(0, f.dirLower.size(), f.dirLower) == 0 && p.size() > f.dirLower.size()) {
+    full = p;
+  } else if (p.find_first_of(L"\\:") == std::wstring::npos) {
+    // A bare name searches the usual places; if the plugins directory holds that name, it is the one at risk.
+    full = f.dirLower + p;
+    if (GetFileAttributesW(full.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+  } else {
+    return false;  // a file outside the plugins directory is not a plugin file
+  }
+  if (f.verified.count(full) != 0) return false;
+
+  const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+  const std::string file = NarrowName(full);
+  HANDLE h = CreateFileW(full.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                         nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return false;  // the real load reports it
+    if (!enforcing) return false;
+    if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] refused a later load of %s: cannot open the file to check its signature: error %lu",
+          file.c_str(), static_cast<unsigned long>(error));
+    }
+    RecordRefusal(file);
+    return true;
+  }
+  auto entry = std::make_unique<FilterState::Verified>();
+  entry->handle = h;
+  const int64_t now = static_cast<int64_t>(std::time(nullptr));
+  std::string refusal;
+  const nevr_plugin_signature::Verdict v =
+      nevr_plugin_signature::VerifyPluginFile(h, nevr_plugin_trust::ActivePolicy(), now);
+  if (!v.accepted()) {
+    refusal = v.Describe();
+  } else {
+    const nevr_plugin_tree::TreeVerdict t = nevr_plugin_tree::VerifyPluginTree(
+        f.dirNarrow, h, nevr_plugin_trust::ActivePolicy(), now, &entry->deps);
+    if (!t.accepted) {
+      refusal = "dependency " + t.Describe();
+      RecordRefusal(t.file);
+    }
+  }
+  if (refusal.empty()) {
+    f.verified[full] = std::move(entry);
+    return false;
+  }
+  CloseHandle(h);
+  if (!enforcing) {
+    if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] a plugin loads %s after its init: %s, allowed because this is a dev build (plugin trust mode %s)",
+          file.c_str(), refusal.c_str(), nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()));
+    }
+    return false;
+  }
+  if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] refused a later load of %s: %s", file.c_str(), refusal.c_str());
+  }
+  RecordRefusal(file);
+  return true;
+}
+
+// Registers the filter once. The plugins directory is the loader's spelling (a trailing backslash).
+void InstallPluginLoadFilter(const std::string& pluginDir) {
+  FilterState& f = Filter();
+  static bool registered = false;
+  {
+    std::lock_guard<std::mutex> lock(f.mutex);
+    f.dirNarrow = pluginDir;
+    std::wstring wide;
+    for (char c : pluginDir) wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+    f.dirLower = NormalizeWide(wide.c_str());
+    if (!f.dirLower.empty() && f.dirLower.back() != L'\\') f.dirLower.push_back(L'\\');
+  }
+  if (!registered) {
+    registered = true;
+    nevr_dll_load_hook::AddLoadFilter("plugin-signature", &PluginLoadFilter);
+  }
+}
 
 struct StagedPlugin {
   HMODULE                  hModule;
@@ -362,7 +543,7 @@ class PluginLoadRun {
     held->Adopt(h);
     const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(
         held->get(), nevr_plugin_trust::ActivePolicy(), static_cast<int64_t>(std::time(nullptr)));
-    if (verdict.accepted()) return true;
+    if (verdict.accepted()) return enforcing ? CheckDependencies(item, held, itemReport) : true;
     if (!enforcing) {
       const std::string what = verdict.reason == nevr_plugin_signature::Reason::Unsigned
                                    ? std::string("UNSIGNED")
@@ -375,6 +556,22 @@ class PluginLoadRun {
     const std::string reason = "refused: " + verdict.Describe();
     Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), filename,
         reason.c_str());
+    RecordRefusal(item.file);
+    FailPluginLoad(item, reason, itemReport);
+    return false;
+  }
+
+  // ADR 0010 section 1: the DLLs this plugin names (imports, delay-load imports, forwarded exports) that sit in
+  // the plugins directory pass the same check, or the plugin does not load. They stay held across the load.
+  bool CheckDependencies(const PluginLoadItem& item, HeldFile* held, PluginManifestEntry& itemReport) {
+    const nevr_plugin_tree::TreeVerdict tree = nevr_plugin_tree::VerifyPluginTree(
+        pluginDir, held->get(), nevr_plugin_trust::ActivePolicy(), static_cast<int64_t>(std::time(nullptr)),
+        &held->deps);
+    if (tree.accepted) return true;
+    const std::string reason = "refused: dependency " + tree.Describe();
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), item.file.c_str(),
+        reason.c_str());
+    RecordRefusal(tree.file);
     FailPluginLoad(item, reason, itemReport);
     return false;
   }
@@ -462,6 +659,10 @@ class PluginLoadRun {
    * The flags require an absolute path (we have one). If the OS rejects them we
    * log and fall back rather than failing to load — but we say so, because a
    * silent fallback would defeat the whole point. */
+  struct StagedLoadScope {  // this thread's loads are the loader's own, already checked (PluginLoadFilter)
+    StagedLoadScope() { t_stagedLoad = true; }
+    ~StagedLoadScope() { t_stagedLoad = false; }
+  } stagedScope;
   HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -775,6 +976,8 @@ void LoadPlugins(PluginPhase phase) {
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
 
+  InstallPluginLoadFilter(pluginDir);  // loads a plugin makes after its init face the same check
+
   run->Stage(phase);
   run->InitAll(ctx);
 
@@ -794,6 +997,7 @@ void LoadPlugins(PluginPhase phase) {
       g_plugins.size(), run->EnabledCount());
 
   PublishPluginReport(run->TakeReport());
+  ShowRefusalNoticeIfDue();  // after the record; once per run, client with graphics only
 }
 
 void UnloadPlugins() {
@@ -855,6 +1059,27 @@ void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
 
 bool TestHook_RestrictedSearchFallbackAllowed(bool enforcing, unsigned long error) {
   return RestrictedSearchFallbackAllowed(enforcing, static_cast<DWORD>(error));
+}
+
+void TestHook_SetRefusalDialogSink(void (*sink)(const std::string& text)) { g_refusalDialogSink = sink; }
+
+void TestHook_ResetRefusals() {
+  std::lock_guard<std::mutex> lock(g_refusalMutex);
+  g_refusals = nevr_plugin_refusal::Tracker();
+}
+
+void TestHook_ShowRefusalNoticeIfDue() { ShowRefusalNoticeIfDue(); }
+
+void TestHook_RecordRefusal(const std::string& file) { RecordRefusal(file); }
+
+void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPluginLoadFilter(pluginDir); }
+
+void TestHook_ResetPluginLoadFilter() {
+  FilterState& f = Filter();
+  std::lock_guard<std::mutex> lock(f.mutex);
+  f.dirLower.clear();
+  f.dirNarrow.clear();
+  f.verified.clear();  // closes the held handles, so a test can delete or rewrite its files
 }
 
 void TestHook_ClearPlugins() {

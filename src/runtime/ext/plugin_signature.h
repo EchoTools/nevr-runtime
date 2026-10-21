@@ -75,6 +75,18 @@ std::string ChainStatusNames(uint32_t status);
 // Never throws: an exception while verifying (an allocation failure reading a large file) is a refusal.
 Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix);
 
+// The DLL names a PE file asks the loader for, lowercased and without duplicates: its import table, its
+// delay-load import table and the DLL half of every forwarded export ("DLL.Symbol", the export's RVA inside the
+// export directory), the last as "dll.dll". Reads from offset 0 like VerifyPluginFile. False, with `error`, when
+// any of the three tables does not parse to the end of the file: a plugin whose dependencies cannot be listed
+// cannot be vouched for.
+struct Dependencies {
+  std::vector<std::string> imports;
+  std::vector<std::string> delayImports;
+  std::vector<std::string> forwarders;
+};
+bool ListDependencies(HANDLE file, Dependencies* out, std::string* error);
+
 // Test only: makes the next VerifyPluginFile calls raise std::bad_alloc inside, to prove they come back as a refusal.
 void TestHook_ThrowInVerify(bool enable);
 
