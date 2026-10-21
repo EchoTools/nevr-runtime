@@ -91,6 +91,11 @@ Not shown: the tail of that chain with a real Artifact Signing certificate and t
 private CA and the DigiCert TSA. A real run needs a file the pipeline signed; the first signed plugin from `release-signer` is the
 witness, and the test plan (section 5) includes a fixture signed by the pipeline once one exists.
 
+The pipeline has never produced a signed file. `release-signer` has no signing run on record, and the shipped `BugSplat64.dll` of the
+latest release carries no Authenticode signature (`osslsigncode extract-signature`: "No signature found"). Until its first
+owner-run signing trial passes, the subject pin cannot be filled, no signed fixture exists, and nothing in this section has been
+observed on a certificate the pipeline issued.
+
 API pages: `WinVerifyTrust`
 https://learn.microsoft.com/en-us/windows/win32/api/wintrust/nf-wintrust-winverifytrust, `CertGetCertificateChain`
 https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certgetcertificatechain.
@@ -222,5 +227,5 @@ Release-notes line (for `RELEASE-NOTES.md`, which the release pipeline builds):
 
 1. Keep the dependency check (section 1) or drop it and record the gap.
 2. Revocation is not checked (section 4); say if that is acceptable.
-3. `signer_subject` must be filled in `release-signer` before this ships.
+3. `signer_subject` must be filled in `release-signer` before this ships, and that needs the owner-run signing trial (the pipeline has never signed a file).
 4. The plugin repos' signing onboarding order (section 6).
