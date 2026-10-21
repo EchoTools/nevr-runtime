@@ -10,6 +10,7 @@ file (what a correct verifier must say). Needs openssl, osslsigncode and x86_64-
 """
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -190,6 +191,34 @@ def spc_digest(pkcs7):
     return spc["kids"][1]["kids"][1]["raw"]
 
 
+OID_MESSAGE_DIGEST = bytes.fromhex("2a864886f70d010904")   # 1.2.840.113549.1.9.4
+OID_CONTENT_TYPE = bytes.fromhex("2a864886f70d010903")     # 1.2.840.113549.1.9.3
+OID_DATA = bytes.fromhex("2a864886f70d010701")             # 1.2.840.113549.1.7.1
+OID_SHA1_WITH_RSA = bytes.fromhex("2a864886f70d010105")    # 1.2.840.113549.1.1.5
+
+
+def resigned(pe_bytes, leaf_, mutate, work, name):
+    """The signature of an unstamped file, re-made with the leaf's throwaway key over MUTATED signed attributes, so
+    the RSA signature is genuine and only the one structural fact under test is wrong. `mutate(signer)` edits the
+    signerInfo node in place (its kids: version, sid, digestAlgorithm, [0] signedAttrs, signatureAlgorithm,
+    signature)."""
+    content_info, _ = der_parse(pkcs7_of(pe_bytes))
+    signer = find_signer_info(content_info["kids"][1]["kids"][0])
+    assert signer["kids"][3]["tag"] == 0xA0 and signer["kids"][-1]["tag"] == 0x04, "expected an unstamped signature"
+    mutate(signer)
+    attrs = {"tag": 0x31, "raw": b"", "kids": signer["kids"][3]["kids"]}
+    to_sign = Path(work) / f"{name}.attrs"
+    to_sign.write_bytes(der_dump(attrs))
+    signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", leaf_["key"], str(to_sign)],
+                               capture_output=True, check=True).stdout
+    signer["kids"][5]["raw"] = signature
+    return der_dump(content_info)
+
+
+def attr_named(signer, oid):
+    return next((a for a in signer["kids"][3]["kids"] if a["kids"][0]["raw"] == oid), None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out")
@@ -289,6 +318,30 @@ def main():
     real, fake = stamp(now - 2 * DAY).encode(), stamp(now - 7 * DAY).encode()
     assert data.count(real) == 1, data.count(real)
     (out / "backdated_token.dll").write_bytes(data.replace(real, fake))
+
+    # Structure faults under a GENUINE signature (re-signed with the throwaway leaf key over the edited attributes).
+    unstamped = (out / "good_unstamped.dll").read_bytes()
+
+    def two_message_digests(signer):
+        attrs = signer["kids"][3]["kids"]
+        attrs.append(copy.deepcopy(attr_named(signer, OID_MESSAGE_DIGEST)))
+
+    def no_content_type(signer):
+        signer["kids"][3]["kids"].remove(attr_named(signer, OID_CONTENT_TYPE))
+
+    def other_content_type(signer):
+        attr_named(signer, OID_CONTENT_TYPE)["kids"][1]["kids"][0]["raw"] = OID_DATA
+
+    def sha1_signature_algorithm(signer):
+        signer["kids"][4]["kids"][0]["raw"] = OID_SHA1_WITH_RSA
+
+    for name, edit in (("two_message_digests", two_message_digests), ("no_content_type", no_content_type),
+                       ("other_content_type", other_content_type), ("sha1_signature_algorithm", sha1_signature_algorithm)):
+        with_pkcs7(unstamped, resigned(unstamped, good, edit, out, name), out / f"{name}.dll")
+        files[name] = f"{name}.dll"
+
+    # A token that is genuine but dated in the future (the authority's clock, or a forged time, ahead of now).
+    make("token_future", good, pinned_chain, now + 2 * DAY)
 
     for name in ("unsigned", "tampered_code", "tampered_signature", "token_copied", "content_swap", "backdated_token"):
         files[name] = f"{name}.dll"
