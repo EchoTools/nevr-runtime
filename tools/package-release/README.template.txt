@@ -24,6 +24,14 @@ Uninstall
        powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir "<the same bin\win10 folder>"
   This puts your original BugSplat64.dll and a legacy dbgcore.dll back. The backup files stay.
 
+If the Quest build will not start
+  Connect the headset by USB (USB debugging on), then:
+       powershell -NoProfile -ExecutionPolicy Bypass -File quest-diagnose.ps1
+  It reads the headset's facts, starts the game once, shows a short verdict and writes nevr-diagnose-<date>.zip
+  next to the script. Send us that zip. It changes nothing on the headset or the PC (it closes the game if it
+  is running), does not copy your sign-in link, and replaces the headset serial and any e-mail address with
+  <device-serial> and <email>.
+
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be
   flagged by Windows Defender or SmartScreen. The SHA-256 of BugSplat64.dll is in SHA256SUMS; compare it with

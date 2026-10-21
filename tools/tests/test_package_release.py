@@ -109,7 +109,7 @@ class LocalDevPackageTest(PackageFixture):
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
                              ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "install.ps1",
-                              "uninstall.ps1"])
+                              "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             for name in z.namelist():
                 if name != "SHA256SUMS":
@@ -119,7 +119,8 @@ class LocalDevPackageTest(PackageFixture):
         self.assertIn(hashlib.sha256(zip_path.read_bytes()).hexdigest(), top)
         self.assertIn(hashlib.sha256(apk_path.read_bytes()).hexdigest(), top)
         notes = (self.out / "RELEASE-NOTES.md").read_text()
-        for needle in ("install.ps1", "uninstall.ps1", self.version, zip_path.name, apk_path.name, "adb install"):
+        for needle in ("install.ps1", "uninstall.ps1", "quest-diagnose.ps1", self.version, zip_path.name, apk_path.name,
+                       "adb install"):
             self.assertIn(needle, notes)
 
     def test_a_local_run_refuses_a_binary_stamped_as_a_release(self):
@@ -220,7 +221,7 @@ class ReleaseStagesTest(PackageFixture):
     def test_tree_holds_the_files_the_signer_signs_and_no_checksums_yet(self):
         tree = self.make_tree()
         self.assertEqual(sorted(p.name for p in tree.iterdir()),
-                         ["BugSplat64.dll", "README.txt", "install.ps1", "uninstall.ps1"])
+                         ["BugSplat64.dll", "README.txt", "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
         info = (self.out / "release.json").read_text()
         self.assertIn('"version": "5.0.0"', info)
         self.assertIn(COMMIT, info)
@@ -264,7 +265,7 @@ class ReleaseStagesTest(PackageFixture):
 
     def sign_scripts(self, tree):
         """What signing does to a PowerShell script: an Authenticode block is appended."""
-        for name in ("install.ps1", "uninstall.ps1"):
+        for name in ("install.ps1", "uninstall.ps1", "quest-diagnose.ps1"):
             path = tree / name
             path.write_bytes(path.read_bytes() + b"\n# SIG # Begin signature block\n# SIG # End signature block\n")
 
@@ -338,7 +339,7 @@ class ReleaseStagesTest(PackageFixture):
         (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("not signed (no signature block): install.ps1, uninstall.ps1", result.stderr)
+        self.assertIn("not signed (no signature block): install.ps1, quest-diagnose.ps1, uninstall.ps1", result.stderr)
 
     def test_the_packaging_path_has_no_prerelease_input_and_its_output_is_byte_identical(self):
         # Promoting a release changes only GitHub's flag. The tool has no flag argument at all ...
