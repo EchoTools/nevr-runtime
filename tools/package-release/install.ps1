@@ -4,16 +4,50 @@
 # deletes anything: the original BugSplat64.dll is copied to BugSplat64.dll.original-<timestamp>, and a
 # legacy dbgcore.dll is renamed to dbgcore.dll.legacy-<date>. uninstall.ps1 puts both back.
 #
-# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>]
+# usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the usual Meta Horizon / Oculus library locations are searched; with more than one
 # install found, pass -Dir.
-param([string]$Dir = '')
+param([string]$Dir = '', [switch]$Pause, [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
 
+# #736: a tester who double-clicks this script must see why it stopped. Every error is printed plainly, appended
+# with the time and the folder to nevr-install.log next to this script, and the window waits for Enter when it was
+# opened from Explorer (it closes the moment the script ends) or when -Pause is given; and -NoPause never waits.
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptName = Split-Path -Leaf $MyInvocation.MyCommand.Path
+$logFile = Join-Path $here 'nevr-install.log'
+function Write-RunLog([string]$Text) {
+  try {
+    Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ' + $Text)
+  } catch {
+    Write-Host ('could not write the log ' + $logFile + ': ' + $_.Exception.Message)
+  }
+}
+function Test-LaunchedFromExplorer {
+  try {
+    $parentId = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$PID").ParentProcessId
+    return ((Get-Process -Id $parentId).ProcessName -eq 'explorer')
+  } catch {
+    return $false
+  }
+}
+function Wait-BeforeClose {
+  if ($NoPause) { return }
+  if (-not $Pause) {
+    if (-not (Test-LaunchedFromExplorer)) { return }
+  }
+  try {
+    Read-Host 'Press Enter to close' | Out-Null
+  } catch {
+    # Read-Host throws in a non-interactive host: the script's own result stays its exit code.
+    Write-Host ('could not wait for Enter: ' + $_.Exception.Message)
+  }
+}
+$exitCode = 0
+try {
 $dll = Join-Path $here 'BugSplat64.dll'
 $sums = Join-Path $here 'SHA256SUMS'
 if (-not (Test-Path -LiteralPath $dll)) { throw "BugSplat64.dll is not next to install.ps1 ($here)" }
@@ -114,3 +148,16 @@ try {
 Set-Content -LiteralPath $state -Encoding ASCII -Value @("backup=$backup", "legacy=$legacyAside", "installed_sha256=$ours")
 Write-Output "INSTALLED BugSplat64.dll sha256=$ours into $Dir"
 Write-Output "To undo: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -Dir `"$Dir`""
+Write-RunLog ("OK $scriptName INSTALLED BugSplat64.dll sha256=$ours Dir=$Dir")
+
+} catch {
+  $exitCode = 1
+  $message = $_.Exception.Message
+  $shownDir = if ($Dir) { $Dir } else { '(not given)' }
+  Write-Host ''
+  Write-Host ('ERROR: ' + $message)
+  Write-Host ('(also written to ' + $logFile + ')')
+  Write-RunLog ($scriptName + ' ERROR: ' + $message + ' Dir=' + $shownDir)
+}
+Wait-BeforeClose
+exit $exitCode
