@@ -5,12 +5,16 @@
  * decides what gOBBPath holds, so the root it serves is chosen here: the first candidate that holds the game's
  * `_data` directory.
  *
- *   1. /sdcard/Android/media/com.readyatdawn.r15/files   where the echo.taxi installer app puts the data
- *   2. /storage/emulated/0/readyatdawn                   where tools/quest-install.sh puts it, and the
- *                                                        game's own fallback
+ *   1. /sdcard/Android/media/com.readyatdawn.r15/files   the data root: Android's app-specific media directory, where
+ *                                                        the echo.taxi installer puts the data
+ *   2. /storage/emulated/0/readyatdawn                   the legacy root: where tools/quest-install.sh puts it, and
+ *                                                        the game's own fallback
  *
- * Neither holding `_data` resolves to the game's own fallback, found=false: what the game does without this
- * code, and the caller says so in one line. Pure: the filesystem is the caller's `exists`.
+ * Where `_data` sits under the media directory is not confirmed: the installer's maintainer names `files/` as the
+ * root, and nobody has listed it. So the media directory is also served when it exists without `_data` directly
+ * under it (source "android_media_unmarked"), after both roots were checked for `_data`. Neither existing resolves
+ * to the game's own fallback, found=false: what the game does without this code, and the caller says so in one
+ * line. Pure: the filesystem is the caller's `exists`.
  */
 #pragma once
 
@@ -19,9 +23,9 @@
 
 namespace nevr_quest::data_root {
 
-// The directory the installer app writes under (sub-directory `files`; the installer's layout is unsettled, see #749).
+// The data root: the installer app's directory under Android/media (needs no storage permission to read).
 inline constexpr const char* kMediaRoot = "/sdcard/Android/media/com.readyatdawn.r15/files";
-// The game's own fallback root and tools/quest-install.sh's target.
+// The legacy root: the game's own fallback and tools/quest-install.sh's target.
 inline constexpr const char* kLegacyRoot = "/storage/emulated/0/readyatdawn";
 // What proves a root holds the game's data.
 inline constexpr const char* kMarker = "_data";
@@ -40,7 +44,7 @@ using ExistsFn = bool (*)(const char* path) noexcept;
 
 struct Resolution {
   const char* root;    // never null: the winner, or the game's own fallback when none holds the marker
-  const char* source;  // "android_media", "legacy", or "none"
+  const char* source;  // "android_media", "legacy", "android_media_unmarked" or "none"
   bool found;
 };
 
@@ -55,6 +59,7 @@ inline Resolution Resolve(ExistsFn exists) noexcept {
   for (const Candidate& c : kCandidates) {
     if (HoldsData(c.root, exists)) return {c.root, c.source, true};
   }
+  if (exists(kMediaRoot)) return {kMediaRoot, "android_media_unmarked", true};
   return {kLegacyRoot, "none", false};
 }
 

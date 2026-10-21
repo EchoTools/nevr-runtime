@@ -182,6 +182,7 @@ bool FakeExists(const char* path) noexcept { return g_existing.count(path) != 0;
 std::vector<std::string> g_lines;
 void CaptureLine(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
 
+constexpr const char* kMediaDir = "/sdcard/Android/media/com.readyatdawn.r15/files";
 constexpr const char* kMediaData = "/sdcard/Android/media/com.readyatdawn.r15/files/_data";
 constexpr const char* kLegacyData = "/storage/emulated/0/readyatdawn/_data";
 
@@ -210,12 +211,26 @@ void TheLegacyRootIsServedWhenOnlyItHoldsTheData() {
   QCHECK(std::strcmp(r.root, "/storage/emulated/0/readyatdawn") == 0);
 }
 
-void ARootWithoutTheDataDirectoryDoesNotWin() {
+void ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt() {
   Reset();
-  g_existing = {"/sdcard/Android/media/com.readyatdawn.r15/files", "/sdcard/Android/media/com.readyatdawn.r15/files/asset_patches",
-                kLegacyData};
+  g_existing = {kMediaDir, "/sdcard/Android/media/com.readyatdawn.r15/files/asset_patches", kLegacyData};
   const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
   QCHECK(std::strcmp(r.source, "legacy") == 0);
+}
+
+void TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaDir};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "android_media_unmarked") == 0);
+  QCHECK(std::strcmp(r.root, kMediaDir) == 0);
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  obb::ResolveRoot(&FakeExists);
+  sentinel::SetLogSink(previous);
+  QCHECK(SomeLineContains("\"source\":\"android_media_unmarked\""));
+  QCHECK(SomeLineContains("\"level\":\"warn\""));
 }
 
 void NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback() {
@@ -306,7 +321,8 @@ int main() {
   AThunkWithoutAnOriginalIsAFaultAndSkipsNothing();
   TheAndroidMediaRootWinsWhenBothHoldTheData();
   TheLegacyRootIsServedWhenOnlyItHoldsTheData();
-  ARootWithoutTheDataDirectoryDoesNotWin();
+  ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt();
+  TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo();
   NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback();
   ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt();
   WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths();

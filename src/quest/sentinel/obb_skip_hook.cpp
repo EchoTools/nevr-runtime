@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <sys/stat.h>
 
 #include "data_root.h"
@@ -82,13 +83,19 @@ bool RegisterCounters() noexcept {
 void ResolveRoot(data_root::ExistsFn exists) noexcept {
   const data_root::Resolution r = data_root::Resolve(exists);
   g_root.store(r.root, std::memory_order_release);
-  if (r.found) {
+  if (r.found && std::strcmp(r.source, "android_media_unmarked") == 0) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "data_root",
+                        {{"result", "found"},
+                         {"source", r.source},
+                         {"root", r.root},
+                         {"detail", "the media directory exists but holds no _data directly under it"}});
+  } else if (r.found) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_root",
                         {{"result", "found"}, {"source", r.source}, {"root", r.root}});
   } else {
     sentinel::LogFields(sentinel::LogLevel::kError, "data_root",
                         {{"result", "not_found"},
-                         {"detail", "the game's _data directory is in neither place"},
+                         {"detail", "neither the Android/media directory nor the legacy root exists with the game's _data"},
                          {"tried_media", data_root::kMediaRoot},
                          {"tried_legacy", data_root::kLegacyRoot}});
   }
