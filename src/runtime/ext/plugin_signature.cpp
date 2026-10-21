@@ -6,10 +6,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <memory>
+#include <new>
 #include <utility>
+
+#ifndef CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL
+#define CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL 0x00000004
+#endif
 
 #ifndef CALG_SHA_256
 #define CALG_SHA_256 (ALG_CLASS_HASH | ALG_TYPE_ANY | 12)
@@ -29,6 +36,12 @@ constexpr const char* kOidCodeSigning = "1.3.6.1.5.5.7.3.3";
 constexpr const char* kOidTimeStamping = "1.3.6.1.5.5.7.3.8";
 constexpr const char* kOidRfc3161Token = "1.3.6.1.4.1.311.3.3.1";
 constexpr const char* kOidTstInfo = "1.2.840.113549.1.9.16.1.4";
+constexpr const char* kOidSignedData = "1.2.840.113549.1.7.2";
+constexpr const char* kOidSpcIndirectData = "1.3.6.1.4.1.311.2.1.4";
+constexpr const char* kOidContentTypeAttr = "1.2.840.113549.1.9.3";
+constexpr const char* kOidMessageDigestAttr = "1.2.840.113549.1.9.4";
+constexpr const char* kOidRsaPublicKey = "1.2.840.113549.1.1.1";
+constexpr const char* kOidEcPublicKey = "1.2.840.10045.2.1";
 constexpr const char* kOidSha256 = "2.16.840.1.101.3.4.2.1";
 constexpr const char* kOidSha384 = "2.16.840.1.101.3.4.2.2";
 constexpr const char* kOidSha512 = "2.16.840.1.101.3.4.2.3";
@@ -105,8 +118,10 @@ bool ReadTlv(const uint8_t* p, size_t n, Tlv* out) {
   if ((len & 0x80) != 0) {
     const size_t k = len & 0x7F;
     if (k == 0 || k > 4 || n < 2 + k) return false;  // indefinite or oversized lengths are not DER
+    if (p[2] == 0) return false;                      // a leading zero length byte is not minimal
     len = 0;
     for (size_t i = 0; i < k; ++i) len = (len << 8) | p[2 + i];
+    if (len < 0x80) return false;                     // the short form was required
     hdr = 2 + k;
   }
   if (len > n - hdr) return false;
@@ -138,6 +153,7 @@ std::string OidToString(const uint8_t* p, size_t n) {
                    : "2." + std::to_string(first - 80);
   uint64_t acc = 0;
   for (size_t i = 1; i < n; ++i) {
+    if ((acc >> 56) != 0) return {};  // an arc that does not fit 63 bits is no OID we know; never wraps into one
     acc = (acc << 7) | (p[i] & 0x7F);
     if ((p[i] & 0x80) == 0) {
       out += "." + std::to_string(acc);
@@ -223,7 +239,16 @@ bool ParseGeneralizedTime(const uint8_t* p, size_t n, int64_t* unix) {
   };
   const int year = num(0, 4), month = num(4, 2), day = num(6, 2), hour = num(8, 2), minute = num(10, 2),
             second = num(12, 2);
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60) return false;
+  static const int kDays[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month < 1 || month > 12 || day < 1 || day > kDays[month - 1] || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  if (n > 15) {  // a fraction: '.' then digits only, before the Z
+    if (p[14] != '.' || n < 17) return false;
+    for (size_t i = 15; i + 1 < n; ++i) {
+      if (p[i] < '0' || p[i] > '9') return false;
+    }
+  }
   *unix = DaysFromCivil(year, static_cast<unsigned>(month), static_cast<unsigned>(day)) * 86400 +
           hour * 3600 + minute * 60 + second;
   return true;
@@ -364,8 +389,6 @@ struct Decoded {
   Store store;
   Cert signer;
   Bytes signerInfo;       // CMSG_SIGNER_INFO blob; its pointers point into this buffer
-  Bytes content;          // the encapsulated content
-  std::string contentType;
   const CMSG_SIGNER_INFO* info() const { return reinterpret_cast<const CMSG_SIGNER_INFO*>(signerInfo.data()); }
 };
 
@@ -406,14 +429,6 @@ bool DecodeSigned(const uint8_t* p, size_t n, Decoded* out, std::string* reason)
     *reason = "no signer info: error " + std::to_string(GetLastError());
     return false;
   }
-  if (!GetParam(out->msg.get(), CMSG_CONTENT_PARAM, 0, &out->content)) {
-    *reason = "no content: error " + std::to_string(GetLastError());
-    return false;
-  }
-  Bytes innerType;
-  if (GetParam(out->msg.get(), CMSG_INNER_CONTENT_TYPE_PARAM, 0, &innerType) && !innerType.empty()) {
-    out->contentType.assign(reinterpret_cast<const char*>(innerType.data()));
-  }
   out->store.reset(CertOpenStore(CERT_STORE_PROV_MSG, kEncoding, 0, 0, out->msg.get()));
   if (!out->store) {
     *reason = "no certificate store: error " + std::to_string(GetLastError());
@@ -432,6 +447,113 @@ bool DecodeSigned(const uint8_t* p, size_t n, Decoded* out, std::string* reason)
 
 bool VerifySignerSignature(Decoded& d) {
   return CryptMsgControl(d.msg.get(), 0, CMSG_CTRL_VERIFY_SIGNATURE, d.signer->pCertInfo) != FALSE;
+}
+
+bool IsRefusedSignatureAlgorithm(const std::string& oid) {
+  // md5WithRSA, sha1WithRSA (two spellings), dsaWithSha1, ecdsaWithSHA1: the hash is too weak to sign with.
+  return oid == "1.2.840.113549.1.1.4" || oid == "1.2.840.113549.1.1.5" || oid == "1.3.14.3.2.29" ||
+         oid == "1.2.840.10040.4.3" || oid == "1.2.840.10045.4.1";
+}
+
+// What CMSG_CTRL_VERIFY_SIGNATURE does not do on every CryptoAPI (it does not under Wine): bind the signed
+// content to the signature. Reads the SignedData DER itself and requires
+//   - the encapsulated content type to be `expectedType`;
+//   - signedAttrs to carry exactly one contentType (equal to `expectedType`) and exactly one messageDigest;
+//   - the signer's digest algorithm, and the signature algorithm, to be SHA-256 or stronger;
+//   - messageDigest to equal that digest over the content octets: for an indirect-data block the body of its
+//     SEQUENCE, for a TSTInfo the body of its OCTET STRING.
+// `content` is returned as the element to parse next: the whole SEQUENCE (indirect data) or the octets (TSTInfo).
+// `mismatch` is set when the failure is a messageDigest that does not match rather than a malformed structure.
+bool BindContent(const uint8_t* p, size_t n, const char* expectedType, Bytes* content, bool* mismatch,
+                 std::string* why) {
+  *mismatch = false;
+  auto malformed = [&](const char* text) {
+    *why = text;
+    return false;
+  };
+  Tlv ci;
+  std::vector<Tlv> ciKids;
+  if (!ReadTlv(p, n, &ci) || ci.tag != 0x30 || !Children(ci, &ciKids) || ciKids.size() != 2 || !IsOid(ciKids[0]) ||
+      OidToString(ciKids[0].body, ciKids[0].len) != kOidSignedData || ciKids[1].tag != 0xA0) {
+    return malformed("not a SignedData ContentInfo");
+  }
+  Tlv sd;
+  std::vector<Tlv> sdKids;
+  if (!ReadTlv(ciKids[1].body, ciKids[1].len, &sd) || sd.tag != 0x30 || !Children(sd, &sdKids) ||
+      sdKids.size() < 4 || sdKids[2].tag != 0x30 || sdKids.back().tag != 0x31) {
+    return malformed("SignedData is malformed");
+  }
+  std::vector<Tlv> encap;
+  if (!Children(sdKids[2], &encap) || encap.size() != 2 || !IsOid(encap[0]) || encap[1].tag != 0xA0) {
+    return malformed("the signed content is missing or detached");
+  }
+  if (OidToString(encap[0].body, encap[0].len) != expectedType) {
+    return malformed("the signed content has the wrong content type");
+  }
+  Tlv element;
+  if (!ReadTlv(encap[1].body, encap[1].len, &element) || element.total != encap[1].len) {
+    return malformed("the signed content does not parse");
+  }
+  const bool octets = std::strcmp(expectedType, kOidTstInfo) == 0;
+  if (element.tag != (octets ? 0x04 : 0x30)) return malformed("the signed content has the wrong shape");
+  const uint8_t* hashed = element.body;
+  const size_t hashedLen = element.len;
+  if (octets) content->assign(element.body, element.body + element.len);
+  else content->assign(encap[1].body, encap[1].body + element.total);
+
+  std::vector<Tlv> signers;
+  std::vector<Tlv> si;
+  if (!Children(sdKids.back(), &signers) || signers.size() != 1 || signers[0].tag != 0x30 ||
+      !Children(signers[0], &si) || si.size() < 6 || si[2].tag != 0x30 || si[3].tag != 0xA0 || si[4].tag != 0x30) {
+    return malformed("expected one signer with signed attributes");
+  }
+  std::vector<Tlv> algId;
+  if (!Children(si[2], &algId) || algId.empty() || !IsOid(algId[0])) return malformed("signer digest algorithm");
+  const std::string digestOid = OidToString(algId[0].body, algId[0].len);
+  ALG_ID alg = 0;
+  if (!AlgFromOid(digestOid, &alg)) {
+    return malformed(("digest algorithm " + digestOid + " refused: SHA-256 or stronger only").c_str());
+  }
+  std::vector<Tlv> sigAlg;
+  if (!Children(si[4], &sigAlg) || sigAlg.empty() || !IsOid(sigAlg[0])) return malformed("signature algorithm");
+  const std::string sigOid = OidToString(sigAlg[0].body, sigAlg[0].len);
+  if (IsRefusedSignatureAlgorithm(sigOid)) {
+    return malformed(("signature algorithm " + sigOid + " refused: SHA-256 or stronger only").c_str());
+  }
+
+  std::vector<Tlv> attrs;
+  if (!Children(si[3], &attrs)) return malformed("signed attributes do not parse");
+  Bytes messageDigest;
+  bool haveDigest = false;
+  bool haveType = false;
+  for (const Tlv& attr : attrs) {
+    std::vector<Tlv> parts;
+    std::vector<Tlv> values;
+    if (attr.tag != 0x30 || !Children(attr, &parts) || parts.size() != 2 || !IsOid(parts[0]) || parts[1].tag != 0x31 ||
+        !Children(parts[1], &values) || values.size() != 1) {
+      return malformed("a signed attribute does not parse");
+    }
+    const std::string oid = OidToString(parts[0].body, parts[0].len);
+    if (oid == kOidMessageDigestAttr) {
+      if (haveDigest || values[0].tag != 0x04) return malformed("messageDigest attribute");
+      haveDigest = true;
+      messageDigest.assign(values[0].body, values[0].body + values[0].len);
+    } else if (oid == kOidContentTypeAttr) {
+      if (haveType || !IsOid(values[0]) || OidToString(values[0].body, values[0].len) != expectedType) {
+        return malformed("contentType attribute");
+      }
+      haveType = true;
+    }
+  }
+  if (!haveDigest || !haveType) return malformed("signed attributes lack contentType or messageDigest");
+
+  Bytes actual;
+  if (!HashOf(alg, hashed, hashedLen, &actual)) return malformed("cannot hash the signed content");
+  if (actual != messageDigest) {
+    *mismatch = true;
+    return malformed("the signed content is not what the signature covers (messageDigest differs)");
+  }
+  return true;
 }
 
 // SpcIndirectDataContent ::= SEQUENCE { data SpcAttributeTypeAndOptionalValue,
@@ -491,6 +613,16 @@ bool CertEkus(const CERT_CONTEXT* cert, std::vector<std::string>* ekus) {
   return true;
 }
 
+// RSA keys of at least 2048 bits or EC keys of at least 256: a smaller key is no identity worth pinning.
+bool KeyIsStrongEnough(const CERT_CONTEXT* cert) {
+  const CERT_PUBLIC_KEY_INFO& key = cert->pCertInfo->SubjectPublicKeyInfo;
+  if (key.Algorithm.pszObjId == nullptr) return false;
+  const DWORD bits = CertGetPublicKeyLength(kEncoding, const_cast<CERT_PUBLIC_KEY_INFO*>(&key));
+  if (std::strcmp(key.Algorithm.pszObjId, kOidRsaPublicKey) == 0) return bits >= 2048;
+  if (std::strcmp(key.Algorithm.pszObjId, kOidEcPublicKey) == 0) return bits >= 256;
+  return false;
+}
+
 bool Contains(const std::vector<std::string>& list, const std::string& value) {
   return std::find(list.begin(), list.end(), value) != list.end();
 }
@@ -533,8 +665,10 @@ bool BuildChainToPinnedRoot(const CERT_CONTEXT* cert, HCERTSTORE additional, con
   para.cbSize = sizeof(para);
   const FILETIME when = UnixToFileTime(atUnix);
   const CERT_CHAIN_CONTEXT* rawChain = nullptr;
-  if (!CertGetCertificateChain(engine.get(), cert, const_cast<FILETIME*>(&when), additional, &para, 0, nullptr,
-                               &rawChain) ||
+  // CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL: never fetch an issuer (AIA) over the network while a plugin loads
+  // (CertGetCertificateChain, dwFlags: "do not use the network for URL retrieval; use only cached URLs").
+  if (!CertGetCertificateChain(engine.get(), cert, const_cast<FILETIME*>(&when), additional, &para,
+                               CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, nullptr, &rawChain) ||
       rawChain == nullptr) {
     *error = "CertGetCertificateChain error " + std::to_string(GetLastError());
     return false;
@@ -549,7 +683,11 @@ bool BuildChainToPinnedRoot(const CERT_CONTEXT* cert, HCERTSTORE additional, con
     }
     const CERT_SIMPLE_CHAIN* simple = chain->rgpChain[0];
     const CERT_CONTEXT* last = simple->rgpElement[simple->cElement - 1]->pCertContext;
-    if (!CertCompareCertificate(kEncoding, root->pCertInfo, last->pCertInfo)) *status = CERT_TRUST_IS_UNTRUSTED_ROOT;
+    // The whole encoded certificate, not issuer and serial: a forged root can copy both.
+    if (last->cbCertEncoded != root->cbCertEncoded ||
+        std::memcmp(last->pbCertEncoded, root->pbCertEncoded, root->cbCertEncoded) != 0) {
+      *status = CERT_TRUST_IS_UNTRUSTED_ROOT;
+    }
   }
   return true;
 }
@@ -599,7 +737,7 @@ bool ParseTstInfo(const Bytes& content, std::string* imprintAlg, Bytes* imprint,
   return kids[4].tag == 0x18 && ParseGeneralizedTime(kids[4].body, kids[4].len, genTime);
 }
 
-TimestampResult CheckTimestamp(const Decoded& sig, const Bytes& pkcs7, const Policy& policy) {
+TimestampResult CheckTimestamp(const Decoded& sig, const Bytes& pkcs7, const Policy& policy, int64_t nowUnix) {
   TimestampResult result;
   const CRYPT_ATTR_BLOB* token = nullptr;
   if (!FindTokenAttribute(sig.info(), &token)) return result;
@@ -614,14 +752,19 @@ TimestampResult CheckTimestamp(const Decoded& sig, const Bytes& pkcs7, const Pol
   Decoded ts;
   std::string why;
   if (!DecodeSigned(token->pbData, token->cbData, &ts, &why)) return fail(Reason::TimestampInvalid, why);
-  if (ts.contentType != kOidTstInfo) return fail(Reason::TimestampInvalid, "the token's content is not a TSTInfo");
   if (!VerifySignerSignature(ts)) return fail(Reason::TimestampInvalid, "the token's signature does not verify");
+  Bytes tstInfo;
+  bool mismatch = false;
+  if (!BindContent(token->pbData, token->cbData, kOidTstInfo, &tstInfo, &mismatch, &why)) {
+    return fail(Reason::TimestampInvalid, "the token: " + why);
+  }
 
   std::string imprintAlg;
   Bytes imprint;
-  if (!ParseTstInfo(ts.content, &imprintAlg, &imprint, &result.genTime)) {
+  if (!ParseTstInfo(tstInfo, &imprintAlg, &imprint, &result.genTime)) {
     return fail(Reason::TimestampInvalid, "the TSTInfo does not parse");
   }
+  if (result.genTime > nowUnix + 300) return fail(Reason::TimestampInvalid, "the token's time is in the future");
 
   // The imprint must be the hash of THIS signature's signature bytes (RFC 3161 as Authenticode uses it).
   ALG_ID alg = 0;
@@ -641,6 +784,7 @@ TimestampResult CheckTimestamp(const Decoded& sig, const Bytes& pkcs7, const Pol
   if (!CertEkus(ts.signer.get(), &ekus) || !Contains(ekus, kOidTimeStamping)) {
     return fail(Reason::TimestampInvalid, "the time-stamp certificate lacks the time stamping EKU");
   }
+  if (!KeyIsStrongEnough(ts.signer.get())) return fail(Reason::TimestampInvalid, "the time-stamp key is too weak");
   uint32_t status = 0;
   std::string error;
   if (!BuildChainToPinnedRoot(ts.signer.get(), ts.store.get(), policy.rootDer, result.genTime, &status, &error)) {
@@ -718,7 +862,11 @@ std::string ChainStatusNames(uint32_t status) {
   return out;
 }
 
-Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
+namespace {
+std::atomic<bool> g_throwInVerify{false};
+
+Verdict VerifyImpl(HANDLE file, const Policy& policy, int64_t nowUnix) {
+  if (g_throwInVerify.load()) throw std::bad_alloc();
   Bytes data;
   std::string error;
   if (!ReadWholeFile(file, &data, &error)) return Refuse(Reason::Unreadable, error);
@@ -740,9 +888,14 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
   std::string why;
   if (!DecodeSigned(pkcs7.data(), pkcs7.size(), &sig, &why)) return Refuse(Reason::MalformedSignature, why);
 
+  Bytes spc;
+  bool mismatch = false;
+  if (!BindContent(pkcs7.data(), pkcs7.size(), kOidSpcIndirectData, &spc, &mismatch, &why)) {
+    return Refuse(mismatch ? Reason::SignatureInvalid : Reason::MalformedSignature, why);
+  }
   std::string algOid;
   Bytes signedDigest;
-  if (!ParseSpcDigest(sig.content, &algOid, &signedDigest)) {
+  if (!ParseSpcDigest(spc, &algOid, &signedDigest)) {
     return Refuse(Reason::MalformedSignature, "the signed content is not an Authenticode indirect-data block");
   }
   ALG_ID alg = 0;
@@ -755,7 +908,7 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
 
   // When was it signed? A verified, bound timestamp says; a present but bad one refuses (never falls back to
   // "now"); no timestamp means now.
-  const TimestampResult stamp = CheckTimestamp(sig, pkcs7, policy);
+  const TimestampResult stamp = CheckTimestamp(sig, pkcs7, policy, nowUnix);
   if (stamp.present && !stamp.ok) {
     Verdict v = Refuse(stamp.reason, stamp.detail);
     v.chainStatus = stamp.chainStatus;
@@ -775,6 +928,8 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
     return v;
   }
 
+  if (!KeyIsStrongEnough(sig.signer.get())) return Refuse(Reason::ChainStatus, "the signer's key is too weak");
+
   std::vector<std::string> ekus;
   if (!CertEkus(sig.signer.get(), &ekus) || !Contains(ekus, kOidCodeSigning)) {
     return Refuse(Reason::MissingEku, "no code signing EKU");
@@ -789,9 +944,11 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
   if (profile == nullptr) return Refuse(Reason::MissingEku, "no accepted profile EKU");
 
   if (!policy.subject.empty()) {
-    char subject[512];
-    const DWORD n = CertNameToStrA(kEncoding, &sig.signer->pCertInfo->Subject,
-                                   CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG, subject, sizeof(subject));
+    constexpr DWORD kStr = CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG;
+    const DWORD need = CertNameToStrA(kEncoding, &sig.signer->pCertInfo->Subject, kStr, nullptr, 0);
+    std::string subject(need > 0 ? need : 1, '\0');
+    const DWORD n = need > 1 ? CertNameToStrA(kEncoding, &sig.signer->pCertInfo->Subject, kStr, subject.data(), need) : 0;
+    if (n > 0) subject.resize(n - 1);  // the count includes the terminator
     if (n == 0 || policy.subject != subject) return Refuse(Reason::SubjectMismatch, n == 0 ? "" : subject);
   }
 
@@ -809,5 +966,17 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
   ok.signingTime = stamp.present ? stamp.genTime : 0;
   return ok;
 }
+}  // namespace
+
+// Nothing escapes: an allocation failure while reading a large file is a refusal, never an exception into the loader.
+Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
+  try {
+    return VerifyImpl(file, policy, nowUnix);
+  } catch (const std::exception& e) {
+    return Refuse(Reason::Unreadable, std::string("exception while verifying: ") + e.what());
+  }
+}
+
+void TestHook_ThrowInVerify(bool enable) { g_throwInVerify.store(enable); }
 
 }  // namespace nevr_plugin_signature

@@ -57,9 +57,9 @@ class Pki:
         run(["openssl", "x509", "-in", pem, "-outform", "DER", "-out", der])
         return {"key": key, "pem": pem, "der": der}
 
-    def leaf(self, name, cn, issuer, ekus, not_before, not_after, serial):
+    def leaf(self, name, cn, issuer, ekus, not_before, not_after, serial, bits=2048):
         key, csr, pem, ext = (self.path(f"{name}.{x}") for x in ("key", "csr", "pem", "ext"))
-        run(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", csr, "-subj", f"/CN={cn}"])
+        run(["openssl", "req", "-newkey", f"rsa:{bits}", "-nodes", "-keyout", key, "-out", csr, "-subj", f"/CN={cn}"])
         Path(ext).write_text("keyUsage=critical,digitalSignature\nextendedKeyUsage=critical," + ",".join(ekus) + "\n")
         run(["openssl", "x509", "-req", "-in", csr, "-CA", issuer["pem"], "-CAkey", issuer["key"],
              "-set_serial", str(serial), "-out", pem, "-not_before", stamp(not_before),
@@ -77,11 +77,11 @@ def build_dll(work, name, marker):
     return out
 
 
-def sign(unsigned, out, leaf, chain_pems, tsa=None, tsa_time=None):
+def sign(unsigned, out, leaf, chain_pems, tsa=None, tsa_time=None, digest="sha256"):
     """osslsigncode sign; chain_pems are concatenated behind the leaf into the -certs file."""
     certs = Path(str(out) + ".chain.pem")
     certs.write_text("".join(Path(p).read_text() for p in [leaf["pem"], *chain_pems]))
-    cmd = ["osslsigncode", "sign", "-certs", str(certs), "-key", leaf["key"], "-h", "sha256",
+    cmd = ["osslsigncode", "sign", "-certs", str(certs), "-key", leaf["key"], "-h", digest,
            "-in", str(unsigned), "-out", str(out)]
     if tsa is not None:
         cmd += ["-TSA-certs", tsa["pem_chain"], "-TSA-key", tsa["key"], "-TSA-time", str(tsa_time)]
@@ -165,6 +165,31 @@ def swap_timestamp(donor, recipient, out):
     out.write_bytes(bytes(result))
 
 
+def pkcs7_of(pe_bytes):
+    """The PKCS#7 DER of a signed PE (WIN_CERTIFICATE header and padding removed)."""
+    _, off, size = pe_cert_table(pe_bytes)
+    length = struct.unpack_from("<I", pe_bytes, off)[0]
+    return pe_bytes[off + 8:off + length]
+
+
+def with_pkcs7(pe_bytes, pkcs7, out):
+    """The same PE with its certificate table replaced by `pkcs7` (the table is the last thing in the file)."""
+    dir_off, off, size = pe_cert_table(pe_bytes)
+    padded = pkcs7 + b"\0" * (-len(pkcs7) % 8)
+    win = struct.pack("<IHH", len(pkcs7) + 8, 0x0200, 0x0002) + padded
+    result = bytearray(pe_bytes[:off]) + win
+    struct.pack_into("<II", result, dir_off, off, len(win))
+    out.write_bytes(bytes(result))
+
+
+def spc_digest(pkcs7):
+    """The Authenticode digest inside SpcIndirectDataContent: encapContentInfo -> [0] -> SEQ -> DigestInfo -> OCTET."""
+    content_info, _ = der_parse(pkcs7)
+    signed_data = content_info["kids"][1]["kids"][0]
+    spc = signed_data["kids"][2]["kids"][1]["kids"][0]
+    return spc["kids"][1]["kids"][1]["raw"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out")
@@ -186,7 +211,10 @@ def main():
     good = leaf("good", pinned, [CODE_SIGNING, PROFILE_EKU], now - DAY, now + 3 * DAY, 0x1001)
     wrong_eku = leaf("wrong_eku", pinned, [CODE_SIGNING, OTHER_EKU], now - DAY, now + 3 * DAY, 0x1002)
     foreign = leaf("foreign", other, [CODE_SIGNING, PROFILE_EKU], now - DAY, now + 3 * DAY, 0x1003)
-    forged = leaf("forged", other, [CODE_SIGNING, PROFILE_EKU], now - DAY, now + 3 * DAY, 0x1004)
+    # The forgery that matters: same subject and serial as the pinned root, a fresh key, and a leaf it issued.
+    forged_root = pki.root("forged_root_ca", "Test Pinned Root", now - 400 * DAY, now + 3000 * DAY)
+    forged = leaf("forged", forged_root, [CODE_SIGNING, PROFILE_EKU], now - DAY, now + 3 * DAY, 0x1004)
+    weak = pki.leaf("weak", "Test weak", pinned, [CODE_SIGNING, PROFILE_EKU], now - DAY, now + 3 * DAY, 0x1006, bits=1024)
     old = leaf("old", pinned, [CODE_SIGNING, PROFILE_EKU], now - 10 * DAY, now - 5 * DAY, 0x1005)
 
     tsa_leaf = leaf("tsa", pinned, [TIME_STAMPING], now - 30 * DAY, now + 3000 * DAY, 0x2001)
@@ -196,6 +224,11 @@ def main():
     tsa_foreign_leaf = leaf("tsa_foreign", other, [TIME_STAMPING], now - 30 * DAY, now + 3000 * DAY, 0x2002)
     tsa_foreign = {"key": tsa_foreign_leaf["key"], "pem_chain": pki.path("tsa_foreign.chain.pem")}
     Path(tsa_foreign["pem_chain"]).write_text(Path(tsa_foreign_leaf["pem"]).read_text() + Path(other["pem"]).read_text())
+
+    tsa_weak_leaf = pki.leaf("tsa_weak", "Test tsa_weak", pinned, [TIME_STAMPING], now - 30 * DAY, now + 3000 * DAY,
+                             0x2003, bits=1024)
+    tsa_weak = {"key": tsa_weak_leaf["key"], "pem_chain": pki.path("tsa_weak.chain.pem")}
+    Path(tsa_weak["pem_chain"]).write_text(Path(tsa_weak_leaf["pem"]).read_text() + Path(pinned["pem"]).read_text())
 
     plain = build_dll(out, "plain", "plugin-one")
     plain2 = build_dll(out, "plain2", "plugin-two")
@@ -212,7 +245,11 @@ def main():
     make("good2", good, pinned_chain, now, plain2)
     make("wrong_eku", wrong_eku, pinned_chain, now)
     make("other_root", foreign, [], now)                        # the root is not in the file nor the store
-    make("forged_root", forged, [other["pem"]], now)            # the file carries its own root
+    make("forged_root", forged, [forged_root["pem"]], now)      # the file carries a copy of the root's name and serial, not its key
+    make("weak_key", weak, pinned_chain, now)
+    make("tsa_weak", good, pinned_chain, now, tsa_=tsa_weak)    # stamped by an authority with a 1024 bit key
+    sign(plain, out / "sha1_digest.dll", good, pinned_chain, digest="sha1")   # SHA-1 digest: refused whole
+    files["sha1_digest"] = "sha1_digest.dll"
     make("expired_stamped_inside", old, pinned_chain, now - 7 * DAY)
     make("expired_unstamped", old, pinned_chain, None)
     make("stamped_after_expiry", old, pinned_chain, now - 2 * DAY)
@@ -236,7 +273,24 @@ def main():
 
     swap_timestamp((out / "good2.dll").read_bytes(), (out / "good.dll").read_bytes(), out / "token_copied.dll")
 
-    for name in ("unsigned", "tampered_code", "tampered_signature", "token_copied"):
+    # content_swap: a genuine signature (good's), its Authenticode digest replaced by the digest of ANOTHER file
+    # (plain2, signed as good2), attached to that other file. The signed attributes are untouched, so the RSA
+    # signature still verifies; only the binding of messageDigest to the content is left to catch it.
+    good_p7 = pkcs7_of((out / "good.dll").read_bytes())
+    old_digest = spc_digest(good_p7)
+    new_digest = spc_digest(pkcs7_of((out / "good2.dll").read_bytes()))
+    assert good_p7.count(old_digest) == 1 and len(old_digest) == len(new_digest)
+    with_pkcs7((out / "good2.dll").read_bytes(), good_p7.replace(old_digest, new_digest), out / "content_swap.dll")
+
+    # backdated_token: good's timestamp token with only genTime edited (same length), inside a certificate that
+    # was already expired at the real time. The token's own signature no longer covers its TSTInfo.
+    sign(plain, out / "stamped_after_expiry_copy.dll", old, pinned_chain, tsa, now - 2 * DAY)
+    data = (out / "stamped_after_expiry_copy.dll").read_bytes()
+    real, fake = stamp(now - 2 * DAY).encode(), stamp(now - 7 * DAY).encode()
+    assert data.count(real) == 1, data.count(real)
+    (out / "backdated_token.dll").write_bytes(data.replace(real, fake))
+
+    for name in ("unsigned", "tampered_code", "tampered_signature", "token_copied", "content_swap", "backdated_token"):
         files[name] = f"{name}.dll"
 
     manifest = {

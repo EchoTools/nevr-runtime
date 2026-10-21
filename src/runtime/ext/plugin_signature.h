@@ -72,6 +72,10 @@ std::string ChainStatusNames(uint32_t status);
 
 // Verifies the PE file open on `file` (read access). `nowUnix` is the current time, passed in so a test can
 // fix it. Reads the file from offset 0; does not close it or rely on the file pointer afterwards.
+// Never throws: an exception while verifying (an allocation failure reading a large file) is a refusal.
 Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix);
+
+// Test only: makes the next VerifyPluginFile calls raise std::bad_alloc inside, to prove they come back as a refusal.
+void TestHook_ThrowInVerify(bool enable);
 
 }  // namespace nevr_plugin_signature
