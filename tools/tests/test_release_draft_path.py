@@ -87,7 +87,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
     def run_listing(self, pages, rc=0, tag="v5.0.0"):
         """Run the listing step's bash with a fake gh printing one --jq result per page (as gh --paginate does)."""
         if shutil.which("jq") is None:  # the fake gh and the step both run jq; the CI builder image has none
-            self.skipTest("jq is not on PATH (the CI builder image has none; the step runs on ubuntu-latest)")
+            self.skipTest("jq is not on PATH (the CI builder image has none; the step runs on the ubuntu-26.04 runner)")
         run = load()["jobs"]["drafts"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory(prefix="listing-") as tmp:
             gh = Path(tmp) / "gh"

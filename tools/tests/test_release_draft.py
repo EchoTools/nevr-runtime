@@ -35,9 +35,9 @@ FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "ne
 class ReleaseDraftTest(unittest.TestCase):
     def setUp(self):
         # release_draft.sh and the `drafts` step read JSON with jq, which the builder image does not carry; they
-        # run on ubuntu-latest, which does. A skip here names why, never a pass.
+        # run on the ubuntu-26.04 runner, which does. A skip here names why, never a pass.
         if shutil.which("jq") is None:
-            self.skipTest("jq is not on PATH (the CI builder image has none; the script runs on ubuntu-latest)")
+            self.skipTest("jq is not on PATH (the CI builder image has none; the script runs on the ubuntu-26.04 runner)")
         self.tmp = Path(tempfile.mkdtemp(prefix="release-draft-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
         bindir = self.tmp / "bin"

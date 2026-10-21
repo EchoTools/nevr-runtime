@@ -22,10 +22,10 @@ concurrency:
 jobs:
   read-line:
     name: the PR body ends with the read line
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # The PR head, with every branch's history so the merge-base with the target can be computed.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0

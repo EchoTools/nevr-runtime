@@ -100,9 +100,9 @@ class WorkflowStructureTest(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         data, _ = load()
         for name, job in data["jobs"].items():
-            self.assertEqual(job["runs-on"], "ubuntu-latest", name)
+            self.assertEqual(job["runs-on"], "ubuntu-26.04", name)
             self.assertNotIn("environment", job, name)
-        for forbidden in ("windows-latest", "azure/", "codesign", "Get-AuthenticodeSignature", "signtool"):
+        for forbidden in ("runs-on: windows", "azure/", "codesign", "Get-AuthenticodeSignature", "signtool"):
             self.assertNotIn(forbidden, text)
 
     def test_the_sign_job_is_a_named_stub_that_passes_the_files_through(self):

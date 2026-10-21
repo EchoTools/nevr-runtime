@@ -16,7 +16,7 @@ name: Build
 # archives stay a workflow artifact). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
 # release keeps whatever the human set. The whole workflow runs on
-# ubuntu-latest: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
+# ubuntu-26.04: no Windows runner, no cloud login. A `workflow_dispatch` started on a vX.Y.Z tag ref runs
 # the same path as a dry run and publishes nothing, unless the tag's release is a DRAFT carrying none of the
 # built files: then the five files are attached to that draft, which stays a draft (see `drafts`).
 on:
@@ -43,7 +43,7 @@ jobs:
   # read-only token. A release event never mints a write token before the build.
   drafts:
     if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     outputs:
@@ -73,14 +73,14 @@ jobs:
     # `build` stops on `needs.guard.result == 'success'`, and every job below it with it: nothing is built or
     # uploaded.
     if: ${{ always() && needs.drafts.result != 'failure' && needs.drafts.result != 'cancelled' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     outputs:
       built: ${{ steps.check.outputs.built }}
       draft: ${{ steps.draft.outputs.draft }}
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Does this release already carry its assets
       id: check
@@ -125,7 +125,7 @@ jobs:
     # `!cancelled()` here the whole chain below is skipped and a release run is green and does nothing
     # (v5.1.0, run 38409770193). Every job below `drafts` therefore names its own status function.
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: read
@@ -151,7 +151,7 @@ jobs:
       WINEDEBUG: "-all"
 
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
         fetch-depth: 0
@@ -237,7 +237,7 @@ jobs:
     # for the same vcpkg.json.
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -268,7 +268,7 @@ jobs:
     # Saved right after the install, so a failure in a later step does not lose the dependency build.
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
@@ -357,7 +357,7 @@ jobs:
     # them. The publish job attests them to this commit.
     - name: Upload the symbol files
       if: steps.release.outputs.version != ''
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: symbols
         path: dist/symbols/
@@ -393,7 +393,7 @@ jobs:
 
     - name: Upload the release tree
       if: steps.release.outputs.version != ''
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: unsigned-release-tree
         path: release-stage/
@@ -404,7 +404,7 @@ jobs:
     # archives are never published.
     - name: Upload the unsigned packages for signing
       if: github.event_name == 'release' || needs.guard.outputs.draft == 'true'
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: unsigned-packages
         path: |
@@ -421,13 +421,13 @@ jobs:
   quest:
     needs: guard
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.guard.outputs.built != 'true' && (github.event_name == 'release' || github.ref_type == 'tag') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     env:
       NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
         fetch-depth: 0
@@ -462,7 +462,7 @@ jobs:
     - name: Restore the downloaded NDK
       if: steps.ndk.outputs.present != 'true'
       id: ndk_cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/android-ndk-r26d
         key: android-ndk-r26d-linux
@@ -500,7 +500,7 @@ jobs:
 
     - name: Restore the vcpkg binary cache
       id: vcpkg_cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
@@ -542,7 +542,7 @@ jobs:
         sha256sum "$out"
 
     - name: Upload the Quest library
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: quest-library
         path: quest-asset/
@@ -551,31 +551,31 @@ jobs:
 
     - name: Save the vcpkg binary cache
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .vcpkg-binary-cache
         key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
 
   # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
   # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
-  # ubuntu-latest and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
+  # ubuntu-26.04 and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
   # Nothing downstream labels these files signed: the artifact is named packages-unsigned, and the release
   # notes and SIGNING.txt state only what holds before and after a signer has run.
   sign:
     name: "sign: stubbed, policy signer not built yet"
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       if: github.event_name == 'release' || needs.build.outputs.draft == 'true'
       with:
         name: unsigned-packages
         path: packages
 
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       if: needs.build.outputs.version != ''
       with:
         name: unsigned-release-tree
@@ -594,7 +594,7 @@ jobs:
           echo "UNSIGNED passthrough: $f"
         done
 
-    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: packages-unsigned
         path: packages
@@ -609,13 +609,13 @@ jobs:
   seal:
     needs: [build, sign]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && needs.build.outputs.version != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: packages-unsigned
         path: staged
@@ -629,7 +629,7 @@ jobs:
         (cd release-assets && sha256sum -c SHA256SUMS)
         ls -la release-assets
 
-    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: release-unsigned
         path: release-assets
@@ -643,11 +643,11 @@ jobs:
   repack:
     needs: [build, sign, seal]
     if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install archive tools
       run: |
@@ -655,7 +655,7 @@ jobs:
         sudo apt-get install -y zstd
         python -m pip install cmake==4.4.4
 
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: packages-unsigned
         path: staged
@@ -689,7 +689,7 @@ jobs:
     # The .tar.zst archives are built and checked but are not release assets: the public set is zips only
     # (what Windows users use, and what a signer can sign). They stay here as a workflow artifact.
     - name: Keep the .tar.zst archives as a workflow artifact
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: dist-tar-zst
         path: dist/*.tar.zst
@@ -697,7 +697,7 @@ jobs:
         retention-days: 7
 
     - name: Keep the zips for the publish job
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: dist-zips
         path: dist/*.zip
@@ -709,7 +709,7 @@ jobs:
   publish:
     needs: [build, quest, sign, seal, repack]
     if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && needs.quest.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
     # features"). They are not code signing.
@@ -718,29 +718,29 @@ jobs:
       id-token: write
       attestations: write
     steps:
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: dist-zips
         path: dist
 
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: release-unsigned
         path: release-assets
 
     # The symbol files (a workflow artifact, never a release asset) are attested to this same commit.
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: symbols
         path: symbols
 
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: quest-library
         path: quest-asset
 
     - name: Attest build provenance of the release files
-      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
       with:
         subject-path: |
           dist/*.zip
@@ -754,7 +754,7 @@ jobs:
     # then re-sends the release's own current value (softprops/action-gh-release, src/github.ts: `config.input_prerelease !== undefined ? config.input_prerelease : existingRelease.prerelease`),
     # read at upload time, so a human's choice (and a promotion made while this run is going) is kept.
     - name: Upload dist artifacts
-      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
       with:
         # The one exception to "the uploads set nothing about the release's state": for a dispatch on a draft
         # the action would PUBLISH the reused draft after uploading unless draft: true (its README: "If the
@@ -769,7 +769,7 @@ jobs:
 
     # The release's sealed zip, its checksums and the notes: the declared public set (all attested above).
     - name: Upload the release files
-      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
       with:
         draft: ${{ github.event_name == 'workflow_dispatch' }}
         fail_on_unmatched_files: true

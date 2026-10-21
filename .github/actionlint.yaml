@@ -1,0 +1,7 @@
+# actionlint's list of GitHub-hosted runner labels (rule_runner_label.go, v1.7.12 and main) stops at
+# ubuntu-24.04; GitHub's runner-images README lists ubuntu-26.04 as an available x64 image. The label is
+# declared here so actionlint accepts the workflows' runs-on. Remove this file once an actionlint release
+# knows ubuntu-26.04.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

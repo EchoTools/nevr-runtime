@@ -238,7 +238,7 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
         self.assertIn("mtrojnar/osslsigncode.git", dockerfile)  # not in Arch's official repos: pinned build
         self.assertIn("- name: Toolchain versions", workflow)
-        # The repack job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
+        # The repack job runs on the ubuntu-26.04 runner (not the builder image) and installs zstd with apt-get
         # there; the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
@@ -255,7 +255,7 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("actions/attest-build-provenance@", workflow)
         self.assertNotIn("azure/", workflow)
         self.assertNotIn("environment: codesign", workflow)
-        self.assertNotIn("windows-latest", workflow)
+        self.assertNotIn("runs-on: windows", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
         self.assertIn("          dist/*.zip", workflow)
