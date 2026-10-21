@@ -571,6 +571,7 @@ class PluginLoadRun {
     const std::string reason = "refused: dependency " + tree.Describe();
     Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), item.file.c_str(),
         reason.c_str());
+    RecordRefusal(item.file);  // the dialog names the plugin the player asked for and the file that stopped it
     RecordRefusal(tree.file);
     FailPluginLoad(item, reason, itemReport);
     return false;

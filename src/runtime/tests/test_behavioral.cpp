@@ -240,7 +240,10 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 // Production headers (included AFTER all stubs are defined).
 // ============================================================================
 
+#include <cctype>
 #include "runtime/ext/plugin_loader.h"
+#include "runtime/ext/plugin_refusal_notice.h"
+#include "runtime/hook/dll_load_hook.h"
 #include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
@@ -413,6 +416,222 @@ TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
   LoadPlugins();
   EXPECT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContains("file=gate_a_unsigned.dll refused: unsigned"));
+}
+
+// ---- the dependency walk, the refusal dialog and the load filter (ADR 0010 sections 1 and 6, #741) -------------
+
+namespace {
+std::vector<std::string> g_refusalDialogs;
+void CaptureRefusalDialog(const std::string& text) { g_refusalDialogs.push_back(text); }
+}  // namespace
+
+class PluginDependencyGateTest : public PluginSignatureGateTest {
+ protected:
+  void SetUp() override {
+    PluginSignatureGateTest::SetUp();
+    ASSERT_TRUE(manifest_.contains("trees"));
+    wasServer_ = g_isServer;
+    wasHeadless_ = g_isHeadless;
+    g_isServer = FALSE;  // a client with graphics: the one run that shows the dialog
+    g_isHeadless = FALSE;
+    g_refusalDialogs.clear();
+    TestHook_ResetRefusals();
+    TestHook_SetRefusalDialogSink(&CaptureRefusalDialog);
+  }
+
+  void TearDown() override {
+    TestHook_ResetPluginLoadFilter();
+    TestHook_SetRefusalDialogSink(nullptr);
+    TestHook_ResetRefusals();
+    g_isServer = wasServer_;
+    g_isHeadless = wasHeadless_;
+    PluginSignatureGateTest::TearDown();
+  }
+
+  // Copies the fixture tree `tree` (its signed and unsigned files) into plugins/ and returns the root file's name.
+  std::string Copy(const std::string& tree) {
+    const nlohmann::json& t = manifest_["trees"][tree];
+    const std::string from = fixtures_ + "/" + t["dir"].get<std::string>() + "/";
+    WIN32_FIND_DATAA found;
+    HANDLE h = FindFirstFileA((from + "*.dll").c_str(), &found);
+    EXPECT_NE(h, INVALID_HANDLE_VALUE) << from;
+    if (h == INVALID_HANDLE_VALUE) return {};
+    do {
+      const std::string target = pluginsDir_ + found.cFileName;
+      EXPECT_TRUE(CopyFileA((from + found.cFileName).c_str(), target.c_str(), FALSE)) << target;
+      copies_.push_back(target);
+    } while (FindNextFileA(h, &found));
+    FindClose(h);
+    return t["root"].get<std::string>();
+  }
+
+  void PlanTree(const std::string& tree) {
+    const std::string root = Copy(tree);
+    g_testPluginLoadPlan.push_back({root, root, false, "", "{}"});
+  }
+
+  // What the filter is asked about a load of `file` in plugins/.
+  bool Blocked(const std::string& file) {
+    std::wstring wide;
+    for (char c : pluginsDir_ + file) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
+  }
+
+  void ExpectDependencyRefusal(const std::string& tree) {
+    const nlohmann::json& t = manifest_["trees"][tree];
+    PlanTree(tree);
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_EQ(GetModuleHandleA(t["root"].get<std::string>().c_str()), nullptr) << "the plugin was mapped";
+    EXPECT_EQ(GetModuleHandleA("dep.dll"), nullptr) << "the refused dependency was mapped";
+    const std::string expected = "refused: dependency dep.dll (" + t["via"].get<std::string>() + "): unsigned";
+    EXPECT_TRUE(TestLogContains(expected)) << expected;
+    const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+    ASSERT_EQ(manifest.size(), 1u);
+    EXPECT_EQ(manifest[0]["error"].get<std::string>(), expected);
+  }
+
+  BOOL wasServer_ = FALSE;
+  BOOL wasHeadless_ = FALSE;
+};
+
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedImportIsRefused) { ExpectDependencyRefusal("import_unsigned"); }
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedDelayLoadIsRefused) { ExpectDependencyRefusal("delay_unsigned"); }
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedForwardTargetIsRefused) {
+  ExpectDependencyRefusal("forwarder_unsigned");
+}
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedDependencyTwoLevelsDownIsRefused) {
+  ExpectDependencyRefusal("transitive_unsigned");
+}
+
+TEST_F(PluginDependencyGateTest, SignedDependenciesAreNotARefusal) {
+  PlanTree("import_ok");
+  LoadPlugins();
+  // The fixture is not a real plugin, so it fails for lacking the plugin exports; what matters is that the gate let
+  // it through.
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, DevBuildDoesNotWalkTheDependencies) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  PlanTree("import_unsigned");
+  LoadPlugins();
+  EXPECT_FALSE(TestLogContains("dependency"));
+}
+
+TEST_F(PluginDependencyGateTest, RefusalDialogNamesThePluginAndTheFileThatStoppedIt) {
+  PlanTree("import_unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  EXPECT_NE(g_refusalDialogs[0].find("importer.dll wasn't loaded because it isn't signed by nEVR."), std::string::npos)
+      << g_refusalDialogs[0];
+  EXPECT_NE(g_refusalDialogs[0].find("dep.dll wasn't loaded because it isn't signed by nEVR."), std::string::npos)
+      << g_refusalDialogs[0];
+  EXPECT_NE(g_refusalDialogs[0].find("ask each plugin's author for a signed release."), std::string::npos);
+}
+
+TEST_F(PluginDependencyGateTest, OneRefusedPluginGetsTheExactDialogText) {
+  Plan("gate_dialog.dll", "unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  EXPECT_EQ(g_refusalDialogs[0],
+            "gate_dialog.dll wasn't loaded because it isn't signed by nEVR. Plugins from the launcher are signed; "
+            "ask the plugin's author for a signed release.");
+}
+
+TEST_F(PluginDependencyGateTest, DialogIsShownOncePerRun) {
+  Plan("gate_dialog_a.dll", "unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  TestHook_RecordRefusal("later.dll");
+  TestHook_ShowRefusalNoticeIfDue();
+  EXPECT_EQ(g_refusalDialogs.size(), 1u) << "a second dialog in the same run";
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogOnAServer) {
+  g_isServer = TRUE;
+  Plan("gate_dialog_s.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+  EXPECT_TRUE(TestLogContains("file=gate_dialog_s.dll refused: unsigned"));  // the record is still written
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogOnAHeadlessRun) {
+  g_isHeadless = TRUE;
+  Plan("gate_dialog_h.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogWhenNothingWasRefused) {
+  Plan("gate_dialog_ok.dll", "signed");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfAnUnsignedFileInThePluginsDirectoryIsRefused) {
+  Plan("late_unsigned.dll", "unsigned");  // copied into plugins/, never planned to load
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_unsigned.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_unsigned.dll: unsigned"));
+  TestHook_ShowRefusalNoticeIfDue();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  EXPECT_NE(g_refusalDialogs[0].find("late_unsigned.dll"), std::string::npos);
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
+  Plan("late_signed.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_signed.dll"));
+  EXPECT_FALSE(TestLogContains("refused a later load"));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadByBareNameResolvesToThePluginsDirectory) {
+  Plan("late_bare.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare.dll", nullptr));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfAFileOutsideThePluginsDirectoryIsNotThisFiltersBusiness) {
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring outside;
+  for (char c : fixtures_ + "/" + manifest_["files"]["test_plugin_onframe.unsigned"].get<std::string>()) {
+    outside.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(outside.c_str(), nullptr));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileWithAnUnsignedDependencyIsRefused) {
+  Copy("import_unsigned");
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("importer.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of importer.dll: dependency dep.dll (import): unsigned"));
+}
+
+TEST_F(PluginDependencyGateTest, DevBuildAllowsALateLoadWithAWarning) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("late_dev.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_dev.dll"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "a plugin loads late_dev.dll after its init"));
+}
+
+TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
+  nevr_plugin_refusal::Tracker t;
+  t.Record("a.dll");
+  t.Record("a.dll");
+  EXPECT_EQ(t.refused(), 1u);
+  EXPECT_TRUE(t.TakeDialog(true, false).empty());  // a server gets no dialog
+  EXPECT_FALSE(t.shown());
+  EXPECT_TRUE(t.TakeDialog(false, true).empty());  // nor does a headless run
+  EXPECT_FALSE(t.TakeDialog(false, false).empty());
+  EXPECT_TRUE(t.shown());
+  EXPECT_TRUE(t.TakeDialog(false, false).empty());
 }
 
 TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyBuild) {
