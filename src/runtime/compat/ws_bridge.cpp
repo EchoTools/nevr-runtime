@@ -2411,6 +2411,7 @@ bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
   std::atomic<SOCKET> clientSide{INVALID_SOCKET};
   std::atomic<SOCKET> serverSide{INVALID_SOCKET};
   std::vector<std::thread> pumps;
+  std::mutex pumpsMutex;
   std::thread acceptor([&] {
     SOCKET a = accept(front, nullptr, nullptr);
     if (a == INVALID_SOCKET) return;
@@ -2434,6 +2435,7 @@ bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
         if (send(dest, buf, n, 0) != n) return;
       }
     };
+    std::lock_guard<std::mutex> lk(pumpsMutex);
     pumps.emplace_back(pump, a, b);
     pumps.emplace_back(pump, b, a);
   });
@@ -2447,9 +2449,13 @@ bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
 
   std::promise<void> returned;
   std::future<void> finished = returned.get_future();
+  std::promise<void> clientSawOpen;  // the drop must come after the remote itself is open, or it is a failed connect
+  std::future<void> clientOpen = clientSawOpen.get_future();
+  std::atomic<bool> clientOpenSignalled{false};
   ix::WebSocket* raw = remote.get();
   std::atomic<bool> fired{false};
   remote->setOnMessageCallback([&](const ix::WebSocketMessagePtr& msg) {
+    if (msg->type == ix::WebSocketMessageType::Open && !clientOpenSignalled.exchange(true)) clientSawOpen.set_value();
     if (msg->type != ix::WebSocketMessageType::Close || fired.exchange(true)) return;
     CloseGameSocketsForRemote(raw, 1, msg->closeInfo.code);
     returned.set_value();
@@ -2457,14 +2463,24 @@ bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
   remote->start();
 
   const auto deadline = std::chrono::milliseconds(timeoutMs);
-  bool ok = opened.wait_for(deadline) == std::future_status::ready;
+  bool ok = opened.wait_for(deadline) == std::future_status::ready &&
+            clientOpen.wait_for(deadline) == std::future_status::ready;
+  if (!ok) std::fprintf(stderr, "TestHook_LoginRemoteDroppedThroughRealIx: the remote never opened\n");
   if (ok) {
     for (SOCKET s : {clientSide.load(), serverSide.load()}) {
       if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);  // the connection ends with no close frame
     }
     ok = finished.wait_for(deadline) == std::future_status::ready;
+    if (!ok) std::fprintf(stderr, "TestHook_LoginRemoteDroppedThroughRealIx: the Close callback never returned\n");
   }
-  if (!ok) return false;  // the remote's thread is stuck: leave everything in place for the caller to exit
+  if (!ok) {
+    // The remote's thread may be stuck, and the helper threads still use this frame: leave them running and
+    // detached for the caller to end the process.
+    acceptor.detach();
+    std::lock_guard<std::mutex> lk(pumpsMutex);
+    for (std::thread& t : pumps) t.detach();
+    return false;
+  }
 
   remote->stop();
   closesocket(front);  // wakes the acceptor if the client never connected
