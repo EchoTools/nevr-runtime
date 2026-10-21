@@ -93,13 +93,14 @@ class TheN91GuardIsTheOneThatExists(unittest.TestCase):
         self.assertNotIn("SAFETY NET", bridge())
 
     def test_only_the_login_role_injects(self):
-        handler = client_message_handler()
+        body = extract_braced_function(bridge(), "static void HandleRemoteOpen(")
         self.assertRegex(
-            handler, r"pairPtr->role\s*==\s*nevr_socket_role::Role::Login\s*&&\s*!pairPtr->loginInjected")
+            body, r"pair->role\s*==\s*nevr_socket_role::Role::Login\s*&&\s*!pair->loginInjected")
 
     def test_a_first_frame_that_contradicts_the_role_is_checked_for_every_game_frame(self):
-        handler = client_message_handler()
-        self.assertIn("CheckFirstFrameRoleLocked(*pair, msg->str)", handler)
+        self.assertIn("ForwardGameFrameToRemote(gameWs, msg->str, msg->binary)", client_message_handler())
+        body = extract_braced_function(bridge(), "static void ForwardGameFrameToRemote(")
+        self.assertIn("CheckFirstFrameRoleLocked(*pair, frame)", body)
 
 
 class TheRedirectGivesTheServicesTheirRequestTargets(unittest.TestCase):

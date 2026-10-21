@@ -1240,6 +1240,31 @@ TEST_F(N61_WsBridgeTest, TheLoginRemoteDroppedByItsServerEndsItsSessionWithoutSe
   nevr_self_check::ResetForTest();
 }
 
+// #738: a send that fails runs ix's Close callback on the sending thread, and the bridge's Close handler takes
+// g_pairsMutex. Each production send on the login remote must therefore happen outside it. One test per send path;
+// the remote's reader is parked so the failure is found by the send (TestHook_SendOnDroppedRemote).
+static void ExpectSendOnDroppedRemoteReturns(int path, const char* what) {
+  const int result = TestHook_SendOnDroppedRemote(path, 10000);
+  if (result == 1) {
+    ADD_FAILURE() << what << ": the sending thread deadlocked on g_pairsMutex inside ix's Close callback";
+    std::fflush(stdout);
+    std::_Exit(1);  // the stuck thread owns the mutex the fixture's teardown needs
+  }
+  EXPECT_EQ(result, 0) << what << ": no send on the dropped remote ever failed";
+}
+
+TEST_F(N61_WsBridgeTest, SendFrameToServerOnADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(0, "SendFrameToServer");
+}
+
+TEST_F(N61_WsBridgeTest, AGameFrameForwardedToADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(1, "the game->server forward");
+}
+
+TEST_F(N61_WsBridgeTest, TheFlushWhenTheRemoteOpensOnADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(2, "the flush on the remote's open");
+}
+
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
   // Scenario:
   //   1. Login connects → callback_A on shared remote.
