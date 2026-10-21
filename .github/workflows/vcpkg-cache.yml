@@ -59,7 +59,7 @@ jobs:
         # No restore-keys: an entry holds only the archives of this key. A fallback to an older entry
         # carried its 19 unusable archives into the saved one (run 37914950616: "Restored 0 package(s)",
         # 38 archives saved, 231 MB grew to 547 MB).
-        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlay-ports/**') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Install vcpkg dependencies
       if: steps.vcpkg_cache.outputs.cache-hit != 'true'
@@ -84,4 +84,4 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin3-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin3-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-overlay-ports/**') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
