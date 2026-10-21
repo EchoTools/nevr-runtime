@@ -29,7 +29,9 @@ done
 [ -f "$so" ] || die "missing shared object $so"
 
 # The two compiler-rt entries every arm64 NDK library carries, and the sentinel's own constructor.
-expected=" init_have_lse_atomics init_cpu_features _ZL18nevr_sentinel_ctorv "
+# compiler-rt's CPU-feature constructor is init_cpu_features up to clang 17 (NDK r26d) and __init_cpu_features
+# from the rename for function multi-versioning (clang 21, NDK r30); it fills __aarch64_cpu_features only.
+expected=" init_have_lse_atomics init_cpu_features __init_cpu_features _ZL18nevr_sentinel_ctorv "
 
 sections=$("$readelf" -S -W "$so") || die "llvm-readelf -S failed on $so"
 init_line=$(printf '%s\n' "$sections" | sed -E 's/^ *\[ *[0-9]+\] *//' | awk '$1 == ".init_array" { print; exit }')
