@@ -308,8 +308,9 @@ refused, whether the player built it, downloaded it or got it from a friend.
 player notice, the graphics-driver dialog (#553, `src/runtime/log/builtin_filter.cpp`, policy in `gpu_hung_notice.h`): a `MessageBoxA`
 on its own thread, once per run, never on a server or a headless run, shown only after the record is written. A refusal notice
 follows the same policy: after the log line and the manifest entry, once per run, on a client with graphics only, one dialog that
-lists each refused file and the reason in plain words ("not signed by the NEVR release process"), on its own thread so boot does not
-block. On a dedicated server there is no dialog; the refusal line and the manifest entry are the record, and a `required` plugin
+names each refused file, in these words: "<file> wasn't loaded because it isn't signed by NEVR. Plugins from the launcher are
+signed; ask the plugin's author for a signed release." It runs on its own thread so boot does not block. The log line, not the
+dialog, carries the exact reason (`unsigned`, `other signer`, `denylisted`, or the chain status in hex). On a dedicated server there is no dialog; the refusal line and the manifest entry are the record, and a `required` plugin
 ends the run through the existing path.
 
 Release-notes line (`RELEASE-NOTES.md`, which the release pipeline builds):
@@ -330,11 +331,13 @@ Release-notes line (`RELEASE-NOTES.md`, which the release pipeline builds):
 
 ## Open items
 
-1. Revocation beyond the denylist is not checked; the reviewer decides whether the denylist is enough.
+1. Revocation beyond the denylist is not checked. The compiled-in denylist is enough for v5.5.0. It is revisited when a signing
+   profile is compromised, or when the signer signs releases for more than five repositories (third-party plugins in volume),
+   whichever comes first.
 2. `signer_subject` must be filled in `release-signer`, and the profile EKU confirmed against the first real certificate; both need
    the owner-run signing trial (the pipeline has never signed a file). The gate does not ship before then.
 3. The plugin repos' signing onboarding order (section 6).
-4. The refusal dialog's wording, and whether a client without a desktop (Wine without a display) skips it.
+4. Whether a client without a desktop (Wine without a display) skips the refusal dialog.
 5. Approved community plugin releases pass through `release-signer` before publishing; how that join works is being settled outside
    this repository.
 6. Whether `release-signer` also reads the `NEVR-PLUGIN-TRUST` literal (section 3) is a follow-up, not a prerequisite.
