@@ -1,100 +1,181 @@
 # ADR 0010: the runtime loads only plugins signed through the release-signer pipeline
 
-Status: proposed (#741). Nothing in this document is implemented. Sections 1 to 6 answer the questions the design has to settle; every
-code claim is a `file:line` on the tree this ADR was written against, every measurement names its probe.
+Status: proposed (#741). Nothing in this document is implemented. Every code claim is a `file:line` on the tree this ADR was written
+against; every measurement names its probe; what is not shown is said where it matters.
 
 ## Context
 
-`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NvrPluginInit*` inside
-the game process, with the runtime's authority. Nothing asks who built the file. The signing pipeline for releases already exists
+`LoadPlugins` loads every DLL that `config.yaml`'s `plugins:` list names from the plugins directory and runs its `NvrPluginInit*`
+inside the game process, with the runtime's authority. Nothing asks who built the file. The signing pipeline for releases exists
 (`thesprockee/release-signer`, Azure Artifact Signing, profile `andrew-bates-public`); the runtime does not use its output for plugins.
+That pipeline has never produced a signed file: it has no signing run on record, and the shipped `BugSplat64.dll` of the latest
+release carries no Authenticode signature (`osslsigncode extract-signature`: "No signature found").
+
+## Threat model
+
+The gate protects a player from a plugin handed around between players: a DLL from a chat, a mod pack or a download page that the
+player puts in `plugins/` and lists in `config.yaml`.
+
+It does not protect against anything that can also replace `BugSplat64.dll` or `echovr.exe`, or write the runtime's memory: an
+installer, a script run as the player, or another program under the same account can disable the check by replacing the runtime. It
+does not protect against a compromised signing profile beyond the denylist in section 2. It does not defend a game copy against its
+own owner (the owner can run a dev build, section 3).
+
+What checks the runtime itself: its own Authenticode signature, made by the same pipeline (`BugSplat64.dll` is in the `sign:` list of
+`release-signer/config/sources.yml`), which a player or an installer can verify (`Get-AuthenticodeSignature`; `SIGNING.txt` in the
+package says how). Nothing in the game process checks it: the game imports `BugSplat64.dll` statically as one of its own dependencies
+(`tools/verify_pe_contract.py`). This ADR does not add that check; it states the boundary.
 
 ## Decision
 
-A plugin DLL loads only when all of these hold, checked on the file before `LoadLibrary` and on the same open handle:
+A plugin DLL loads only when all of these hold, checked on the file before `LoadLibrary`:
 
-1. The Authenticode signature is intact (the file digest matches the signed digest).
-2. The signer certificate chains to the pinned Microsoft Identity Verification Root CA 2020, built by the runtime against that
-   root alone (an exclusive-root chain engine), not against the machine's trust store.
-3. The signer certificate carries the whole EKU OID of our profile (section 2) and, once the signer fills it in, the pinned subject.
-4. The certificate was valid at the time the RFC 3161 timestamp counter-signature records; a signature with no valid timestamp is
-   accepted only while the leaf is itself within its validity period.
+1. The file carries an embedded Authenticode signature (a catalog signature, or none, is refused) and its digest matches.
+2. The signer certificate chains to the pinned Microsoft Identity Verification Root CA 2020, built by the runtime against that root
+   alone (an exclusive-root chain engine), not against the machine's trust store, and the chain build reports `dwErrorStatus == 0`
+   (any nonzero status refuses).
+3. The signer certificate carries the pinned profile EKU (a whole-OID compare) and the code-signing EKU, and, once the signer fills it
+   in, the pinned subject.
+4. The certificate was valid at the time of an RFC 3161 timestamp that is bound to this signature (section 2); a signature with no
+   timestamp is accepted only while the leaf is itself within its validity period.
+5. Neither the signer's leaf serial nor the signing time falls inside the denylist (section 2).
+6. Every DLL the plugin imports from the plugins directory passes the same check (section 1).
 
-Otherwise the plugin is refused with one line (`[NEVR.PLUGIN] plugin=<name> file=<file> refused: <reason>`), recorded in the plugin
-manifest the login carries as a failed load (`PluginManifestEntry`), and, for a plugin marked `required`, the existing required-plugin
-failure path applies (N134). There is no config key and no environment variable that relaxes this in a release build. The one
-relaxation is a build-time option (section 3).
+Otherwise the plugin is refused with one line (`[NEVR.PLUGIN] plugin=<name> file=<file> refused: <reason>`), recorded as a failed
+load in the plugin manifest the login carries (`PluginManifestEntry`), shown to the player (section 6) and, for a plugin marked
+`required`, the existing required-plugin failure path applies (N134). A refusal is final: there is no fallback load (section 1). No
+config key and no environment variable relaxes this in a release build; the only relaxation is a build-time option (section 3).
 
-## 1. Every LoadLibrary path for plugins today, and where the check goes
+## 1. Every load path today, and where the check goes
 
-All plugin loading goes through one function.
+There are two plugin loaders in the tree, not one.
 
-- `LoadPlugins(PluginPhase)` at `src/runtime/ext/plugin_loader.cpp:634` starts a `PluginLoadRun`; its pass 1 calls `StageOne` for each plan
-  entry in the phase (`plugin_loader.cpp:205-213`).
-- `StageOne` (`plugin_loader.cpp:274`) is the only caller of `LoadModule` (`plugin_loader.cpp:292`). It already refuses a disabled entry, a
-  superseded one, a duplicate and a file outside the plugins directory (`PluginFileStaysInDirectory`) before that call.
-- `LoadModule` (`plugin_loader.cpp:368`) is the only place a plugin file is mapped: `LoadLibraryExA(path, nullptr,
-  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)` at `:384`, and, when the OS rejects those flags with
-  `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryA(path)` at `:391` (logged as "hardening inactive").
-- The early pass (N146) and the normal pass both run through `StageOne`; there is no second loader. `module_loader.cpp` and the
-  statically linked modules (`platform_compat`, `token_auth`) load no DLL files of ours (`git grep -n LoadLibrary -- src/runtime/ext
-  src/modules` finds only `platform_compat.cpp:211,269`, which load the system's `Secur32.dll` and `ole32.dll`).
-- `DllLoadHook` (`src/runtime/hook/dll_load_hook.cpp:308-322`) hooks all four LoadLibrary variants. It filters the game's loads and is not
-  part of the plugin path; it is not the place for this check because it sees a load after the file is chosen and cannot name the
-  plugin entry that asked.
+**The current loader** has one load site.
 
-The check goes in `StageOne`, between `PluginFileStaysInDirectory` and `LoadModule`, as one call:
-`PluginSignatureVerdict v = VerifyPluginSignature(path, policy)`. Verdict "refused" goes to `FailPluginLoad(item, reason, itemReport)`
-(the same function `LoadModule` failure uses at `plugin_loader.cpp:294`). The verifier is a separate file
-(`src/runtime/ext/plugin_signature.{h,cpp}`), a function over a file handle and a policy value, so a test calls it without a game.
+- `LoadPlugins(PluginPhase)` (`src/runtime/ext/plugin_loader.cpp:634`) starts a `PluginLoadRun`; pass 1 calls `StageOne` for each plan
+  entry in the phase (`:205-213`).
+- `StageOne` (`:274`) is the only caller of `LoadModule` (`:292`). It already refuses a disabled entry, a superseded one, a duplicate
+  and a file outside the plugins directory (`PluginFileStaysInDirectory`) before that call.
+- `LoadModule` (`:368`) is the only place a plugin file is mapped: `LoadLibraryExA(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+  LOAD_LIBRARY_SEARCH_SYSTEM32)` at `:384`, and, on `ERROR_INVALID_PARAMETER`, an unrestricted `LoadLibraryA(path)` at `:391`.
+- The early pass (N146) and the normal pass both go through `StageOne`. `module_loader.cpp` and the statically linked modules load no
+  DLL files of ours (`platform_compat.cpp:211,269` load the system's `Secur32.dll` and `ole32.dll`).
 
-Two properties the placement has to keep:
+**The check goes in `StageOne`**, between `PluginFileStaysInDirectory` and `LoadModule`, as one call that returns a verdict and keeps
+a handle open: `VerifyPluginSignature(path, policy)` in `src/runtime/ext/plugin_signature.{h,cpp}`, a function over a file handle and
+a policy value, so a test calls it without a game. A refusal goes to `FailPluginLoad` (the function the `LoadModule` failure uses at
+`:294`); `LoadModule` stays a plain load that runs only after a pass. #741 said `LoadModule`; `StageOne` is the one place where the
+verdict, the refusal and the manifest entry meet, so the issue is corrected to say so.
 
-- **Verify and load the same bytes.** `VerifyPluginSignature` opens the file with `FILE_SHARE_READ` only (no write, no delete sharing)
-  and `StageOne` keeps that handle open across `LoadModule`; a writer cannot swap the file between the check and the map. The handle goes
-  to `WinVerifyTrust` in `WINTRUST_FILE_INFO.hFile`. Not shown: that Wine honours the sharing mode on `LoadLibraryExA` of an already open
-  file; the test in section 5 (swap attempt) measures it.
-- **Dependencies in the plugins directory.** N75 restricts a plugin's import resolution to its own directory and System32. An unsigned
-  DLL in the plugins directory that a signed plugin imports would load without a check. The verifier therefore also reads the verified
-  plugin's import table and requires every import that resolves to a file in the plugins directory to pass the same check. System32
-  imports are the OS's. This is an addition to the stated design (the order says "a plugin DLL"); it is in the plan because without it the
-  check can be bypassed through a dependency. Decision for the reviewer: keep it (recommended) or drop it and state the gap.
+**No fallback in an enforcing build.** The `:391` branch loads with the default search order when the OS rejects the restricted
+flags. In an enforcing build that branch is removed: `ERROR_INVALID_PARAMETER` from the restricted load is a refusal with its own
+reason (`restricted search unsupported`), because a load the check did not shape is a load the check did not cover. The dev build
+keeps the fallback.
+
+**The legacy loader is a second load site, and it has no check.** `src/legacy/gamepatches/plugin_loader.cpp:79` calls `LoadLibraryA`
+on every `*.dll` in `plugins\` next to `echovr.exe` and runs `NvrPluginInit`. It is built (`CMakeLists.txt:223`
+`add_subdirectory(src/legacy/gamepatches)`, target `gamepatcheslegacy`) and packaged by `dist-legacy` (`CMakeLists.txt:437`) and
+`dist-all` (`:446`, `DEPENDS dist dist-legacy`).
+
+Who uses it, measured with `git grep -n -iE 'dist-legacy|dist-all|gamepatcheslegacy' -- .github docs README.md INSTALL.md tools
+justfile src/launcher`:
+- the `justfile` recipe `dist-legacy` (`justfile:79-80`);
+- `tools/tests/test_release_contract.py:186`, which asserts that `DEPENDS dist dist-legacy` is in the CMake;
+- naming and `-Werror` tooling that mention the target by name.
+
+No workflow, release package script, document or install script references it. The release build builds `--target dist` only
+(`.github/workflows/build.yml:309`); the v5.4.3 release carries five assets and none holds a legacy DLL; `release-signer`'s declared
+file set names none. `src/legacy/` is frozen (AGENTS.md "Guardrails"), so the gate cannot be added there.
+
+Recommendation: **the legacy build stops being part of any package target and is never in a release package.** `dist-all` stops
+depending on `dist-legacy` (one line in `CMakeLists.txt`; the `justfile` keeps `dist-legacy` as an explicit developer recipe), and
+`tools/tests/test_release_contract.py` replaces its `DEPENDS dist dist-legacy` assertion with the opposite one: no release workflow,
+`package_release.py` input or `sources.yml` entry names `gamepatcheslegacy` or `gameserverlegacy`. Why not "give it the same gate":
+the directory is frozen by rule, and it would mean a second verifier compiled against a different include layout, for code nobody
+ships. Not shown: whether anyone outside the release flow (a player, a hosting setup) runs a locally built `dist-legacy` package; the
+threat model puts anyone who installs their own runtime DLL outside the gate. The change lands with the implementation as its own
+commit.
+
+**Dependencies, delay loads, forwarders.** N75 restricts a plugin's imports to its own directory and System32
+(`plugin_loader.cpp:369-383`). An unsigned DLL in the plugins directory that a signed plugin imports would load without a check. The
+verifier therefore reads the plugin's import table, its delay-load import directory and its forwarded exports (an export whose RVA
+lies inside the export directory and names `dll.symbol`), and requires every named DLL that resolves to a file in the plugins
+directory to pass the same check. System32 imports are the OS's. Delay loads and forwarders are in the walk, not gaps.
+
+**Plugin-initiated loads.** A plugin that calls `LoadLibrary` after its init is not on the staged path. `DllLoadHook`
+(`src/runtime/hook/dll_load_hook.cpp:308-322`) already hooks all four LoadLibrary variants; in an enforcing build its filter also
+checks any load whose resolved path lies in the plugins directory against the same verifier, and refuses (null, `ERROR_ACCESS_DENIED`)
+on a failure. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is not a
+plugin file); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
+anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
+their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it.
+
+**Check and load are separate steps.** A file can change between them.
+- `VerifyPluginSignature` opens the file with `FILE_SHARE_READ` only (no write or delete sharing), and `StageOne` keeps that handle
+  open across `LoadModule`, so a Windows process cannot write or replace the file in between.
+- Known gap: under Wine and Proton a Linux process of the same user can write the underlying file without the Windows sharing rules.
+  The test in section 5 measures whether Wine honours the sharing mode against another Wine process; it cannot cover a native Linux
+  writer, and the threat model puts a same-user native writer out of scope. The mitigation that would cover it (copy the verified bytes
+  into a private directory and load the copy) breaks N75's directory-based dependency search, so it is not adopted; it is the option to
+  take if the threat model widens.
 
 ## 2. What is pinned, and how it survives 72-hour leaf certificates
 
-Artifact Signing issues a leaf certificate that is valid 72 hours and renews it daily; the durable identity of the signing profile is the
-profile's EKU, and deleting and recreating the profile changes it. Source: Microsoft Learn, Artifact Signing "Certificate management",
-https://learn.microsoft.com/en-us/azure/artifact-signing/concept-certificate-management. The same page and the Q&A thread
+Artifact Signing issues a leaf certificate valid 72 hours and renews it daily; the durable identity of the signing profile is its
+EKU, and deleting and recreating the profile changes it. Source:
+https://learn.microsoft.com/en-us/azure/artifact-signing/concept-certificate-management. That page and
 https://learn.microsoft.com/en-us/answers/questions/5923488/how-to-trust-azure-artifact-signing-certificates-w
-say that a timestamped signature stays valid after the leaf expires, and that Windows trusts the chain through the Microsoft Identity
-Verification Root CA 2020 distributed in its trust list.
+say a timestamped signature stays valid after the leaf expires and that Windows trusts the chain through the Microsoft Identity
+Verification Root CA 2020.
 
-What the runtime pins (values from `release-signer`, which is the authority for them; the runtime copies, it does not invent):
+What the runtime pins. The values come from `release-signer`, which is their authority:
 
-| Pin | Value | Source |
+| Pin | Value | Status |
 | --- | --- | --- |
-| Root | Microsoft Identity Verification Root CA 2020 certificate, compiled in as DER (SHA-256 of the DER is also compiled in and checked at startup of the verifier) | `release-signer/config/ca/ms-identity-verification-root-2020.crt` |
-| Leaf EKU | the whole OID `1.3.6.1.4.1.311.97.918669346.25014483.651891390.88972997`, compared as a whole string, never by the `1.3.6.1.4.1.311.97.` prefix (every Artifact Signing customer shares the prefix) | `release-signer/config/signing.yml:15` |
-| Code signing EKU | `1.3.6.1.5.5.7.3.3` must also be present | RFC 5280 |
-| Subject | the exact subject of the signing identity, RFC 2253 form | `release-signer/config/signing.yml:17-21`: **empty today**. `release-signer`'s verifier already compares it when set (`internal/authenticode/verify.go`). Filling it in is a prerequisite PR in that repo (not this issue); until it lands the runtime pins EKU plus root only, and the ADR's status stays "proposed". |
-| Account and profile names | not in the certificate; not pinned by the runtime (`sprockeesigning`, `andrew-bates-public` are the signer's configuration) | |
+| Root | Microsoft Identity Verification Root CA 2020, compiled in as DER; its SHA-256 is compiled in and checked | from `release-signer/config/ca/ms-identity-verification-root-2020.crt`, which the pipeline's own verifier uses |
+| Leaf EKU | the whole OID `1.3.6.1.4.1.311.97.918669346.25014483.651891390.88972997`, compared as a whole string (every Artifact Signing customer shares the `1.3.6.1.4.1.311.97.` prefix) | **unverified.** It is the value in `release-signer/config/signing.yml:15`, which came from the owner's directive; no certificate issued to the profile has ever been seen (no signing run, empty `records/`). A pin to confirm, not a fact. |
+| Code-signing EKU | `1.3.6.1.5.5.7.3.3` also present | RFC 5280 |
+| Subject | exact RFC 2253 subject of the signing identity | **empty** in `signing.yml:21`; it comes only from the owner-run subject-discovery trial |
 
-Survival over leaf rotation: the pin is the EKU and the root, neither of which changes with the daily renewal. The leaf's validity is
-judged **at the signing time**, not at load time: the verifier reads the RFC 3161 counter-signature attribute
-(`1.3.6.1.4.1.311.3.3.1`) from the signature, takes the `genTime` of the time-stamp token, and builds the chain with
-`CertGetCertificateChain(..., pTime = genTime, ...)`. The timestamp token's own signer chain (the Microsoft TSA,
-`http://timestamp.acs.microsoft.com`, per `release-signer`) is verified the same way. A signature with no timestamp is judged at the
-current time, so it passes only while the 72-hour leaf is live; that is an accepted case only for a dev build (section 3), and a release
-plugin without a timestamp is refused with the reason `no timestamp and signer certificate expired`.
+The EKU is confirmed by the same trial: the first certificate the profile issues, read from the run's own stage-60 evidence, is
+compared with `signing.yml:15` before the pipeline or the runtime pins it. If it differs, `signing.yml` and the runtime's pin are both
+corrected to what the certificate shows, and nothing is released against the old value. Until then the runtime's pin table is marked
+`unconfirmed` in the source and the plugin gate does not ship.
 
-Not shown: the tail of that chain with a real Artifact Signing certificate and the real Microsoft TSA. The probe in section 4 used a
-private CA and the DigiCert TSA. A real run needs a file the pipeline signed; the first signed plugin from `release-signer` is the
-witness, and the test plan (section 5) includes a fixture signed by the pipeline once one exists.
+**Survival over leaf rotation.** The pin is the EKU plus the root, neither of which changes with the daily renewal. The leaf's
+validity is judged at the signing time, not at load time: the verifier reads the RFC 3161 counter-signature attribute
+(`1.3.6.1.4.1.311.3.3.1`) from the signature, takes the time-stamp token's `genTime`, and builds the chain with
+`CertGetCertificateChain(..., pTime = genTime, ...)`. The token's own signer chain (the Microsoft TSA) is verified the same way.
 
-The pipeline has never produced a signed file. `release-signer` has no signing run on record, and the shipped `BugSplat64.dll` of the
-latest release carries no Authenticode signature (`osslsigncode extract-signature`: "No signature found"). Until its first
-owner-run signing trial passes, the subject pin cannot be filled, no signed fixture exists, and nothing in this section has been
-observed on a certificate the pipeline issued.
+**The timestamp is bound to the signature.** A token is evidence only about the signature it stamps. The verifier reads the token's
+`TSTInfo.messageImprint` (hash algorithm and digest) and compares it with the hash, under that algorithm, of the `signature` OCTET
+STRING of the Authenticode `SignerInfo` (the encrypted digest). A token whose imprint does not equal it is refused as `timestamp not
+bound to this signature`; without this, a valid token copied from another signature would pass.
+
+**A signature with no timestamp** is judged at the current time, so it passes only while the 72-hour leaf is live and is refused with
+`no timestamp and signer certificate expired` afterwards. The pipeline timestamps everything it signs (`release-signer` verifies the
+timestamp in stage 60), so a pipeline file always carries one.
+
+**Chain status.** The chain build's `dwErrorStatus` must be exactly 0; any set bit refuses. The reason line prints the hex value and
+the `CERT_TRUST_*` name of each set bit. Measured (wine-11.19, exclusive root = the test root): a signature from a root that is not in
+the store gives `0x10000`, `CERT_TRUST_IS_PARTIAL_CHAIN` (mingw `wincrypt.h:5305`); a signature that embeds a forged root
+certificate of its own gives `0x20`, `CERT_TRUST_IS_UNTRUSTED_ROOT` (`wincrypt.h:5294`). Both are refused by the rule "any nonzero".
+
+**Revocation, and a compromised signing day.** Short-lived certificates make an online revocation check (disabled in the probe,
+`WTD_REVOKE_NONE`) a failure mode of its own at game boot, so there is none. A timestamped signature from a compromised day would stay
+valid forever, so the runtime ships a denylist, compiled in and changed only by a runtime release, with three kinds of entry:
+- a leaf certificate serial number;
+- a signing-time interval (`genTime` from, until) for the profile, which refuses everything stamped in a compromised window whatever
+  the serial;
+- a profile EKU (the pin table is a list; a retired or compromised profile's EKU is removed from it and listed here, so the reason
+  line can say why).
+
+The denylist lives in one header, and a test checks that every entry parses. A runtime that predates an entry cannot learn it: the
+update path is a new release, and a plugin signed in the window stays loadable on older runtimes. The release notes of the release
+that adds an entry say so.
+
+Not shown: the chain with a real Artifact Signing certificate and the real Microsoft TSA; the probe used a private CA and the
+DigiCert TSA. The first pipeline-signed file is the witness; section 5 holds a row for it.
 
 API pages: `WinVerifyTrust`
 https://learn.microsoft.com/en-us/windows/win32/api/wintrust/nf-wintrust-winverifytrust, `CertGetCertificateChain`
@@ -102,130 +183,158 @@ https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certget
 
 ## 3. Testing an unsigned local build of a plugin
 
-Recommendation: **a dev build of the runtime**, a build-time option and not a runtime switch.
+Recommendation: **a dev build of the runtime**, selected at build time and never by a runtime switch.
 
 - `-DNEVR_ALLOW_UNSIGNED_PLUGINS=ON` compiles the verifier in "log and allow" mode: an unsigned or foreign-signed plugin loads, with a
-  Warning line per plugin (`[NEVR.PLUGIN] plugin=<name> file=<file> UNSIGNED, loaded because this is a dev build`) and the build
-  identity (`nevr_identity`, N112) carries `plugins=unsigned-allowed`, so the server side can see it. Default OFF. Only the dev preset and
-  an explicit configure flag turn it on.
-- A release cannot carry it: `tools/package_release.py` (which already reads the identity literal from the shipped
-  `BugSplat64.dll`) gets a check that the literal says `plugins=signed-only`, and `tools/tests/test_release_contract.py` pins that
-  check. The release-signer's source declaration reads the same literal (`binary: BugSplat64.dll`, `sources.yml`).
+  Warning line per plugin (`[NEVR.PLUGIN] plugin=<name> file=<file> UNSIGNED, loaded because this is a dev build`). Default OFF. Only
+  a dedicated preset, `mingw-plugin-dev`, turns it on; it inherits `mingw-release` the way `mingw-scenario` does for
+  `NEVR_SCENARIO_CONTROL` (`CMakePresets.json:96-102`).
+- **A release proves the option is off without touching `NEVR-BUILD`.** The identity literal (`\0NEVR-BUILD <version> <commit40>\0`) is
+  a cross-repo contract (`tools/package_release.py:44`, the `binary:` entries of `release-signer/config/sources.yml`, rule 2.3) and
+  gets no new field. Every build instead embeds a second, separate NUL-bounded literal, `\0NEVR-PLUGIN-TRUST <mode>\0`, with
+  `<mode>` either `signed-only` or `unsigned-allowed`, defined next to `kIdentityArray` (`src/core/build_identity.cpp:39`) with its
+  own regex. `tools/package_release.py` gets a second check that finds exactly one such literal in each packaged `BugSplat64.dll` and
+  that it says `signed-only`, and fails the package otherwise. `tools/tests/test_release_contract.py` pins that check, and a test
+  feeds it a DLL carrying each mode. `release-signer` is unchanged by this ADR; a stage there that reads the same literal is an
+  optional follow-up.
+- The literal is not the login's `nevr_identity` JSON (N112), which this ADR leaves unchanged. A server-visible flag for a dev build
+  is a separate decision, not made here.
 
-Why not the alternatives: a config key or environment variable is something a malicious package can set next to the DLL, which defeats
-the gate ("no config flag turns it off in a release build"). A "test certificate" the runtime also trusts means a second pin in the
-shipping binary, and anyone with that key loads plugins into every player's game. A build-time option leaves the shipping binary with
-exactly one trust root.
+Why not the alternatives: a config key or environment variable can be set by whatever ships next to the DLL, which defeats the gate;
+a second trusted "test" certificate puts a second root in the shipping binary; and a preset alone (as `mingw-scenario` is today)
+leaves nothing that proves at packaging time which preset made the DLL. The literal is the proof.
 
-There is no signing route for a developer's local build, on purpose: the project issues no development certificate. A plugin
-developer builds the runtime with the option on (`just preset=mingw-debug build`; local builds already stamp `-dev`) and uses that
-`BugSplat64.dll` in their own game copy.
+There is no signing route for a developer's local build: the project issues no development certificate. A plugin developer builds
+the runtime with that preset and uses its `BugSplat64.dll` in their own game copy.
 
 ## 4. WinVerifyTrust under Wine and Proton, and how it is known
 
 Measured with `wine-11.19`, a throwaway prefix, `DISPLAY` and `WAYLAND_DISPLAY` unset, a probe built with the repo's toolchain
-(`x86_64-w64-mingw32-g++ 16.2.0`, static) calling `WinVerifyTrust`, `CryptQueryObject`, `CryptMsgGetParam` and, with an exclusive root
-store, `CertCreateCertificateChainEngine` + `CertGetCertificateChain`. Test files were signed with `osslsigncode 2.14` under a private
-root CA (leaf EKUs `1.3.6.1.5.5.7.3.3` plus a test OID), plus one DigiCert RFC 3161 timestamp.
+(`x86_64-w64-mingw32-g++ 16.2.0`, static) calling `WinVerifyTrust`, `CryptQueryObject`, `CryptMsgGetParam` and, over an exclusive
+root store, `CertCreateCertificateChainEngine` and `CertGetCertificateChain`. Files were signed with `osslsigncode 2.14` under a
+private root (leaf EKUs `1.3.6.1.5.5.7.3.3` plus a test OID), one with a DigiCert RFC 3161 timestamp. An independent re-run (a fresh
+prefix, different probe sources) gave the same results and added the forged-root row.
 
-| Case | `WinVerifyTrust` | Exclusive-root chain (`dwErrorStatus`) | EKU test |
+| Case | `WinVerifyTrust` | Exclusive-root chain `dwErrorStatus` | EKU test |
 | --- | --- | --- | --- |
 | unsigned file | `0x800b0100` (`TRUST_E_NOSIGNATURE`) | n/a | n/a |
 | signed by our test root, test EKU | `0x00000000` | `0x00000000` | present |
 | signed by our test root, other EKU | `0x00000000` | `0x00000000` | absent |
-| signed by a different root, our EKU | `0x00000000` | `0x00010000` (`CERT_TRUST_IS_UNTRUSTED_ROOT`) | present |
+| signed by a root not in the store, our EKU | `0x00000000` | `0x00010000` (`CERT_TRUST_IS_PARTIAL_CHAIN`) | present |
+| signed with a forged root embedded in the signature, our EKU | `0x00000000` | `0x00000020` (`CERT_TRUST_IS_UNTRUSTED_ROOT`) | present |
 | our signed file, one byte of code changed | `0x80096010` (`TRUST_E_BAD_DIGEST`) | n/a | n/a |
-| signed with RFC 3161 timestamp | `0x00000000`; `CRYPT_PROVIDER_SGNR.csCounterSigners` is 0 | `0x00000000` | present |
+| signed with an RFC 3161 timestamp | `0x00000000`; `csCounterSigners` is 0 | `0x00000000` | present |
 
-What follows from it:
+What follows:
+- **Under Wine, `WinVerifyTrust` returning 0 proves only that the digest matches a well-formed signature.** It returns 0 for a
+  signature from a root nobody trusts. The identity decision does not rest on it: it serves as the digest check, and the root, EKU,
+  status and denylist are decided by the runtime's own chain build.
+- Wine does not populate counter-signers in the provider data, so the runtime reads the timestamp itself:
+  `CryptQueryObject(CERT_QUERY_OBJECT_FILE, ..., CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, ...)` then
+  `CryptMsgGetParam(CMSG_SIGNER_UNAUTH_ATTR_PARAM)` returned attribute `1.3.6.1.4.1.311.3.3.1` (5998 bytes) for the timestamped file
+  and "not found" for the untimestamped one. Parsing the token (an inner CMS `SignedData` whose content is a `TSTInfo`) is a work item.
+- Embedded signatures only: `CryptQueryObject` with the embedded-PKCS7 flag succeeding is a precondition. A file with no embedded
+  signature is refused before `WinVerifyTrust` runs, so a catalog-signed file is not accepted on native Windows, where
+  `WinVerifyTrust` would otherwise accept it through the catalog.
+- One code path serves native Windows and Wine, so both take the same decision. The Platform Trust List is not relied on.
 
-- **Under Wine, `WinVerifyTrust` returning 0 proves only that the digest matches a well-formed signature.** It returns 0 for a signature
-  from a root nobody trusts. The identity decision cannot rest on its verdict. It is used for the digest check; the root and EKU are
-  decided by the runtime's own exclusive-root chain build, which gave the right answer for every row.
-- Wine does not populate counter-signers in the provider data, so the timestamp is read by the runtime itself: `CryptQueryObject(
-  CERT_QUERY_OBJECT_FILE, ..., CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, ...)` then `CryptMsgGetParam(CMSG_SIGNER_UNAUTH_ATTR_PARAM)`
-  returned attribute `1.3.6.1.4.1.311.3.3.1` (5998 bytes) for the timestamped file and "not found" for the untimestamped one.
-  Parsing the token (an inner CMS `SignedData` whose content is a `TSTInfo`) is the work item; it is not done in the probe.
-- The same code path serves native Windows, where `WinVerifyTrust` additionally checks the Platform Trust List. We do not rely on that
-  half of it, so the two platforms take the same decision.
-
-Not shown: Proton (no Proton install was run; Proton ships Wine's crypt32 and wintrust, so the Wine result is the expected one, and the
-test in section 5 runs against it when a Proton prefix is available), native Windows (the `just test-winvm` rig), and revocation (the
-probe disabled it, `WTD_REVOKE_NONE`; the plan does not check revocation, because the signer's certificates are short-lived and renewed
-daily, and an online check inside the game's boot is a failure mode of its own). The probe sources are scratch and are not committed;
-the implementation's tests (section 5) are what stay.
+Not shown: Proton (no Proton install was run; Proton ships Wine's crypt32 and wintrust, so the Wine result is the expected one, and
+the section 5 test runs against it when a prefix is available) and native Windows (the `just test-winvm` rig). The probe sources are
+scratch and not committed; the implementation's tests stay.
 
 ## 5. Tests
 
-Fixtures are generated at test time by a Python helper in `tools/tests/` (openssl + osslsigncode, both present in the builder image,
-`.github/builder/Dockerfile:37-44`): a test root CA, a leaf with the test EKU, a second leaf with another EKU, a second root, and a
-trivial DLL built from the repo's toolchain. The verifier takes the policy (root DER, EKU, subject) as an argument, so the tests pin the
-test root and never the Microsoft one; one more test pins the Microsoft root constant by hash.
+Fixtures are generated at test time by a Python helper in `tools/tests/` (openssl and osslsigncode are in the builder image,
+`.github/builder/Dockerfile:37-44`): a test root, a leaf with the test EKU, a second leaf with another EKU, a second root, a forged
+root embedded in a signature, and a trivial DLL from the repo's toolchain. The verifier takes the policy (root DER, EKU list,
+subject, denylist) as an argument, so tests pin the test root and never the Microsoft one; one test pins the Microsoft root constant
+by hash.
 
 GTest under Wine (a new test file in `src/runtime/tests/`, added to the GTest floor):
 
 | Test | Expected |
 | --- | --- |
 | signed by the pinned root and EKU, timestamped | accepted |
-| unsigned file | refused, reason `unsigned` |
-| signed by the pinned root, other EKU | refused, reason `EKU` |
-| signed by another root, same EKU | refused, reason `untrusted root` |
-| signed file with one byte changed | refused, reason `digest mismatch` |
+| unsigned file | refused, `unsigned` |
+| catalog-only or no embedded signature | refused, `no embedded signature` |
+| signed by the pinned root, other EKU | refused, `EKU` |
+| signed by a root not in the store, same EKU | refused, status `0x10000` |
+| forged root embedded in the signature | refused, status `0x20` |
+| any other nonzero `dwErrorStatus` | refused (the test injects a chain with a flag set) |
+| one byte changed | refused, `digest mismatch` |
 | leaf expired, valid timestamp inside the leaf's validity | accepted |
-| leaf expired, no timestamp | refused, reason `signer certificate expired and no timestamp` |
+| leaf expired, no timestamp | refused, `signer certificate expired and no timestamp` |
 | timestamp after the leaf's `notAfter` | refused |
-| file replaced between verify and load (swap attempt on the held handle) | the swap is refused by the OS, or the loaded bytes equal the verified bytes |
-| a dependency in the plugins directory that is unsigned | refused, reason names the dependency |
-| `NEVR_ALLOW_UNSIGNED_PLUGINS` build: unsigned plugin | loaded with the Warning line |
+| valid timestamp token copied from another file's signature | refused, `timestamp not bound to this signature` |
+| denied leaf serial | refused, `denylisted serial` |
+| signing time inside a denied interval | refused, `denylisted signing window` |
+| denied profile EKU | refused, `denylisted profile` |
+| plugin imports an unsigned DLL from the plugins directory (import table, delay-load, forwarder: one case each) | refused, names the dependency |
+| plugin calls `LoadLibrary` on an unsigned file in the plugins directory after init | refused by the `DllLoadHook` filter |
+| restricted-search load rejected with `ERROR_INVALID_PARAMETER` | refused, no fallback load |
+| file written while the verify handle is held, from another Wine process | the write fails, or the loaded bytes equal the verified bytes |
+| `NEVR_ALLOW_UNSIGNED_PLUGINS` build, unsigned plugin | loaded with the Warning line |
+| a file the pipeline signed (once one exists) | accepted |
 
-Each test is also run as a mutant (the AGENTS.md rule): drop the root check, drop the EKU compare, compare the EKU by prefix, drop the
-digest check, pass `pTime = now`; each must make the row it guards fail.
+Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
+drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the `:391` fallback; each makes its row fail.
 
-Integration (`tests/system` or a `launch-client.sh` run on a game copy, nested display): a game copy with one signed fixture plugin and
-one unsigned in `config.yaml`; the run's log must contain the load line of the first and the refusal line of the second, and the manifest
-carried by the login (`nevr_plugins`) must list the second as failed. Per AGENTS.md "Logging", the refusal record is read from a real
-run.
+Integration: a game copy with one signed fixture plugin and one unsigned, on the nested display; the run's log must contain the load
+line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.
 
-`just test-winvm` runs the same GTest on native Windows as the second platform.
+Release contract: the packaging check for the `NEVR-PLUGIN-TRUST` literal (section 3), and the legacy targets absent from release
+inputs (section 1). `just test-winvm` runs the GTest on native Windows as the second platform. The N-rules index in `AGENTS.md` gets
+a row once the rule is implemented.
 
-Also: `tools/tests` gets the release contract tests of section 3, and the N-rules index in `AGENTS.md` gets a row for the new rule once
-it is implemented.
+## 6. Plugins people use today, and what a player sees
 
-## 6. Plugins people use today, and the release-notes line
+Every plugin outside this repository (`nevr-runtime-plugins`: `broadcaster-bridge`, `anim-debugger`, `audio-intercom`,
+`game-rules-override`, `session-unlocker`, `combat-mod`, `combat-2d`) is built and distributed unsigned today; the one in this
+repository (`example`) is not shipped to players. From the first release with this change an unsigned copy of any of them is
+refused, whether the player built it, downloaded it or got it from a friend.
 
-Today every plugin outside this repository (`nevr-runtime-plugins`: `broadcaster-bridge`, `anim-debugger`, `audio-intercom`,
-`game-rules-override`, `session-unlocker`, `combat-mod`, `combat-2d`) is built and distributed unsigned, and the one plugin in this
-repository (`example`) is not shipped to players. From the first release with this change an unsigned copy of any of them is refused
-with a clear line, whether the player built it, downloaded it, or got it from a friend.
+- Each plugin that is to keep working is added to `release-signer/config/sources.yml` as a source (repo, workflow, start commit,
+  exact file set; POLICY.md rules 1.2 and 3.3), so its release DLLs come out of the same pipeline. That is one PR in `release-signer`
+  per plugin repo, not part of #741, and each plugin repo's workflow must produce the build attestation the signer demands. Order:
+  signed plugin releases exist before the runtime release that enforces.
+- **Community plugin releases.** A plugin published by a community mirror or index without passing through `release-signer` is
+  refused by this gate like any other unsigned DLL. Approved community releases must go through `release-signer` before they are
+  published. How that join works is open (open item 5).
+- `config.yaml` entries for refused plugins stay. A refused plugin is the same failure as one that cannot load today
+  (`FailPluginLoad`): a `required` plugin stops the run, an optional one is skipped.
+- #575 moves the plugins directory; the check works on whatever path `StageOne` builds.
 
-- Each plugin that is to keep working is added to `release-signer/config/sources.yml` as a source (repo, workflow, start commit, exact
-  file set; POLICY.md rules 1.2 and 3.3), so its release DLLs come out of the same pipeline with the same signature. That is a separate
-  PR in `release-signer` per plugin repo, not part of #741; the plugin repos' release workflows must produce the build attestation the
-  signer demands. The order of merging: the signed plugin releases exist before the runtime release that enforces.
-- Two upgrades of the runtime exist, so a player is never left with a plugin that no longer loads without being told: the release notes
-  say it, and each refusal line names the file and the cause.
-- `config.yaml` entries for refused plugins stay; a refused plugin is the same failure as one that cannot load today
-  (`FailPluginLoad`), so a `required` plugin stops the run and an optional one is skipped.
-- `#575` moves the plugins directory to `%LOCALAPPDATA%\nevr\echovr`; the check works on whatever path `LoadModule` receives, so the two
-  changes do not touch each other.
+**What the player sees beyond the log line.** A log file is not where a player looks. The runtime already has a precedent for a
+player notice, the graphics-driver dialog (#553, `src/runtime/log/builtin_filter.cpp`, policy in `gpu_hung_notice.h`): a `MessageBoxA`
+on its own thread, once per run, never on a server or a headless run, shown only after the record is written. A refusal notice
+follows the same policy: after the log line and the manifest entry, once per run, on a client with graphics only, one dialog that
+lists each refused file and the reason in plain words ("not signed by the NEVR release process"), on its own thread so boot does not
+block. On a dedicated server there is no dialog; the refusal line and the manifest entry are the record, and a `required` plugin
+ends the run through the existing path.
 
-Release-notes line (for `RELEASE-NOTES.md`, which the release pipeline builds):
+Release-notes line (`RELEASE-NOTES.md`, which the release pipeline builds):
 
-> Plugins: the runtime now loads only plugins signed through the project's release pipeline. An unsigned plugin, or one signed by anyone else,
-> is not loaded; `BugSplat64.dll`'s log names the file and the reason on one line. Use the signed releases of each plugin.
-> Plugin developers: build the runtime with `-DNEVR_ALLOW_UNSIGNED_PLUGINS=ON` to test an unsigned build; those builds say so in their
-> login and are not released.
+> Plugins: the runtime now loads only plugins signed through the project's release pipeline. An unsigned plugin, or one signed by
+> anyone else, is not loaded: a message tells you which file, and `BugSplat64.dll`'s log names the file and the reason. Use the
+> signed release of each plugin. Plugin developers: build the runtime with the `mingw-plugin-dev` preset to test an unsigned build;
+> those builds say so inside the DLL and are not released.
 
 ## Consequences
 
-- One more pinned artifact in the binary (the root certificate) and a dependency of the runtime's release on `release-signer`'s
-  `signer_subject` being set.
-- Plugin authors lose the drop-a-DLL workflow on a release runtime; the dev build is the replacement.
-- A stolen signing profile is the single point of trust, as it already is for `BugSplat64.dll`.
+- One more pinned artifact in the binary (the root certificate), a second embedded literal, and a dependency of the runtime's release
+  on `release-signer`'s `signer_subject` and the confirmed EKU.
+- Plugin authors lose the drop-a-DLL workflow on a release runtime; the dev build replaces it.
+- A stolen signing profile is the single point of trust, as it already is for `BugSplat64.dll`; the denylist is the response, and it
+  moves at the speed of a runtime release.
+- The legacy build is no longer part of `dist-all`.
 
-## Open items for the reviewer
+## Open items
 
-1. Keep the dependency check (section 1) or drop it and record the gap.
-2. Revocation is not checked (section 4); say if that is acceptable.
-3. `signer_subject` must be filled in `release-signer` before this ships, and that needs the owner-run signing trial (the pipeline has never signed a file).
-4. The plugin repos' signing onboarding order (section 6).
+1. Revocation beyond the denylist is not checked; the reviewer decides whether the denylist is enough.
+2. `signer_subject` must be filled in `release-signer`, and the profile EKU confirmed against the first real certificate; both need
+   the owner-run signing trial (the pipeline has never signed a file). The gate does not ship before then.
+3. The plugin repos' signing onboarding order (section 6).
+4. The refusal dialog's wording, and whether a client without a desktop (Wine without a display) skips it.
+5. Approved community plugin releases pass through `release-signer` before publishing; how that join works is being settled outside
+   this repository.
+6. Whether `release-signer` also reads the `NEVR-PLUGIN-TRUST` literal (section 3) is a follow-up, not a prerequisite.
