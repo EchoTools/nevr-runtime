@@ -1091,9 +1091,10 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
     # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
-    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) ride in this executable.
+    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) and
+    # test_return_to_lobby_queue.cpp (#730, header-only lifecycle/return_to_lobby_queue.h) ride in this executable.
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
-                   tests/test_server_bringup.cpp)
+                   tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
                                ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)

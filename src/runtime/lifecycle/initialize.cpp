@@ -17,6 +17,7 @@
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
 #include "runtime/patch/resource_override.h"
+#include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/state_machine.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/server/gameserver.h"
@@ -246,7 +247,7 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
 // ============================================================================
 
 extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
-  if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
+  if (g_pGame) nevr_return_to_lobby::ScheduleNow(g_pGame, "export");
 }
 
 extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
