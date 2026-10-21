@@ -100,6 +100,15 @@ cat {fix}/obj_$base
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK (3 .init_array entries", result.stdout)
 
+    def test_openssls_cpuid_constructor_passes(self) -> None:
+        # OpenSSL 3.6.5's crypto/armcap.c makes OPENSSL_cpuid_setup an ELF constructor on aarch64.
+        (self.fix / "sections").write_text(SECTIONS.replace("000018", "000020"))
+        (self.fix / "relocs").write_text(RELOCS + "0000000000064cf8  0000000000000403 R_AARCH64_RELATIVE                30000\n")
+        (self.fix / "symbols").write_text(SYMBOLS + "0000000000030000 t OPENSSL_cpuid_setup\n")
+        result = self.run_check(self.add_object("a.o"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK (4 .init_array entries", result.stdout)
+
     def test_a_tool_that_cannot_run_fails_and_names_the_path(self) -> None:
         bogus = self.root / "nonexistent"
         result = self.run_check(self.add_object("a.o"), bin_dir=bogus)
