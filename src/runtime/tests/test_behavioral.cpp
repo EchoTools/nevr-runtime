@@ -1219,6 +1219,27 @@ TEST_F(N61_WsBridgeTest, TheLoginRemoteEndingDoesNotDeadlockOnItsOwnMutex) {
   nevr_self_check::ResetForTest();
 }
 
+// #723, the ServerDB drop: the session-end flush runs inside the login remote's own Close callback, and ix holds
+// its non-recursive _setReadyStateMutex there. A send on that same remote (the flush's sender) blocks on it, so the
+// remote's thread never returned and graceful shutdown (WebSocket::stop joins it) never finished. This drives a real
+// ix::WebSocket against a real local server that closes it, with a self-check result queued for the flush to send.
+TEST_F(N61_WsBridgeTest, TheLoginRemoteDroppedByItsServerEndsItsSessionWithoutSendingOnItself) {
+  nevr_self_check::ResetForTest();
+  nevr_self_check::SetEnabled(true);
+  nevr_self_check::SetSender(&TestHook_SendFrameToServer);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId());
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"drop_probe", "a result waits in the queue", nullptr});
+  ASSERT_GE(id, 0);
+  nevr_self_check::Report(id, "queued", true);
+
+  if (!TestHook_LoginRemoteDroppedThroughRealIx(10000)) {
+    ADD_FAILURE() << "the remote's Close callback never returned: the session-end flush sent on the closing remote";
+    std::fflush(stdout);
+    std::_Exit(1);  // the remote's thread is stuck on ix's own mutex; tearing down would wait on it
+  }
+  nevr_self_check::ResetForTest();
+}
+
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
   // Scenario:
   //   1. Login connects → callback_A on shared remote.
