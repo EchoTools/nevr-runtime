@@ -1,4 +1,4 @@
-// plugin_signature.cpp — see plugin_signature.h and docs/adr/0010-signed-plugins-only.md.
+// plugin_signature.cpp — see plugin_signature.h (ADR 0010, #741).
 
 #include "runtime/ext/plugin_signature.h"
 
