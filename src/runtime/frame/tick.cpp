@@ -24,6 +24,7 @@
  */
 
 #include "runtime/frame/tick.h"
+#include "runtime/frame/window_watch.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -71,6 +72,7 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     nevr_pnsrad_enabler::InstallPendingDiagnostics();
     nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
+    nevr_window_watch::Poll(nowUs / 1000);         // #341: a client whose X window vanished quits (Wine only; a no-op on a server)
 
     // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
     {
