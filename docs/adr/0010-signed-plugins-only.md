@@ -281,7 +281,9 @@ GTest under Wine (a new test file in `src/runtime/tests/`, added to the GTest fl
 | a file the pipeline signed (once one exists) | accepted |
 
 Mutants (AGENTS.md "What a PR carries"): drop the root check, drop the status test, compare the EKU by prefix, drop the digest check,
-drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the `:391` fallback; each makes its row fail.
+drop the imprint binding, pass `pTime = now`, drop the denylist test, restore the `:391` fallback, let the 64-file dependency cap fail open
+(a 65th dependency is then accepted), compare the late-load path as text instead of its final path (an 8.3 name, a `\\?\` prefix or a trailing dot
+or space then loads unchecked); each makes its row fail.
 
 Integration: a game copy with one signed fixture plugin and one unsigned, on the nested display; the run's log must contain the load
 line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.
