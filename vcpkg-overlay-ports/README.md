@@ -6,7 +6,9 @@ takes these ports in place of vcpkg's. The Quest build reads its own overlays (`
 
 | Port | Version | vcpkg's port at `.vcpkg-commit` | Source of these files |
 |---|---|---|---|
-| `mbedtls` | 3.6.7 | 3.6.4 (vcpkg master: 3.6.5) | vcpkg 2026.10.16's 3.6.5 port with the version and the `v3.6.7` archive's SHA512 |
+| `ixwebsocket` | 12.1.0 | 12.0.1 | microsoft/vcpkg#54444 (`ports/ixwebsocket`), unchanged |
+| `mbedtls` | 3.6.7 | 3.6.5 | vcpkg 2026.10.16's 3.6.5 port with the version and the `v3.6.7` archive's SHA512 |
+| `miniupnpc` | 2.3.3 | 2.3.2 | vcpkg's 2.3.2 port with the version and the `miniupnpc_2_3_3` archive's SHA512 |
 
 When `.vcpkg-commit` moves to a vcpkg whose port is at this version or later, delete that port's directory here
 (and this file and `vcpkg-configuration.json` with the last one).
