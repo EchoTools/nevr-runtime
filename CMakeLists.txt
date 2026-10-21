@@ -442,7 +442,10 @@ add_custom_target(dist-legacy
 # =============================================================================
 # Combined dist-all target
 # =============================================================================
+# The legacy build is not part of it: its plugin loader (src/legacy/gamepatches/plugin_loader.cpp) loads every
+# DLL in plugins\ unchecked and src/legacy/ is frozen, so a legacy DLL never goes into a package that is
+# shipped (#741, docs/adr/0010-signed-plugins-only.md). `just dist-legacy` stays an explicit developer recipe.
 add_custom_target(dist-all
-  DEPENDS dist dist-legacy
+  DEPENDS dist
   COMMENT "All distribution packages created"
 )

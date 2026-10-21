@@ -183,11 +183,22 @@ class ReleaseContractTest(unittest.TestCase):
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
-        self.assertIn("DEPENDS dist dist-legacy", cmake)
+        dist_all = cmake.split("add_custom_target(dist-all", 1)[1].split(")", 1)[0]
+        self.assertIn("DEPENDS dist\n", dist_all)
+        self.assertNotIn("dist-legacy", dist_all)
         justfile = (REPO / "justfile").read_text()
         workflows = "".join(path.read_text() for path in (REPO / ".github/workflows").glob("*.yml"))
         for name, text in (("CMakeLists.txt", cmake), ("justfile", justfile), ("workflows", workflows)):
             self.assertNotRegex(text, r"(?i)dist[-_](lite|debug)|DIST_(LITE|DEBUG)|PROJECT_VERSION}-(lite|debug)", name)
+
+    def test_no_release_input_names_the_legacy_build(self):
+        """#741: the legacy plugin loader loads every DLL in plugins\\ unchecked and src/legacy/ is frozen, so no
+        release workflow, packaging script or build target a release uses may name or build it."""
+        inputs = {path.name: path.read_text() for path in (REPO / ".github/workflows").glob("*.yml")}
+        inputs["package_release.py"] = (REPO / "tools/package_release.py").read_text()
+        inputs["build_distribution.py"] = (REPO / "tools/build_distribution.py").read_text()
+        for name, text in inputs.items():
+            self.assertNotRegex(text, r"gamepatcheslegacy|gameserverlegacy|dist-legacy|dist-all", name)
 
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
