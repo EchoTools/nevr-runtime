@@ -213,7 +213,7 @@ void TheLegacyRootIsServedWhenOnlyItHoldsTheData() {
 
 void ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt() {
   Reset();
-  g_existing = {kMediaDir, "/sdcard/Android/media/com.readyatdawn.r15/files/asset_patches", kLegacyData};
+  g_existing = {kMediaDir, "/sdcard/Android/media/com.readyatdawn.r15/asset_patches", kLegacyData};
   const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
   QCHECK(std::strcmp(r.source, "legacy") == 0);
 }
