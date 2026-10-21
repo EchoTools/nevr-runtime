@@ -605,6 +605,54 @@ TEST_F(PluginDependencyGateTest, LateLoadOfAFileOutsideThePluginsDirectoryIsNotT
   EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(outside.c_str(), nullptr));
 }
 
+// The same unsigned file in plugins/, named four ways that all resolve to it but do not spell its directory the way
+// the loader does. A filter that compares the text of the path lets each of them load unchecked.
+class PluginLateLoadAliasTest : public PluginDependencyGateTest {
+ protected:
+  void SetUp() override {
+    PluginDependencyGateTest::SetUp();
+    Plan("alias_target_unsigned.dll", "unsigned");  // copied into plugins/, never planned to load
+    g_testPluginLoadPlan.clear();
+    plain_ = pluginsDir_ + "alias_target_unsigned.dll";
+    TestHook_InstallPluginLoadFilter(pluginsDir_);
+  }
+
+  static std::wstring Lower(const std::string& narrow) {
+    std::wstring wide;
+    for (char c : narrow) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return wide;
+  }
+
+  void ExpectRefused(const std::wstring& spelled) {
+    EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(spelled.c_str(), nullptr)) << "not refused: " << std::string(spelled.begin(), spelled.end());
+    EXPECT_TRUE(TestLogContains("refused a later load of alias_target_unsigned.dll: unsigned"));
+  }
+
+  std::string plain_;
+};
+
+TEST_F(PluginLateLoadAliasTest, TheOrdinarySpellingIsRefused) { ExpectRefused(Lower(plain_)); }
+
+TEST_F(PluginLateLoadAliasTest, AnEightDotThreeShortNameIsRefused) {
+  char shortPath[MAX_PATH] = {};
+  const DWORD n = GetShortPathNameA(plain_.c_str(), shortPath, MAX_PATH);
+  ASSERT_GT(n, 0u) << "GetShortPathName failed: " << GetLastError();
+  ASSERT_NE(std::string(shortPath), plain_) << "no 8.3 name was made for the file: this form is not under test";
+  ExpectRefused(Lower(shortPath));
+}
+
+TEST_F(PluginLateLoadAliasTest, AQuestionMarkPrefixIsRefused) { ExpectRefused(Lower("\\\\?\\" + plain_)); }
+TEST_F(PluginLateLoadAliasTest, ATrailingDotIsRefused) { ExpectRefused(Lower(plain_ + ".")); }
+TEST_F(PluginLateLoadAliasTest, ATrailingSpaceIsRefused) { ExpectRefused(Lower(plain_ + " ")); }
+
+TEST_F(PluginLateLoadAliasTest, ADotDotDetourThroughThePluginsDirectoryIsRefused) {
+  ExpectRefused(Lower(pluginsDir_ + "..\\plugins\\alias_target_unsigned.dll"));
+}
+
+TEST_F(PluginLateLoadAliasTest, AFileThatIsNotInThePluginsDirectoryIsStillNotThisFiltersBusiness) {
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(Lower("\\\\?\\" + fixtures_ + "\\fixtures.json").c_str(), nullptr));
+}
+
 TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileWithAnUnsignedDependencyIsRefused) {
   Copy("import_unsigned");
   TestHook_InstallPluginLoadFilter(pluginsDir_);

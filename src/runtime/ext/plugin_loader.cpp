@@ -241,6 +241,7 @@ struct FilterState {
   std::mutex mutex;
   std::wstring dirLower;  // plugins directory, lowercase, backslashes, trailing backslash; empty: filter inactive
   std::string dirNarrow;  // the same directory as the loader spells it, for the dependency walk
+  std::wstring dirFinal;  // the directory's final path (long names, no prefix, no reparse points), lowercase, trailing backslash
   // Verified files stay open (FILE_SHARE_READ only) for the life of the process: the bytes that were checked
   // are the bytes the real load maps, and nobody can swap them in between or afterwards.
   struct Verified {
@@ -277,21 +278,69 @@ std::string NarrowName(const std::wstring& wide) {
   return out;
 }
 
+// The final path of an open file or directory: long names, symbolic links and junctions resolved, the \\?\ prefix
+// removed, lowercase. This is what the plugins directory is compared with. The text of the path a caller passes
+// cannot be: an 8.3 short name, a \\?\ prefix, a trailing dot or space and a junction all name a file in the
+// plugins directory without spelling it.
+bool FinalPathOfHandle(HANDLE handle, std::wstring* out) {
+  std::wstring buf(512, L'\0');
+  for (;;) {
+    const DWORD n = GetFinalPathNameByHandleW(handle, buf.data(), static_cast<DWORD>(buf.size()),
+                                              FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0) return false;
+    if (n < buf.size()) {
+      buf.resize(n);
+      break;
+    }
+    buf.resize(static_cast<size_t>(n) + 1);
+  }
+  if (buf.compare(0, 8, L"\\\\?\\UNC\\") == 0) {
+    buf = L"\\" + buf.substr(7);
+  } else if (buf.compare(0, 4, L"\\\\?\\") == 0) {
+    buf.erase(0, 4);
+  }
+  // Wine hands back the spelling the handle was opened with, an 8.3 name included; expand it. Native Windows
+  // has already done so and this changes nothing there.
+  DWORD longLen = GetLongPathNameW(buf.c_str(), nullptr, 0);
+  if (longLen != 0) {
+    std::wstring expanded(longLen, L'\0');
+    const DWORD got = GetLongPathNameW(buf.c_str(), expanded.data(), longLen);
+    if (got != 0 && got < longLen) {
+      expanded.resize(got);
+      buf = expanded;
+    }
+  }
+  if (!buf.empty()) CharLowerBuffW(buf.data(), static_cast<DWORD>(buf.size()));
+  *out = buf;
+  return true;
+}
+
+// Opens `path` for its attributes only, sharing everything, so looking at a file never stops anyone using it.
+bool FinalPathOf(const std::wstring& path, std::wstring* out) {
+  HANDLE h = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  const bool ok = FinalPathOfHandle(h, out);
+  CloseHandle(h);
+  return ok;
+}
+
 bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (t_stagedLoad || lowerPath == nullptr) return false;
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
   if (f.dirLower.empty()) return false;
   const std::wstring p = NormalizeWide(lowerPath);
+  // A bare name searches the usual places; if the plugins directory holds that name, it is the one at risk.
+  const bool bare = p.find_first_of(L"\\:") == std::wstring::npos;
+  const std::wstring candidate = bare ? f.dirLower + p : p;
   std::wstring full;
-  if (p.compare(0, f.dirLower.size(), f.dirLower) == 0 && p.size() > f.dirLower.size()) {
-    full = p;
-  } else if (p.find_first_of(L"\\:") == std::wstring::npos) {
-    // A bare name searches the usual places; if the plugins directory holds that name, it is the one at risk.
-    full = f.dirLower + p;
-    if (GetFileAttributesW(full.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+  if (FinalPathOf(candidate, &full)) {
+    if (full.compare(0, f.dirFinal.size(), f.dirFinal) != 0 || full.size() <= f.dirFinal.size()) return false;
+  } else if (!bare && p.compare(0, f.dirLower.size(), f.dirLower) == 0 && p.size() > f.dirLower.size()) {
+    full = p;  // cannot be resolved (denied, say) but is spelled as a file in the directory: the open below decides
   } else {
-    return false;  // a file outside the plugins directory is not a plugin file
+    return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
   }
   if (f.verified.count(full) != 0) return false;
 
@@ -315,9 +364,14 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   entry->handle = h;
   const int64_t now = static_cast<int64_t>(std::time(nullptr));
   std::string refusal;
+  // The file that was resolved and the file now held must be the same one: between the two opens a name can be
+  // pointed somewhere else. What is verified is what this handle holds.
+  std::wstring heldPath;
   const nevr_plugin_signature::Verdict v =
       nevr_plugin_signature::VerifyPluginFile(h, nevr_plugin_trust::ActivePolicy(), now);
-  if (!v.accepted()) {
+  if (!FinalPathOfHandle(h, &heldPath) || heldPath != full) {
+    refusal = "the file changed between resolving its path and opening it";
+  } else if (!v.accepted()) {
     refusal = v.Describe();
   } else {
     const nevr_plugin_tree::TreeVerdict t = nevr_plugin_tree::VerifyPluginTree(
@@ -358,6 +412,9 @@ void InstallPluginLoadFilter(const std::string& pluginDir) {
     for (char c : pluginDir) wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
     f.dirLower = NormalizeWide(wide.c_str());
     if (!f.dirLower.empty() && f.dirLower.back() != L'\\') f.dirLower.push_back(L'\\');
+    f.dirFinal.clear();
+    if (!f.dirLower.empty() && !FinalPathOf(f.dirLower, &f.dirFinal)) f.dirFinal = f.dirLower;
+    if (!f.dirFinal.empty() && f.dirFinal.back() != L'\\') f.dirFinal.push_back(L'\\');
   }
   if (!registered) {
     registered = true;
@@ -1079,6 +1136,7 @@ void TestHook_ResetPluginLoadFilter() {
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
   f.dirLower.clear();
+  f.dirFinal.clear();
   f.dirNarrow.clear();
   f.verified.clear();  // closes the held handles, so a test can delete or rewrite its files
 }
