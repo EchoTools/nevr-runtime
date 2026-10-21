@@ -162,7 +162,7 @@ Fixtures are generated at test time by a Python helper in `tools/tests/` (openss
 trivial DLL built from the repo's toolchain. The verifier takes the policy (root DER, EKU, subject) as an argument, so the tests pin the
 test root and never the Microsoft one; one more test pins the Microsoft root constant by hash.
 
-GTest under Wine (`src/runtime/tests/test_plugin_signature.cpp`, added to the GTest floor):
+GTest under Wine (a new test file in `src/runtime/tests/`, added to the GTest floor):
 
 | Test | Expected |
 | --- | --- |
