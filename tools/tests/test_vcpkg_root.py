@@ -67,6 +67,44 @@ class VcpkgRootTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(marker.read_text(), "kept")
 
+    def pin_tool(self, have, want, bootstrap_writes):
+        """Commit a source whose vcpkg prints `have`, whose revision names `want`, and whose
+        bootstrap-vcpkg.sh replaces the executable with one that prints `bootstrap_writes`."""
+        (self.source / "vcpkg").write_text(f"#!/bin/sh\necho 'vcpkg package management program version {have}-abc'\n")
+        (self.source / "scripts").mkdir(exist_ok=True)
+        (self.source / "scripts/vcpkg-tool-metadata.txt").write_text(f"VCPKG_TOOL_RELEASE_TAG={want}\n")
+        boot = self.source / "bootstrap-vcpkg.sh"
+        boot.write_text("#!/bin/sh\nd=$(dirname \"$0\")\ntouch \"$d/bootstrapped\"\n"
+                        f"printf '#!/bin/sh\\necho \"vcpkg package management program version {bootstrap_writes}-def\"\\n' > \"$d/vcpkg\"\n"
+                        "chmod +x \"$d/vcpkg\"\n")
+        boot.chmod(0o755)
+        git("add", "-A", cwd=self.source)
+        git("commit", "-q", "-m", "tool", cwd=self.source)
+        self.commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.source, check=True,
+                                     capture_output=True, text=True).stdout.strip()
+
+    def test_a_copied_tool_older_than_the_revision_names_is_bootstrapped(self):
+        self.pin_tool(have="2025-12-16", want="2026-09-26", bootstrap_writes="2026-09-26")
+        a = self.checkout("a")
+        r = self.run_script(a)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        root = pathlib.Path(r.stdout.strip())
+        self.assertTrue((root / "bootstrapped").exists())
+        self.assertIn("2026-09-26", subprocess.run([str(root / "vcpkg"), "version"], capture_output=True,
+                                                   text=True).stdout)
+
+    def test_a_copied_tool_on_the_named_release_is_kept(self):
+        self.pin_tool(have="2026-09-26", want="2026-09-26", bootstrap_writes="2026-09-26")
+        r = self.run_script(self.checkout("a"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((pathlib.Path(r.stdout.strip()) / "bootstrapped").exists())
+
+    def test_a_bootstrap_that_does_not_reach_the_named_release_fails_loudly(self):
+        self.pin_tool(have="2025-12-16", want="2026-09-26", bootstrap_writes="2026-01-01")
+        r = self.run_script(self.checkout("a"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("want 2026-09-26", r.stderr)
+
     def test_a_missing_source_fails_loudly(self):
         a = self.checkout("a")
         env = dict(os.environ, NEVR_VCPKG_SOURCE=str(self.tmp / "nope"))
