@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <sys/stat.h>
 
+#include "data_root.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
@@ -22,6 +24,9 @@ std::atomic<std::uint64_t> g_pathServed{0};
 // Set before the callback is called (the callback asks for the path), never cleared in production: the
 // game's mount request was answered, and every later path request is for that mount.
 std::atomic<bool> g_skipped{false};
+// The root served for the skipped mount (#749): chosen by ResolveRoot before the game runs, so the game's call path
+// never touches the filesystem or the log. A string literal in data_root.h, never freed.
+std::atomic<const char*> g_root{sentinel::pinned::kObbFallbackDataRoot};
 
 // AStorageManager_mountObb. A request without a callback has nobody to answer: the original.
 void MountHandler(MountThunk::Fn original, AStorageManagerOpaque* manager, const char* filename, const char* key,
@@ -39,13 +44,18 @@ void MountHandler(MountThunk::Fn original, AStorageManagerOpaque* manager, const
 const char* PathHandler(PathThunk::Fn original, AStorageManagerOpaque* manager, const char* filename) noexcept {
   if (!g_skipped.load(std::memory_order_acquire)) return original(manager, filename);
   g_pathServed.fetch_add(1, std::memory_order_relaxed);
-  return sentinel::pinned::kObbFallbackDataRoot;
+  return g_root.load(std::memory_order_acquire);
 }
 
 NEVR_HOOK_RECORD(kMountHook, MountThunk, &MountHandler);
 NEVR_HOOK_RECORD(kPathHook, PathThunk, &PathHandler);
 
 }  // namespace
+
+bool DirectoryExists(const char* path) noexcept {
+  struct stat st;
+  return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
 
 bool RegisterCounters() noexcept {
   struct Entry {
@@ -69,7 +79,23 @@ bool RegisterCounters() noexcept {
   return true;
 }
 
+void ResolveRoot(data_root::ExistsFn exists) noexcept {
+  const data_root::Resolution r = data_root::Resolve(exists);
+  g_root.store(r.root, std::memory_order_release);
+  if (r.found) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "data_root",
+                        {{"result", "found"}, {"source", r.source}, {"root", r.root}});
+  } else {
+    sentinel::LogFields(sentinel::LogLevel::kError, "data_root",
+                        {{"result", "not_found"},
+                         {"detail", "the game's _data directory is in neither place"},
+                         {"tried_media", data_root::kMediaRoot},
+                         {"tried_legacy", data_root::kLegacyRoot}});
+  }
+}
+
 bool Install() noexcept {
+  ResolveRoot(&DirectoryExists);
   PathThunk::Arm(kPathHook);
   const sentinel::GotStatus path =
       sentinel::InstallThunk<PathThunk>(g_pathHook, sentinel::pinned::LibR15GetMountedObbPath());
@@ -103,6 +129,7 @@ void ArmForTest() noexcept {
 
 void ResetForTest() noexcept {
   g_skipped.store(false, std::memory_order_relaxed);
+  g_root.store(sentinel::pinned::kObbFallbackDataRoot, std::memory_order_relaxed);
   g_mountSkipped.store(0, std::memory_order_relaxed);
   g_pathServed.store(0, std::memory_order_relaxed);
 }
