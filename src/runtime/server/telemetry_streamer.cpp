@@ -1,4 +1,5 @@
 #include "runtime/server/telemetry_streamer.h"
+#include "runtime/server/telemetry_header.h"
 #include "core/hex_dump.h"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -1095,47 +1096,8 @@ bool TelemetryStreamer::SendEnvelope(const std::string& serialized) {
 }
 
 bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
-  telemetry::v2::Envelope envelope;
-  auto* header = envelope.mutable_header();
-
-  header->set_capture_id(m_sessionId);
-  header->set_format_version(2);
-
-  auto* ts = header->mutable_created_at();
-  auto now = std::chrono::system_clock::now();
-  auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-  auto nanos =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()) - std::chrono::duration_cast<std::chrono::nanoseconds>(secs);
-  ts->set_seconds(secs.count());
-  ts->set_nanos(static_cast<int32_t>(nanos.count()));
-
-  auto* ah = header->mutable_echo_arena();
-  ah->set_session_id(m_sessionId);
-  ah->set_client_name("nevr-runtime");
-  ah->set_private_match(m_isPrivateMatch);
-  ah->set_match_type(m_isPrivateMatch
-      ? telemetry::v2::MATCH_TYPE_PRIVATE
-      : telemetry::v2::MATCH_TYPE_ARENA);
-  ah->set_map_name("mpl_arena_a");
-  ah->set_total_round_count(3);
-
-  // Skeleton layout (fixed for EchoVR: 23 bones)
-  auto* skel = ah->mutable_skeleton();
-  skel->set_bone_count(23);
-  skel->set_transform_stride(12);    // 3 x float32
-  skel->set_orientation_stride(16);  // 4 x float32
-
-  // Initial roster from snapshot
-  for (uint16_t i = 0; i < snap.playerCount && i < 16; i++) {
-    const auto& pi = snap.playerInfo[i];
-    if (pi.accountId == 0) continue;
-    auto* entry = ah->add_initial_roster();
-    entry->set_slot(i);
-    entry->set_account_number(pi.accountId);
-    entry->set_display_name(pi.displayName);
-    // teamIndex: 0=blue->ROLE_BLUE_TEAM(1), 1=orange->ROLE_ORANGE_TEAM(2), 2=spec->ROLE_SPECTATOR(3)
-    entry->set_role(static_cast<telemetry::v2::Role>(pi.teamIndex + 1));
-  }
+  const telemetry::v2::Envelope envelope =
+      nevr_game_server::BuildCaptureHeaderEnvelope(m_sessionId, m_isPrivateMatch, snap, std::chrono::system_clock::now());
 
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {

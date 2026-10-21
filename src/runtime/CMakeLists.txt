@@ -76,6 +76,7 @@ set(PATCHES_SOURCES
     "server/session_unregister.cpp"
     "server/main_thread_handoff.cpp"
     "server/serverdb_uri.cpp"
+    "server/telemetry_header.cpp"
     "server/telemetry_streamer.cpp"
     "server/bearer_reconnect_auth.cpp"
     "server/upnp.cpp"
@@ -162,6 +163,7 @@ set(PATCHES_HEADERS
     "server/session_unregister.h"
     "server/main_thread_handoff.h"
     "server/serverdb_uri.h"
+    "server/telemetry_header.h"
     "server/telemetry_streamer.h"
     "server/bearer_reconnect_auth.h"
     "server/serialized_mint.h"
@@ -227,7 +229,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_header.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -738,6 +740,13 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_session_unregister DISCOVERY_MODE PRE_TEST)
 
     # co-op AI diagnostic (issue #63): the pure decisions behind patch/coop_ai_trace.cpp.
+    # The telemetry CaptureHeader envelope (server/telemetry_header.cpp): parsed back field by field.
+    add_executable(test_telemetry_header tests/test_telemetry_header.cpp server/telemetry_header.cpp)
+    set_source_files_properties(tests/test_telemetry_header.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_telemetry_header PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_header PRIVATE GTest::gtest GTest::gtest_main nevr_api)
+    gtest_discover_tests(test_telemetry_header DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_coop_ai_trace tests/test_coop_ai_trace.cpp)
     target_include_directories(test_coop_ai_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_coop_ai_trace PRIVATE GTest::gtest GTest::gtest_main)
