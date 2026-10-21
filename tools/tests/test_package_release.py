@@ -557,6 +557,31 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ERROR: no folder given; pass -Dir", result.stdout)
 
+    def test_pause_in_a_noninteractive_host_does_not_change_the_exit_code(self):
+        # Read-Host throws in -NonInteractive; a successful install must still exit 0 and say why it did not wait.
+        result = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", str(self.pkg / "install.ps1"),
+                                 "-Dir", str(self.game), "-Pause"],
+                                input="", capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("INSTALLED BugSplat64.dll", result.stdout)
+        self.assertIn("could not wait for Enter", result.stdout)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"NEW-RUNTIME")
+
+    def test_pause_in_a_noninteractive_host_keeps_an_errors_exit_code(self):
+        result = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", str(self.pkg / "install.ps1"),
+                                 "-Dir", str(self.game.parent / "nope"), "-Pause"],
+                                input="", capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("ERROR: no echovr.exe in", result.stdout)
+
+    def test_uninstall_pause_in_a_noninteractive_host_does_not_change_the_exit_code(self):
+        self.ps_typed("", "install.ps1", "-Dir", str(self.game))
+        result = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-File", str(self.pkg / "uninstall.ps1"),
+                                 "-Dir", str(self.game), "-Pause"],
+                                input="", capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
     def test_an_unwritable_log_does_not_hide_the_error(self):
         (self.pkg / "nevr-install.log").mkdir()  # a directory where the log file should be
         result = self.ps_typed("", "install.ps1", "-Dir", str(self.game.parent / "nope"))

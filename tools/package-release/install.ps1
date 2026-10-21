@@ -39,7 +39,12 @@ function Wait-BeforeClose {
   if (-not $Pause) {
     if (-not (Test-LaunchedFromExplorer)) { return }
   }
-  Read-Host 'Press Enter to close' | Out-Null
+  try {
+    Read-Host 'Press Enter to close' | Out-Null
+  } catch {
+    # Read-Host throws in a non-interactive host: the script's own result stays its exit code.
+    Write-Host ('could not wait for Enter: ' + $_.Exception.Message)
+  }
 }
 $exitCode = 0
 try {
