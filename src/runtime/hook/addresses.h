@@ -539,6 +539,12 @@ constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 // Net game and game object layout (server bring-up, lifecycle/server_bringup.h)
 // ============================================================================
 
+/// Offset within the game context (the runtime's g_pGame: the argument of PreprocessCommandLine) of the
+/// net game pointer: GetNetGameFromContext (echovr.exe 0x140113a90) is `mov rax,[rcx+0x8518]; ret`. A
+/// game function that takes "the net game" (NetGameScheduleReturnToLobby, NetGameSwitchState) is given
+/// that pointer, never the context itself.
+constexpr uintptr_t CONTEXT_NETGAME_OFFSET = 0x8518;
+
 /// Offset within the net game of its state (an EchoVR::NetGameState, 32 bits): its first field.
 constexpr uintptr_t NETGAME_STATE_OFFSET = 0;
 
