@@ -159,6 +159,38 @@ TEST_F(PluginSignature, BackdatedTimestampTokenIsRefused) {
   EXPECT_NE(v.detail.find("messageDigest differs"), std::string::npos) << v.Describe();
 }
 
+// Each of these carries a GENUINE RSA signature (re-made with the throwaway leaf key over edited signed attributes),
+// so only the structural check under test can refuse it.
+TEST_F(PluginSignature, SecondMessageDigestAttributeIsRefused) {
+  const Verdict v = Verify("two_message_digests");
+  EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();
+  EXPECT_EQ(v.detail, "messageDigest attribute");
+}
+
+TEST_F(PluginSignature, MissingContentTypeAttributeIsRefused) {
+  const Verdict v = Verify("no_content_type");
+  EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();
+  EXPECT_EQ(v.detail, "signed attributes lack contentType or messageDigest");
+}
+
+TEST_F(PluginSignature, ContentTypeAttributeThatDisagreesWithTheContentIsRefused) {
+  const Verdict v = Verify("other_content_type");
+  EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();
+  EXPECT_EQ(v.detail, "contentType attribute");
+}
+
+TEST_F(PluginSignature, SignatureAlgorithmOffTheAllowlistIsRefused) {
+  const Verdict v = Verify("sha1_signature_algorithm");
+  EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();
+  EXPECT_NE(v.detail.find("signature algorithm 1.2.840.113549.1.1.5 refused"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginSignature, GenuineTokenDatedInTheFutureIsRefused) {
+  const Verdict v = Verify("token_future");
+  EXPECT_EQ(v.reason, Reason::TimestampInvalid) << v.Describe();
+  EXPECT_EQ(v.detail, "the token's time is in the future");
+}
+
 TEST_F(PluginSignature, Sha1SignedFileIsRefused) {
   const Verdict v = Verify("sha1_digest");
   EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();

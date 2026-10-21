@@ -503,17 +503,30 @@ bool VerifySignerSignature(Decoded& d) {
   return CryptMsgControl(d.msg.get(), 0, CMSG_CTRL_VERIFY_SIGNATURE, d.signer->pCertInfo) != FALSE;
 }
 
-bool IsRefusedSignatureAlgorithm(const std::string& oid) {
-  // md5WithRSA, sha1WithRSA (two spellings), dsaWithSha1, ecdsaWithSHA1: the hash is too weak to sign with.
-  return oid == "1.2.840.113549.1.1.4" || oid == "1.2.840.113549.1.1.5" || oid == "1.3.14.3.2.29" ||
-         oid == "1.2.840.10040.4.3" || oid == "1.2.840.10045.4.1";
+// The signature algorithms a signer may carry: RSA (the plain rsaEncryption CMS uses with a separate digest
+// algorithm, or with SHA-256/384/512 named) and ECDSA with SHA-256/384/512. Anything else, SHA-1 and MD5 spellings
+// included, is refused; an allowlist, so an algorithm nobody thought of is refused too.
+bool IsAllowedSignatureAlgorithm(const std::string& oid) {
+  static const char* const kAllowed[] = {
+      "1.2.840.113549.1.1.1",   // rsaEncryption
+      "1.2.840.113549.1.1.11",  // sha256WithRSAEncryption
+      "1.2.840.113549.1.1.12",  // sha384WithRSAEncryption
+      "1.2.840.113549.1.1.13",  // sha512WithRSAEncryption
+      "1.2.840.10045.4.3.2",    // ecdsa-with-SHA256
+      "1.2.840.10045.4.3.3",    // ecdsa-with-SHA384
+      "1.2.840.10045.4.3.4",    // ecdsa-with-SHA512
+  };
+  for (const char* allowed : kAllowed) {
+    if (oid == allowed) return true;
+  }
+  return false;
 }
 
 // What CMSG_CTRL_VERIFY_SIGNATURE does not do on every CryptoAPI (it does not under Wine): bind the signed
 // content to the signature. Reads the SignedData DER itself and requires
 //   - the encapsulated content type to be `expectedType`;
 //   - signedAttrs to carry exactly one contentType (equal to `expectedType`) and exactly one messageDigest;
-//   - the signer's digest algorithm, and the signature algorithm, to be SHA-256 or stronger;
+//   - the signer's digest algorithm to be SHA-256, -384 or -512, and the signature algorithm to be on the allowlist;
 //   - messageDigest to equal that digest over the content octets: for an indirect-data block the body of its
 //     SEQUENCE, for a TSTInfo the body of its OCTET STRING.
 // `content` is returned as the element to parse next: the whole SEQUENCE (indirect data) or the octets (TSTInfo).
@@ -571,8 +584,8 @@ bool BindContent(const uint8_t* p, size_t n, const char* expectedType, Bytes* co
   std::vector<Tlv> sigAlg;
   if (!Children(si[4], &sigAlg) || sigAlg.empty() || !IsOid(sigAlg[0])) return malformed("signature algorithm");
   const std::string sigOid = OidToString(sigAlg[0].body, sigAlg[0].len);
-  if (IsRefusedSignatureAlgorithm(sigOid)) {
-    return malformed(("signature algorithm " + sigOid + " refused: SHA-256 or stronger only").c_str());
+  if (!IsAllowedSignatureAlgorithm(sigOid)) {
+    return malformed(("signature algorithm " + sigOid + " refused: RSA or ECDSA with SHA-256 or stronger only").c_str());
   }
 
   std::vector<Tlv> attrs;
