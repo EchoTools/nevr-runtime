@@ -2,7 +2,8 @@
 # Print the vcpkg root this checkout installs dependencies with, creating it first when absent.
 #
 # Every checkout gets its own root at build/vcpkg-root: a local clone of ~/.vcpkg (git hardlinks the
-# objects) on the revision in .vcpkg-commit, with the vcpkg executable copied from ~/.vcpkg. vcpkg
+# objects) on the revision in .vcpkg-commit, with the vcpkg executable copied from ~/.vcpkg, or bootstrapped
+# when that copy is not the tool release the revision names (scripts/vcpkg-tool-metadata.txt). vcpkg
 # takes an exclusive filesystem lock on its root (`<root>/.vcpkg-root`) for a whole install, and
 # keeps buildtrees/ and packages/ there, so two checkouts sharing ~/.vcpkg serialise on the lock (or
 # fail with "Failed to take the filesystem lock") and race in the same buildtrees/.
@@ -50,4 +51,17 @@ if [[ "$have" != "$want" ]]; then
   [[ "$have" == "$want" ]] || { echo "vcpkg_root: $root is at $have, want $want (.vcpkg-commit)" >&2; exit 1; }
 fi
 [[ -x "$root/vcpkg" ]] || { echo "vcpkg_root: $root/vcpkg is missing; delete $root and run again" >&2; exit 1; }
+
+# The executable is the one the revision names (scripts/vcpkg-tool-metadata.txt), not whatever ~/.vcpkg holds:
+# a revision's ports can need a newer tool than the copied one. A mismatch bootstraps the named release.
+metadata="$root/scripts/vcpkg-tool-metadata.txt"
+if [[ -f "$metadata" ]]; then
+  want_tool=$(sed -n 's/^VCPKG_TOOL_RELEASE_TAG=//p' "$metadata" | tr -d '[:space:]')
+  tool_version() { "$root/vcpkg" version 2>/dev/null | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sed -n 1p; }
+  if [[ -n "$want_tool" && "$(tool_version)" != "$want_tool" ]]; then
+    "$root/bootstrap-vcpkg.sh" -disableMetrics >&2
+    have_tool=$(tool_version)
+    [[ "$have_tool" == "$want_tool" ]] || { echo "vcpkg_root: $root/vcpkg is version '$have_tool' after bootstrap, want $want_tool ($metadata)" >&2; exit 1; }
+  fi
+fi
 echo "$root"
