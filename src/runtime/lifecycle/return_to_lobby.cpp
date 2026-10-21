@@ -65,12 +65,10 @@ bool ScheduleNow(PVOID pGame, const char* caller) {
     static std::atomic<uint64_t> refused{0};
     const uint64_t count = refused.fetch_add(1, std::memory_order_relaxed) + 1;
     if ((count & (count - 1)) == 0) {
-      uint32_t state = 0;
-      if (pGame != nullptr) std::memcpy(&state, pGame, sizeof(state));
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] return to lobby not scheduled caller=%s reason=%s net_game_state=%u refused=%llu — "
+          "[NEVR.PATCH] return to lobby not scheduled caller=%s reason=%s refused=%llu — "
           "the game's call queue is not allocated and the game's function would fault on it (#730)",
-          caller, nevr_return_to_lobby_queue::Name(verdict), state, static_cast<unsigned long long>(count));
+          caller, nevr_return_to_lobby_queue::Name(verdict), static_cast<unsigned long long>(count));
     }
     return false;
   }
