@@ -552,6 +552,11 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
         self.assertIn("Press Enter to close", result.stdout)
 
+    def test_uninstall_without_dir_and_an_empty_answer_stops_with_the_usual_message(self):
+        result = self.ps_typed("\n", "uninstall.ps1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: no folder given; pass -Dir", result.stdout)
+
     def test_an_unwritable_log_does_not_hide_the_error(self):
         (self.pkg / "nevr-install.log").mkdir()  # a directory where the log file should be
         result = self.ps_typed("", "install.ps1", "-Dir", str(self.game.parent / "nope"))
