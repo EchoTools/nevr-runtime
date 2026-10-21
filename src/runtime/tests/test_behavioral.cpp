@@ -20,6 +20,7 @@
 #include <ixwebsocket/IXWebSocketServer.h>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <cstdarg>
 #include <algorithm>
 #include <array>
@@ -244,6 +245,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "core/hex_dump.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/self_check.h"
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/socket_role.h"
 #include "runtime/compat/hmd_serial.h"
@@ -1183,6 +1185,59 @@ TEST_F(N61_WsBridgeTest, LoginSessionEndRenumbersTheNextConnectionAsLogin) {
   EXPECT_TRUE(TestHook_ForgetLoginSession(remote.handle, &next));
   EXPECT_EQ(next, 1);
   EXPECT_FALSE(TestHook_ForgetLoginSession(remote.handle, &next)) << "already forgotten";
+}
+
+// #723/#729: the login remote ending runs the self-check session end, which flushes the queued results through
+// SendFrameToServer, which takes g_pairsMutex. Ending the session while holding that mutex deadlocked the
+// remote's own thread, and WebSocket::stop() (graceful shutdown) then waited on that thread forever. The path
+// runs on a worker thread here so a regression fails the test instead of hanging it.
+TEST_F(N61_WsBridgeTest, TheLoginRemoteEndingDoesNotDeadlockOnItsOwnMutex) {
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  ASSERT_NE(TestHook_N61_RegisterLogin(remote.handle, loginWs.handle), nullptr);
+
+  nevr_self_check::ResetForTest();
+  nevr_self_check::SetEnabled(true);
+  nevr_self_check::SetSender(&TestHook_SendFrameToServer);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId());
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"deadlock_probe", "a result waits in the queue", nullptr});
+  ASSERT_GE(id, 0);
+  nevr_self_check::Report(id, "queued", true);  // something for the session end to flush through the sender
+
+  std::promise<void> done;
+  std::future<void> finished = done.get_future();
+  std::thread worker([&] {
+    TestHook_CloseGameSocketsForRemote(remote.handle, 1, 1000);
+    done.set_value();
+  });
+  if (finished.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+    ADD_FAILURE() << "the remote-ended path never returned: it holds g_pairsMutex while the self-check flush takes it";
+    std::fflush(stdout);
+    std::_Exit(1);  // the stuck thread owns the mutex the fixture's teardown needs
+  }
+  worker.join();
+  nevr_self_check::ResetForTest();
+}
+
+// #723, the ServerDB drop: the session-end flush runs inside the login remote's own Close callback, and ix holds
+// its non-recursive _setReadyStateMutex there. A send on that same remote (the flush's sender) blocks on it, so the
+// remote's thread never returned and graceful shutdown (WebSocket::stop joins it) never finished. This drives a real
+// ix::WebSocket against a real local server that closes it, with a self-check result queued for the flush to send.
+TEST_F(N61_WsBridgeTest, TheLoginRemoteDroppedByItsServerEndsItsSessionWithoutSendingOnItself) {
+  nevr_self_check::ResetForTest();
+  nevr_self_check::SetEnabled(true);
+  nevr_self_check::SetSender(&TestHook_SendFrameToServer);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId());
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"drop_probe", "a result waits in the queue", nullptr});
+  ASSERT_GE(id, 0);
+  nevr_self_check::Report(id, "queued", true);
+
+  if (!TestHook_LoginRemoteDroppedThroughRealIx(10000)) {
+    ADD_FAILURE() << "the remote's Close callback never returned: the session-end flush sent on the closing remote";
+    std::fflush(stdout);
+    std::_Exit(1);  // the remote's thread is stuck on ix's own mutex; tearing down would wait on it
+  }
+  nevr_self_check::ResetForTest();
 }
 
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {

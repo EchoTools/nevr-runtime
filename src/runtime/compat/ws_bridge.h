@@ -73,6 +73,11 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle);
 void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired);
 bool  TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr);
 size_t TestHook_GameSocketsBoundTo(void* remoteHandle);
+bool TestHook_SendFrameToServer(const std::string& frame);  // the sender the bridge gives the self-check unit
+void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigned int code);
+// A real ix client/server pair: the server drops the login remote and its Close callback ends the session. False when
+// the callback's thread never came back (then end the process; do not tear down).
+bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs);
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx);
 bool  TestHook_N61_HasActiveCallback();
 int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none
