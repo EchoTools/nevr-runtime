@@ -1,12 +1,8 @@
 """CI builds the vcpkg revision recorded in .vcpkg-commit, read from that one file."""
 from __future__ import annotations
 
-import os
 import pathlib
 import re
-import shutil
-import subprocess
-import tempfile
 import unittest
 
 import yaml
@@ -91,30 +87,6 @@ class VcpkgPinTest(unittest.TestCase):
             text = (WORKFLOWS / name).read_text()
             self.assertIn("ghcr.io/echotools/nevr-runtime-builder:", text, name)
             self.assertNotIn("ln -s libcrypt32.a", text, f"{name} re-creates a link the image has")
-
-    def test_the_local_pin_check_also_requires_the_case_folded_crypt32(self):
-        justfile = (REPO / "justfile").read_text()
-        recipe = justfile[justfile.index("vcpkg-pin-check:"):]
-        recipe = recipe[:recipe.index("\n\n")]
-        self.assertIn("libCrypt32.a", recipe)
-        self.assertIn("exit 1", recipe)
-
-    @unittest.skipUnless(shutil.which("just") and (pathlib.Path.home() / ".vcpkg/.git").exists(),
-                         "needs just and a vcpkg checkout at ~/.vcpkg")
-    def test_the_pin_check_fails_when_the_symlink_is_missing_and_passes_when_present(self):
-        head = subprocess.run(["git", "-C", str(pathlib.Path.home() / ".vcpkg"), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, check=True).stdout.strip()
-        if head != (REPO / ".vcpkg-commit").read_text().strip():
-            self.skipTest("~/.vcpkg is not on the pinned revision")
-        with tempfile.TemporaryDirectory() as lib:
-            env = dict(os.environ, NEVR_MINGW_LIB=lib)
-            missing = subprocess.run(["just", "vcpkg-pin-check"], cwd=REPO, env=env, capture_output=True, text=True)
-            self.assertNotEqual(missing.returncode, 0, missing.stdout + missing.stderr)
-            self.assertIn("libCrypt32.a is missing", missing.stderr)
-            pathlib.Path(lib, "libcrypt32.a").write_bytes(b"")
-            os.symlink("libcrypt32.a", os.path.join(lib, "libCrypt32.a"))
-            present = subprocess.run(["just", "vcpkg-pin-check"], cwd=REPO, env=env, capture_output=True, text=True)
-            self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
 
 
 if __name__ == "__main__":

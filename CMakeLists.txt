@@ -207,7 +207,7 @@ add_subdirectory(extern)
 
 find_package(Protobuf REQUIRED)
 
-# yaml-cpp (0.8.0, x64-mingw-static): backs src/core/nevr_config. Found here,
+# yaml-cpp (0.9.0, x64-mingw-static): backs src/core/nevr_config. Found here,
 # before the src/ subdirectories, so nevr_core can see its headers (compile-only,
 # SYSTEM include) and nevr_runtime can link the library. The library is linked
 # ONLY into nevr_runtime (and the nevr_config test exe) — never into nevr_core's
