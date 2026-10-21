@@ -90,6 +90,7 @@ TEST_F(PluginSignature, UnsignedFileIsRefused) {
 TEST_F(PluginSignature, OtherSignersProfileEkuIsRefused) {
   const Verdict v = Verify("wrong_eku");
   EXPECT_EQ(v.reason, Reason::MissingEku) << v.Describe();
+  EXPECT_EQ(v.detail, "no accepted profile EKU");
 }
 
 TEST_F(PluginSignature, RootNotPinnedIsPartialChain) {
@@ -102,7 +103,9 @@ TEST_F(PluginSignature, RootForgedInsideTheFileIsUntrusted) {
   const Verdict v = Verify("forged_root");
   EXPECT_EQ(v.reason, Reason::ChainStatus) << v.Describe();
   EXPECT_NE(v.chainStatus, 0u);
-  EXPECT_EQ(v.chainStatus & 0x20u, 0x20u) << v.Describe();  // CERT_TRUST_IS_UNTRUSTED_ROOT
+  // The forged root has the pinned root's subject and serial but not its key: it is not the pinned root, so the
+  // chain engine calls it untrusted.
+  EXPECT_EQ(v.chainStatus, 0x20u) << v.Describe();  // CERT_TRUST_IS_UNTRUSTED_ROOT
 }
 
 TEST_F(PluginSignature, ChangedCodeByteIsADigestMismatch) {
@@ -139,6 +142,48 @@ TEST_F(PluginSignature, TimestampTokenCopiedFromAnotherSignatureIsNotBound) {
 TEST_F(PluginSignature, TimestampFromAnAuthorityTheRootDidNotIssueIsRefused) {
   const Verdict v = Verify("tsa_untrusted");
   EXPECT_EQ(v.reason, Reason::TimestampInvalid) << v.Describe();
+  EXPECT_EQ(v.chainStatus, 0x20u) << v.Describe();  // CERT_TRUST_IS_UNTRUSTED_ROOT
+}
+
+// The two attacks CMSG_CTRL_VERIFY_SIGNATURE does not stop under Wine: it checks the signature over the signed
+// attributes but never compares messageDigest to the content. Both fixtures carry a real signature.
+TEST_F(PluginSignature, ContentSwappedUnderAGenuineSignatureIsRefused) {
+  const Verdict v = Verify("content_swap");
+  EXPECT_EQ(v.reason, Reason::SignatureInvalid) << v.Describe();
+  EXPECT_NE(v.detail.find("messageDigest differs"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginSignature, BackdatedTimestampTokenIsRefused) {
+  const Verdict v = Verify("backdated_token");
+  EXPECT_EQ(v.reason, Reason::TimestampInvalid) << v.Describe();
+  EXPECT_NE(v.detail.find("messageDigest differs"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginSignature, Sha1SignedFileIsRefused) {
+  const Verdict v = Verify("sha1_digest");
+  EXPECT_EQ(v.reason, Reason::MalformedSignature) << v.Describe();
+  EXPECT_NE(v.detail.find("SHA-256 or stronger"), std::string::npos) << v.Describe();
+}
+
+TEST_F(PluginSignature, SignerWithA1024BitKeyIsRefused) {
+  const Verdict v = Verify("weak_key");
+  EXPECT_EQ(v.reason, Reason::ChainStatus) << v.Describe();
+  EXPECT_EQ(v.detail, "the signer's key is too weak");
+}
+
+TEST_F(PluginSignature, TimeStampAuthorityWithA1024BitKeyIsRefused) {
+  const Verdict v = Verify("tsa_weak");
+  EXPECT_EQ(v.reason, Reason::TimestampInvalid) << v.Describe();
+  EXPECT_EQ(v.detail, "the time-stamp key is too weak");
+}
+
+TEST_F(PluginSignature, AnExceptionWhileVerifyingIsARefusalNotAThrow) {
+  nevr_plugin_signature::TestHook_ThrowInVerify(true);
+  const Verdict v = Verify("good");
+  nevr_plugin_signature::TestHook_ThrowInVerify(false);
+  EXPECT_EQ(v.reason, Reason::Unreadable) << v.Describe();
+  EXPECT_NE(v.detail.find("exception while verifying"), std::string::npos) << v.Describe();
+  EXPECT_TRUE(Verify("good").accepted());
 }
 
 TEST_F(PluginSignature, DeniedSerialIsRefused) {
