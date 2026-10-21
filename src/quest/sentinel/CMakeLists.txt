@@ -14,7 +14,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
   hook_log.cpp
-  hook_report.cpp)
+  hook_report.cpp
+  libcpp_verbose_abort.cpp)
 target_include_directories(nevr_quest_got_hook PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..)
