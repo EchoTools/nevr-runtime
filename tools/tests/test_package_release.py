@@ -488,6 +488,77 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertNotIn("DriveNotFound", result.stdout + result.stderr)
         self.assertIn("no echovr.exe in", result.stdout + result.stderr)
 
+    # #736: a tester who double-clicks the script must see why it stopped. The window closes when the script
+    # ends, so the error is printed plainly, appended to nevr-install.log next to the script, and (launched from
+    # Explorer, or with -Pause) the script waits for Enter. Input that is redirected never waits.
+    def test_an_error_is_printed_plainly_and_logged_next_to_the_script(self):
+        missing = str(self.game.parent / "no-such-folder")
+        result = self.ps_typed("", "install.ps1", "-Dir", missing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: no echovr.exe in " + missing, result.stdout)
+        log = (self.pkg / "nevr-install.log").read_text()
+        self.assertIn("install.ps1", log)
+        self.assertIn("ERROR: no echovr.exe in " + missing, log)
+        self.assertIn("Dir=" + missing, log)
+        self.assertRegex(log, r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
+
+    def test_an_error_before_the_folder_is_checked_is_logged_with_the_folder_it_was_given(self):
+        (self.pkg / "SHA256SUMS").write_text("")
+        result = self.ps_typed("", "install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: SHA256SUMS has no entry for BugSplat64.dll", result.stdout)
+        self.assertIn("Dir=" + str(self.game), (self.pkg / "nevr-install.log").read_text())
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
+    def test_pause_waits_for_enter_after_an_error(self):
+        result = self.ps_typed("\n", "install.ps1", "-Dir", str(self.game.parent / "nope"), "-Pause")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Press Enter to close", result.stdout)
+
+    def test_pause_waits_for_enter_after_success_too(self):
+        result = self.ps_typed("\n", "install.ps1", "-Dir", str(self.game), "-Pause")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("INSTALLED BugSplat64.dll", result.stdout)
+        self.assertIn("Press Enter to close", result.stdout)
+
+    def test_no_pause_never_waits(self):
+        result = self.ps_typed("", "install.ps1", "-Dir", str(self.game.parent / "nope"), "-Pause", "-NoPause")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Press Enter to close", result.stdout)
+
+    def test_without_pause_a_script_run_from_a_pipe_does_not_wait(self):
+        result = self.ps_typed("", "install.ps1", "-Dir", str(self.game.parent / "nope"))
+        self.assertNotIn("Press Enter to close", result.stdout)
+
+    def test_a_success_is_logged_too(self):
+        result = self.ps_typed("", "install.ps1", "-Dir", str(self.game))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        log = (self.pkg / "nevr-install.log").read_text()
+        self.assertIn("OK install.ps1", log)
+        self.assertIn("Dir=" + str(self.game), log)
+
+    def test_uninstall_reports_an_error_the_same_way(self):
+        result = self.ps_typed("", "uninstall.ps1", "-Dir", str(self.game))  # nothing installed yet
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: no nevr-install.txt in " + str(self.game), result.stdout)
+        log = (self.pkg / "nevr-install.log").read_text()
+        self.assertIn("uninstall.ps1", log)
+        self.assertIn("Dir=" + str(self.game), log)
+
+    def test_uninstall_without_dir_asks_for_the_folder_and_pauses_on_request(self):
+        self.ps_typed("", "install.ps1", "-Dir", str(self.game))
+        result = self.ps_typed(str(self.game) + "\n\n", "uninstall.ps1", "-Pause")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertIn("Press Enter to close", result.stdout)
+
+    def test_an_unwritable_log_does_not_hide_the_error(self):
+        (self.pkg / "nevr-install.log").mkdir()  # a directory where the log file should be
+        result = self.ps_typed("", "install.ps1", "-Dir", str(self.game.parent / "nope"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ERROR: no echovr.exe in", result.stdout)
+        self.assertIn("could not write", result.stdout)
+
     def test_an_existing_release_output_is_never_overwritten(self):
         (self.pkg / "BugSplat64.dll").write_bytes(b"TAMPERED")
         result = self.ps("install.ps1", "-Dir", str(self.game))
