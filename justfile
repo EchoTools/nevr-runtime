@@ -396,7 +396,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router --target test_plugin_signature
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_trust
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -406,6 +406,14 @@ test-auth-unit:
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
     cmake --build --preset {{ preset }} --target test_export_trace
+    # Signed fixtures for the plugin signature gate (ADR 0010, #741), made once for test_plugin_signature and the
+    # gate tests in test_behavioral: a throwaway PKI and osslsigncode, offline, over the real test plugin. A
+    # missing tool or a failed generation fails the recipe; the tests fail, never skip, without the directory.
+    mkdir -p /var/tmp/work-nevr-runtime
+    sigfix="$(mktemp -d /var/tmp/work-nevr-runtime/test-plugin-signature.XXXXXX)"
+    trap 'rm -rf "$sigfix"' EXIT
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
+    export NEVR_SIGFIX_DIR="$sigfix"
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -576,18 +584,18 @@ test-auth-unit:
         fi
         run_test "$bin"
     done
-    # The plugin signature verifier reads signed fixtures made by the generator (ADR 0010, #741): a
-    # throwaway PKI and osslsigncode, offline. A missing tool or a failed generation fails the recipe.
-    mkdir -p /var/tmp/work-nevr-runtime
-    sigfix="$(mktemp -d /var/tmp/work-nevr-runtime/test-plugin-signature.XXXXXX)"
-    trap 'rm -rf "$sigfix"' EXIT
-    python3 tools/gen_plugin_signature_fixtures.py "$sigfix"
     bin="build/{{ preset }}/bin/test_plugin_signature.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    NEVR_SIGFIX_DIR="$sigfix" run_test "$bin"
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_plugin_trust.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     # test_broadcaster_bridge / test_broadcaster_guards live in
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.

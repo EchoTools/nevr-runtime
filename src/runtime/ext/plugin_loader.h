@@ -83,4 +83,6 @@ std::string BuildPluginManifestJson();
 void TestHook_RegisterPluginOnFrame(NvrPluginOnFrame_fn fn);
 void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn);
 void TestHook_ClearPlugins();
+// #741: whether LoadModule may retry with the default search order after the restricted load failed.
+bool TestHook_RestrictedSearchFallbackAllowed(bool enforcing, unsigned long error);
 #endif

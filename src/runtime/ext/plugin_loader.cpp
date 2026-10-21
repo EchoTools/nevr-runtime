@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -18,6 +19,8 @@
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
 #include "runtime/ext/plugin_log.h"             // #598: a plugin's log line, as the host writes it
 #include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
+#include "runtime/ext/plugin_signature.h"       // #741: who signed the file
+#include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -147,6 +150,13 @@ std::string_view PluginFilename(const std::string& file) {
   return name;
 }
 
+// ADR 0010 section 1: when the OS rejects the restricted search flags, a build that allows unsigned plugins
+// retries with the default search order (N75's old behaviour, logged); a signed-only build does not, because a
+// load the check did not shape is a load it did not cover.
+bool RestrictedSearchFallbackAllowed(bool enforcing, DWORD error) {
+  return !enforcing && error == ERROR_INVALID_PARAMETER;
+}
+
 // `file` names a DLL inside plugins/. No other path component belongs in a
 // configured filename.
 bool PluginFileStaysInDirectory(const std::string& file) {
@@ -155,6 +165,24 @@ bool PluginFileStaysInDirectory(const std::string& file) {
   return name.find_first_of("\\/:") == std::string_view::npos &&
          name.find('\0') == std::string_view::npos;
 }
+
+// #741 (ADR 0010): the plugin file, open for reading with FILE_SHARE_READ only, so no Windows process can
+// write to it or replace it while it is held. StageOne verifies the signature on it and keeps it open
+// across LoadModule: the bytes that were checked are the bytes that load.
+class HeldFile {
+ public:
+  HeldFile() = default;
+  HeldFile(const HeldFile&) = delete;
+  HeldFile& operator=(const HeldFile&) = delete;
+  ~HeldFile() {
+    if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
+  }
+  HANDLE get() const { return handle_; }
+  void Adopt(HANDLE h) { handle_ = h; }
+
+ private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
 
 struct StagedPlugin {
   HMODULE                  hModule;
@@ -289,13 +317,66 @@ class PluginLoadRun {
       FailPluginLoad(item, "file is outside plugins directory", itemReport);
       return;
     }
-    HMODULE hPlugin = LoadModule(path, filename);
+    HeldFile held;
+    if (!CheckSignature(item, path, itemReport, &held)) return;
+    const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+    HMODULE hPlugin = LoadModule(path, filename, enforcing);
     if (!hPlugin) {
-      FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()), itemReport);
+      const DWORD error = GetLastError();
+      if (enforcing && error == ERROR_INVALID_PARAMETER) {
+        // ADR 0010 section 1: a load the check did not shape is a load the check did not cover.
+        FailPluginLoad(item, "refused: restricted search unsupported, no fallback load in a signed-only build",
+                       itemReport);
+        return;
+      }
+      FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(error), itemReport);
       return;
     }
     if (SkipSameModule(planIndex, hPlugin)) return;
     ResolveAndStage(planIndex, hPlugin, path);
+  }
+
+  // #741 (ADR 0010): opens the file, decides whether the pipeline signed it, and leaves it held. False when
+  // the plugin must not load (the failure is recorded through FailPluginLoad); in a build that allows
+  // unsigned plugins a refusal is logged at Warning and the load goes on.
+  bool CheckSignature(const PluginLoadItem& item, const std::string& path, PluginManifestEntry& itemReport,
+                      HeldFile* held) {
+    const char* filename = item.file.c_str();
+    const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+    HANDLE h = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+      const DWORD error = GetLastError();
+      if (!enforcing) return true;  // nothing to check; the load reports a missing file as it always did
+      if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+        FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(error), itemReport);
+        return false;
+      }
+      const std::string reason =
+          "refused: cannot open the file to check its signature: error " + std::to_string(error);
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), filename,
+          reason.c_str());
+      FailPluginLoad(item, reason, itemReport);
+      return false;
+    }
+    held->Adopt(h);
+    const nevr_plugin_signature::Verdict verdict = nevr_plugin_signature::VerifyPluginFile(
+        held->get(), nevr_plugin_trust::ActivePolicy(), static_cast<int64_t>(std::time(nullptr)));
+    if (verdict.accepted()) return true;
+    if (!enforcing) {
+      const std::string what = verdict.reason == nevr_plugin_signature::Reason::Unsigned
+                                   ? std::string("UNSIGNED")
+                                   : "NOT ACCEPTED: " + verdict.Describe();
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] plugin=%s file=%s %s, loaded because this is a dev build (plugin trust mode %s)",
+          item.name.c_str(), filename, what.c_str(), nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()));
+      return true;
+    }
+    const std::string reason = "refused: " + verdict.Describe();
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] plugin=%s file=%s %s", item.name.c_str(), filename,
+        reason.c_str());
+    FailPluginLoad(item, reason, itemReport);
+    return false;
   }
 
   // True when the entry is skipped.
@@ -365,7 +446,7 @@ class PluginLoadRun {
   }
 
   // LoadLibrary with the restricted search; null on failure (the caller reports it).
-  static HMODULE LoadModule(const std::string& path, const char* filename) {
+  static HMODULE LoadModule(const std::string& path, const char* filename, bool enforcing) {
   /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
    *
    * The risk was never loading OUR dll — we pass a full path. It is how ITS
@@ -384,7 +465,8 @@ class PluginLoadRun {
   HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
-  if (!hPlugin && GetLastError() == ERROR_INVALID_PARAMETER) {
+  // A signed-only build has no fallback (ADR 0010 section 1): the caller refuses on ERROR_INVALID_PARAMETER.
+  if (!hPlugin && RestrictedSearchFallbackAllowed(enforcing, GetLastError())) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
         "default search order (hardening inactive for this load)", filename);
@@ -673,6 +755,11 @@ void LoadPlugins(PluginPhase phase) {
         "[NEVR.PLUGIN] %zu plugin(s) configured, %zu enabled; loading in list order from %s",
         run->PlanSize(), run->EnabledCount(), pluginDir.c_str());
   }
+  if (!early) {
+    // #741: which trust mode this binary enforces, from the same literal the packaging check reads.
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin trust: %s (%s)",
+        nevr_plugin_trust::ModeWord(nevr_plugin_trust::ActiveMode()), nevr_plugin_trust::ModeLiteral());
+  }
   const size_t loadedBefore = g_plugins.size();
 
   // Build init context (shared; the per-plugin channel is args_json via InitEx).
@@ -764,6 +851,10 @@ void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
   p.on_state_change = fn;
   p.shutdown = nullptr;
   g_plugins.push_back(p);
+}
+
+bool TestHook_RestrictedSearchFallbackAllowed(bool enforcing, unsigned long error) {
+  return RestrictedSearchFallbackAllowed(enforcing, static_cast<DWORD>(error));
 }
 
 void TestHook_ClearPlugins() {

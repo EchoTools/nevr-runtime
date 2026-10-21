@@ -30,6 +30,8 @@ set(PATCHES_SOURCES
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
     "ext/plugin_manifest.cpp"
+    "ext/plugin_signature.cpp"
+    "ext/plugin_trust.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
@@ -197,7 +199,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -234,6 +236,17 @@ set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(compat/ws_bridge.cpp PROPERTIES COMPILE_OPTIONS "-Werror=old-style-cast")
 endif()
+
+# Signed plugins only (ADR 0010, #741). Every build enforces the signature gate unless this is ON; only the
+# mingw-plugin-dev preset turns it on. The mode is compiled in and embedded as a NUL-bounded
+# "NEVR-PLUGIN-TRUST <mode>" literal that tools/package_release.py reads from the packaged DLL and refuses
+# unless it says signed-only. No config key and no environment variable changes it.
+option(NEVR_ALLOW_UNSIGNED_PLUGINS "Load plugins the signature gate refuses, with a Warning (plugin developers' builds only, never ship)" OFF)
+if(NEVR_ALLOW_UNSIGNED_PLUGINS)
+  set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll loads unsigned plugins (plugin developer build, never ship)")
+endif()
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -1160,6 +1173,17 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
+    # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
+    add_executable(test_plugin_trust
+      tests/test_plugin_trust.cpp
+      ext/plugin_trust.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_trust.cpp ext/plugin_trust.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_trust PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_trust PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
+    gtest_discover_tests(test_plugin_trust DISCOVERY_MODE PRE_TEST)
+
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
     # compiled with NEVR_TEST_HOOKS to enable mock-callback injection into the
@@ -1194,6 +1218,9 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       # #60: plugin_loader.cpp builds the login's plugin report through this.
       ext/plugin_manifest.cpp
+      # #741: the signature gate StageOne consults, linked as production source.
+      ext/plugin_signature.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
@@ -1234,6 +1261,8 @@ if(BUILD_TESTING)
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
@@ -1273,7 +1302,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
-      ws2_32 psapi advapi32
+      ws2_32 psapi advapi32 crypt32
     )
 
     # Hermetic DLL fixtures for the real LoadLibraryExA path in

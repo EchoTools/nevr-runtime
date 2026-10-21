@@ -183,6 +183,30 @@ TEST_F(PluginSignature, EkuIsComparedAsAWholeOidNotAPrefix) {
   EXPECT_EQ(Verify("good").reason, Reason::MissingEku);
 }
 
+// The loader holds the file it verified (FILE_SHARE_READ only) across the load (ADR 0010 section 1). This
+// measures that Wine honours the sharing mode against another open of the same file: a writer, a deleter and
+// a rename all fail while the handle is held.
+TEST_F(PluginSignature, HeldVerifyHandleStopsAWriteDeleteOrRenameOfTheFile) {
+  const std::string source = WinPath(dir_ + "/" + manifest_["files"]["good"].get<std::string>());
+  const std::string copy = WinPath(dir_ + "/held_copy.dll");
+  ASSERT_TRUE(CopyFileA(source.c_str(), copy.c_str(), FALSE));
+  HANDLE held = CreateFileA(copy.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(held, INVALID_HANDLE_VALUE);
+  EXPECT_TRUE(nevr_plugin_signature::VerifyPluginFile(held, policy_, now_).accepted());
+
+  HANDLE writer = CreateFileA(copy.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  EXPECT_EQ(writer, INVALID_HANDLE_VALUE) << "a writer opened the file while it was held";
+  EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+  if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+  EXPECT_FALSE(DeleteFileA(copy.c_str()));
+  EXPECT_FALSE(MoveFileA(copy.c_str(), (copy + ".moved").c_str()));
+
+  CloseHandle(held);
+  EXPECT_TRUE(DeleteFileA(copy.c_str())) << "the file could not be removed after the handle closed";
+}
+
 TEST_F(PluginSignature, ChainStatusNamesTheBits) {
   EXPECT_EQ(nevr_plugin_signature::ChainStatusNames(0x10000), "CERT_TRUST_IS_PARTIAL_CHAIN");
   EXPECT_EQ(nevr_plugin_signature::ChainStatusNames(0x21),

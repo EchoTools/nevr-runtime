@@ -42,6 +42,11 @@ SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
+# The plugin-trust literal (ADR 0010, #741): NUL-bounded "NEVR-PLUGIN-TRUST <mode>". Separate from the identity
+# literal, which is a cross-repo contract and has no such field. A packaged DLL carries exactly one, and it says
+# signed-only; unsigned-allowed is the mingw-plugin-dev preset and is never packaged.
+PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
+PLUGIN_TRUST_SOURCE = REPO / "src" / "runtime" / "ext" / "plugin_trust.cpp"
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -75,13 +80,36 @@ def identity_in(blob: bytes, label: str) -> tuple:
     return version.decode("ascii"), commit.decode("ascii")
 
 
+def plugin_trust_problems(label: str, blob: bytes) -> list:
+    """The packaged DLL must say it enforces the plugin signature gate: exactly one literal, signed-only."""
+    found = PLUGIN_TRUST.findall(blob)
+    if len(found) != 1:
+        return [f"{label}: expected exactly one 'NEVR-PLUGIN-TRUST <mode>' literal, found {len(found)}"]
+    if found[0] != b"signed-only":
+        return [f"{label}: NEVR-PLUGIN-TRUST is '{found[0].decode('ascii')}', not 'signed-only': a build that "
+                f"loads unsigned plugins is never packaged"]
+    return []
+
+
+def pins_unconfirmed_problems(source: Path = PLUGIN_TRUST_SOURCE) -> list:
+    """A release must not carry a signature gate whose profile EKU nobody has compared with a real certificate."""
+    text = source.read_text(encoding="utf-8")
+    match = re.search(r"\bkPinsConfirmed\s*=\s*(true|false)\s*;", text)
+    if not match:
+        return [f"{source.name}: kPinsConfirmed not found"]
+    if match.group(1) != "true":
+        return [f"{source.name}: kPinsConfirmed is false: the profile EKU pin has not been compared with a "
+                f"certificate the real pipeline issued (docs/adr/0010), so no release carries the plugin gate yet"]
+    return []
+
+
 def expected_identity_problems(label: str, blob: bytes, version, commit: str) -> list:
     """`version` None: any development version (a local build); else exactly that release version."""
     try:
         got_version, got_commit = identity_in(blob, label)
     except GateFailure as error:
         return [str(error)]
-    problems = []
+    problems = plugin_trust_problems(label, blob)
     if version is None:
         if not DEV_VERSION.match(got_version):
             problems.append(f"{label}: version '{got_version}' is not a development version "
@@ -181,10 +209,12 @@ def gate(args, work: Path) -> dict:
     return info
 
 
-def stamp_check(dll: Path, version, commit: str = "") -> str:
+def stamp_check(dll: Path, version, commit: str = "", trust_source: Path = PLUGIN_TRUST_SOURCE) -> str:
     """The CI assertion after the build. `version` set: the identity literal must be exactly that release
     version; unset: it must be a development version. `commit` (when given): the checked-out commit."""
     problems = expected_identity_problems(dll.name, dll.read_bytes(), version, commit)
+    if version is not None:
+        problems += pins_unconfirmed_problems(trust_source)
     if problems:
         raise GateFailure("\n".join(problems))
     found_version, found_commit = identity_in(dll.read_bytes(), dll.name)
@@ -318,6 +348,7 @@ def main(argv=None) -> int:
         parser.add_argument("--dll", required=True, type=Path)
         parser.add_argument("--version", default="")
         parser.add_argument("--commit", default="")
+        parser.add_argument("--plugin-trust-source", type=Path, default=PLUGIN_TRUST_SOURCE)
     else:
         if mode == "tree":
             parser.add_argument("--version", required=True)
@@ -337,7 +368,7 @@ def main(argv=None) -> int:
         if mode == "stamp":
             if args.version and not RELEASE_VERSION.match(args.version):
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
-            print(f"stamped identity: {stamp_check(args.dll, args.version or None, args.commit)}")
+            print(f"stamped identity: {stamp_check(args.dll, args.version or None, args.commit, args.plugin_trust_source)}")
             return 0
         if mode == "seal":
             written = seal(args.tree, args.out, require_signed=args.require_signed)
