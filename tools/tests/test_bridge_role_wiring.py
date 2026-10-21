@@ -97,6 +97,18 @@ class TheN91GuardIsTheOneThatExists(unittest.TestCase):
         self.assertRegex(
             body, r"pair->role\s*==\s*nevr_socket_role::Role::Login\s*&&\s*!pair->loginInjected")
 
+    def test_the_remote_open_handler_runs_the_flush_with_the_pair_it_opened_for(self):
+        handler = client_message_handler()
+        self.assertRegex(handler, r"HandleRemoteOpen\(\s*pairPtr\s*,\s*connIdx\s*,\s*discordId\s*,\s*accountName\s*,\s*bearerToken\s*\)")
+
+    def test_the_flush_recheck_refuses_a_pair_that_took_a_freed_pairs_address(self):
+        body = extract_braced_function(bridge(), "static void HandleRemoteOpen(")
+        self.assertRegex(body, r"!PairRegisteredLocked\(pair\)\s*\|\|\s*pair->remoteWs\s*!=\s*remote")
+
+    def test_a_frame_from_a_pair_sharing_the_remote_queues_behind_a_flushing_pair(self):
+        body = extract_braced_function(bridge(), "static void ForwardGameFrameToRemote(")
+        self.assertRegex(body, r"other\.remoteWs\s*==\s*pair->remoteWs\s*&&\s*!other\.remoteOpen")
+
     def test_a_first_frame_that_contradicts_the_role_is_checked_for_every_game_frame(self):
         self.assertIn("ForwardGameFrameToRemote(gameWs, msg->str, msg->binary)", client_message_handler())
         body = extract_braced_function(bridge(), "static void ForwardGameFrameToRemote(")

@@ -51,6 +51,7 @@
 #include "runtime/compat/status_redirect_check.h"
 #include "core/logging.h"
 #include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <future>
 #include <stdexcept>
@@ -1159,6 +1160,17 @@ static void ForwardGameFrameToRemote(ix::WebSocket& gameWs, const std::string& f
           pair->pendingToRemote.size());
       return;
     }
+    // A pair that shares its remote with a pair still flushing queues behind that flush, on the flushing pair's
+    // queue, so frames from both sockets reach the remote in the order they arrived here.
+    for (auto& entry : g_pairs) {
+      ProxyPair& other = *entry.second;
+      if (&other != pair.get() && other.remoteWs == pair->remoteWs && !other.remoteOpen) {
+        other.pendingToRemote.push_back(frame);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued behind the login flush (%zu pending)",
+            other.pendingToRemote.size());
+        return;
+      }
+    }
     remote = pair->remoteWs;
     connIdx = pair->connIdx;
   }
@@ -1261,7 +1273,9 @@ static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, c
           static_cast<int>(injectedPlatform), connIdx, ConnLabel(connIdx), injectedSize);
     }
     std::lock_guard<std::mutex> lk(g_pairsMutex);
-    if (!PairRegisteredLocked(pair)) return;
+    // The address alone can be handed to a new pair once the old one is freed; the remote this call holds
+    // cannot be reused while it holds it, so a pair that now has another remote is not the one it opened for.
+    if (!PairRegisteredLocked(pair) || pair->remoteWs != remote) return;
     if (pair->pendingToRemote.empty()) {
       pair->remoteOpen = true;
       return;
@@ -2794,6 +2808,179 @@ void TestHook_N61_ResetState() {
   g_activeGameWs = nullptr;
   g_roles.Reset();
   nevr_socket_role::GlobalAdvertisement().Reset();
+}
+
+// ---- test rig for the flush in HandleRemoteOpen ----------------------------------------------------------------
+// A real ix server that records every frame it receives, in order, and a real ix client (R1) connected to it. A
+// login pair on R1 is registered with remoteOpen=false and frames queued, the way the production Open handler finds
+// it. The test parks HandleRemoteOpen between its first batch of sends and its re-lock (through the test binary's
+// Log, on the "login injected" line) and drives the other paths while it is parked.
+namespace {
+struct FlushRig {
+  std::unique_ptr<ix::WebSocketServer> server;
+  std::mutex m;
+  std::condition_variable cv;
+  std::vector<std::string> got;
+  std::shared_ptr<ix::WebSocket> r1;
+  std::promise<void> r1Open;
+  std::atomic<bool> r1OpenSignalled{false};
+  void* game1 = nullptr;  // TestHook_N61_CreateMockWs handles (only their addresses are used)
+  void* game2 = nullptr;
+  void* game3 = nullptr;
+  std::shared_ptr<ix::WebSocket> r2;  // the replacement pair's own remote: never started
+  ProxyPair* pair = nullptr;          // the login pair HandleRemoteOpen is given
+  ProxyPair* replacement = nullptr;   // the pair registered under game2 at the same address
+};
+}  // namespace
+
+void* TestHook_FlushRig_Start(unsigned int timeoutMs) {
+  ix::initNetSystem();
+  auto* rig = new FlushRig();
+  std::mt19937 rng{std::random_device{}()};
+  int port = 0;
+  for (int attempt = 0; attempt < 50 && !rig->server; ++attempt) {
+    port = 20000 + static_cast<int>(rng() % 30000);
+    auto candidate = std::make_unique<ix::WebSocketServer>(port, "127.0.0.1");
+    if (candidate->listen().first) rig->server = std::move(candidate);
+  }
+  if (!rig->server) { delete rig; return nullptr; }
+  rig->server->setOnClientMessageCallback([rig](std::shared_ptr<ix::ConnectionState>, ix::WebSocket&,
+                                                const ix::WebSocketMessagePtr& msg) {
+    if (msg->type != ix::WebSocketMessageType::Message) return;
+    std::lock_guard<std::mutex> lk(rig->m);
+    rig->got.push_back(msg->str);
+    rig->cv.notify_all();
+  });
+  rig->server->start();
+  rig->r1 = std::make_shared<ix::WebSocket>();
+  rig->r1->setUrl("ws://127.0.0.1:" + std::to_string(port) + "/");
+  rig->r1->disableAutomaticReconnection();
+  rig->r1->setOnMessageCallback([rig](const ix::WebSocketMessagePtr& msg) {
+    if (msg->type == ix::WebSocketMessageType::Open && !rig->r1OpenSignalled.exchange(true)) rig->r1Open.set_value();
+  });
+  std::future<void> opened = rig->r1Open.get_future();
+  rig->r1->start();
+  if (opened.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready) return nullptr;
+
+  rig->game1 = TestHook_N61_CreateMockWs();
+  rig->game2 = TestHook_N61_CreateMockWs();
+  rig->game3 = TestHook_N61_CreateMockWs();
+  rig->r2 = std::make_shared<ix::WebSocket>();
+  auto pair = std::make_unique<ProxyPair>();
+  pair->remoteWs = rig->r1;
+  pair->remoteOpen = false;
+  pair->loginInjected = false;
+  pair->connIdx = 1;
+  pair->role = nevr_socket_role::Role::Login;
+  pair->pendingToRemote = {"q1", "q2"};
+  rig->pair = pair.get();
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* g1 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game1)->get();
+  g_pairs[g1] = std::move(pair);
+  g_loginRemoteWs = rig->r1;
+  g_loginGameWs = g1;
+  g_activeGameWs = g1;
+  return rig;
+}
+
+// The production Open handler for the login pair, on the calling thread.
+void TestHook_FlushRig_RunOpen(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  HandleRemoteOpen(rig->pair, 1, 4242, "verify748", "");
+}
+
+// The production game->server forward for game socket 1 (the login socket) or 3 (a matchmaker sharing R1).
+void TestHook_FlushRig_Forward(void* handle, int game, const std::string& frame) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  void* h = game == 3 ? rig->game3 : rig->game1;
+  ForwardGameFrameToRemote(*static_cast<std::shared_ptr<ix::WebSocket>*>(h)->get(), frame, true);
+}
+
+// A matchmaker pair sharing R1, registered as the production Open handler does (remoteOpen=true at admission).
+void TestHook_FlushRig_AddMatchmaker(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  auto pair = std::make_unique<ProxyPair>();
+  pair->remoteWs = rig->r1;
+  pair->remoteOpen = true;
+  pair->loginInjected = true;
+  pair->connIdx = 2;
+  pair->role = nevr_socket_role::Role::Matchmaker;
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  g_pairs[static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game3)->get()] = std::move(pair);
+}
+
+// The login game socket closes (its pair is erased, as RetireGameWsLocked does) and a new game socket's pair is
+// registered under game2 at the address the erased pair had. allocatorReused: the allocator handed the address
+// back (false: not reproduced on this run, nothing registered).
+bool TestHook_FlushRig_ReplacePairAtSameAddress(void* handle, bool* allocatorReused) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* g1 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game1)->get();
+  ix::WebSocket* g2 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game2)->get();
+  auto it = g_pairs.find(g1);
+  if (it == g_pairs.end()) return false;
+  ProxyPair* const old = it->second.get();
+  g_pairs.erase(it);  // frees the old pair
+  // The allocator only: up to 1000 live allocations of the same type until one lands on the freed address.
+  std::vector<std::unique_ptr<ProxyPair>> misses;
+  std::unique_ptr<ProxyPair> fresh = std::make_unique<ProxyPair>();
+  while (fresh.get() != old && misses.size() < 1000) {
+    misses.push_back(std::move(fresh));
+    fresh = std::make_unique<ProxyPair>();
+  }
+  *allocatorReused = fresh.get() == old;
+  std::fprintf(stderr, "flush rig: old pair %p, new pair %p after %zu misses\n", static_cast<void*>(old),
+               static_cast<void*>(fresh.get()), misses.size());
+  if (!*allocatorReused) return false;
+  fresh->remoteWs = rig->r2;  // its own remote, still connecting
+  fresh->remoteOpen = false;
+  fresh->loginInjected = false;
+  fresh->connIdx = 1;
+  fresh->role = nevr_socket_role::Role::Login;
+  fresh->pendingToRemote = {"x-for-r2"};
+  rig->replacement = fresh.get();
+  g_pairs[g2] = std::move(fresh);
+  g_loginGameWs = g2;
+  g_activeGameWs = g2;
+  return true;
+}
+
+void TestHook_FlushRig_ReplacementState(void* handle, bool* remoteOpen, size_t* pending) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  *remoteOpen = rig->replacement->remoteOpen;
+  *pending = rig->replacement->pendingToRemote.size();
+}
+
+bool TestHook_FlushRig_LoginPairOpen(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return PairRegisteredLocked(rig->pair) && rig->pair->remoteOpen;
+}
+
+// Frames the server received, waiting until there are at least `n` or the time runs out.
+std::vector<std::string> TestHook_FlushRig_Received(void* handle, size_t n, unsigned int timeoutMs) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::unique_lock<std::mutex> lk(rig->m);
+  rig->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] { return rig->got.size() >= n; });
+  return rig->got;
+}
+
+void TestHook_FlushRig_Stop(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    g_pairs.clear();
+    g_loginRemoteWs.reset();
+    g_loginGameWs = nullptr;
+    g_activeGameWs = nullptr;
+  }
+  rig->r1->stop();
+  rig->server->stop();
+  TestHook_N61_DestroyMockWs(rig->game1);
+  TestHook_N61_DestroyMockWs(rig->game2);
+  TestHook_N61_DestroyMockWs(rig->game3);
+  delete rig;
 }
 
 #endif  // NEVR_TEST_HOOKS

@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <future>
 #include <cstdarg>
+#include <cstring>
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -158,12 +159,23 @@ void ClearTestLogs() {
   g_testLogLeveled.clear();
 }
 
+// The park point for the flush tests (see Log).
+std::atomic<bool> g_flushPark{false};
+std::promise<void>* g_flushParked = nullptr;
+std::shared_future<void> g_flushRelease;
+
 void Log(EchoVR::LogLevel level, const char* format, ...) {
   char buffer[2048] = {};
   va_list args;
   va_start(args, format);
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
+  // Park the logging thread on the "login injected" line (HandleRemoteOpen, between its first batch of
+  // sends and its re-lock) until the test releases it.
+  if (g_flushPark.load() && std::strstr(buffer, "login injected") != nullptr && g_flushPark.exchange(false)) {
+    g_flushParked->set_value();
+    g_flushRelease.wait();
+  }
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   nevr_test_log_cap::Append(g_testLogMessages, buffer);
   g_testLogLeveled.emplace_back(level, buffer);
@@ -1263,6 +1275,110 @@ TEST_F(N61_WsBridgeTest, AGameFrameForwardedToADroppedRemoteDoesNotHoldThePairsL
 
 TEST_F(N61_WsBridgeTest, TheFlushWhenTheRemoteOpensOnADroppedRemoteDoesNotHoldThePairsLock) {
   ExpectSendOnDroppedRemoteReturns(2, "the flush on the remote's open");
+}
+
+// ---- the flush's interleavings, with HandleRemoteOpen parked between its first batch
+// of sends and its re-lock (the "login injected" log line). Hooks are in ws_bridge.cpp (TestHook_FlushRig_*).
+void* TestHook_FlushRig_Start(unsigned int timeoutMs);
+void TestHook_FlushRig_RunOpen(void* handle);
+void TestHook_FlushRig_Forward(void* handle, int game, const std::string& frame);
+void TestHook_FlushRig_AddMatchmaker(void* handle);
+bool TestHook_FlushRig_ReplacePairAtSameAddress(void* handle, bool* allocatorReused);
+void TestHook_FlushRig_ReplacementState(void* handle, bool* remoteOpen, size_t* pending);
+bool TestHook_FlushRig_LoginPairOpen(void* handle);
+std::vector<std::string> TestHook_FlushRig_Received(void* handle, size_t n, unsigned int timeoutMs);
+void TestHook_FlushRig_Stop(void* handle);
+
+namespace {
+struct FlushPark {
+  std::promise<void> parked;
+  std::promise<void> release;
+  std::future<void> parkedF;
+  std::thread worker;
+  explicit FlushPark(void* rig) {
+    parkedF = parked.get_future();
+    g_flushParked = &parked;
+    g_flushRelease = release.get_future().share();
+    g_flushPark = true;
+    worker = std::thread([rig] { TestHook_FlushRig_RunOpen(rig); });
+  }
+  bool WaitParked() { return parkedF.wait_for(std::chrono::seconds(10)) == std::future_status::ready; }
+  void Release() { release.set_value(); worker.join(); g_flushPark = false; }
+};
+std::string FlushShow(const std::vector<std::string>& got) {
+  std::string out;
+  for (const std::string& f : got) out += (f.size() <= 16 ? f : "<login " + std::to_string(f.size()) + "B>") + " ";
+  return out;
+}
+}  // namespace
+
+// (a)(b)(c): a game frame and a runtime frame that arrive while the flush is mid-way queue behind it, are each sent
+// once, and the frame after the flush goes after them.
+TEST_F(N61_WsBridgeTest, FramesDuringTheFlushQueueBehindItInOrderOnce) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  TestHook_FlushRig_Forward(rig, 1, "g1");
+  EXPECT_TRUE(TestHook_SendFrameToServer("s1"));
+  EXPECT_FALSE(TestHook_FlushRig_LoginPairOpen(rig)) << "remoteOpen flipped before the drain finished";
+  park.Release();
+  EXPECT_TRUE(TestHook_FlushRig_LoginPairOpen(rig));
+  TestHook_FlushRig_Forward(rig, 1, "g2");
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 7, 3000);  // 6 expected; waits for a 7th
+  std::fprintf(stderr, "flush order: %s\n", FlushShow(got).c_str());
+  ASSERT_EQ(got.size(), 6u) << FlushShow(got);
+  EXPECT_GT(got[0].size(), 16u) << "first frame is the LoginRequest";
+  EXPECT_EQ(std::vector<std::string>(got.begin() + 1, got.end()),
+            (std::vector<std::string>{"q1", "q2", "g1", "s1", "g2"}));
+  TestHook_FlushRig_Stop(rig);
+}
+
+// TOCTOU/ABA: the login game socket closes while the flush is parked and a new game socket's pair takes the same
+// address. PairRegisteredLocked compares addresses, so the parked flush adopts the new pair: it must not send the new
+// pair's queued frame on the old remote, and must not mark the new pair's (still connecting) remote open.
+TEST_F(N61_WsBridgeTest, AFlushDoesNotAdoptAPairRegisteredAtTheSameAddress) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  bool reused = false;
+  const bool replaced = TestHook_FlushRig_ReplacePairAtSameAddress(rig, &reused);
+  park.Release();
+  if (!replaced) {
+    TestHook_FlushRig_Stop(rig);
+    GTEST_SKIP() << "the allocator did not hand the erased pair's address back on this run";
+  }
+  bool open = false;
+  size_t pending = 0;
+  TestHook_FlushRig_ReplacementState(rig, &open, &pending);
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 4, 1500);
+  std::fprintf(stderr, "flush aba: replacement remoteOpen=%d pending=%zu; old remote received: %s\n", open ? 1 : 0,
+               pending, FlushShow(got).c_str());
+  EXPECT_FALSE(open) << "the new pair's remote is still connecting but was marked open";
+  EXPECT_EQ(pending, 1u) << "the new pair's queued frame was taken by the old pair's flush";
+  EXPECT_EQ(std::count(got.begin(), got.end(), std::string("x-for-r2")), 0) << "sent on the wrong remote";
+  TestHook_FlushRig_Stop(rig);
+}
+
+// A matchmaker pair shares the login remote with remoteOpen=true from its admission (ws_bridge.cpp, the Matchmaker
+// branch of the Open handler). A frame it sends while the login pair is mid-flush queues behind the flush, so the
+// remote gets the frames of both sockets in the order they arrived (the flush held g_pairsMutex for its whole length
+// before #738, which gave the same order).
+TEST_F(N61_WsBridgeTest, AMatchmakerFrameDuringTheLoginFlushGoesAfterIt) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  TestHook_FlushRig_AddMatchmaker(rig);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  TestHook_FlushRig_Forward(rig, 1, "g1");  // queued behind the flush
+  TestHook_FlushRig_Forward(rig, 3, "m1");  // the matchmaker, while the flush is mid-way
+  park.Release();
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 5, 3000);
+  std::fprintf(stderr, "flush matchmaker: %s\n", FlushShow(got).c_str());
+  ASSERT_EQ(got.size(), 5u) << FlushShow(got);
+  EXPECT_EQ(std::vector<std::string>(got.begin() + 1, got.end()), (std::vector<std::string>{"q1", "q2", "g1", "m1"}));
+  TestHook_FlushRig_Stop(rig);
 }
 
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
