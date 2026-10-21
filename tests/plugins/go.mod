@@ -1,6 +1,6 @@
 module github.com/EchoTools/nevr-runtime/tests/plugins
 
-go 1.25.6
+go 1.27.0
 
 require github.com/stretchr/testify v1.12.1
 

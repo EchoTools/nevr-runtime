@@ -12,10 +12,10 @@ import (
 	"time"
 
 	telemetryv2 "buf.build/gen/go/echotools/nevr-api/protocolbuffers/go/telemetry/v2"
+	"github.com/coder/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"nhooyr.io/websocket"
 )
 
 // mockTelemetryServer accepts WebSocket connections and collects

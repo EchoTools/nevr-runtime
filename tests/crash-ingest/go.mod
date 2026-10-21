@@ -1,3 +1,3 @@
 module github.com/EchoTools/nevr-runtime/tests/crash-ingest
 
-go 1.22
+go 1.27.0
