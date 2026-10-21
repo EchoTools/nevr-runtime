@@ -32,7 +32,7 @@ jobs:
     # The same builder image as build.yml (.github/builder/Dockerfile): the compiler hash vcpkg puts in
     # every archive name has to come from the same toolchain the build restores them in.
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:1c303e5bfe7d
+      image: ghcr.io/echotools/nevr-runtime-builder:24ebf1eb3e06
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

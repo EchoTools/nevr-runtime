@@ -135,10 +135,10 @@ jobs:
     # The toolchain is the prebuilt builder image (.github/builder/Dockerfile, built by
     # builder-image.yml): Arch's MinGW-w64 GCC and headers from pacman, the toolchain development
     # uses (#81), not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
-    # model), plus osslsigncode, buf and the libCrypt32.a link. The tag is the Dockerfile's hash; the
+    # model), plus osslsigncode and buf. The tag is the Dockerfile's hash; the
     # "Toolchain versions" step records what built each run.
     container:
-      image: ghcr.io/echotools/nevr-runtime-builder:1c303e5bfe7d
+      image: ghcr.io/echotools/nevr-runtime-builder:24ebf1eb3e06
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -209,7 +209,7 @@ jobs:
         just --version
         # The image's own just is the one the release was built with. An action that installs one adds a
         # directory to PATH, and PATH is part of every mingw package ABI (see the vcpkg install below).
-        test "$(just --version)" = "just 1.58.0"
+        test "$(just --version)" = "just 1.59.0"
         osslsigncode --version
         buf --version
 
@@ -440,16 +440,16 @@ jobs:
         public-api-key: ${{ vars.NEVR_PUBLIC_API_KEY }}
         public-socket-key: ${{ vars.NEVR_PUBLIC_SOCKET_KEY }}
 
-    # just 1.58.0 from its release tarball, checked against the digest measured when this pin was written.
+    # just 1.59.0 from its release tarball, checked against the digest measured when this pin was written.
     # Not an action that edits PATH (that is what build.yml's other job must never do, #551).
     - name: Install pinned just
       run: |
         set -euo pipefail
-        curl -fsSL -o "$RUNNER_TEMP/just.tgz" https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
-        echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  $RUNNER_TEMP/just.tgz" | sha256sum -c -
+        curl -fsSL -o "$RUNNER_TEMP/just.tgz" https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-x86_64-unknown-linux-musl.tar.gz
+        echo "409044617b6f06517c1035e55ca38c8c856ff8b650e41bc2aa1ef82d5903a23e  $RUNNER_TEMP/just.tgz" | sha256sum -c -
         mkdir -p "$HOME/.local/bin"
         tar -xzf "$RUNNER_TEMP/just.tgz" -C "$HOME/.local/bin" just
-        test "$("$HOME/.local/bin/just" --version)" = "just 1.58.0"
+        test "$("$HOME/.local/bin/just" --version)" = "just 1.59.0"
 
     - name: Locate the NDK
       id: ndk

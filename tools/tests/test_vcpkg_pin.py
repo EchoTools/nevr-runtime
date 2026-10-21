@@ -56,7 +56,7 @@ class VcpkgPinTest(unittest.TestCase):
             self.assertNotIn("GITHUB_PATH", text, f"{workflow.name} edits PATH for later steps")
             self.assertNotIn("extractions/setup-just", text, f"{workflow.name} installs just onto PATH")
         build = (WORKFLOWS / "build.yml").read_text()
-        self.assertIn('test "$(just --version)" = "just 1.58.0"', build)
+        self.assertIn('test "$(just --version)" = "just 1.59.0"', build)
 
     def test_the_cache_key_prefix_is_the_same_in_the_seed_and_the_consumer(self):
         keys = {}
@@ -78,15 +78,15 @@ class VcpkgPinTest(unittest.TestCase):
             self.assertIn(path, triggers["push"]["paths"])
         self.assertIn(".vcpkg-commit", text)
 
-    def test_the_builder_image_provides_the_case_folded_crypt32(self):
-        # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only; every
-        # workflow that links runs in the builder image, which carries the symlink.
+    def test_nothing_case_folds_crypt32(self):
+        # ixwebsocket 12 links crypt32 in lower case (IXWebSocket #570), which Arch's libcrypt32.a
+        # satisfies, so neither the builder image nor a workflow makes a libCrypt32.a link.
         dockerfile = (REPO / ".github/builder/Dockerfile").read_text()
-        self.assertIn("ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a", dockerfile)
+        self.assertNotIn("libCrypt32.a", dockerfile)
         for name in ("build.yml", "vcpkg-cache.yml", "defender-scan.yml"):
             text = (WORKFLOWS / name).read_text()
             self.assertIn("ghcr.io/echotools/nevr-runtime-builder:", text, name)
-            self.assertNotIn("ln -s libcrypt32.a", text, f"{name} re-creates a link the image has")
+            self.assertNotIn("libCrypt32.a", text, name)
 
 
 if __name__ == "__main__":

@@ -224,7 +224,7 @@ class ReleaseContractTest(unittest.TestCase):
         # just comes from the builder image, not from an action that edits PATH (PATH is hashed into every
         # mingw package ABI, #551): the job asserts the image carries the pinned version.
         self.assertNotIn("extractions/setup-just", workflow)
-        self.assertIn('test "$(just --version)" = "just 1.58.0"', workflow)
+        self.assertIn('test "$(just --version)" = "just 1.59.0"', workflow)
         # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
         # from pacman, installed once in the builder image (.github/builder/Dockerfile) that the job
         # runs in, with every version logged per run.
@@ -242,7 +242,7 @@ class ReleaseContractTest(unittest.TestCase):
         # there; the build job has no apt-get.
         build_job = workflow.split("\n  sign:", 1)[0]
         self.assertNotIn("apt-get", build_job)
-        self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
+        self.assertIn("bufbuild/buf/cmd/buf@v1.74.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))

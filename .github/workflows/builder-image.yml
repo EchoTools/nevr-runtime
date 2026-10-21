@@ -48,4 +48,4 @@ jobs:
         fi
         docker build --pull -t "$ref" .github/builder
         docker push "$ref"
-        docker run --rm "$ref" bash -c 'x86_64-w64-mingw32-g++ --version | head -n 1; cmake --version | head -n 1; osslsigncode --version; buf --version; keytool -help >/dev/null && echo keytool ok; ls -l /usr/x86_64-w64-mingw32/lib/libCrypt32.a'
+        docker run --rm "$ref" bash -c 'x86_64-w64-mingw32-g++ --version | head -n 1; cmake --version | head -n 1; osslsigncode --version; buf --version; keytool -help >/dev/null && echo keytool ok'
