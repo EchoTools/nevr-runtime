@@ -28,7 +28,7 @@ RELOCS = """Relocation section '.rela.dyn' at offset 0x1610 contains 3 entries:
 0000000000064cf0  0000000000000403 R_AARCH64_RELATIVE                2047c
 """
 SYMBOLS = """000000000005c138 t init_have_lse_atomics
-000000000005c608 t init_cpu_features
+000000000005c608 t __init_cpu_features
 000000000002047c t _ZL18nevr_sentinel_ctorv
 0000000000021774 t _GLOBAL__sub_I_extra.cpp
 0000000000021800 t __cxx_global_var_init
@@ -89,13 +89,6 @@ cat {fix}/obj_$base
         )
 
     def test_expected_initializers_and_clean_objects_pass(self) -> None:
-        result = self.run_check(self.add_object("a.o"))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("OK (3 .init_array entries", result.stdout)
-
-    def test_the_renamed_compiler_rt_cpu_features_constructor_passes(self) -> None:
-        # clang 21's compiler-rt (NDK r30) names the constructor __init_cpu_features.
-        (self.fix / "symbols").write_text(SYMBOLS.replace(" init_cpu_features", " __init_cpu_features"))
         result = self.run_check(self.add_object("a.o"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK (3 .init_array entries", result.stdout)

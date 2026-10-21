@@ -1,6 +1,6 @@
 /* nevr_quest toolchain probe.
  *
- * Trivial translation unit whose only purpose is to prove the NDK r26d
+ * Trivial translation unit whose only purpose is to prove the NDK
  * arm64-v8a build path compiles and links a shared object cleanly.
  * Not shipped; not part of the crash reporter.
  */

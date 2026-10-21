@@ -94,13 +94,13 @@ clean:
 
 # --- Android / Quest (arm64-v8a) ---
 # Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
-# NDK: r26d by default; override with ANDROID_NDK_HOME.
+# NDK: r30 by default; override with ANDROID_NDK_HOME.
 # The Quest configure lines clear the ccache launcher: that build embeds the worktree path in its debug info (no -ffile-prefix-map),
 # so an object cached from one worktree would put that worktree's path into another's .so.
 
-ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
+ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r30")
 
-# Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
+# Configure the Android arm64-v8a build (NDK r30, API 26, static libc++)
 configure-android:
     cd src/quest && CMAKE_C_COMPILER_LAUNCHER= CMAKE_CXX_COMPILER_LAUNCHER= ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
 

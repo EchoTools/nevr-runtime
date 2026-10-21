@@ -16,7 +16,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     env:
-      NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
+      NDK_REVISION: 30.0.16248370   # NDK r30, the one src/quest/CMakePresets.json names
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -38,7 +38,7 @@ jobs:
       with:
         just-version: '1.58.0'
 
-    # The runner image carries NDK r26d (26.3.11579264); if it ever stops, download it once and cache it.
+    # The runner image carries NDK r30 (30.0.16248370); if it ever stops, download it once and cache it.
     - name: Locate the NDK
       id: ndk
       run: |
@@ -52,21 +52,21 @@ jobs:
       id: ndk_cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
-        path: ${{ runner.temp }}/android-ndk-r26d
-        key: android-ndk-r26d-linux
+        path: ${{ runner.temp }}/android-ndk-r30
+        key: android-ndk-r30-linux
 
-    - name: Download NDK r26d
+    - name: Download NDK r30
       if: steps.ndk.outputs.present != 'true' && steps.ndk_cache.outputs.cache-hit != 'true'
       run: |
         set -euo pipefail
-        curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+        curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r30-linux.zip
         unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
-        test -d "$RUNNER_TEMP/android-ndk-r26d"
+        test -d "$RUNNER_TEMP/android-ndk-r30"
 
     - name: Select the NDK and check its revision
       run: |
         set -euo pipefail
-        if [ "${{ steps.ndk.outputs.present }}" = "true" ]; then ndk="${{ steps.ndk.outputs.dir }}"; else ndk="$RUNNER_TEMP/android-ndk-r26d"; fi
+        if [ "${{ steps.ndk.outputs.present }}" = "true" ]; then ndk="${{ steps.ndk.outputs.dir }}"; else ndk="$RUNNER_TEMP/android-ndk-r30"; fi
         grep -q "^Pkg.Revision = $NDK_REVISION" "$ndk/source.properties"
         echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
         cat "$ndk/source.properties"

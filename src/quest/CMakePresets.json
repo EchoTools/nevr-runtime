@@ -3,7 +3,7 @@
     "configurePresets": [
         {
             "name": "android-arm64",
-            "displayName": "Android arm64-v8a (NDK r26d, API 26)",
+            "displayName": "Android arm64-v8a (NDK r30, API 26)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/../../build/android-arm64",
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
