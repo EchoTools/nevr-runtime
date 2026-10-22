@@ -1,9 +1,9 @@
 # ADR 0012: the install folder is static; nEVR's runtime, plugins and state live in `%LOCALAPPDATA%\nevr\echovr`
 
 Status: proposed (#575, tracking issue #799). Nothing in the "Decision" section is built yet. ADR 0010 and ADR 0011 are accepted and
-neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in two places:** `nevr.dll`
-loads from the root, not from the directory of `BugSplat64.dll`; and a refused or missing `nevr.dll` stops the game, where ADR 0008
-lets it run without the runtime. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
+neither is superseded by this record. **It amends ADR 0008 (`0008-bugsplat-host-and-nevr-runtime.md`) in three places:** `nevr.dll`
+loads from the root, not from the directory of `BugSplat64.dll`; a refused or missing `nevr.dll` stops the game, where ADR 0008
+lets it run without the runtime; and the host's log gains a `versions` event. "Relation to other records" says which text of ADR 0008 each replaces. What exists today is named
 under "Context"; each piece that moves is re-measured by the pull request that moves it.
 
 ## Context
@@ -59,8 +59,8 @@ The rule for what lives in `BugSplat64.dll`: only what must keep working when `n
 because the file sits in the install folder.
 
 1. **Crash capture stays in the host.** A crash inside `nevr.dll` is still recorded (the host's `createReport`, ADR 0008).
-2. **The versions are the first record of the host's log**, the `versions` record of "Names this record fixes": the host's
-   version and sha256, then `nevr.dll`'s version and sha256, so a player's report names exactly what ran.
+2. **The versions are logged as soon as the verdict on `nevr.dll` is known**, in the `versions` record of "Names this record fixes":
+   the host's version and sha256, then `nevr.dll`'s version and sha256, so a player's report names exactly what ran.
 3. **A refused or missing `nevr.dll` stops the game**, after one refusal dialog and its log line. The game does not continue
    without nEVR, and there is no fallback to a single-DLL install. The load, the check, the dialog and the stop run in the host's
    detour on the game's main wrapper (ADR 0008's rendezvous), never in `DllMain`: ADR 0008's rule that `DllMain` does no file I/O
@@ -82,8 +82,7 @@ code-signing EKU, as ADR 0010 requires. Today `ProductionPolicy` and `plugin_tru
 `NEVR-PLUGIN-TRUST` literal; the host takes the same pins through a second policy constructor over the same constants, not a
 copy, and the pull request that does it measures what moves. The denylist stays in `nevr.dll` and covers plugins. A denylist change
 must not need a new `BugSplat64.dll`, because that file changes rarely. The accepted cost: a genuinely signed `nevr.dll` that is on
-the denylist is stopped only by a host that knows it, which means a new `BugSplat64.dll`; the host changes rarely, and that is
-the price of keeping it small.
+the denylist is stopped only by a new host release; the host changes rarely, and that is the price of keeping it small.
 
 The dialog text for a refused file names the file and the reason in a player's words. For a missing `nevr.dll` it says that
 `nevr.dll` is missing and to run the installer, and the log line names the path that was searched. Both go through the refusal
@@ -115,8 +114,8 @@ for harnesses and native test machines. A signed-only build ignores it and logs 
 
 On the first run that finds the old layout, the runtime moves, and logs every file it moves or leaves:
 
-- from the `_local` directories (and the `-config` folder's neighbours the old search used): `config.yaml`, `.credentials.json`
-  and the caches;
+- from the install's `_local` directories: `config.yaml`, `.credentials.json` and the caches. A `-config` folder's own
+  `config.yaml` and credentials are not moved: they stay where they are, and the rule of "Where state resolves" finds them there;
 - from `%LOCALAPPDATA%\EchoVR\logs`: nEVR's own files, which are the run logs the built-in filter writes (`BuildLogFilePath` in
   `builtin_filter.cpp`, whose prefix is configurable) and `nevr-crash-<run id>.txt` (`PrepareCrashRecordPath`), never the game's own.
   The move recognises them by the names those writers use; step 5 of the order of work fixes the list from the code of that day.
@@ -126,6 +125,9 @@ safe to run twice, and leaves a file in place, with a log line, when it cannot m
 it has moved anything out of a `_local` directory, it writes `MOVED-TO-NEVR-ROOT.txt` there, naming the root, so a player or support
 can see why that folder is empty.
 
+The uninstaller puts back what the move took: it copies `config.yaml` and `.credentials.json` from the root into `_local` and removes
+`MOVED-TO-NEVR-ROOT.txt`, and leaves the root as it is, so uninstalling and then installing a pre-split release keeps the login.
+
 ### Updating only the host, and going back
 
 A post-split `BugSplat64.dll` whose `nevr.dll` is absent or refused stops the game with the dialog above. That case arises when
@@ -133,8 +135,8 @@ the host is replaced or the root is cleared; the installer is the supported way 
 
 A `BugSplat64.dll` from a pre-split release is the whole runtime in one DLL (ADR 0008, "The tree today"): it never looks for
 `nevr.dll`, so it never shows that dialog. Dropped over a migrated install it runs the old runtime against `_local` paths the move
-emptied: no config and no login. Going back to a pre-split release therefore requires the uninstaller first, and the marker file of
-"The one-time move" is what shows a player or support why the old folder is empty.
+emptied: no config and no login. Going back to a pre-split release therefore requires the uninstaller first, which restores `_local` (see "The one-time move"), and the
+marker file is what shows a player or support why the old folder is empty.
 
 ## Order of work
 
@@ -145,8 +147,10 @@ Each step is its own pull request with its own issue under #575, mergeable and t
    old shape. **1b, the host minidump:** the host's `BugSplat_createReport` writes the minidump.
 2. The target split: `nevr.dll` is built beside `BugSplat64.dll`, in the same folder, and the package is a matched pair.
 3. The host verifies `nevr.dll` (the signature gate with the pins above), writes the `versions` record, and shows the dialog and stops
-   on a refusal or a missing file.
-4. `nevr.dll` and the plugins move to the root, with the installer and uninstaller.
+   on a refusal or a missing file. **Prerequisite:** `release-signer` signs `nevr.dll` (it is added to the signer's file list); this
+   step does not ship until a signed `nevr.dll` exists.
+4. `nevr.dll` and the plugins move to the root, with the installer and uninstaller (which restores `_local`) and the dev-only
+   `NEVR_ROOT`.
 5. State moves under the root, with the one-time move (#574).
 6. Dedicated servers' credentials follow the rule above.
 
@@ -154,20 +158,24 @@ Each step is its own pull request with its own issue under #575, mergeable and t
 
 - **The root layout and file names:** `%LOCALAPPDATA%\nevr\echovr\` holding `nevr.dll`, `plugins\`, `config.yaml`,
   `.credentials.json`, `logs\` and `crashes\`, as in the table. `nevr-bootstrap.jsonl` stays the host's log file name.
-- **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`.
-- **The `versions` record:** the first record the host writes to `nevr-bootstrap.jsonl`, before any `host_attach` event, with `tag`
-  `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
+- **`NEVR_ROOT`**, honoured only in a dev build, replaces `%LOCALAPPDATA%\nevr\echovr`; it lands in step 4.
+- **The `versions` record:** written by the host's detour on the game's main wrapper right after the verdict on `nevr.dll`: the first
+  record of that process after the verdict (attach records before it are fine; every record carries the `pid`, so the log reads per
+  process). It goes to `nevr-bootstrap.jsonl` with `tag` `NEVR.HOST`, `event` `versions`, and the fields `host_version`, `host_sha256`, `runtime_version`, `runtime_sha256` (the last two
   `unavailable` when `nevr.dll` is missing or refused, with the path searched in `runtime_path`).
-- **The exit code** after the refusal dialog on a client, and on a server or headless run, is 78 (`ForceFatalExit(78)`, free in
-  `src/` today; 78 is `EX_CONFIG` in sysexits). A server also logs the refusal line first.
+- **The exit code** after the refusal dialog on a client, and on a server or headless run, is 78 (free in `src/` today; 78 is `EX_CONFIG`
+  in sysexits). The host ends the process by its own call, `TerminateProcess(GetCurrentProcess(), 78)`, as it already does for an
+  unsupported game image (`RequireSupportedGameModule`, `src/runtime/lifecycle/game_image_guard.cpp`, called from
+  `src/runtime/host/host_entry.cpp`), never through the runtime's `ForceFatalExit`, which belongs to a runtime that is not there.
+  A server also logs the refusal line first.
 - **The host's export table** is unchanged.
 
 ## Relation to other records
 
-- ADR 0008 is built on and **amended in two places**. Kept: the host and runtime are a matched pair behind one versioned C ABI, the
+- ADR 0008 is built on and **amended in three places**. Kept: the host and runtime are a matched pair behind one versioned C ABI, the
   rendezvous is the game's main wrapper, `DllMain` does no file I/O, and the export table. Replaced: "`nevr.dll`, in the same
   directory" and the `ResolveRuntimePath` rule "`nevr.dll` in the directory of `BugSplat64.dll`" become the root; and "when no runtime is published the
-  detour returns the original wrapper's result" becomes a stop. The code that implements the first is
+  detour returns the original wrapper's result" becomes a stop; and the host's journal events (`host_attach`, `runtime_load`, `crash_dump`) gain a `versions` event. The code that implements the first is
   `nevr_host::ResolveRuntimePath` (`src/runtime/host/runtime_load.cpp`).
 - ADR 0010 is extended, not superseded: its verifier gains a second use, the host's check of `nevr.dll`, and its refusal policy
   gains a second subject.
