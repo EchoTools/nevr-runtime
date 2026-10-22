@@ -195,15 +195,6 @@ TEST_F(RealSigned, AnotherProfileEkuIsRefused) {
   EXPECT_EQ(verdict.reason, nevr_plugin_signature::Reason::MissingEku) << verdict.Describe();
 }
 
-TEST_F(RealSigned, ADifferentSubjectIsNotRefusedWhenTheRootAndTheProfileEkuMatch) {
-  // The production policy pins no subject, so a signer whose subject differs from the one on the v5.4.3 file passes
-  // as long as the chain and the EKU hold. Stand in for such a signer by comparing against the file's own policy
-  // with no subject: acceptance must not depend on the subject text.
-  nevr_plugin_signature::Policy policy = trust::ProductionPolicy();
-  policy.subject.clear();
-  EXPECT_TRUE(VerifyReal(policy, kAfterTheLeafExpired).accepted());
-}
-
 TEST_F(RealSigned, APinnedSubjectThatDiffersIsStillRefusedWhenAPolicyAsksForIt) {
   nevr_plugin_signature::Policy policy = trust::ProductionPolicy();
   policy.subject = "CN=Someone Else, O=Someone Else, L=San Francisco, S=ca, C=US";

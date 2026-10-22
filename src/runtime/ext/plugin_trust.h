@@ -28,12 +28,12 @@ const char* ModeWord(Mode mode);
 // loader's start-up line so the linker keeps it.
 const char* ModeLiteral();
 
-// True once the profile EKU and the signer subject have been read from a certificate the real pipeline issued
-// and test_plugin_trust has verified that signed file against them (ADR 0010 section 2).
+// True once the profile EKU has been read from a certificate the real pipeline issued and test_plugin_trust has
+// verified that signed file against it (ADR 0010 section 2). The signer subject is deliberately not pinned.
 bool PinsConfirmed();
 
-// The production policy: the pinned Microsoft root, the profile EKU, the subject (empty until the signer
-// fills it) and the denylist.
+// The production policy: the pinned Microsoft root, the profile EKU, no subject (the field stays empty, so no
+// subject is compared) and the denylist.
 const nevr_plugin_signature::Policy& ProductionPolicy();
 
 // The pinned root certificate (DER) and its SHA-256 as 64 lowercase hex characters; a test checks that
