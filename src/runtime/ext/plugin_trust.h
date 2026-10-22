@@ -28,8 +28,8 @@ const char* ModeWord(Mode mode);
 // loader's start-up line so the linker keeps it.
 const char* ModeLiteral();
 
-// False while the profile EKU has never been read from a certificate the real pipeline issued (ADR 0010
-// section 2). tools/package_release.py refuses to package a release while this is false.
+// True once the profile EKU and the signer subject have been read from a certificate the real pipeline issued
+// and test_plugin_trust has verified that signed file against them (ADR 0010 section 2).
 bool PinsConfirmed();
 
 // The production policy: the pinned Microsoft root, the profile EKU, the subject (empty until the signer
