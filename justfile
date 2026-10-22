@@ -662,6 +662,25 @@ _vcpkg-quest-host:
         --x-manifest-root="$jd/tools/quest-host-deps" \
         --x-install-root="$jd/build/quest-host-vcpkg"
 
+# Host tests for the Quest first-run data step's core (src/quest/data: sha256, the zip extractor, the pins and decision, the
+# staging swap; docs/adr/0011-quest-game-data-first-run.md). zlib comes from the tools/quest-host-deps manifest for the
+# x64-linux triplet, never a system package. Fail-close: a compile error, a missing library or any failed check exits nonzero.
+test-quest-data: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-data-host"
+    mkdir -p "$out"
+    host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    for f in sha256 zip staging; do
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
+            "src/quest/data/$f.cpp" -o "$out/$f.o"
+    done
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" src/quest/tests/data_test.cpp "$host/lib/libz.a" \
+        -o "$out/data_test"
+    timeout -k 5 300 "$out/data_test"
+
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
 # compiles the same test, the same vectors (service_redirect_vectors.h) and the same
@@ -1310,9 +1329,9 @@ verify:
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     # --- Parallel test block --------------------------------------------------
-    # Eight independent suites run concurrently (capped at nproc) instead of one after
+    # Nine independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
-    # it, so the serial wall clock was ~8 compiles back to back. The shared vcpkg host
+    # it, so the serial wall clock was ~9 compiles back to back. The shared vcpkg host
     # prereq (yaml-cpp) is built once, serially, here, so the workers that depend on it hit
     # the idempotent guard in _vcpkg-quest-host and never run vcpkg concurrently.
     # tools/verify-parallel.sh fails closed and names the failing suite: any suite failing
@@ -1326,6 +1345,7 @@ verify:
         test-quest-tls \
         test-quest-redirect \
         test-quest-social \
+        test-quest-data \
         test-quest-integration
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
