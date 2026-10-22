@@ -62,6 +62,7 @@ BRAND_PROSE_SPELLINGS = {
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
     "docs/adr/0010-signed-plugins-only.md": {"nEVR"},
+    "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
