@@ -1,6 +1,8 @@
 # ADR 0010: the runtime loads only plugins signed through the release-signer pipeline
 
-Status: proposed (#741). Nothing in this document is implemented. Every code claim is a `file:line` on the tree this ADR was written
+Status: accepted, implemented by #745 (merge commit 712fb5c4226335f9084ef5dcd42da986e62efc04: the loader refuses unsigned plugins;
+signed-only and dev builds) and #746 (merge commit 99eb052bc9debfc0ff332f35127b06437142c71f: dependencies and later loads, one refusal
+dialog) (#741). The text below is the plan the implementation followed. Every code claim is a `file:line` on the tree this ADR was written
 against; every measurement names its probe; what is not shown is said where it matters.
 
 ## Context
