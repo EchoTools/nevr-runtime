@@ -65,6 +65,25 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertIn("gh attestation verify", text)
         self.assertIn("Enable release immutability", text)
 
+    def test_every_gh_release_create_is_a_titled_draft_and_agents_md_publishes_from_it(self):
+        # Release immutability is on: a release created as published is locked before the build attaches files.
+        for name in ("AGENTS.md", "RELEASING.md"):
+            text = (REPO / name).read_text(encoding="utf-8")
+            creates = [l for l in text.splitlines() if "&& gh release create " in l]
+            self.assertTrue(creates, name)
+            for line in creates:
+                self.assertRegex(line, r"--title v\S+ --draft --prerelease --verify-tag", f"{name}: {line}")
+            self.assertIn("gh release edit v", text)
+            self.assertIn("--draft=false", text, name)
+
+    def test_readme_issue_template_and_justfile_carry_the_audience_names_and_sums_scope(self):
+        self.assertIn("-windows-player.zip", (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("-windows-player.zip", (REPO / ".github/ISSUE_TEMPLATE/beta-bug.yml").read_text(encoding="utf-8"))
+        self.assertIn("-windows-server) and its symbol files", (REPO / "justfile").read_text(encoding="utf-8"))
+        releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("the SHA-256 of the Windows player zip", releasing)
+        self.assertIn("echo.taxi holds Quest APKs and dry runs only", releasing)
+
 
 if __name__ == "__main__":
     unittest.main()

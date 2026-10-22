@@ -67,7 +67,7 @@ launcher: configure
 verbose-build: configure
     cmake --build --preset {{ preset }}
 
-# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/
+# Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/
 dist: build
     @cmake --build --preset {{ preset }} --target dist
 

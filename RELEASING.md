@@ -23,10 +23,12 @@ all read or check that one list, so the names below cannot drift from the build.
 | `nevr-runtime-vX.Y.Z-windows-player.zip` | players on Windows | `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 | `nevr-runtime-vX.Y.Z-windows-server.zip` | people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `README.md`, `INSTALL.md`, an empty `plugins/` |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
-| `SHA256SUMS` | everyone | SHA-256 of the files above |
+| `SHA256SUMS` | everyone | one line: the SHA-256 of the Windows player zip (what `seal()` in `tools/package_release.py` writes). The server zip and the Quest `.so` are not in it; their integrity is the attestation |
 | `RELEASE-NOTES.md` | everyone | the notes `tools/package_release.py seal` writes from `tools/package-release/RELEASE-NOTES.template.md` |
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
+
+**Signed Windows zips live on the GitHub release.** echo.taxi holds Quest APKs and dry runs only.
 
 **Quest APKs never go on GitHub.** They are hosted on echo.taxi, `https://echo.taxi/nevr-runtime/quest/<file>` with a
 `<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the host without
@@ -57,8 +59,9 @@ five names on the draft is built and attached; a draft that already carries any 
 second dispatch never overwrites files. The `quest` job runs only for a draft dispatch or a release event, never for a
 plain dispatch: a green plain dispatch says nothing about the Quest tests.
 
-Do not create the release as published. A published release is immutable once the setting below is on, and the build
-attaches its files after the release exists.
+**The draft path is the only path.** Release immutability is on for this repository. A release created as published is
+locked the moment it exists, before the build can attach its files, and can never be filled or fixed. Never run
+`gh release create` without `--draft`.
 
 ## Check the draft
 
@@ -67,7 +70,7 @@ All of these on the draft, before anything is signed or published. Read the outp
 ```sh
 gh release view vX.Y.Z --json assets --jq '.assets[].name'          # exactly the five names above
 mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, empty directory
-(cd "$S" && sha256sum -c SHA256SUMS)                                  # every listed file OK
+(cd "$S" && sha256sum -c SHA256SUMS)                                  # the player zip line: OK (the only line)
 for f in "$S"/*; do gh attestation verify "$f" -R EchoTools/nevr-runtime; done   # each exits 0
 (cd "$S" && unzip -p nevr-runtime-vX.Y.Z-windows-player.zip BugSplat64.dll | strings -a | grep -a '^NEVR-BUILD')
 ```
@@ -95,6 +98,9 @@ Check a signed file as `SIGNING.txt` in the player zip says: `Get-AuthenticodeSi
 certificate. The CI attestation covers the bytes CI built; for a file the signer replaced, the Authenticode signature and
 the signer's decision record are the evidence for the new bytes.
 
+After the signer has replaced assets (a `dry_run=false` pass), run the checks above again on the draft before publishing:
+the replaced files carry the signer's Authenticode signature and decision record, and the same five names must still be there.
+
 ## Publish
 
 Only from the checked draft:
@@ -121,7 +127,8 @@ release attestation (tag, commit and assets) that `gh release verify` checks. Th
 a draft, and why **a bad asset is never swapped**: the fix is the next version, and the tag name of a published release
 is never reused.
 
-**The setting is the repository owner's to flip.** Steps, from GitHub's page "Preventing changes to your releases":
+**The setting is on** (the owner enabled it for this repository; it applies to every release published from now on). To
+check or change it, which is the owner's to do, the steps (GitHub Docs, "Preventing changes to your releases") are:
 repository **Settings**, then the **Releases** section, then **Enable release immutability**. It applies to releases
 published after it is turned on; it does not touch earlier ones.
 
