@@ -98,7 +98,7 @@ build, what to do) is not optional.
   headroom, the same 2.2 GiB figure `tools/quest-install.sh` uses, doubled in the mismatch case where the old `_data` stays. Not
   enough: no download, the floor message names the free and needed MiB.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
-  bounded number of attempts with backoff, then give up to the floor. The whole-file sha256 is verified at the end only (the
+  bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step

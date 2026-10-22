@@ -44,7 +44,7 @@ struct Options {
   ShowFn show = nullptr;                       // required for a visible message; null: the message is only logged
   AppFn app = nullptr;                         // the android_app; null: process_end::CurrentApp
   data_root::ExistsFn exists = nullptr;        // null: obb_skip::DirectoryExists
-  data::Transport* transport = nullptr;        // null: a CurlTransport with the pinned trust root
+  data::Transport* transport = nullptr;        // null: a CurlTransport with the pinned roots (data_host_roots.h)
   EnderFn ender = nullptr;                     // null: process_end::EndProcess
   SleepFn sleep = nullptr;                     // null: nanosleep
   std::string probe_path;                      // empty: <media root>/nevr-data-probe

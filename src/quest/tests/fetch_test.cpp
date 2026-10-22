@@ -24,6 +24,7 @@ struct Step {
   bool completes = true;         // false: no response at all (the network is down)
   std::string extra;             // appended to the body (a body longer than the pin)
   int flip_at = -1;              // flip one byte of the body at this offset into the zip
+  std::int64_t short_by = 0;     // > 0: the response ends cleanly this many bytes before the pin (completed, but short)
 };
 
 class ScriptedTransport : public Transport {
@@ -51,6 +52,7 @@ class ScriptedTransport : public Transport {
     const std::size_t from = step.honor_range ? static_cast<std::size_t>(offset) : 0;
     std::size_t to = body.size();
     if (step.drop_after >= 0) to = std::min(to, from + static_cast<std::size_t>(step.drop_after));
+    if (step.short_by > 0) to -= static_cast<std::size_t>(step.short_by);
     for (std::size_t at = from; at < to;) {
       if (!keep_going()) {
         r.interrupted = true;
@@ -425,6 +427,88 @@ TEST(ThePartIsMarkedWhileItIsKept) {
   CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kRetriesExhausted);
   CHECK(Exists(rig.Part()));
   CHECK(IsOwned(rig.Part()));
+}
+
+TEST(ADigestMismatchThenAResumeLeavesTheMarkerOnTheRecreatedPart) {
+  Rig rig;
+  Step bad;
+  bad.flip_at = 700;
+  Step drop;
+  drop.drop_after = 1000;
+  ScriptedTransport net(rig.zip, {bad, drop});
+  rig.config.max_attempts = 2;
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kRetriesExhausted);
+  // Attempt 1 ended in a mismatch and deleted the part; attempt 2 created it again and was cut off: it is kept for a
+  // resume, so it carries the marker that says it is ours.
+  CHECK(Exists(rig.Part()));
+  CHECK(IsOwned(rig.Part()));
+}
+
+TEST(AShortBodyKeepsThePartAndTheNextAttemptResumesFromIt) {
+  Rig rig;
+  Step shorter;
+  shorter.short_by = 5000;
+  ScriptedTransport net(rig.zip, {shorter, Step{}});
+  const FetchResult r = RunFetch(rig.config, net);
+  CHECK_EQ(r.status, FetchStatus::kOk);
+  CHECK_EQ(r.attempts, 2);
+  CHECK_EQ(net.offsets.size(), std::size_t{2});
+  CHECK_EQ(net.offsets[0], static_cast<std::uint64_t>(0));
+  CHECK_EQ(net.offsets[1], static_cast<std::uint64_t>(rig.zip.size() - 5000));  // resumed, not restarted
+  CHECK(Exists(rig.config.root + "/" + kManifest));
+}
+
+TEST(AShortBodyThatNeverCompletesLeavesTheMarkedPart) {
+  Rig rig;
+  Step shorter;
+  shorter.short_by = 5000;
+  ScriptedTransport net(rig.zip, {shorter, shorter, shorter});
+  rig.config.max_attempts = 2;
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kRetriesExhausted);
+  CHECK(Exists(rig.Part()));
+  CHECK(IsOwned(rig.Part()));
+  CHECK(!Exists(rig.config.root + "/_data"));
+}
+
+TEST(TheDefaultBackoffGrowsFromTwoSecondsToACap) {
+  CHECK_EQ(DefaultBackoffMs(1), 0u);
+  CHECK_EQ(DefaultBackoffMs(2), 2000u);
+  CHECK_EQ(DefaultBackoffMs(3), 4000u);
+  CHECK_EQ(DefaultBackoffMs(4), 8000u);
+  CHECK_EQ(DefaultBackoffMs(5), 16000u);
+  CHECK_EQ(DefaultBackoffMs(6), 30000u);
+  CHECK_EQ(DefaultBackoffMs(60), 30000u);
+}
+
+TEST(WithoutACallerBackoffTheFetchSleepsTheDefaultBeforeEachRetry) {
+  Rig rig;
+  rig.config.backoff = nullptr;
+  std::vector<unsigned> slept;
+  rig.config.sleep_ms = [&slept](unsigned ms) { slept.push_back(ms); };
+  Step down;
+  down.completes = false;
+  ScriptedTransport net(rig.zip, {down});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kRetriesExhausted);  // 4 attempts: waits before 2, 3 and 4
+  unsigned total = 0;
+  for (const unsigned ms : slept) {
+    CHECK(ms > 0 && ms <= kBackoffSliceMs);
+    total += ms;
+  }
+  CHECK_EQ(total, 2000u + 4000u + 8000u);
+}
+
+TEST(ACancelEndsTheBackoffWait) {
+  Rig rig;
+  rig.config.backoff = nullptr;
+  int sleeps = 0;
+  rig.config.sleep_ms = [&sleeps](unsigned) { ++sleeps; };
+  rig.config.keep_going = [&sleeps] { return sleeps < 3; };
+  Step down;
+  down.completes = false;
+  ScriptedTransport net(rig.zip, {down});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kCancelled);
+  CHECK_EQ(sleeps, 3);  // not the 8 slices of the first wait
+  CHECK_EQ(net.offsets.size(), std::size_t{1});
 }
 
 TEST(APartLongerThanThePinIsDiscarded) {

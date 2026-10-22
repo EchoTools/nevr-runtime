@@ -52,11 +52,12 @@ struct Easy {
 }  // namespace
 
 CurlTransport::CurlTransport(std::string roots_pem, bool allow_plain_http, long connect_timeout_seconds,
-                             long stall_seconds)
+                             long stall_seconds, std::function<RootsCheck()> roots_check)
     : roots_pem_(std::move(roots_pem)),
       allow_plain_http_(allow_plain_http),
       connect_timeout_seconds_(connect_timeout_seconds),
-      stall_seconds_(stall_seconds) {}
+      stall_seconds_(stall_seconds),
+      roots_check_(std::move(roots_check)) {}
 
 TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t offset, const BodyFn& on_body,
                                         const KeepGoingFn& keep_going) {
@@ -65,14 +66,23 @@ TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t of
 
   // Trust anchors first: with none there is nothing to verify against, and a request that skipped verification is
   // never acceptable.
-  std::string pem;
+  const std::string& pem = roots_pem_;
   if (!allow_plain_http_) {
-    if (roots_pem_.empty()) {
+    if (pem.empty()) {
       out.code = kNoTrustAnchors;
       out.detail = "no_trust_anchors";
       return out;
     }
-    pem = roots_pem_;
+    if (pem == DataHostRootsPem()) {
+      // The start-up self-check of the production table: a blob that is not the one written in data_host_roots.h is
+      // never handed to libcurl.
+      const RootsCheck check = roots_check_();
+      if (!check.ok) {
+        out.code = kRootsUnusable;
+        out.detail = "roots_unusable:" + check.detail;
+        return out;
+      }
+    }
   }
 
   Easy easy;
@@ -103,11 +113,12 @@ TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t of
   set(CURLOPT_NOPROGRESS, 0L);
   set(CURLOPT_XFERINFOFUNCTION, Progress);
   set(CURLOPT_XFERINFODATA, &ctx);
+  set(CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2));  // the minimum, not the only version
   set(CURLOPT_SSL_VERIFYPEER, 1L);
   set(CURLOPT_SSL_VERIFYHOST, 2L);
   if (!pem.empty()) {
     curl_blob blob;
-    blob.data = &pem[0];
+    blob.data = const_cast<char*>(pem.data());  // CURL_BLOB_COPY: libcurl copies it, never writes it
     blob.len = pem.size();
     blob.flags = CURL_BLOB_COPY;
     set(CURLOPT_CAINFO_BLOB, &blob);
