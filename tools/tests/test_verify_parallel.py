@@ -83,6 +83,13 @@ class VerifyParallelTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("no suite recipes given", result.stderr)
 
+    def test_a_repeated_suite_name_is_refused_before_anything_runs(self):
+        # Results are keyed by suite name, so a repeat would overwrite a failure with a pass.
+        result = self.run_script("a", "b", "a")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("duplicate suite recipe: a", result.stderr)
+        self.assertFalse((self.fake / "a.started").exists() or (self.fake / "b.started").exists())
+
     @unittest.skipIf((os.cpu_count() or 1) < 2, "needs two cores to run two suites at once")
     def test_suites_run_at_the_same_time_not_one_after_another(self):
         # Each suite waits until it has seen the other running; one after another, the first times out.
@@ -91,9 +98,6 @@ class VerifyParallelTest(unittest.TestCase):
         result = self.run_script("a", "b")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class VcpkgQuestHostGuardTest(unittest.TestCase):
@@ -160,3 +164,6 @@ class VcpkgQuestHostGuardTest(unittest.TestCase):
             out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(self.calls_made(), 0, "the waiter ran vcpkg again after the first install finished")
+
+if __name__ == "__main__":
+    unittest.main()

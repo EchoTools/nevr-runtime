@@ -29,6 +29,16 @@ if ((${#suites[@]} == 0)); then
     exit 2
 fi
 
+# Results are keyed by suite name, so a repeated name would let a pass overwrite a failure.
+declare -A seen_suites=()
+for suite in "${suites[@]}"; do
+    if [[ -n "${seen_suites[$suite]:-}" ]]; then
+        echo "verify-parallel: duplicate suite recipe: $suite" >&2
+        exit 2
+    fi
+    seen_suites["$suite"]=1
+done
+
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
@@ -49,7 +59,8 @@ declare -A running    # pid -> recipe name
 declare -A statuses   # recipe name -> exit code
 
 run_one() {
-    local suite="$1" log="$out/$suite.log" t0 rc
+    local suite="$1" t0 rc
+    local log="$out/$suite.log"
     t0=$SECONDS
     printf '[%s] START\n' "$suite"
     if just "$suite" >"$log" 2>&1; then
