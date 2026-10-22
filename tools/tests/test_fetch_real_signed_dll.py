@@ -76,3 +76,11 @@ def test_a_failed_download_exits_1_with_the_reason(tmp_path, capsys):
     rc = fetch_tool.main([str(tmp_path / "cache"), "--url", (tmp_path / "missing.zip").as_uri()])
     assert rc == 1
     assert "fetch_real_signed_dll:" in capsys.readouterr().err
+
+
+def test_a_response_over_the_size_limit_is_refused(tmp_path, served, monkeypatch):
+    source, _ = served
+    monkeypatch.setattr(fetch_tool, "MAX_ZIP_BYTES", 16)
+    with pytest.raises(SystemExit, match="larger than 16 bytes"):
+        fetch_tool.fetch(tmp_path / "cache", source.as_uri())
+    assert not (tmp_path / "cache").exists()

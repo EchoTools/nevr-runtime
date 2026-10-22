@@ -137,16 +137,18 @@ constexpr uint8_t kRoot[] = {
 };
 constexpr const char kRootSha256[] = "5367f20c7ade0e2bca790915056d086b720c33c1fa2a2661acf787e3292e1270";
 
-// The signing profile's EKU and the signer's subject, both read from a real signed file: the v5.4.3
-// BugSplat64.dll, sha256 a97767e62721503d4e249b016b734c42619a5aaa209ecdcd7a25a434f6d2a629, whose leaf
-// carries this EKU (findings: /home/andrew/metis/gopher-spritz/findings/2026-10-21-signed-v543-signer-facts.md).
+// The signing profile's EKU, read from a real signed file: the v5.4.3 BugSplat64.dll, sha256
+// a97767e62721503d4e249b016b734c42619a5aaa209ecdcd7a25a434f6d2a629, whose leaf carries this EKU
+// (findings: /home/andrew/metis/gopher-spritz/findings/2026-10-21-signed-v543-signer-facts.md).
 // test_plugin_trust verifies that file against these pins (RealSigned.*).
 constexpr const char kProfileEku[] = "1.3.6.1.4.1.311.97.918669346.25014483.651891390.88972997";
 constexpr bool kPinsConfirmed = true;
 
-// The signer's subject exactly as the verifier prints it: CertNameToStrA(X509_ASN_ENCODING,
-// CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG), read under Wine on that file. Not the RFC 2253 spelling.
-constexpr const char kSubject[] = "CN=Andrew Bates, O=Andrew Bates, L=San Francisco, S=ca, C=US";
+// The signer's subject is deliberately not pinned (empty = the check is skipped). The signing profile's EKU and the
+// pinned Microsoft root already bind a file to this pipeline, and a leaf's subject text is the part of a short-lived
+// certificate that changes when the signer renews or renames, which Microsoft's Artifact Signing guidance warns about
+// (ADR 0010, the 2026-10-14 design). Pinning it would refuse every plugin signed after such a change.
+constexpr const char kSubject[] = "";
 
 #ifdef NEVR_ALLOW_UNSIGNED_PLUGINS
 constexpr Mode kBuildMode = Mode::UnsignedAllowed;
