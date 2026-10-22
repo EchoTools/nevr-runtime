@@ -37,11 +37,28 @@ class VcpkgPinTest(unittest.TestCase):
                 self.assertLess(text.index("actions/checkout"), text.index("Microsoft/vcpkg.git"),
                                 f"{workflow.name}: .vcpkg-commit is read before the checkout")
 
+    @staticmethod
+    def justfile_pin():
+        text = (REPO / "justfile").read_text()
+        body = text[text.index("_vcpkg-mingw:"):]
+        match = re.search(r"env PATH=(\S+) \./vcpkg install --triplet=x64-mingw-static", body)
+        assert match, "justfile _vcpkg-mingw no longer pins PATH for vcpkg install"
+        return match.group(1)
+
+    def test_the_justfile_and_the_workflows_pin_the_same_path(self):
+        # Run 39433944012: the workflow pinned /usr/local/sbin:...:/bin and the justfile /usr/local/bin:/usr/bin, so
+        # `just verify` rebuilt all 13 mingw packages (about 19 minutes of a 33 minute Verify step).
+        pins = set()
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            pins.update(re.findall(r"env PATH=(\S+) \\\n\s+\"\$HOME/\.vcpkg/vcpkg\" install", workflow.read_text()))
+        self.assertEqual(pins, {self.justfile_pin()})
+
     def test_every_vcpkg_install_runs_under_the_same_pinned_path(self):
         # x64-mingw-static lists PATH in VCPKG_ENV_PASSTHROUGH, so PATH is hashed into every mingw package
         # ABI. Two jobs with different PATHs name every archive differently and the restore finds none
         # (runs 38424698584 vs 38429980090: all 14 mingw ABIs differed, the 5 x64-linux ones matched).
-        pinned = "env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        # The pin is the justfile's (_vcpkg-mingw), the one `just verify` installs under: one source, no copy.
+        pinned = "env PATH=" + self.justfile_pin()
         installing = [p for p in sorted(WORKFLOWS.glob("*.yml")) if '"$HOME/.vcpkg/vcpkg" install' in p.read_text()]
         self.assertGreaterEqual(len(installing), 3, "expected build, vcpkg-cache and defender-scan to install")
         for workflow in installing:
