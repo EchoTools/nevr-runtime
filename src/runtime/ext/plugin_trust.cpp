@@ -137,14 +137,16 @@ constexpr uint8_t kRoot[] = {
 };
 constexpr const char kRootSha256[] = "5367f20c7ade0e2bca790915056d086b720c33c1fa2a2661acf787e3292e1270";
 
-// The signing profile's EKU, as release-signer's config/signing.yml carries it. UNCONFIRMED: no certificate
-// issued to the profile has been read, so this is a value to compare against the first real signed file,
-// not a fact. kPinsConfirmed becomes true in the change that records that comparison.
+// The signing profile's EKU and the signer's subject, both read from a real signed file: the v5.4.3
+// BugSplat64.dll, sha256 a97767e62721503d4e249b016b734c42619a5aaa209ecdcd7a25a434f6d2a629, whose leaf
+// carries this EKU (findings: /home/andrew/metis/gopher-spritz/findings/2026-10-21-signed-v543-signer-facts.md).
+// test_plugin_trust verifies that file against these pins (RealSigned.*).
 constexpr const char kProfileEku[] = "1.3.6.1.4.1.311.97.918669346.25014483.651891390.88972997";
-constexpr bool kPinsConfirmed = false;
+constexpr bool kPinsConfirmed = true;
 
-// The signer's RFC 2253 subject. Empty until the owner-run subject discovery has produced it.
-constexpr const char kSubject[] = "";
+// The signer's subject exactly as the verifier prints it: CertNameToStrA(X509_ASN_ENCODING,
+// CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG), read under Wine on that file. Not the RFC 2253 spelling.
+constexpr const char kSubject[] = "CN=Andrew Bates, O=Andrew Bates, L=San Francisco, S=ca, C=US";
 
 #ifdef NEVR_ALLOW_UNSIGNED_PLUGINS
 constexpr Mode kBuildMode = Mode::UnsignedAllowed;

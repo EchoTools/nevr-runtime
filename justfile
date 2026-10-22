@@ -414,6 +414,10 @@ test-auth-unit:
     trap 'rm -rf "$sigfix"' EXIT
     python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
+    # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept: test_plugin_trust verifies the
+    # production pins against it. A failed fetch or a digest that does not match fails the recipe.
+    NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py /var/tmp/work-nevr-runtime/cache/real-signed)"
+    export NEVR_REAL_SIGNED_DLL
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2

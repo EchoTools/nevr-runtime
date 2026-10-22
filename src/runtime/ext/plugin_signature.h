@@ -50,7 +50,7 @@ struct TimeWindow {
 struct Policy {
   std::vector<uint8_t> rootDer;                // the pinned root certificate, DER
   std::vector<std::string> profileEkus;        // accepted profile EKU OIDs (whole-string compare)
-  std::string subject;                         // pinned signer subject (RFC 2253 form); empty = not pinned
+  std::string subject;                         // pinned signer subject, as CertNameToStrA(X500 | REVERSE) prints it; empty = not pinned
   std::vector<std::string> deniedSerials;      // leaf serial numbers, lowercase hex without leading zeros
   std::vector<TimeWindow> deniedWindows;       // signing times (timestamp, else now) refused
   std::vector<std::string> deniedProfileEkus;  // profile EKUs refused even when listed in profileEkus
