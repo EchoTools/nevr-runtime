@@ -51,10 +51,9 @@ struct Easy {
 
 }  // namespace
 
-CurlTransport::CurlTransport(std::vector<std::string> ca_dirs, nevr::auth::LogSink log, bool allow_plain_http,
-                             long connect_timeout_seconds, long stall_seconds)
-    : ca_dirs_(std::move(ca_dirs)),
-      log_(std::move(log)),
+CurlTransport::CurlTransport(std::string roots_pem, bool allow_plain_http, long connect_timeout_seconds,
+                             long stall_seconds)
+    : roots_pem_(std::move(roots_pem)),
       allow_plain_http_(allow_plain_http),
       connect_timeout_seconds_(connect_timeout_seconds),
       stall_seconds_(stall_seconds) {}
@@ -68,13 +67,12 @@ TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t of
   // never acceptable.
   std::string pem;
   if (!allow_plain_http_) {
-    const nevr::quest_auth::CaBundle bundle = nevr::quest_auth::LoadCaBundle(ca_dirs_, log_);
-    if (bundle.certificates == 0) {
+    if (roots_pem_.empty()) {
       out.code = kNoTrustAnchors;
       out.detail = "no_trust_anchors";
       return out;
     }
-    pem = bundle.pem;
+    pem = roots_pem_;
   }
 
   Easy easy;

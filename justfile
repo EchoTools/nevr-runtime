@@ -703,14 +703,12 @@ test-quest-data-net: _vcpkg-quest-host
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$host/include" $(pkg-config --cflags libcurl) \
         src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
-        src/quest/data/curl_transport.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/curl_transport_test.cpp \
+        src/quest/data/curl_transport.cpp src/quest/tests/curl_transport_test.cpp \
         "$host/lib/libz.a" -o "$out/curl_transport_test" $(pkg-config --libs libcurl) -lssl -lcrypto
     cd "$out"
     export NEVR_TEST_TMP="$PWD"
     openssl req -x509 -newkey rsa:2048 -nodes -keyout trust.key -out trust.pem -subj "/CN=nevr-data-test-ca" -days 2 \
         -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
-    mkdir trust
-    cp trust.pem trust/trust.pem
     ./curl_transport_test write-zip payload.zip
     : > requests.log
     python3 -I ../../src/quest/tests/range_server.py server.port requests.log payload.zip &
@@ -718,7 +716,7 @@ test-quest-data-net: _vcpkg-quest-host
     trap 'kill "$server" 2>/dev/null || true' EXIT
     for _ in $(seq 1 100); do [ -s server.port ] && break; sleep 0.1; done
     [ -s server.port ] || { echo "test-quest-data-net: the range server did not start" >&2; exit 1; }
-    timeout -k 5 300 ./curl_transport_test "$(cat server.port)" requests.log trust
+    timeout -k 5 300 ./curl_transport_test "$(cat server.port)" requests.log trust.pem
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
