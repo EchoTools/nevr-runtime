@@ -104,6 +104,37 @@ class PrePushHookTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, tag + result.stdout + result.stderr)
             self.assertFalse(self.remote_has(f"refs/tags/{tag}"))
 
+    def bad_side_branch(self):
+        """A branch `side` carrying a 100644 script; the checkout is back on a clean `main`."""
+        self.run_git("checkout", "-q", "-b", "side")
+        self.add_script("-x")
+        self.run_git("checkout", "-q", "main")
+
+    def test_several_refs_in_one_push_are_all_checked_in_either_order(self):
+        self.bad_side_branch()
+        for refs in (("main:good", "side"), ("side", "main:good")):
+            result = self.push(*refs)
+            self.assertNotEqual(result.returncode, 0, " ".join(refs) + result.stdout + result.stderr)
+            self.assertIn("refs/heads/side", result.stderr)
+            self.assertFalse(self.remote_has("side"))
+            self.assertFalse(self.remote_has("good"))
+
+    def test_a_tag_of_a_tree_does_not_end_the_check_of_the_refs_after_it(self):
+        self.bad_side_branch()
+        self.run_git("tag", "treetag", "main^{tree}")
+        for refs in (("refs/tags/treetag", "side"), ("side", "refs/tags/treetag")):
+            result = self.push(*refs)
+            self.assertNotEqual(result.returncode, 0, " ".join(refs) + result.stdout + result.stderr)
+            self.assertIn("refs/heads/side", result.stderr)
+            self.assertFalse(self.remote_has("side"))
+        self.assertEqual(self.push("refs/tags/treetag").returncode, 0)
+
+    def test_a_note_that_starts_with_a_shebang_is_not_refused(self):
+        self.run_git("notes", "add", "-m", "#!/not/a/script")
+        result = self.push("refs/notes/commits")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.remote_has("refs/notes/commits"))
+
     def test_deleting_a_remote_branch_is_allowed_whatever_the_checkout_holds(self):
         self.assertEqual(self.push("main:old").returncode, 0)
         self.add_script("-x")
