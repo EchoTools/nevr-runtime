@@ -410,7 +410,7 @@ jobs:
         set -euo pipefail
         packages=(dist/nevr-runtime-v*/)
         name=$(basename "${packages[0]%/}")
-        python3 tools/verify_symbols.py --tree release-stage/nevr-runtime-v*-windows "dist/symbols/$name"
+        python3 tools/verify_symbols.py --tree release-stage/nevr-runtime-v*-windows-player "dist/symbols/$name"
 
     - name: Upload the release tree
       if: steps.release.outputs.version != ''
@@ -645,7 +645,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        tree=$(ls -d staged/release/nevr-runtime-v*-windows)
+        tree=$(ls -d staged/release/nevr-runtime-v*-windows-player)
         python3 tools/package_release.py seal --tree "$tree" --out release-assets
         (cd release-assets && sha256sum -c SHA256SUMS)
         ls -la release-assets

@@ -318,6 +318,8 @@ just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
 
+Every release follows RELEASING.md.
+
 Releases are built by CI from a tag, never locally. The steps, in order, from a clone of origin:
 
 ```sh

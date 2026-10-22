@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+FOUR = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0-windows-server.zip",
         "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; FOUR predates the Quest library
 
 
@@ -450,7 +450,7 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("sha256sum -c SHA256SUMS", seal)
         self.assertIn("packages-unsigned", seal)
         self.assertIn("release-unsigned", seal)
-        self.assertIn("staged/release/nevr-runtime-v*-windows", seal)
+        self.assertIn("staged/release/nevr-runtime-v*-windows-player", seal)
         self.assertFalse((REPO / "tools" / "rc_release_apk.sh").exists())
 
     def test_the_build_writes_the_public_defaults_before_it_configures(self):

@@ -1,0 +1,70 @@
+"""One release asset per audience, named for it (#823): the list, the build, and RELEASING.md agree."""
+import pathlib
+import re
+import subprocess
+import unittest
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+NAMES = REPO / "tools" / "release_asset_names.sh"
+AUDIENCE = ("windows-player", "windows-server", "quest")
+
+
+def listed(version="5.5.0"):
+    out = subprocess.run(["bash", "-c", f'source "{NAMES}"; release_asset_names {version}'],
+                         capture_output=True, text=True, check=True).stdout
+    return out.split("\n")[:-1]
+
+
+class ReleaseAssetsTest(unittest.TestCase):
+    def test_the_release_lists_exactly_these_five_names(self):
+        self.assertEqual(listed(), [
+            "nevr-runtime-v5.5.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md",
+            "nevr-runtime-v5.5.0-windows-server.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so"])
+
+    def test_every_per_audience_file_carries_its_audience_and_the_bare_zip_is_gone(self):
+        for name in listed():
+            if name in ("SHA256SUMS", "RELEASE-NOTES.md"):
+                continue
+            self.assertTrue(any(f"-{a}" in name for a in AUDIENCE), f"{name} names no audience")
+        self.assertNotIn("nevr-runtime-v5.5.0.zip", listed())
+
+    def test_the_packager_and_the_dist_target_make_the_listed_zips(self):
+        packager = (REPO / "tools" / "package_release.py").read_text()
+        self.assertIn('f"{base}-windows-player.zip"', packager)
+        self.assertNotIn('-windows.zip', packager)
+        cmake = (REPO / "CMakeLists.txt").read_text()
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
+
+    def test_the_workflow_globs_name_the_player_tree(self):
+        build = (REPO / ".github/workflows/build.yml").read_text()
+        self.assertEqual(len(re.findall(r"nevr-runtime-v\*-windows-player", build)), 2)
+        self.assertIsNone(re.search(r"nevr-runtime-v\*-windows(?!-)", build))
+
+    def test_releasing_md_lists_each_asset_and_agents_md_points_at_it(self):
+        text = (REPO / "RELEASING.md").read_text()
+        for name in listed("X.Y.Z"):
+            self.assertIn(f"`{name}`", text, f"RELEASING.md does not list {name}")
+        agents = (REPO / "AGENTS.md").read_text()
+        self.assertIn("Every release follows RELEASING.md.", agents)
+
+    def test_releasing_md_carries_the_three_release_steps_agents_md_carries(self):
+        releasing = (REPO / "RELEASING.md").read_text()
+        for step in ("just release-preflight",
+                     'git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z',
+                     "gh workflow run build.yml --ref vX.Y.Z"):
+            self.assertIn(step, releasing)
+        agents = (REPO / "AGENTS.md").read_text()
+        for step in ("just release-preflight", 'git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>',
+                     "gh workflow run build.yml --ref v<x.y.z>"):
+            self.assertIn(step, agents)
+
+    def test_releasing_md_creates_a_titled_draft_and_publishes_from_it(self):
+        text = (REPO / "RELEASING.md").read_text()
+        self.assertIn("gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag", text)
+        self.assertIn("gh release edit vX.Y.Z --draft=false", text)
+        self.assertIn("gh attestation verify", text)
+        self.assertIn("Enable release immutability", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

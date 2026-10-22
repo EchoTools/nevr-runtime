@@ -179,7 +179,7 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
-        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")', cmake)
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)

@@ -310,7 +310,8 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the one release package, nevr-runtime-v<ver>: binaries run through strip --strip-all.
+# Creates the one release package, nevr-runtime-v<ver>-windows-server (the server package; the player package is
+# nevr-runtime-v<ver>-windows-player, made by tools/package_release.py): binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
 # function names through the .dbg's COFF symbol table. The release preset has no -g, so there are no source
@@ -319,7 +320,7 @@ endif()
 # Usage: cmake --build <build_dir> --target dist
 # =============================================================================
 
-set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
+set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
 set(DIST_SYMBOLS_DIR "${CMAKE_SOURCE_DIR}/dist/symbols/${DIST_NAME}")
