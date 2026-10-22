@@ -96,8 +96,8 @@ exports (an export whose RVA lies inside the export directory and names `dll.sym
 `VerifyPluginFile`, up to 64 files. The rules, each pinned by a test in `test_plugin_tree.cpp`:
 - A name with no extension gets `.dll`, as the loader does, so the file checked is the file mapped (`WithDefaultExtension`).
 - A name that carries a path is refused: it is resolved relative to something the walk cannot know.
-- An import or forwarder that is not a file in the plugins directory and is not supplied by the system (an API set, or a System32
-  file) is refused: a file put there before the load would be mapped unchecked.
+- An import or forwarder that is not a file in the plugins directory and is not supplied by the system (an API set, a System32
+  file, or a module already loaded in the process: `SuppliedByTheSystem`) is refused: a file put there before the load would be mapped unchecked.
 - An absent delay-load is not refused: it is resolved when first called, by a `LoadLibrary` the late-load filter checks then, and an
   optional one (`nvapi64.dll` on a machine without it) must not refuse a plugin that loads without it.
 System32 imports are the OS's.
@@ -113,13 +113,17 @@ the load against the same verifier and refuses (null, `ERROR_MOD_NOT_FOUND`) on 
   through links, so no list of candidates is complete. A plugin that needs such a load passes a full path.
 A dev build logs the line `a plugin loads <file> after its init: <reason>, allowed because this is a dev build (plugin trust mode
 <mode>)` and allows it. Known gaps, recorded and not claimed closed: a load by an absolute path outside the plugins directory (it is
-not a plugin file); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
+not a plugin file); under Wine, a unix symbolic link to the plugins directory is not recognised by the final-path compare, so an
+unsigned file reached through it loads (#788, open); the lock order of the late-load filter against a load made from a plugin's
+`DllMain` is not proven (#784, open); a direct `LdrLoadDll` or a manual map by a plugin (code that is already signed by us and running in the process can do
 anything); a plugin's own build flags. Plugins built from `plugins/common` get `/DEPENDENTLOADFLAG:0x800` as a template default so
-their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it.
+their own implicit imports resolve the way N75 does; that flag lives in the plugin's repo and the runtime cannot enforce it. The
+race on a dependency that the system names (a file in `plugins\` that replaces a system DLL between the check and the load) was
+filed as #783 and is closed.
 
 **Check and load are separate steps.** A file can change between them.
-- `VerifyPluginSignature` opens the file with `FILE_SHARE_READ` only (no write or delete sharing), and `StageOne` keeps that handle
-  open across `LoadModule`, so a Windows process cannot write or replace the file in between.
+- `StageOne` opens the file with `FILE_SHARE_READ` only (no write or delete sharing), passes that handle to `VerifyPluginFile` and
+  keeps it open across `LoadModule`, so a Windows process cannot write or replace the file in between.
 - Known gap: under Wine and Proton a Linux process of the same user can write the underlying file without the Windows sharing rules.
   The test in section 5 measures whether Wine honours the sharing mode against another Wine process; it cannot cover a native Linux
   writer, and the threat model puts a same-user native writer out of scope. The mitigation that would cover it (copy the verified bytes
@@ -179,7 +183,8 @@ valid forever, so the runtime ships a denylist, compiled in and changed only by 
 - a profile EKU (the pin table is a list; a retired or compromised profile's EKU is removed from it and listed here, so the reason
   line can say why).
 
-The denylist lives in one header, and a test checks that every entry parses. A runtime that predates an entry cannot learn it: the
+The denylist is the policy's `deniedSerials`, `deniedWindows` and `deniedProfileEkus` fields (`plugin_signature.h`), filled in
+`ProductionPolicy` (`plugin_trust.cpp`; no entry today), and a test checks that every entry parses. A runtime that predates an entry cannot learn it: the
 update path is a new release, and a plugin signed in the window stays loadable on older runtimes. The release notes of the release
 that adds an entry say so.
 
@@ -241,7 +246,7 @@ What follows:
 - Wine does not populate counter-signers in the provider data, so the runtime reads the timestamp itself:
   `CryptQueryObject(CERT_QUERY_OBJECT_FILE, ..., CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, ...)` then
   `CryptMsgGetParam(CMSG_SIGNER_UNAUTH_ATTR_PARAM)` returned attribute `1.3.6.1.4.1.311.3.3.1` (5998 bytes) for the timestamped file
-  and "not found" for the untimestamped one. Parsing the token (an inner CMS `SignedData` whose content is a `TSTInfo`) is a work item.
+  and "not found" for the untimestamped one. The verifier parses the token (an inner CMS `SignedData` whose content is a `TSTInfo`) itself (`plugin_signature.cpp`).
 - Embedded signatures only: `CryptQueryObject` with the embedded-PKCS7 flag succeeding is a precondition. A file with no embedded
   signature is refused before `WinVerifyTrust` runs, so a catalog-signed file is not accepted on native Windows, where
   `WinVerifyTrust` would otherwise accept it through the catalog.
@@ -259,7 +264,8 @@ root embedded in a signature, and a trivial DLL from the repo's toolchain. The v
 subject, denylist) as an argument, so tests pin the test root and never the Microsoft one; one test pins the Microsoft root constant
 by hash.
 
-GTest under Wine (a new test file in `src/runtime/tests/`, added to the GTest floor):
+GTest under Wine, in `src/runtime/tests/test_plugin_signature.cpp`, `test_plugin_tree.cpp`, `test_plugin_trust.cpp` and
+`test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`):
 
 | Test | Expected |
 | --- | --- |
@@ -296,8 +302,8 @@ Integration: a game copy with one signed fixture plugin and one unsigned, on the
 line of the first and the refusal line of the second, and the login's `nevr_plugins` must list the second as failed.
 
 Release contract: the packaging check for the `NEVR-PLUGIN-TRUST` literal (section 3), and the legacy targets absent from release
-inputs (section 1). `just test-winvm` runs the GTest on native Windows as the second platform. The N-rules index in `AGENTS.md` gets
-a row once the rule is implemented.
+inputs (section 1). `just test-winvm` runs the GTest on native Windows as the second platform. The rule is N147 in the N-rules index in
+`AGENTS.md`.
 
 ## 6. Plugins people use today, and what a player sees
 
