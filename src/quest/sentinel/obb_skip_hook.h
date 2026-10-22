@@ -63,6 +63,9 @@ bool DirectoryExists(const char* path) noexcept;
 void ArmForTest() noexcept;
 void ResetForTest() noexcept;
 
+// The root ResolveRoot chose last (a string literal, never freed): what the game's data-root question is answered with.
+const char* CurrentRoot() noexcept;
+
 struct Counts {
   unsigned long long mountSkipped, pathServed;
 };

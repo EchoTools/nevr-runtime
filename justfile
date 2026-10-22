@@ -721,6 +721,16 @@ test-quest-data-net: _vcpkg-quest-host
     for _ in $(seq 1 100); do [ -s server.port ] && break; sleep 0.1; done
     [ -s server.port ] || { echo "test-quest-data-net: the range server did not start" >&2; exit 1; }
     timeout -k 5 300 ./curl_transport_test "$(cat server.port)" requests.log trust.pem
+    # The step as the game reaches it: through the permission-wait handler's thunk entry (src/quest/sentinel/data_wiring.cpp).
+    cd "{{ justfile_directory() }}"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isrc/quest/sentinel -isystem "$host/include" \
+        $(pkg-config --cflags libcurl) src/quest/tests/data_wiring_test.cpp src/quest/sentinel/data_wiring.cpp \
+        src/quest/sentinel/obb_skip_hook.cpp src/quest/sentinel/permission_wait_hook.cpp src/quest/sentinel/process_end_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
+        src/quest/data/data_step.cpp src/quest/data/curl_transport.cpp \
+        "$host/lib/libz.a" -o "$out/data_wiring_test" $(pkg-config --libs libcurl) -lssl -lcrypto -ldl
+    NEVR_TEST_TMP="$out" timeout -k 5 300 "$out/data_wiring_test"
     echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is

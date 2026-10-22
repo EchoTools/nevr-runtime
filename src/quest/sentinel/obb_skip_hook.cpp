@@ -80,6 +80,8 @@ bool RegisterCounters() noexcept {
   return true;
 }
 
+const char* CurrentRoot() noexcept { return g_root.load(std::memory_order_acquire); }
+
 void ResolveRoot(data_root::ExistsFn exists) noexcept {
   const data_root::Resolution r = data_root::Resolve(exists);
   g_root.store(r.root, std::memory_order_release);

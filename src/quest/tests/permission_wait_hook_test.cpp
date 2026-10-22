@@ -162,6 +162,55 @@ void ANullNameListIsSafe() {
   QCHECK(g_checkCalls == 0 && pw::CurrentCounts().waits == 0);
 }
 
+int g_afterCalls = 0;
+std::size_t g_eventsAtAfter = 0;
+
+void AfterStorage() noexcept {
+  ++g_afterCalls;
+  g_eventsAtAfter = g_events.size();
+}
+
+void TheAfterStorageStepRunsOnceAfterTheWaitAndBeforeTheCallReturns() {
+  Reset(3);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_eventsAtAfter == g_events.size());  // every check of the wait had been made when it ran
+  QCHECK(pw::CurrentCounts().granted == 1);
+  const char* const script[1] = {kWrite};
+  RequestEntry()(script, 1);                   // a later request does not run it again
+  QCHECK(g_afterCalls == 1);
+}
+
+void TheAfterStorageStepRunsWhenThePermissionWasDenied() {
+  Reset(-1);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 40);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(pw::CurrentCounts().timeouts == 1);
+  QCHECK(g_afterCalls == 1);  // the data root needs no storage permission: the step still runs
+}
+
+void TheAfterStorageStepRunsWithoutACheck() {
+  Reset(-1);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+}
+
+void NoAfterStorageStepIsTheGamesCallAlone() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 0);
+}
+
 }  // namespace
 
 // A player who taps Deny waits out the cap before the game's own error: it is what a person waits (30 s).
@@ -180,6 +229,10 @@ int main() {
   ARequestWithoutStoragePermissionsDoesNotWait();
   WithoutACheckTheGamesCallIsUntouched();
   ANullNameListIsSafe();
+  TheAfterStorageStepRunsOnceAfterTheWaitAndBeforeTheCallReturns();
+  TheAfterStorageStepRunsWhenThePermissionWasDenied();
+  TheAfterStorageStepRunsWithoutACheck();
+  NoAfterStorageStepIsTheGamesCallAlone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

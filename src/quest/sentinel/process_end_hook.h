@@ -41,6 +41,10 @@ using EnderFn = void (*)() noexcept;
 
 inline constexpr unsigned kFlushBudgetMs = 500;
 
+// The android_app the game's android_main was called with, kept before the original runs (null until then). The
+// first-run data step reads the activity from it (android_glue_layout.h); nothing else uses it.
+sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept;
+
 // The callback of step 2 (null: none). It is read when android_main returns, so it may be set before or after Install.
 void SetBeforeExit(BeforeExitFn fn) noexcept;
 

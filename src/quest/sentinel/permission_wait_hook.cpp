@@ -21,6 +21,7 @@ constexpr const char kStorageSuffix[] = "_EXTERNAL_STORAGE";
 sentinel::GotHook g_hook;
 std::atomic<CheckFn> g_check{nullptr};
 std::atomic<WaitFn> g_wait{nullptr};
+std::atomic<AfterStorageFn> g_after{nullptr};
 std::atomic<bool> g_spent{false};
 std::atomic<unsigned> g_pollMs{kPollMs};
 std::atomic<unsigned> g_timeoutMs{kTimeoutMs};
@@ -111,6 +112,8 @@ void RequestHandler(RequestThunk::Fn original, const char* const* names, std::ui
   if (g_spent.exchange(true, std::memory_order_acq_rel)) return;  // only the boot request waits
   const WaitFn wait = g_wait.load(std::memory_order_acquire);
   if (wait != nullptr) wait(names, count);
+  const AfterStorageFn after = g_after.load(std::memory_order_acquire);
+  if (after != nullptr) after();
 }
 
 NEVR_HOOK_RECORD(kRequestHook, RequestThunk, &RequestHandler);
@@ -149,6 +152,8 @@ CheckFn ResolveCheck(const char** reason) noexcept {
 
 }  // namespace
 
+void SetAfterStorage(AfterStorageFn fn) noexcept { g_after.store(fn, std::memory_order_release); }
+
 bool InstallAt(const sentinel::GotTarget& target, CheckFn check) noexcept {
   const char* reason = "injected";
   if (check == nullptr) check = ResolveCheck(&reason);
@@ -182,6 +187,7 @@ void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept {
 
 void ResetForTest() noexcept {
   g_check.store(nullptr, std::memory_order_relaxed);
+  g_after.store(nullptr, std::memory_order_relaxed);
   g_wait.store(nullptr, std::memory_order_relaxed);
   g_spent.store(false, std::memory_order_relaxed);
   g_pollMs.store(kPollMs, std::memory_order_relaxed);

@@ -23,6 +23,7 @@ std::atomic<EnderFn> g_ender{&EndProcess};
 std::atomic<AfterFn> g_after{nullptr};
 std::atomic<unsigned> g_budgetMs{kFlushBudgetMs};
 std::atomic<unsigned long long> g_returned{0};
+std::atomic<sentinel::pinned::AndroidAppOpaque*> g_app{nullptr};
 
 // The before-exit callback and the wait for it. One Shared per call, never freed: a callback that outlives
 // its wait still has somewhere to write when it finally returns.
@@ -92,6 +93,7 @@ void AfterReturn() noexcept {
 
 // android_main. The handler touches the game only through `original` and reaches the rest through pointers.
 void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app) noexcept {
+  g_app.store(app, std::memory_order_release);
   original(app);
   g_returned.fetch_add(1, std::memory_order_relaxed);
   const AfterFn after = g_after.load(std::memory_order_acquire);
@@ -103,6 +105,8 @@ void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app
 NEVR_HOOK_RECORD(kMainHook, MainThunk, &MainHandler);
 
 }  // namespace
+
+sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept { return g_app.load(std::memory_order_acquire); }
 
 void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memory_order_release); }
 
@@ -135,6 +139,7 @@ void ResetForTest() noexcept {
   g_after.store(nullptr, std::memory_order_relaxed);
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);
   g_returned.store(0, std::memory_order_relaxed);
+  g_app.store(nullptr, std::memory_order_relaxed);
 }
 
 Counts CurrentCounts() noexcept { return {g_returned.load(std::memory_order_relaxed)}; }
