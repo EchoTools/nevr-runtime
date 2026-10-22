@@ -113,6 +113,16 @@ class ServerContext {
   // false when not initialized, the array is absent, or nothing matches.
   bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
 
+  // The client session GUID of an accepted entrant slot, read from the lobby's
+  // player-session array (lobby+0xC8, stride 0x28). Zero GUID when the slot is
+  // out of range, not accepted, or the lobby is not initialized.
+  GUID GetEntrantSessionGuid(uint32_t slot) const;
+
+  // True only when the slot holds an ACCEPTED client session; on true, *out is
+  // its GUID. On false *out is untouched. This is the "send nothing" decision
+  // for a save-loadout request: there is no fallback to the entrant's account id.
+  bool TryGetEntrantSessionGuid(uint32_t slot, GUID* out) const;
+
   // Number of player sessions whose join state is 4 (accepted): the players actually in the session.
   // GetEntrantCount() is the array capacity, not this. 0 when not initialized.
   uint64_t CountAcceptedEntrants() const;
