@@ -33,7 +33,7 @@ If the Quest build will not start
   the game once. It does not copy your sign-in link. It replaces the headset's serial numbers and any e-mail
   address with <device-serial> and <email>, and masks nothing else: the zip holds the runtime's crash dumps as
   they are and the headset's whole system log, which can show your Wi-Fi name, its BSSID, IP addresses and numeric user ids.
-  Send the zip by direct message to sprockee (@thesprockee) on the EchoVRCE Discord, never in a public channel.
+  Send the zip by direct message to sprockee on the EchoVRCE Discord, never in a public channel.
 
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be
