@@ -419,6 +419,9 @@ void ValidateHostRecords(const Expectation& expect) {
     const auto flush = reinterpret_cast<void (*)()>(
         GetProcAddress(GetModuleHandleW(L"BugSplat64.dll"), "nevr_host_test_FlushDeferred"));
     Require(flush != nullptr, "the host shim's deferred flush did not resolve");
+    const auto wait = reinterpret_cast<int (*)()>(
+        GetProcAddress(GetModuleHandleW(L"BugSplat64.dll"), "nevr_host_test_WaitFailureFlush"));
+    Require(wait != nullptr && wait() == 1, "the host's failure flush did not finish");
     flush();
   }
   const std::vector<nlohmann::json> records = ReadHostRecords();

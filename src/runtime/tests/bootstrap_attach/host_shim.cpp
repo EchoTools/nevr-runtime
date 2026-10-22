@@ -39,6 +39,12 @@ extern "C" __declspec(dllexport) void nevr_host_test_FlushDeferred() {
   nevr_host::OnCrashReporterConstructed();
 }
 
+// The attach failure path flushes the journal from a thread (host_entry.cpp); the test reads the file only after
+// that thread is done, so it never races a half-written flush.
+extern "C" __declspec(dllexport) int nevr_host_test_WaitFailureFlush() {
+  return nevr_host::WaitForAttachFailureFlush(10000) ? 1 : 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (reason != DLL_PROCESS_ATTACH) return TRUE;
   HMODULE exe = GetModuleHandleW(nullptr);

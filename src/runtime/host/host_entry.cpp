@@ -14,6 +14,20 @@ HMODULE g_host_module = nullptr;
 NevrGetRuntimeApiFn g_in_process_runtime = nullptr;
 std::atomic<bool> g_set_game_module_called{false};
 std::atomic<bool> g_attached_at_dll_main{false};
+std::atomic<HANDLE> g_failure_flush_thread{nullptr};
+
+DWORD WINAPI FlushAfterAttachFailure(LPVOID) {
+  g_diagnostics.FlushAttachJournal();
+  return 0;
+}
+
+// An attach that left the game unhooked has no detour to report it, and the game may never construct the
+// crash reporter either, so the record would never reach the disk. A file cannot be written under the loader
+// lock, so the flush runs on a thread: its start waits for the lock, which DllMain releases on return.
+void FlushJournalOffTheLoaderLock() noexcept {
+  const HANDLE thread = CreateThread(nullptr, 0, &FlushAfterAttachFailure, nullptr, 0, nullptr);
+  g_failure_flush_thread.store(thread, std::memory_order_release);
+}
 
 void* RendezvousTarget(HMODULE game_module) {
   return reinterpret_cast<unsigned char*>(game_module) + kGameMainWrapperRva;
@@ -47,6 +61,13 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   if (launcher_mode) return;  // SetGameModule drives the rendezvous after LoadLibrary
   g_attached_at_dll_main.store(true);  // the process image is checked (and hooked, or refused) here
   InstallRendezvous(game_module);
+  if (!g_rendezvous.Installed()) FlushJournalOffTheLoaderLock();  // refused image, prologue or hook: say why
+}
+
+bool WaitForAttachFailureFlush(DWORD timeout_ms) noexcept {
+  const HANDLE thread = g_failure_flush_thread.load(std::memory_order_acquire);
+  if (thread == nullptr) return true;
+  return WaitForSingleObject(thread, timeout_ms) == WAIT_OBJECT_0;
 }
 
 void SetGameModule(HMODULE game_module) noexcept {

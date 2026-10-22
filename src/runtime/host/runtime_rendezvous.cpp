@@ -32,6 +32,13 @@ bool FailHookBytesRead() {
   return false;
 #endif
 }
+bool FailHookCreate() {
+#if defined(NEVR_HOST_TESTING)
+  return RuntimeRendezvous::Seams().fail_hook_create;
+#else
+  return false;
+#endif
+}
 DWORD InstallWaitMs() {
 #if defined(NEVR_HOST_TESTING)
   return RuntimeRendezvous::Seams().install_wait_ms;
@@ -142,6 +149,10 @@ NevrGameMainFn RuntimeRendezvous::Install(void* target) {
 
   void* trampoline = nullptr;
   status = MH_CreateHook(target, reinterpret_cast<void*>(&GameMainWrapperDetour), &trampoline);
+  if (FailHookCreate()) {  // the seam: a create that came back refused
+    if (status == MH_OK) MH_RemoveHook(target);
+    status = MH_ERROR_UNSUPPORTED_FUNCTION;
+  }
   if (status != MH_OK || trampoline == nullptr) {
     Journal(AttachStep::kHookInstall, AttachOutcome::kFailed, static_cast<std::uint32_t>(status),
             actual, HookStage::kCreate);

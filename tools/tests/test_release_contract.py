@@ -331,6 +331,13 @@ class ReleaseContractTest(unittest.TestCase):
         entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
         self.assertIn("nevr_host::OnProcessAttach(", dllmain)
+        # The in-process runtime entry the host loads nothing for: a null here passes every other check and makes
+        # every release run the unmodified game.
+        self.assertRegex(
+            dllmain,
+            r"nevr_host::OnProcessAttach\([^;]*&nevr_runtime_entry::GetRuntimeApi\s*\)",
+            "DllMain must pass &nevr_runtime_entry::GetRuntimeApi to OnProcessAttach",
+        )
         self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
         self.assertNotIn("InitializeGameModule", dllmain)
         self.assertIn("InitializeGameModule(host->game_module)", entry)

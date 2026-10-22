@@ -81,6 +81,7 @@ class RuntimeRendezvous {
   struct TestSeams {
     bool fail_event_create = false;     // CreateEventW "fails": no install event
     bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
+    bool fail_hook_create = false;      // MH_CreateHook "fails" (the hook it made is removed)
     DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
   };
   static TestSeams& Seams();
