@@ -16,6 +16,20 @@ TEST(Hooking, LastAttachErrorBelongsToTheCallingThread) {
   Hooking::LastAttachErrorRef() = "";
 }
 
+// #800: the host (runtime/host) initializes MinHook at the wrapper rendezvous before the runtime's
+// own initialization runs, in the same process and the same MinHook state, so the runtime must treat
+// an already-initialized library as ready and fail on every other status.
+TEST(Hooking, InitializeAcceptsAMinHookTheHostAlreadyInitialized) {
+  EXPECT_TRUE(Hooking::InitializeMinHookWith([] { return MH_OK; }));
+  EXPECT_TRUE(Hooking::InitializeMinHookWith([] { return MH_ERROR_ALREADY_INITIALIZED; }));
+}
+
+TEST(Hooking, InitializeStillFailsOnAnyOtherMinHookStatus) {
+  EXPECT_FALSE(Hooking::InitializeMinHookWith([] { return MH_ERROR_MEMORY_ALLOC; }));
+  EXPECT_FALSE(Hooking::InitializeMinHookWith([] { return MH_UNKNOWN; }));
+  EXPECT_FALSE(Hooking::InitializeMinHookWith([] { return MH_ERROR_NOT_INITIALIZED; }));
+}
+
 TEST(Hooking, PublishesTrampolineBeforeEnable) {
   int targetValue = 0;
   int trampolineValue = 0;

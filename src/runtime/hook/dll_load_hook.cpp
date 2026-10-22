@@ -416,7 +416,8 @@ int Install() {
     // loads through an unhooked variant run no filter, observer or callback. Report
     // each variant and its MH_STATUS, mirroring N126/N128 for the PatchDetour path.
     // (This path does not go through PatchDetour, so it needs its own reporting.)
-    // #632: Install() runs in the boot phase, under the loader lock (N36), so its report goes
+    // #632: Install() runs in the boot phase (initialization, from the host's wrapper detour, before
+    // the game's log exists; not under the loader lock), so its report goes
     // through the boot tee (stderr and nevr-boot.jsonl), and it returns the outcome for the caller.
     struct HookSpec { const char* name; void* target; void* detour; void** original; };
     const HookSpec specs[] = {

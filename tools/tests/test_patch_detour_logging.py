@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class BootPhaseLogging(unittest.TestCase):
-    """InitializeAfterGameImageGuard runs from DllMain under the loader lock, between
-    nevr_boot_log_tee::Init() and Close(). Log() routes by that phase itself (#593): through the boot
+    """InitializeAfterGameImageGuard runs from the runtime's initialize, which the host calls from its
+    wrapper detour (outside the loader lock, ADR 0008), between nevr_boot_log_tee::Init() and Close(). Log() routes by that phase itself (#593): through the boot
     tee while it runs, through the game's CLog after. test_boot_log_routing drives the routing; these
     checks keep callers from branching on the phase by hand again."""
 
