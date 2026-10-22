@@ -115,7 +115,10 @@ $target = Join-Path $Dir 'BugSplat64.dll'
 if (-not (Test-Path -LiteralPath $target)) { throw "no BugSplat64.dll in $Dir to back up" }
 $state = Join-Path $Dir 'nevr-install.txt'
 $originalSha = Get-Sha $target
-if ($originalSha -eq $ours) { throw 'the installed BugSplat64.dll is already this package; nothing to do' }
+# A NEVR runtime carries the NEVR-BUILD identity literal (#759).
+function Test-NevrRuntime([string]$path) {
+  return [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($path)).Contains('NEVR-BUILD ')
+}
 
 # #759: already installed means an update. The DLL must be one this folder's install put there (the recorded
 # build or an earlier one); the original backup and the set-aside dbgcore.dll stay as the first install left
@@ -130,8 +133,21 @@ if (Test-Path -LiteralPath $state) {
   }
   $known = @($values['installed_sha256'])
   if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+  if ($originalSha -eq $ours) {
+    if ($values['installed_sha256'] -eq $ours) { throw 'the installed BugSplat64.dll is already this package; nothing to do' }
+    # This package's DLL was copied in by hand: record it so uninstall.ps1 and the next update know it.
+    $previous = @($known | Where-Object { $_ -ne $ours } | Select-Object -Unique)
+    Set-Content -LiteralPath $state -Encoding ASCII -Value @("backup=$($values['backup'])", "legacy=$($values['legacy'])", "installed_sha256=$ours", ('previous_sha256=' + ($previous -join ',')))
+    Write-Output "RECORDED BugSplat64.dll sha256=$ours as installed in $Dir (it was already this package; the original backup is unchanged: $($values['backup']))"
+    Write-RunLog ("OK $scriptName RECORDED BugSplat64.dll sha256=$ours Dir=$Dir")
+    Wait-BeforeClose
+    exit 0
+  }
   if ($known -notcontains $originalSha) {
-    throw "BugSplat64.dll is not one install.ps1 put there (changed since); run uninstall.ps1 first, or restore the game's own file (see $state)"
+    if (Test-NevrRuntime $target) {
+      throw "BugSplat64.dll is a NEVR runtime install.ps1 did not record; run uninstall.ps1 first (it accepts any NEVR runtime), then install.ps1 again (see $state)"
+    }
+    throw "BugSplat64.dll is neither one install.ps1 put there nor a NEVR runtime, so uninstall.ps1 cannot undo it either; nothing was changed. Restore the game's own file (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
   }
   if (-not (Test-Path -LiteralPath $values['backup'])) { throw "the backup is gone: $($values['backup']); nothing was changed" }
   if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; run uninstall.ps1 first' }
@@ -144,7 +160,7 @@ if (Test-Path -LiteralPath $state) {
     [System.IO.File]::WriteAllBytes($target, $prior)
     throw
   }
-  $previous = @($known | Select-Object -Unique)
+  $previous = @($known | Where-Object { $_ -ne $ours } | Select-Object -Unique)
   Set-Content -LiteralPath $state -Encoding ASCII -Value @("backup=$($values['backup'])", "legacy=$($values['legacy'])", "installed_sha256=$ours", ('previous_sha256=' + ($previous -join ',')))
   Write-Output "UPDATED BugSplat64.dll sha256=$ours into $Dir (the original backup is unchanged: $($values['backup']))"
   Write-RunLog ("OK $scriptName UPDATED BugSplat64.dll sha256=$ours Dir=$Dir")
@@ -152,9 +168,10 @@ if (Test-Path -LiteralPath $state) {
   exit 0
 }
 
+if ($originalSha -eq $ours) { throw 'the installed BugSplat64.dll is already this package; nothing to do' }
 # The file about to be backed up as the original must be the game's own. A NEVR runtime carries the
 # NEVR-BUILD identity literal; backing one up would make uninstall.ps1 "restore" a runtime (#759).
-if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')) {
+if (Test-NevrRuntime $target) {
   throw 'the installed BugSplat64.dll is a NEVR runtime, not the game''s own file, and nevr-install.txt is missing; the file was left as it is. Restore the game''s original BugSplat64.dll first (for example, Verify Files in the Meta Horizon app), then run install.ps1 again'
 }
 

@@ -78,7 +78,9 @@ if (Test-Path -LiteralPath $sums) {
     if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -eq 'BugSplat64.dll') { $known += $Matches[1].ToLower() }
   }
 }
-if ((Test-Path -LiteralPath $target) -and ($known -notcontains (Get-Sha $target))) {
+# A DLL carrying the NEVR-BUILD identity literal is a NEVR runtime: putting the original back over it is safe.
+$isRuntime = (Test-Path -LiteralPath $target) -and [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')
+if ((Test-Path -LiteralPath $target) -and ($known -notcontains (Get-Sha $target)) -and -not $isRuntime) {
   throw 'BugSplat64.dll is not the one install.ps1 put there (changed since); nothing was changed'
 }
 if ($legacyAside -ne '') {
