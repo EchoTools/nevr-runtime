@@ -41,6 +41,10 @@ using EnderFn = void (*)() noexcept;
 
 inline constexpr unsigned kFlushBudgetMs = 500;
 
+// The android_app the game's android_main was called with, kept before the original runs (null until then). The
+// first-run data step reads the activity from it (android_glue_layout.h); nothing else uses it.
+sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept;
+
 // The callback of step 2 (null: none). It is read when android_main returns, so it may be set before or after Install.
 void SetBeforeExit(BeforeExitFn fn) noexcept;
 
@@ -55,6 +59,14 @@ bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept;
 
 // _exit(0).
 void EndProcess() noexcept;
+
+// The end of a process that failed before the game could run (the first-run data step): the same two steps as the
+// return path (the `android_main_returned` line, here with the exit code and a `reason`, then the before-exit callback
+// for at most kFlushBudgetMs), then _exit(exitCode). The code is nonzero, so the launcher and `adb` see a failure.
+inline constexpr int kFailureExitCode = 1;
+void EndWithExitCode(int exitCode, const char* reason) noexcept;
+using ExitFn = void (*)(int exitCode) noexcept;
+void SetExitForTest(ExitFn fn) noexcept;  // null: _exit; ResetForTest restores it
 
 // Test support: arms the handler without touching a GOT slot, with `ender` instead of EndProcess and a
 // `budgetMs` wait for the before-exit callback. ResetForTest clears the callback and the counts.

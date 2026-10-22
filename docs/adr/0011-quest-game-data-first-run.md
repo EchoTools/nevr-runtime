@@ -140,6 +140,43 @@ them measured in a headset:
 mechanism that renders in the headset; the progress display of option A needs one that updates (3, or 2 if a toast can be
 refreshed).
 
+## Behaviour of the data step as wired (#807)
+
+- **The media root needs no permission; only the legacy root does.** The step waits (bounded) for the boot permission wait to
+  end. With Storage granted both roots are used. Without it (a denial, a timeout, a missing check, a request without a storage
+  permission) the legacy root (`/storage/emulated/0/readyatdawn`) is neither recovered nor read, one `data_legacy_skipped` line
+  (`reason=no_storage_permission`) says so, and the decision is made on the media root alone
+  (`/sdcard/Android/media/com.readyatdawn.r15/files`): data there is used, none there is fetched there. The "needs Storage"
+  message (Settings, Echo VR under Apps, Storage) replaces the step's own message, so it is shown and held once, only when the
+  media root cannot be written and there is no grant; the process ends nonzero with reason `no_storage_grant`. A fetch always
+  goes to the media root, so the advice helps only a player whose data already sits in the legacy root; without the grant that
+  cannot be told, and with the grant the step's own message is shown.
+- **Leftovers first, on the roots the step may use.** Before anything is decided, `RecoverReplaced` and then `CleanLeftovers`
+  run on the media root and, with the grant, on the legacy root, so a replace that crashed between its two renames is put back
+  and its staging leftover removed whichever root the decision then picks.
+- **A whole `_data.zip.part` of ours beside data in use is removed** when it carries our marker; an unmarked one is left.
+- **The download notice** is shown after the space check, so a step that cannot download never announces one.
+- **Cancel is the end of the process.** The step runs on android_main's thread, the only thread that reads the glue's destroy
+  command (`android_app::destroyRequested`, +0x64, written by android_main's own looper poll), so nothing can see it while the
+  step blocks. A player who quits mid-download has the process ended by the system; the marked `_data.zip.part` stays and the
+  next launch resumes from its size (measurement 6 measures it). A transfer under 16 KiB/s for 120 s fails as a network failure
+  and is retried from the part's size with the fetch's default backoff.
+- **Plan, decided by measurements 1 and 2 (not built).** If a headset shows that blocking android_main shows no toast, or ends in
+  "not responding", the step moves to a worker thread while android_main pumps its looper (polls the glue's source and sleeps
+  on it). That gives the toast a running looper, avoids the ANR, and lets `destroyRequested` be read, so a real cancel becomes
+  possible. Until the measurements say so, nothing of it is built.
+- **A failure ends the process nonzero** (exit code 1) after the `android_main_returned` line and the before-exit report; the
+  floor message is held ten seconds (two holds of five, with the message shown again between).
+- **The probe** (`nevr-data-probe`) is read only in a development build (`-dev.` in the version).
+
+### Toast fallback plan (measurement 1; written, not built)
+
+The toast is requested from the `android_main` thread, whose Looper is prepared but never run (target SDK 29, legacy TN path), so
+it may not draw. The sentinel log says `requested`, never `shown`: `Toast.show()` returning says nothing about the display. If
+measurement 1 finds no toast, the fallbacks in order are: (a) post the same `makeText(...).show()` to the main looper through a
+`Handler(Looper.getMainLooper())`, which the activity's own thread does run; (b) mechanisms 1 or 4 above; (c) mechanism 3, the
+game's own frames. Nothing of this is built until the measurement says it is needed.
+
 ## Measurements to run first, each with what would falsify the plan
 
 1. On the dev APK, from the sentinel on a headset: show a fixed string through each of the mechanisms 1 to 4 that is cheap to try,
@@ -152,6 +189,7 @@ refreshed).
    before the game runs.
 4. Falsifier for the cause above: the `adb shell ls` of `/sdcard/readyatdawn` and `/sdcard/Android/media/com.readyatdawn.r15/files` on an affected headset.
 5. Uninstall the store package, then `adb shell ls /sdcard/Android/media/com.readyatdawn.r15/files`. Falsifier: the folder is gone, in which case the installer's data does not survive an uninstall either and the first-run fetch is needed on every reinstall.
+6. Start the download on a headset, quit the game mid-download (Home), relaunch. Falsifier: the log does not show a ranged request from the `.part`'s size, or the `.part` is gone, in which case a quit costs the whole download.
 
 ## Tests
 

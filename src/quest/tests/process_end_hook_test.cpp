@@ -42,6 +42,11 @@ void RealAndroidMain(AndroidAppOpaque* app) {
   g_events.push_back("android_main");
 }
 void RecordingEnder() noexcept { g_events.push_back("end"); }
+int g_exitCode = -1;
+void RecordingExit(int code) noexcept {
+  g_events.push_back("exit");
+  g_exitCode = code;
+}
 void RecordingBeforeExit() noexcept {
   g_events.push_back("before_exit");
   g_callbackOnOtherThread = pthread_equal(pthread_self(), g_mainThread) == 0;
@@ -243,6 +248,33 @@ void InstallAtPatchesTheSlotAndTheHandlerRunsForACallThroughIt() {
   dlclose(consumer);
 }
 
+void AFailureEndsWithItsNonzeroCodeAfterTheBeforeExitCallback() {
+  Reset();
+  g_exitCode = -1;
+  pe::SetBeforeExit(&RecordingBeforeExit);
+  pe::ArmForTest(&RecordingEnder, 500);
+  pe::SetExitForTest(&RecordingExit);
+  pe::EndWithExitCode(pe::kFailureExitCode, "data_step_failed");
+  QCHECK(pe::kFailureExitCode != 0);
+  QCHECK(g_events.size() == 2 && g_events[0] == "before_exit" && g_events[1] == "exit");
+  QCHECK(g_exitCode == pe::kFailureExitCode);
+  QCHECK(g_callbackOnOtherThread);
+}
+
+void AFailureEndIsBoundedWhenTheCallbackHangs() {
+  Reset();
+  g_exitCode = -1;
+  pe::SetBeforeExit(&BlockingBeforeExit);
+  pe::ArmForTest(&RecordingEnder, 50);
+  pe::SetExitForTest(&RecordingExit);
+  pe::EndWithExitCode(7, "data_step_failed");
+  QCHECK(g_exitCode == 7 && g_events.back() == "exit");
+  pthread_mutex_lock(&g_blockMutex);
+  g_release = true;
+  pthread_cond_broadcast(&g_blockCond);
+  pthread_mutex_unlock(&g_blockMutex);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -252,6 +284,8 @@ int main(int argc, char** argv) {
   WithoutACallbackTheProcessStillEnds();
   ACallbackThatNeverReturnsDoesNotKeepTheProcessAlive();
   EveryReturnEndsAgain();
+  AFailureEndsWithItsNonzeroCodeAfterTheBeforeExitCallback();
+  AFailureEndIsBoundedWhenTheCallbackHangs();
   InstallAtPatchesTheSlotAndTheHandlerRunsForACallThroughIt();
   ASavedFileIsWholeAfterTheProcessIsEndedUnderTheWriter();
   if (quest_test::Failures() != 0) {

@@ -61,6 +61,9 @@ struct FetchConfig {
   std::function<void(unsigned ms)> sleep_ms;           // null: nanosleep
 
   std::function<bool()> keep_going;                   // false cancels
+  // Called once, after the space check passed and before the first request (not when the part is already whole): the point where a download is certain
+  // to start (a player is told about it here, never before a no_space or bad_root failure). Null: none.
+  std::function<void()> before_download;
   std::function<void(const Event&)> on_event;
   std::function<void(std::uint64_t downloaded, std::uint64_t total)> on_progress;
 };
@@ -70,6 +73,8 @@ struct FetchResult {
   std::string detail;      // the failing step's reason, for the visible message
   int attempts = 0;
   std::string replaced_to;  // where the old `_data` went, when one was replaced
+  std::uint64_t needed_bytes = 0;     // kNoSpace: what the fetch needed
+  std::uint64_t available_bytes = 0;  // kNoSpace: what was free
 };
 
 FetchResult RunFetch(const FetchConfig& config, Transport& transport);

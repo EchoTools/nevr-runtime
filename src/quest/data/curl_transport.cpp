@@ -52,12 +52,14 @@ struct Easy {
 }  // namespace
 
 CurlTransport::CurlTransport(std::string roots_pem, bool allow_plain_http, long connect_timeout_seconds,
-                             long stall_seconds, std::function<RootsCheck()> roots_check)
+                             long stall_seconds, std::function<RootsCheck()> roots_check,
+                             long min_bytes_per_second)
     : roots_pem_(std::move(roots_pem)),
       allow_plain_http_(allow_plain_http),
       connect_timeout_seconds_(connect_timeout_seconds),
       stall_seconds_(stall_seconds),
-      roots_check_(std::move(roots_check)) {}
+      roots_check_(std::move(roots_check)),
+      min_bytes_per_second_(min_bytes_per_second) {}
 
 TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t offset, const BodyFn& on_body,
                                         const KeepGoingFn& keep_going) {
@@ -102,7 +104,7 @@ TransportResult CurlTransport::GetRange(const std::string& url, std::uint64_t of
   set(CURLOPT_WRITEFUNCTION, WriteBody);
   set(CURLOPT_WRITEDATA, &ctx);
   set(CURLOPT_CONNECTTIMEOUT, connect_timeout_seconds_);
-  set(CURLOPT_LOW_SPEED_LIMIT, 1024L);
+  set(CURLOPT_LOW_SPEED_LIMIT, min_bytes_per_second_);
   set(CURLOPT_LOW_SPEED_TIME, stall_seconds_);
   set(CURLOPT_NOSIGNAL, 1L);
   set(CURLOPT_QUICK_EXIT, 1L);

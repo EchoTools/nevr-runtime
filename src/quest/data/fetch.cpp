@@ -273,11 +273,14 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
   if (available < needed) {
     result.status = FetchStatus::kNoSpace;
     result.detail = "need " + Num(needed) + " bytes, " + Num(available) + " free";
+    result.needed_bytes = needed;
+    result.available_bytes = available;
     Emit(c, "data_fetch", {{"outcome", "no_space"}, {"needed", Num(needed)}, {"available", Num(available)}});
     return result;
   }
   Emit(c, "data_fetch", {{"step", "start"}, {"resume_from", Num(have)}, {"total", Num(c.bytes)},
                          {"replacing", c.replacing ? "true" : "false"}});
+  if (c.before_download && have < c.bytes) c.before_download();
 
   bool verified = false;
   std::string last_why;

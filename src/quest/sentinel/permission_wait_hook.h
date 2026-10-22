@@ -37,6 +37,26 @@ using CheckFn = bool (*)(const char* permission) noexcept;
 inline constexpr unsigned kPollMs = 500;
 inline constexpr unsigned kTimeoutMs = 30000;
 
+// How the boot request's wait ended. Only kGranted and kAlreadyGranted mean the app may touch shared storage.
+enum class StorageOutcome {
+  kGranted,             // denied at first, granted while waiting
+  kAlreadyGranted,      // every storage permission in the request was granted already
+  kTimeout,             // still denied after kTimeoutMs (a denial or a dialog nobody answered)
+  kCheckUnavailable,    // CheckPermission was not resolved: nothing can be said about the grant
+  kNoStoragePermission  // the boot request named no storage permission
+};
+const char* StorageOutcomeName(StorageOutcome outcome) noexcept;
+inline bool StorageGranted(StorageOutcome outcome) noexcept {
+  return outcome == StorageOutcome::kGranted || outcome == StorageOutcome::kAlreadyGranted;
+}
+
+// What runs on the game's thread right after the boot request's wait, still before RequestPermissions returns to the
+// game: the first-run data step (data_wiring.h), told how the wait ended. It runs on the first call only, the boot
+// request, and is reached through this pointer so the handler holds no frame of its own across it. Null: none. Set it
+// before the game runs.
+using AfterStorageFn = void (*)(StorageOutcome outcome) noexcept;
+void SetAfterStorage(AfterStorageFn fn) noexcept;
+
 // Arms the handler and installs the thunk in libr15's RequestPermissions slot. One line
 // {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found. True when the
 // slot holds the thunk (a CheckPermission that was not found is logged and makes the wait a no-op, not a failure).
