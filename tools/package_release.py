@@ -216,6 +216,7 @@ def write_tree(args, out: Path, version: str) -> Path:
     shutil.copyfile(args.dll, tree / "BugSplat64.dll")
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
+    shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
     (tree / "README.txt").write_text(render(PACKAGE_DIR / "README.template.txt", values), encoding="utf-8")
     (out / "release.json").write_text(json.dumps({"version": version, "commit": args.commit,
                                                   "tree": tree.name}, indent=1) + "\n", encoding="utf-8")
@@ -226,14 +227,15 @@ def write_tree(args, out: Path, version: str) -> Path:
 # which state this copy is in, so a signer replacing the signed entries never has to edit it.
 SIGNING_TEXT = """Signing
 
-The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1 and
-uninstall.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
+The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1,
+uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
 says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
   BugSplat64.dll              an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
-  install.ps1, uninstall.ps1  an Authenticode signature block at the end of the script
+  install.ps1, uninstall.ps1, quest-diagnose.ps1
+                              an Authenticode signature block at the end of the script
                               (PowerShell: Get-AuthenticodeSignature .\\install.ps1)
 Status "Valid" means signed; "NotSigned" means not signed.
 
