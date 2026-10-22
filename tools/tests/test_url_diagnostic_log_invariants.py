@@ -36,7 +36,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         self.assert_source_contains(
             "src/runtime/compat/ws_bridge.cpp",
             'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n        "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: "',
-            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): "',
+            'nevr_log_diagnostics::FormatRedactedUrlDiagnostic(\n        "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): "',
             'nevr_log_diagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: "',
             'nevr_log_diagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.WS] Proxy listening on "',
         )

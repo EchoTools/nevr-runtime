@@ -8,7 +8,7 @@ Commit `@COMMIT@`.
 
 | file | what |
 |---|---|
-| `@ZIP@` | Windows: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+| `@ZIP@` | Windows: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
 @IF_NOAPK@| `nevr-runtime-v@VERSION@.zip` | `BugSplat64.dll`, `echovr_server.exe`, `README.md`, `INSTALL.md`; both PE files stripped, no debug symbols |
@@ -34,7 +34,7 @@ Commit `@COMMIT@`.
 @IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
 
 ## Signing
-A separate signing step may sign `BugSplat64.dll`, `install.ps1` and `uninstall.ps1` after the build and
+A separate signing step may sign `BugSplat64.dll`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
 signature, and `SIGNING.txt` inside the zip says how to check each one. Compare the zip's SHA-256 with
 `SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it. Windows Defender or SmartScreen may warn
