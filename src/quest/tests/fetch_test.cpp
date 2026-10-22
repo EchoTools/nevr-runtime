@@ -2,8 +2,10 @@
 // a dropped connection, a server that ignores Range, a tampered body, no network, no space, a hostile archive, cancel.
 
 #include <algorithm>
+#include <csignal>
 #include <cstdint>
 #include <string>
+#include <sys/resource.h>
 #include <vector>
 
 #include "quest/data/fetch.h"
@@ -395,6 +397,40 @@ TEST(ACrashBetweenTheSwapRenamesIsRecoveredEvenWhenTheFetchFails) {
   CHECK_EQ(r.status, FetchStatus::kRetriesExhausted);
   CHECK_EQ(ReadFile(rig.config.root + "/_data/old"), std::string("old"));
   CHECK(rig.HasEvent("step=recover"));
+}
+
+// A disk that fails at extraction is not the zip's fault: the verified zip stays, so the next run extracts it without a
+// download. The failing write is a file-size limit (RLIMIT_FSIZE, SIGXFSZ ignored): write() answers EFBIG, as a full
+// disk answers ENOSPC.
+TEST(ADiskFailureAtExtractKeepsTheVerifiedZipAndTheNextRunDoesNotDownloadIt) {
+  Rig rig(BuildZip({{"_data/a", "first", 0}, {"_data/big", std::string(200000, 'a'), 8}}));
+  CHECK(rig.zip.size() < 2000);  // the zip is small, the entry it inflates to is not
+  ScriptedTransport net(rig.zip, {Step{}});
+  struct rlimit old_limit;
+  CHECK_EQ(::getrlimit(RLIMIT_FSIZE, &old_limit), 0);
+  void (*old_handler)(int) = ::signal(SIGXFSZ, SIG_IGN);
+  struct rlimit small = old_limit;
+  small.rlim_cur = 4096;
+  CHECK_EQ(::setrlimit(RLIMIT_FSIZE, &small), 0);
+  const FetchResult r = RunFetch(rig.config, net);
+  const bool kept = Exists(rig.Part());
+  const FetchResult again = RunFetch(rig.config, net);
+  ::setrlimit(RLIMIT_FSIZE, &old_limit);
+  ::signal(SIGXFSZ, old_handler);
+  CHECK_EQ(r.status, FetchStatus::kExtractFailed);
+  CHECK(r.detail.find("write_failed") == 0);
+  CHECK(kept);
+  CHECK(!Exists(StagingPath(rig.config.root, rig.config.sha256)));
+  CHECK(!Exists(rig.config.root + "/_data"));
+  CHECK_EQ(net.offsets.size(), std::size_t{1});  // the second run read the kept zip: no request
+  CHECK_EQ(again.status, FetchStatus::kExtractFailed);
+  CHECK(Exists(rig.Part()));
+  // The disk recovers: the same zip is extracted with no download.
+  const FetchResult healed = RunFetch(rig.config, net);
+  CHECK_EQ(healed.status, FetchStatus::kOk);
+  CHECK_EQ(net.offsets.size(), std::size_t{1});
+  CHECK(Exists(rig.config.root + "/_data/big"));
+  CHECK(!Exists(rig.Part()));
 }
 
 TEST(AStagingDirectoryThatIsNotOursIsNeverDeleted) {
