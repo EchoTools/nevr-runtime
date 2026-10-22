@@ -233,6 +233,24 @@ void TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo() {
   QCHECK(SomeLineContains("\"level\":\"warn\""));
 }
 
+// #757: the media directory without _data AND the legacy root without _data. The unmarked tier is the media
+// directory, so the legacy directory's existence changes nothing.
+void TheMediaDirectoryBeatsALegacyRootThatAlsoHoldsNoData() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaDir, "/storage/emulated/0/readyatdawn"};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "android_media_unmarked") == 0);
+  QCHECK(std::strcmp(r.root, kMediaDir) == 0);
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  obb::ResolveRoot(&FakeExists);
+  sentinel::SetLogSink(previous);
+  QCHECK(g_lines.size() == 1);
+  QCHECK(SomeLineContains("\"source\":\"android_media_unmarked\""));
+  QCHECK(SomeLineContains(kMediaDir));
+}
+
 void NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback() {
   Reset();
   g_existing = {};
@@ -255,6 +273,7 @@ void ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt() {
   QCHECK(SomeLineContains("\"event\":\"data_root\""));
   QCHECK(SomeLineContains("\"result\":\"found\""));
   QCHECK(SomeLineContains("\"source\":\"android_media\""));
+  QCHECK(SomeLineContains("\"level\":\"info\""));  // a root found is an operator line, not a warning (#757)
 }
 
 void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
@@ -269,6 +288,7 @@ void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
   QCHECK(GetDataRootDir() == "/storage/emulated/0/readyatdawn");
   QCHECK(g_lines.size() == 1);
   QCHECK(SomeLineContains("\"result\":\"not_found\""));
+  QCHECK(SomeLineContains("\"level\":\"error\""));  // the one line that says the game will fail is an error (#757)
   QCHECK(SomeLineContains("/sdcard/Android/media/com.readyatdawn.r15/files"));
   QCHECK(SomeLineContains("/storage/emulated/0/readyatdawn"));
 }
@@ -323,6 +343,7 @@ int main() {
   TheLegacyRootIsServedWhenOnlyItHoldsTheData();
   ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt();
   TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo();
+  TheMediaDirectoryBeatsALegacyRootThatAlsoHoldsNoData();
   NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback();
   ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt();
   WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths();
