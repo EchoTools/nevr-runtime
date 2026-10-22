@@ -325,6 +325,11 @@ bool FinalPathOf(const std::wstring& path, std::wstring* out) {
   return ok;
 }
 
+#ifdef NEVR_TEST_HOOKS
+// Runs between resolving a late load's path and opening it: where a test points the name somewhere else.
+void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
+#endif
+
 bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (t_stagedLoad || lowerPath == nullptr) return false;
   FilterState& f = Filter();
@@ -346,6 +351,9 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
 
   const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
   const std::string file = NarrowName(full);
+#ifdef NEVR_TEST_HOOKS
+  if (g_betweenResolveAndOpen != nullptr) g_betweenResolveAndOpen(full);
+#endif
   HANDLE h = CreateFileW(full.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) {
@@ -1131,6 +1139,8 @@ void TestHook_ShowRefusalNoticeIfDue() { ShowRefusalNoticeIfDue(); }
 void TestHook_RecordRefusal(const std::string& file) { RecordRefusal(file); }
 
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPluginLoadFilter(pluginDir); }
+
+void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
 
 void TestHook_ResetPluginLoadFilter() {
   FilterState& f = Filter();

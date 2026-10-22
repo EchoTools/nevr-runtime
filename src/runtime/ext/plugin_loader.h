@@ -93,4 +93,6 @@ void TestHook_ShowRefusalNoticeIfDue();
 void TestHook_RecordRefusal(const std::string& file);
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir);
 void TestHook_ResetPluginLoadFilter();
+// Called by the filter between resolving a late load's path and opening it (null clears it).
+void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 #endif

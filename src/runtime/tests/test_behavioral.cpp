@@ -593,6 +593,29 @@ TEST_F(PluginDependencyGateTest, LateLoadOfAnUnsignedFileInThePluginsDirectoryIs
   EXPECT_NE(g_refusalDialogs[0].find("late_unsigned.dll"), std::string::npos);
 }
 
+// The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
+// as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
+std::wstring g_linkTarget;
+
+void PointTheResolvedNameAtTheSignedFile(const std::wstring& resolved) {
+  DeleteFileW(resolved.c_str());
+  CreateSymbolicLinkW(resolved.c_str(), g_linkTarget.c_str(), 0);
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfANameRepointedBetweenResolveAndOpenIsRefused) {
+  Plan("late_swap.dll", "unsigned");  // the name the late load asks for
+  Plan("late_swap_target.dll", "signed");  // what the name is pointed at in between
+  g_testPluginLoadPlan.clear();
+  g_linkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+  g_linkTarget += L"late_swap_target.dll";
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_SetBetweenResolveAndOpen(&PointTheResolvedNameAtTheSignedFile);
+  const bool blocked = Blocked("late_swap.dll");
+  TestHook_SetBetweenResolveAndOpen(nullptr);
+  EXPECT_TRUE(blocked);
+  EXPECT_TRUE(TestLogContains("the file changed between resolving its path and opening it"));
+}
+
 TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
   Plan("late_signed.dll", "signed");
   g_testPluginLoadPlan.clear();
