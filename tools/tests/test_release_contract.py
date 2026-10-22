@@ -324,10 +324,31 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(sample, rf"(?m)^\s*{section}")
 
     def test_dllmain_and_launcher_both_enter_the_validated_game_module_route(self):
+        # #800: DllMain and NEVR_SetGameModule hand the process to the host (runtime/host), which installs
+        # the one detour on the game's main wrapper; the runtime's initialize, called from that detour,
+        # is the only caller of InitializeGameModule.
         dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
-        self.assertIn("InitializeGameModule(GetModuleHandle(NULL))", dllmain)
-        self.assertIn("InitializeGameModule(hGame)", dllmain)
+        self.assertIn("nevr_host::OnProcessAttach(", dllmain)
+        # The in-process runtime entry the host loads nothing for: a null here passes every other check and makes
+        # every release run the unmodified game.
+        self.assertRegex(
+            dllmain,
+            r"nevr_host::OnProcessAttach\([^;]*&nevr_runtime_entry::GetRuntimeApi\s*\)",
+            "DllMain must pass &nevr_runtime_entry::GetRuntimeApi to OnProcessAttach",
+        )
+        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
+        self.assertNotIn("InitializeGameModule", dllmain)
+        # #804: a process that ends right after a failed attach never reaches a later flush trigger, so DllMain's
+        # process-detach hands termination (lpReserved != NULL) to the host, which writes the journal's remainder.
+        detach = dllmain.split("case DLL_PROCESS_DETACH:", 1)[1]
+        self.assertRegex(
+            detach.split("break;", 1)[0],
+            r"nevr_host::OnProcessDetach\(\s*lpReserved\s*!=\s*(NULL|nullptr)\s*\)",
+            "DLL_PROCESS_DETACH must call nevr_host::OnProcessDetach(lpReserved != NULL)",
+        )
+        self.assertIn("InitializeGameModule(host->game_module)", entry)
         route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
         self.assertIn("RunWithSupportedGameModule", route)
         self.assertNotIn("VerifyGameVersion", initialize)
