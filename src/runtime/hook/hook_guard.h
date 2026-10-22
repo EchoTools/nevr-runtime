@@ -25,8 +25,14 @@ namespace nevr_hook_guard {
 /// PatchDetour call site is covered without touching the site.
 /// Once the fixed table is full the call is counted (DroppedCount) and reported at ERROR by the
 /// next VerifyAll — never silent — but it never fails the boot: this is a diagnostic. It does
-/// not log itself, because it runs under the loader lock.
+/// not log itself, because it runs in the boot phase, before the game's log exists.
 void Record(const void* target, const char* name);
+
+/// Record `target` under `name` with the first bytes the owner of the hook read there after enabling it
+/// (16 bytes), instead of reading them now. The wrapper hook belongs to the host (runtime/host), which
+/// hands the runtime what it wrote; a hook that changed the bytes since is then a mismatch at the first
+/// VerifyAll. Same table, same never-fails contract as Record.
+void RecordBytes(const void* target, const char* name, const unsigned char (&bytes)[16]);
 
 /// Re-read every recorded address and compare. Logs one ERROR per mismatch with
 /// the address, the name, expected vs actual bytes, and `context` (what just

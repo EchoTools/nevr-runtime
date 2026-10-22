@@ -328,15 +328,19 @@ scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
+
+# The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
+# control endpoint listening, a fire drives the game), with a non-zero record and an alarm on
+# failure. The user timer runs tools/scenario/smoke.sh from its own main-tracking worktree.
+smoke *ARGS:
+    tools/scenario/smoke.sh {{ARGS}}
 
 # ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
 scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_all.py {{ARGS}}
 
 # Run plugin ground truth tests (no game binary needed)
@@ -396,7 +400,7 @@ test-auth-unit:
     }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_cmdline_strip --target test_schannel_cred_guard --target test_hooking --target test_dll_load_hook --target test_boot_log_routing --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_self_check --target test_party_share_check --target test_party_leave_check --target test_quit_check --target test_friend_request_check --target test_credential_cache_check --target test_status_redirect_check --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec --target test_legacy_codec --target test_legacy_session --target test_symbol_hash --target test_socket_role --target test_asset_cache --target test_session_router --target test_plugin_signature --target test_plugin_tree --target test_plugin_trust
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     cmake --build --preset {{ preset }} --target test_runtime_abi
@@ -406,6 +410,26 @@ test-auth-unit:
     # without it with the build's own flags and its object is read with nm (docs/adr/0008). Fail-close.
     python3 tools/verify_host_seams.py "build/{{ preset }}"
     cmake --build --preset {{ preset }} --target test_export_trace
+    # Signed fixtures for the plugin signature gate (ADR 0010, #741), made once for test_plugin_signature and the
+    # gate tests in test_behavioral: a throwaway PKI and osslsigncode, offline, over the real test plugin. A
+    # missing tool or a failed generation fails the recipe; the tests fail, never skip, without the directory.
+    mkdir -p /var/tmp/work-nevr-runtime
+    sigfix="$(mktemp -d /var/tmp/work-nevr-runtime/test-plugin-signature.XXXXXX)"
+    trap 'rm -rf "$sigfix"' EXIT
+    python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
+    export NEVR_SIGFIX_DIR="$sigfix"
+    # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
+    # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
+    # a RealSigned test without the file fails. A release build (build.yml sets NEVR_RELEASE_BUILD=1 on the Verify
+    # step of a release or a draft) never fetches from a host outside GitHub: it excludes the RealSigned tests and
+    # says so, and the PR/local run is where they run.
+    if [[ "${NEVR_RELEASE_BUILD:-}" == "1" ]]; then
+        echo "test-auth-unit: release build: the RealSigned tests are excluded (no fixture fetch outside GitHub); PR and local runs run them" >&2
+        export GTEST_FILTER='-RealSigned.*'
+    else
+        NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
+        export NEVR_REAL_SIGNED_DLL
+    fi
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -576,6 +600,24 @@ test-auth-unit:
         fi
         run_test "$bin"
     done
+    bin="build/{{ preset }}/bin/test_plugin_signature.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_plugin_tree.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
+    bin="build/{{ preset }}/bin/test_plugin_trust.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    run_test "$bin"
     # test_broadcaster_bridge / test_broadcaster_guards live in
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin, which
     # holds and tests the N72/N73 guards.
@@ -593,12 +635,51 @@ test-auth: test-auth-groundtruth test-auth-unit
 _vcpkg-quest-host:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
+    jd="{{ justfile_directory() }}"
+    manifest="$jd/tools/quest-host-deps/vcpkg.json"
+    lib="$jd/build/quest-host-vcpkg/x64-linux/lib/libyaml-cpp.a"
+    # Idempotent and race-safe. The manifest installs only yaml-cpp, and every consumer
+    # (test-quest-shared/redirect/integration) checks exactly this artifact: when it exists
+    # and is no older than the manifest, there is nothing to install. `just verify` builds
+    # it once, serially, before the parallel block, so those workers hit this fast path and
+    # never run vcpkg concurrently. When the install is needed it is serialized on a lock
+    # file so two concurrent test-quest-* recipes cannot build the shared host install at
+    # once (vcpkg would otherwise contend on its own root lock or race in its buildtrees).
+    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+        exit 0
+    fi
+    mkdir -p "$jd/build"
+    lock="$jd/build/quest-host-vcpkg.install.lock"
+    exec 9>"$lock"
+    flock 9
+    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+        exit 0
+    fi
+    root="$("$jd/tools/vcpkg_root.sh")"
     cd "$root"
     unset VCPKG_ROOT
     ./vcpkg install --triplet=x64-linux --host-triplet=x64-linux \
-        --x-manifest-root="{{ justfile_directory() }}/tools/quest-host-deps" \
-        --x-install-root="{{ justfile_directory() }}/build/quest-host-vcpkg"
+        --x-manifest-root="$jd/tools/quest-host-deps" \
+        --x-install-root="$jd/build/quest-host-vcpkg"
+
+# Host tests for the Quest first-run data step's core (src/quest/data: sha256, the zip extractor, the pins and decision, the
+# staging swap; docs/adr/0011-quest-game-data-first-run.md). zlib comes from the tools/quest-host-deps manifest for the
+# x64-linux triplet, never a system package. Fail-close: a compile error, a missing library or any failed check exits nonzero.
+test-quest-data: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-data-host"
+    mkdir -p "$out"
+    host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    for f in sha256 zip staging; do
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
+            "src/quest/data/$f.cpp" -o "$out/$f.o"
+    done
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" src/quest/tests/data_test.cpp "$host/lib/libz.a" \
+        -o "$out/data_test"
+    timeout -k 5 300 "$out/data_test"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
@@ -1247,14 +1328,25 @@ verify:
     cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
-    just test-auth-unit
-    just test-quest-shared
-    just test-quest-hooks
-    just test-quest-router
-    just test-quest-tls
-    just test-quest-redirect
-    just test-quest-social
-    just test-quest-integration
+    # --- Parallel test block --------------------------------------------------
+    # Nine independent suites run concurrently (capped at nproc) instead of one after
+    # another: each test-quest-* compiles its own host binary in its own out dir and runs
+    # it, so the serial wall clock was ~9 compiles back to back. The shared vcpkg host
+    # prereq (yaml-cpp) is built once, serially, here, so the workers that depend on it hit
+    # the idempotent guard in _vcpkg-quest-host and never run vcpkg concurrently.
+    # tools/verify-parallel.sh fails closed and names the failing suite: any suite failing
+    # fails the whole gate. The suite list below is the gate's full coverage.
+    just _vcpkg-quest-host
+    bash tools/verify-parallel.sh \
+        test-auth-unit \
+        test-quest-shared \
+        test-quest-hooks \
+        test-quest-router \
+        test-quest-tls \
+        test-quest-redirect \
+        test-quest-social \
+        test-quest-data \
+        test-quest-integration
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1787,11 +1879,15 @@ verify:
         echo "verify: FAIL — N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp." >&2
         exit 1
     fi
-    # The recovery hook must be INSTALLED, and no other sensor verifies it. A dropped
-    # InstallGameMainHook() call means the server no longer sets up its longjmp point
-    # and dies on the first crash it was built to survive.
-    if ! grep -q 'InstallGameMainHook()' src/runtime/lifecycle/initialize.cpp; then
-        echo "verify: FAIL — N125 initialize.cpp no longer calls InstallGameMainHook()." >&2
+    # The recovery point must be REACHED, and no other sensor verifies it: the runtime's descriptor
+    # must carry RuntimeGameMain as its game_main and its initialize must call ArmGameMain. A dropped
+    # entry means the host never runs the setjmp, the VEH's longjmp has nowhere to land, and a server
+    # crash terminates instead of recovering.
+    N125_RE_RC=0; N125_RE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/runtime_entry.cpp) || N125_RE_RC=$?
+    sensor_stage1 "N125 runtime entry reaches the recovery point" "src/runtime/lifecycle/runtime_entry.cpp" "$N125_RE_RC"
+    sensor_nonempty "N125 runtime entry reaches the recovery point" "non-comment lines of runtime_entry.cpp" "$N125_RE"
+    if ! grep -qF 'api.game_main = &RuntimeGameMain;' <<<"$N125_RE" || ! grep -qF 'ArmGameMain(host);' <<<"$N125_RE"; then
+        echo "verify: FAIL — N125 runtime_entry.cpp no longer hands the host RuntimeGameMain and arms it (ArmGameMain)." >&2
         echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
         exit 1
     fi
@@ -2940,7 +3036,7 @@ verify:
     # and review.
     # #451: the self-check wiring goes through the tested gate functions (source check).
     python3 tools/verify_self_check_wiring.py
-    python3 tools/verify_gtest_floor.py --floor 1387
+    python3 tools/verify_gtest_floor.py --floor 1538
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py

@@ -552,8 +552,8 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
 /// Calls the game's main loop (fcn.1400cd550). If the game loop returns (which
 /// means a fatal error occurred), the original function calls the crash handler.
 /// In server mode, we restart the game loop instead so the server stays alive.
-// N125: GameMainWrapperHook, GameMain/OriginalGameMainWrapper, the g_gameLoopJmpBuf
-// definition, and InstallGameMainHook live in lifecycle/crash_recovery.cpp — that
+// N125: GameMainWrapperHook, RuntimeGameMain, ArmGameMain, GameMain/OriginalGameMainWrapper and
+// the g_gameLoopJmpBuf definition live in lifecycle/crash_recovery.cpp — that
 // file owns the longjmp side, so the setjmp side sits beside it rather than
 // coupled across an extern.
 

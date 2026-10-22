@@ -42,6 +42,10 @@ SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
+# The plugin-trust literal (ADR 0010, #741): NUL-bounded "NEVR-PLUGIN-TRUST <mode>". Separate from the identity
+# literal, which is a cross-repo contract and has no such field. A packaged DLL carries exactly one, and it says
+# signed-only; unsigned-allowed is the mingw-plugin-dev preset and is never packaged.
+PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -75,13 +79,24 @@ def identity_in(blob: bytes, label: str) -> tuple:
     return version.decode("ascii"), commit.decode("ascii")
 
 
+def plugin_trust_problems(label: str, blob: bytes) -> list:
+    """The packaged DLL must say it enforces the plugin signature gate: exactly one literal, signed-only."""
+    found = PLUGIN_TRUST.findall(blob)
+    if len(found) != 1:
+        return [f"{label}: expected exactly one 'NEVR-PLUGIN-TRUST <mode>' literal, found {len(found)}"]
+    if found[0] != b"signed-only":
+        return [f"{label}: NEVR-PLUGIN-TRUST is '{found[0].decode('ascii')}', not 'signed-only': a build that "
+                f"loads unsigned plugins is never packaged"]
+    return []
+
+
 def expected_identity_problems(label: str, blob: bytes, version, commit: str) -> list:
     """`version` None: any development version (a local build); else exactly that release version."""
     try:
         got_version, got_commit = identity_in(blob, label)
     except GateFailure as error:
         return [str(error)]
-    problems = []
+    problems = plugin_trust_problems(label, blob)
     if version is None:
         if not DEV_VERSION.match(got_version):
             problems.append(f"{label}: version '{got_version}' is not a development version "
@@ -216,6 +231,7 @@ def write_tree(args, out: Path, version: str) -> Path:
     shutil.copyfile(args.dll, tree / "BugSplat64.dll")
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
+    shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
     (tree / "README.txt").write_text(render(PACKAGE_DIR / "README.template.txt", values), encoding="utf-8")
     (out / "release.json").write_text(json.dumps({"version": version, "commit": args.commit,
                                                   "tree": tree.name}, indent=1) + "\n", encoding="utf-8")
@@ -226,14 +242,15 @@ def write_tree(args, out: Path, version: str) -> Path:
 # which state this copy is in, so a signer replacing the signed entries never has to edit it.
 SIGNING_TEXT = """Signing
 
-The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1 and
-uninstall.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
+The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1,
+uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
 says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
   BugSplat64.dll              an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
-  install.ps1, uninstall.ps1  an Authenticode signature block at the end of the script
+  install.ps1, uninstall.ps1, quest-diagnose.ps1
+                              an Authenticode signature block at the end of the script
                               (PowerShell: Get-AuthenticodeSignature .\\install.ps1)
 Status "Valid" means signed; "NotSigned" means not signed.
 

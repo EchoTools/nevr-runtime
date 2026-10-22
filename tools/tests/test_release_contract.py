@@ -183,11 +183,22 @@ class ReleaseContractTest(unittest.TestCase):
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
-        self.assertIn("DEPENDS dist dist-legacy", cmake)
+        dist_all = cmake.split("add_custom_target(dist-all", 1)[1].split(")", 1)[0]
+        self.assertIn("DEPENDS dist\n", dist_all)
+        self.assertNotIn("dist-legacy", dist_all)
         justfile = (REPO / "justfile").read_text()
         workflows = "".join(path.read_text() for path in (REPO / ".github/workflows").glob("*.yml"))
         for name, text in (("CMakeLists.txt", cmake), ("justfile", justfile), ("workflows", workflows)):
             self.assertNotRegex(text, r"(?i)dist[-_](lite|debug)|DIST_(LITE|DEBUG)|PROJECT_VERSION}-(lite|debug)", name)
+
+    def test_no_release_input_names_the_legacy_build(self):
+        """#741: the legacy plugin loader loads every DLL in plugins\\ unchecked and src/legacy/ is frozen, so no
+        release workflow, packaging script or build target a release uses may name or build it."""
+        inputs = {path.name: path.read_text() for path in (REPO / ".github/workflows").glob("*.yml")}
+        inputs["package_release.py"] = (REPO / "tools/package_release.py").read_text()
+        inputs["build_distribution.py"] = (REPO / "tools/build_distribution.py").read_text()
+        for name, text in inputs.items():
+            self.assertNotRegex(text, r"gamepatcheslegacy|gameserverlegacy|dist-legacy|dist-all", name)
 
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
@@ -313,10 +324,31 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(sample, rf"(?m)^\s*{section}")
 
     def test_dllmain_and_launcher_both_enter_the_validated_game_module_route(self):
+        # #800: DllMain and NEVR_SetGameModule hand the process to the host (runtime/host), which installs
+        # the one detour on the game's main wrapper; the runtime's initialize, called from that detour,
+        # is the only caller of InitializeGameModule.
         dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
-        self.assertIn("InitializeGameModule(GetModuleHandle(NULL))", dllmain)
-        self.assertIn("InitializeGameModule(hGame)", dllmain)
+        self.assertIn("nevr_host::OnProcessAttach(", dllmain)
+        # The in-process runtime entry the host loads nothing for: a null here passes every other check and makes
+        # every release run the unmodified game.
+        self.assertRegex(
+            dllmain,
+            r"nevr_host::OnProcessAttach\([^;]*&nevr_runtime_entry::GetRuntimeApi\s*\)",
+            "DllMain must pass &nevr_runtime_entry::GetRuntimeApi to OnProcessAttach",
+        )
+        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
+        self.assertNotIn("InitializeGameModule", dllmain)
+        # #804: a process that ends right after a failed attach never reaches a later flush trigger, so DllMain's
+        # process-detach hands termination (lpReserved != NULL) to the host, which writes the journal's remainder.
+        detach = dllmain.split("case DLL_PROCESS_DETACH:", 1)[1]
+        self.assertRegex(
+            detach.split("break;", 1)[0],
+            r"nevr_host::OnProcessDetach\(\s*lpReserved\s*!=\s*(NULL|nullptr)\s*\)",
+            "DLL_PROCESS_DETACH must call nevr_host::OnProcessDetach(lpReserved != NULL)",
+        )
+        self.assertIn("InitializeGameModule(host->game_module)", entry)
         route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
         self.assertIn("RunWithSupportedGameModule", route)
         self.assertNotIn("VerifyGameVersion", initialize)

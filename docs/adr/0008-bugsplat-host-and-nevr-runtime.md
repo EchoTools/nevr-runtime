@@ -108,7 +108,12 @@ The host writes under its own per-game folder, never the game's `EchoVR` folder:
   `%TEMP%\nevr\echovr\crashes`, then the directory of `BugSplat64.dll`.
 
 Every record is one JSON object per line with `tag` (`NEVR.HOST`), `ts` (UTC),
-`pid` and `event`. The events are `host_attach` (one per decision: `image_check`,
+`pid`, `run` and `event`. `run` is a per-process token, 16 hex digits, made once from the process's creation
+time, its pid and the performance counter (`GetProcessTimes`, `QueryPerformanceCounter`: kernel32, no heap, no
+I/O, so safe under the loader lock). The pid alone does not name a process: Wine reuses pids (the game is pid 32
+on every launch, and twelve processes started together got the same twelve pids in every batch), so a reader that
+keeps one record per `(pid, seq)` would keep 12 of 72. Every `host_attach` record also carries `seq`, its index in
+the process's journal (0 to 7), and a reader keeps one record per `(run, seq)`. The events are `host_attach` (one per decision: `image_check`,
 `prologue_check`, `hook_install`; the last two carry the target's `rva` and expected and
 actual prologue, and `hook_install` the MinHook `stage` and `mh_status`, and
 `hook_bytes: unread` when the hook is live but its first bytes could not be read;
@@ -121,6 +126,16 @@ action, and `loader_lock_held`, which the host reads from the PEB) and `crash_du
 unavailable, failed). A line that fits no directory goes to `stderr`; a record is never
 dropped silently, and one too large for the 4 KiB bound is replaced by a marker, not
 truncated.
+
+The exit flush (`BootstrapDiagnostics::FlushAttachJournalAtExit`, run at `DLL_PROCESS_DETACH` with
+`lpReserved != NULL`, when every other thread is already dead) writes each journal step not yet written, the failing
+steps first. A flush thread that was killed after it claimed an entry and before it marked it written leaves the
+entry claimed; the exit flush then reads the last 64 KiB of the log for a `host_attach` line with this process's
+`run` and that `seq`, and writes the entry only when there is none. The claim is stored before the write, so a
+thread killed anywhere inside the write leaves the entry claimed. The exit flush waits at most 250 ms for the log
+mutex, which a live process on the same prefix can hold, and when it does not get it writes nothing (an unlocked line
+could interleave with the holder's): a holder that keeps the lock past 250 ms loses the record. That is accepted: a
+holder normally keeps the lock for one write, so one past 250 ms is itself a fault, and the exit stays bounded.
 
 Each append to the file holds a named mutex (`Local\nevr-host-bootstrap-log`) for the write
 only. Under Wine a `FILE_APPEND_DATA` write is not atomic, and concurrent appenders overwrote
@@ -210,16 +225,17 @@ What the rendezvous leaves outside the runtime:
 
 ### The tree today
 
-The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it hooks
-the wrapper itself: `InstallGameMainHook` in `crash_recovery.cpp`, called from
-`initialize.cpp` in `DllMain`, detours the wrapper with `PatchDetour`, and
-`GameMainWrapperHook` holds the `setjmp`. The runtime has no `game_main` entry yet. The
-descriptor, the host units and their harnesses describe the target. The flip comes first: the
-runtime adopts the host contract inside the one DLL, so `initialize` runs from the host's
-detour at the wrapper's entry, `game_main` replaces `GameMainWrapperHook`, and the runtime
-stops hooking the wrapper. The split follows: the runtime moves into `nevr.dll`. Until the
-flip the harness runtimes are stand-ins whose `game_main` runs the original wrapper through
-the trampoline.
+The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it
+adopts the host contract inside that DLL. `DllMain` and `NEVR_SetGameModule` call
+`nevr_host::OnProcessAttach` and `SetGameModule` (`src/runtime/host/host_entry.cpp`), which
+install the one detour on the wrapper. The runtime is handed to the host's loader as an
+in-process provider (`RuntimeLoader::PrepareInProcess`; the load record carries
+`source: in_process`), so nothing is loaded from disk. `initialize` (`runtime_entry.cpp`)
+runs from the detour at the wrapper's entry, outside the loader lock, and arms
+`RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the `setjmp` and is
+the descriptor's `game_main`. The runtime registers the host's hook with HookGuard from the
+bytes the host wrote and installs no hook on the wrapper. The split follows: the runtime
+moves into `nevr.dll`.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.

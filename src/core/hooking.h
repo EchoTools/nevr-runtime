@@ -17,10 +17,21 @@
 
 namespace Hooking {
 
+#ifdef NEVR_USE_MINHOOK
+// MinHook is one library state per process. The stable host (runtime/host) initializes it at the
+// wrapper rendezvous before the runtime's initialization runs, so an already-initialized library is
+// ready, not a failure; any other status is.
+template <typename Init>
+inline BOOL InitializeMinHookWith(Init&& init) {
+  const MH_STATUS status = init();
+  return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
+}
+#endif
+
 // Initialize the hooking library (call once at startup)
 inline BOOL Initialize() {
 #ifdef NEVR_USE_MINHOOK
-  return MH_Initialize() == MH_OK;
+  return InitializeMinHookWith(MH_Initialize);
 #else
   return TRUE;  // Detours doesn't need global initialization
 #endif

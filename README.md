@@ -59,7 +59,7 @@ says how to check each one and which log line proves it.
 - **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
 
 ### Game server mode
-The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -no-console` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
+`echovr.exe -server -headless -no-console` boots, logs in, begins multiplayer, loads the in-process server library and registers with the game service. [`docs/testing/smoke-checklist.md`](docs/testing/smoke-checklist.md) (rows SV01 on) says how to check each item below.
 
 - **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
 - **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
@@ -78,8 +78,6 @@ name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the part
 Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
 yet. On PC:
 
-- the dedicated game server does not complete bring-up
-  ([#45](https://github.com/EchoTools/nevr-runtime/issues/45));
 - the main menu shows no game service status, because the status request fails
   ([#408](https://github.com/EchoTools/nevr-runtime/issues/408));
 - the matchmaking screen's time remaining is always 0
