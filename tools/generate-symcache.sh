@@ -6,8 +6,9 @@ set -euo pipefail
 # of {uint64_t hash, const char* name} pairs, sorted by hash.
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-go_file="/home/andrew/src/evrcat/vendor/github.com/heroiclabs/nakama/v3/server/evr/core_hash_lookup.go"
-out="$repo_root/src/runtime/log/symcache_data.cpp"
+# NEVR_SYMCACHE_GO_FILE and NEVR_SYMCACHE_OUT override the two paths (the tests feed a fixture).
+go_file="${NEVR_SYMCACHE_GO_FILE:-/home/andrew/src/evrcat/vendor/github.com/heroiclabs/nakama/v3/server/evr/core_hash_lookup.go}"
+out="${NEVR_SYMCACHE_OUT:-$repo_root/src/runtime/log/symcache_data.cpp}"
 
 if [[ ! -f "$go_file" ]]; then
     echo "generate-symcache.sh: ERROR — Go symbol cache not found: $go_file" >&2
@@ -39,6 +40,8 @@ fi
 # gsub escapes any backslash or double-quote that appears WITHIN the value.
 # The intermediate format is tab-delimited with NO quotes on the value field, so
 # the sort + final formatting pass can add exactly one layer of C-string quotes.
+# `sort -n` reads only the leading 0 of 0x..., so every line ties and the order comes from the last-resort
+# byte comparison: LC_ALL=C pins it, or the output changes with the caller's locale (#792).
 awk -F'"' '{
     hash = $1;
     gsub(/[[:space:]:]/, "", hash);
@@ -46,7 +49,7 @@ awk -F'"' '{
     gsub(/\\/, "\\\\", name);
     gsub(/"/, "\\\"", name);
     printf "%sULL\t%s\n", hash, name;
-}' "$entries_file" | sort -t$'\t' -k1,1n > "$scratch"
+}' "$entries_file" | LC_ALL=C sort -t$'\t' -k1,1n > "$scratch"
 
 # Generate the output file
 {

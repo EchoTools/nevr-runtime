@@ -303,6 +303,13 @@ uint16_t U16(const Bytes& d, size_t at) {
 struct Section {
   uint32_t rawPointer = 0;
   uint32_t rawSize = 0;
+  uint32_t virtualAddress = 0;
+  uint32_t virtualSize = 0;
+};
+
+struct DataDir {
+  uint32_t rva = 0;
+  uint32_t size = 0;
 };
 
 struct PeLayout {
@@ -312,6 +319,7 @@ struct PeLayout {
   uint32_t certOffset = 0;
   uint32_t certSize = 0;
   std::vector<Section> sections;
+  std::vector<DataDir> dirs;  // every data directory the optional header declares (at most 16)
 };
 
 bool ParsePe(const Bytes& d, PeLayout* pe) {
@@ -335,6 +343,9 @@ bool ParsePe(const Bytes& d, PeLayout* pe) {
     return false;
   }
   if (countAt + 4 > opt + optSize || U32(d, countAt) < 5 || dirs + 5 * 8 > opt + optSize) return false;
+  const size_t declared = std::min<size_t>(U32(d, countAt), 16);
+  if (dirs + declared * 8 > opt + optSize) return false;
+  for (size_t i = 0; i < declared; ++i) pe->dirs.push_back({U32(d, dirs + i * 8), U32(d, dirs + i * 8 + 4)});
   pe->checksumOffset = opt + 64;
   pe->certDirOffset = dirs + 4 * 8;
   pe->sizeOfHeaders = U32(d, opt + 60);
@@ -344,6 +355,8 @@ bool ParsePe(const Bytes& d, PeLayout* pe) {
   if (sections > 96 || d.size() < table || d.size() - table < sections * 40) return false;
   for (size_t i = 0; i < sections; ++i) {
     Section s;
+    s.virtualSize = U32(d, table + i * 40 + 8);
+    s.virtualAddress = U32(d, table + i * 40 + 12);
     s.rawSize = U32(d, table + i * 40 + 16);
     s.rawPointer = U32(d, table + i * 40 + 20);
     pe->sections.push_back(s);
@@ -379,6 +392,47 @@ bool AuthenticodeHash(const Bytes& d, const PeLayout& pe, ALG_ID alg, Bytes* out
   if (!h.Update(base + certEnd, static_cast<size_t>(d.size() - certEnd))) return false;
   return h.Final(out);
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// The DLLs a plugin names: imports, delay-load imports, forwarded exports (ADR 0010 section 1)
+// ---------------------------------------------------------------------------------------------------------
+
+bool RvaToOffset(const Bytes& d, const PeLayout& pe, uint32_t rva, size_t* offset) {
+  if (rva < pe.sizeOfHeaders) {
+    *offset = rva;
+    return *offset < d.size();
+  }
+  for (const Section& s : pe.sections) {
+    const uint64_t span = std::max(s.virtualSize, s.rawSize);
+    if (rva >= s.virtualAddress && rva - s.virtualAddress < span) {
+      const uint64_t within = rva - s.virtualAddress;
+      if (within >= s.rawSize) return false;  // in the zero-filled tail: no bytes on disk to read
+      *offset = static_cast<size_t>(s.rawPointer) + static_cast<size_t>(within);
+      return *offset < d.size();
+    }
+  }
+  return false;
+}
+
+// A NUL-terminated string of at most 256 bytes at `rva`, lowercased; false when it runs off the file or is empty.
+bool ReadNameAt(const Bytes& d, const PeLayout& pe, uint32_t rva, std::string* name) {
+  size_t at = 0;
+  if (!RvaToOffset(d, pe, rva, &at)) return false;
+  name->clear();
+  for (size_t i = 0; at + i < d.size() && i < 256; ++i) {
+    const uint8_t c = d[at + i];
+    if (c == 0) return !name->empty();
+    name->push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : static_cast<char>(c));
+  }
+  return false;
+}
+
+void AddUnique(std::vector<std::string>* list, const std::string& name) {
+  if (std::find(list->begin(), list->end(), name) == list->end()) list->push_back(name);
+}
+
+constexpr size_t kMaxDescriptors = 1024;
+constexpr size_t kMaxExports = 65536;
 
 // ---------------------------------------------------------------------------------------------------------
 // CMS
@@ -987,6 +1041,114 @@ Verdict VerifyPluginFile(HANDLE file, const Policy& policy, int64_t nowUnix) {
     return VerifyImpl(file, policy, nowUnix);
   } catch (const std::exception& e) {
     return Refuse(Reason::Unreadable, std::string("exception while verifying: ") + e.what());
+  }
+}
+
+namespace {
+bool ListDependenciesImpl(HANDLE file, Dependencies* out, std::string* error) {
+  Bytes data;
+  if (!ReadWholeFile(file, &data, error)) return false;
+  PeLayout pe;
+  if (!ParsePe(data, &pe)) {
+    *error = "not a PE file";
+    return false;
+  }
+  auto dir = [&](size_t index) { return index < pe.dirs.size() ? pe.dirs[index] : DataDir{}; };
+
+  const DataDir imports = dir(1);  // IMAGE_DIRECTORY_ENTRY_IMPORT
+  if (imports.rva != 0) {
+    size_t at = 0;
+    if (!RvaToOffset(data, pe, imports.rva, &at)) {
+      *error = "the import directory is outside the file";
+      return false;
+    }
+    for (size_t i = 0;; ++i) {
+      if (i >= kMaxDescriptors || at + (i + 1) * 20 > data.size()) {
+        *error = "the import directory does not end";
+        return false;
+      }
+      const uint32_t nameRva = U32(data, at + i * 20 + 12);
+      if (nameRva == 0) break;
+      std::string name;
+      if (!ReadNameAt(data, pe, nameRva, &name)) {
+        *error = "an import names a DLL outside the file";
+        return false;
+      }
+      AddUnique(&out->imports, name);
+    }
+  }
+
+  const DataDir delay = dir(13);  // IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT
+  if (delay.rva != 0) {
+    size_t at = 0;
+    if (!RvaToOffset(data, pe, delay.rva, &at)) {
+      *error = "the delay-load directory is outside the file";
+      return false;
+    }
+    for (size_t i = 0;; ++i) {
+      if (i >= kMaxDescriptors || at + (i + 1) * 32 > data.size()) {
+        *error = "the delay-load directory does not end";
+        return false;
+      }
+      const uint32_t attributes = U32(data, at + i * 32);
+      const uint32_t nameRva = U32(data, at + i * 32 + 4);
+      if (attributes == 0 && nameRva == 0) break;
+      if ((attributes & 1) == 0) {
+        *error = "a delay-load descriptor uses virtual addresses, not RVAs";
+        return false;
+      }
+      std::string name;
+      if (!ReadNameAt(data, pe, nameRva, &name)) {
+        *error = "a delay-load import names a DLL outside the file";
+        return false;
+      }
+      AddUnique(&out->delayImports, name);
+    }
+  }
+
+  const DataDir exports = dir(0);  // IMAGE_DIRECTORY_ENTRY_EXPORT
+  if (exports.rva != 0 && exports.size >= 40) {
+    size_t at = 0;
+    if (!RvaToOffset(data, pe, exports.rva, &at) || at + 40 > data.size()) {
+      *error = "the export directory is outside the file";
+      return false;
+    }
+    const uint32_t count = U32(data, at + 20);
+    const uint32_t functionsRva = U32(data, at + 28);
+    size_t functionsAt = 0;
+    if (count > kMaxExports || (count != 0 && !RvaToOffset(data, pe, functionsRva, &functionsAt)) ||
+        functionsAt + static_cast<size_t>(count) * 4 > data.size()) {
+      *error = "the export address table is outside the file";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint32_t target = U32(data, functionsAt + static_cast<size_t>(i) * 4);
+      // An export whose RVA lies inside the export directory is a forwarder: the bytes there are "DLL.Symbol".
+      if (target < exports.rva || target - exports.rva >= exports.size) continue;
+      std::string forward;
+      if (!ReadNameAt(data, pe, target, &forward)) {
+        *error = "a forwarded export names a string outside the file";
+        return false;
+      }
+      const size_t dot = forward.rfind('.');
+      if (dot == std::string::npos || dot == 0) {
+        *error = "a forwarded export has no DLL name";
+        return false;
+      }
+      AddUnique(&out->forwarders, forward.substr(0, dot) + ".dll");
+    }
+  }
+  return true;
+}
+}  // namespace
+
+bool ListDependencies(HANDLE file, Dependencies* out, std::string* error) {
+  *out = Dependencies{};
+  try {
+    return ListDependenciesImpl(file, out, error);
+  } catch (const std::exception& e) {
+    *error = std::string("exception while reading the dependencies: ") + e.what();
+    return false;
   }
 }
 

@@ -66,6 +66,8 @@ BRAND_PROSE_SPELLINGS = {
     "docs/standards/logging.md": {"nEVR"},
     "docs/standards/verification.md": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
+    "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
+    "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},
     "tools/package-release/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
