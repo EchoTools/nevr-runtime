@@ -663,6 +663,17 @@ TEST_F(PluginDependencyGateTest, ARelativePathIntoThePluginsDirectoryIsRefusedWh
   EXPECT_TRUE(TestLogContains("refused a later load of late_rel.dll: unsigned"));
 }
 
+// The current directory is what a relative path starts from when it names a file there.
+TEST_F(PluginDependencyGateTest, ARelativePathFromTheCurrentDirectoryIntoThePluginsDirectoryIsRefused) {
+  Plan("late_cwd.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  const std::wstring inPlugins(pluginsDir_.begin(), pluginsDir_.end());
+  CurrentDirectoryScope cwd(inPlugins.c_str());
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L".\\late_cwd.dll", nullptr));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_cwd.dll: unsigned"));
+}
+
 TEST_F(PluginDependencyGateTest, ARelativePathThatCannotBeResolvedIsRefusedNotLetThrough) {
   TestHook_InstallPluginLoadFilter(pluginsDir_);
   std::wstring tooLong;
@@ -686,7 +697,7 @@ TEST_F(PluginDependencyGateTest, ADevBuildLetsAnUnresolvableRelativePathThrough)
 // nothing.
 TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
   std::wstring wideDir(pluginsDir_.begin(), pluginsDir_.end());
-  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size()) + L"nevr_t\u0161\\";
+  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size()) + L"Nevr_T\u0161\\";
   const std::wstring plugins = root + L"plugins\\";
   CreateDirectoryW(root.c_str(), nullptr);
   ASSERT_TRUE(CreateDirectoryW(plugins.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS) << GetLastError();
@@ -727,7 +738,15 @@ TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
   // The plugin's LoadLibraryW reaches the filter only through the real hooks.
   ASSERT_EQ(MH_Initialize(), MH_OK);
   const int hooked = nevr_dll_load_hook::Install();
-  if (hooked == 4) LoadPlugins();
+  if (hooked == 4) {
+    LoadPlugins();
+    // The ANSI entry points reach the filter through the same hooks, with the path in the ANSI code page.
+    const std::string victimNarrow = pluginsDir_ + "dllmain_victim.dll";
+    SetLastError(0);
+    EXPECT_EQ(LoadLibraryA(victimNarrow.c_str()), nullptr) << "LoadLibraryA mapped an unsigned file in plugins/";
+    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
+    EXPECT_EQ(LoadLibraryExA(victimNarrow.c_str(), nullptr, 0), nullptr) << "LoadLibraryExA mapped an unsigned file";
+  }
   nevr_dll_load_hook::Shutdown();  // also clears the registered filters
   MH_Uninitialize();
   nevr_hook_guard::ResetForTest();

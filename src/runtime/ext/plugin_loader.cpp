@@ -236,11 +236,11 @@ void ShowRefusalNoticeIfDue() {
 
 void ShowRefusalNoticeIfDue();
 
-// A load refused after LoadPlugins finished: record it, and tell the player now. A load refused inside a DllMain
-// (the loader lock is held) or while LoadPlugins still runs is shown by LoadPlugins's own notice instead.
+// A load refused after LoadPlugins finished: record it, and tell the player now. A load refused while LoadPlugins
+// still runs (a staged plugin's DllMain, say) is shown by LoadPlugins's own notice instead.
 void RecordLateRefusal(const std::string& file) {
   RecordRefusal(file);
-  if (g_noticeArmed.load() && !nevr_dll_load_hook::LoaderLockHeldByThisThread()) ShowRefusalNoticeIfDue();
+  if (g_noticeArmed.load()) ShowRefusalNoticeIfDue();
 }
 
 // ---- loads a plugin makes after its init (ADR 0010 section 1) --------------------------------------------------

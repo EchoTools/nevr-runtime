@@ -190,6 +190,19 @@ TEST(PluginTreeNames, OnlyWhatTheSystemSuppliesNeedsNoFileInThePluginsDirectory)
   EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem("EXT-MS-WIN-FOO-L1-1-0.dll"));
   EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem("KERNEL32.DLL"));  // loaded, and in System32
   EXPECT_FALSE(nevr_plugin_tree::SuppliedByTheSystem("nevr-no-such-library.dll"));
+  // A module already loaded satisfies an import by name, wherever its file is: this test's own executable.
+  char exe[MAX_PATH] = {};
+  ASSERT_GT(GetModuleFileNameA(nullptr, exe, MAX_PATH), 0u);
+  const std::string exeName = std::string(exe).substr(std::string(exe).find_last_of("\\/") + 1);
+  ASSERT_NE(GetModuleHandleA(exeName.c_str()), nullptr);
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem(exeName));
+  // A directory of that name in System32 is not a library.
+  char system[MAX_PATH] = {};
+  ASSERT_GT(GetSystemDirectoryA(system, MAX_PATH), 0u);
+  const DWORD drivers = GetFileAttributesA((std::string(system) + "\\drivers").c_str());
+  ASSERT_TRUE(drivers != INVALID_FILE_ATTRIBUTES && (drivers & FILE_ATTRIBUTE_DIRECTORY) != 0)
+      << "System32 has no drivers directory: this form is not under test";
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedByTheSystem("drivers"));
   EXPECT_FALSE(nevr_plugin_tree::SuppliedByTheSystem("dep.dll"));
 }
 

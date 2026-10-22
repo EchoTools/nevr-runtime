@@ -107,7 +107,7 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
         }
         // The loader appends ".dll" to a name with no extension; the file it maps is the one to check.
         const std::string name = WithDefaultExtension(written);
-        if (!seen.insert(Lower(name)).second) continue;
+        if (!seen.insert(name).second) continue;
         HANDLE h = CreateFileA((pluginDir + name).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {
