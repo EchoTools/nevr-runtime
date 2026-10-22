@@ -83,19 +83,25 @@ bool SyncDir(const std::string& dir) noexcept {
   return ok;
 }
 
+// A marker is an empty regular file, as MarkOwned writes it. A directory, a link, or a file with content at that name is
+// someone else's.
+bool IsMarkerFile(const std::string& path) noexcept {
+  struct stat st;
+  return ::lstat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0;
+}
+
 bool MarkOwned(const std::string& item) noexcept {
   const std::string marker = OwnerMarkerPath(item);
-  const int fd = ::open(marker.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
-  if (fd < 0) return false;
+  // O_EXCL, never O_TRUNC: a file that is already there is only accepted when it is a marker we wrote (a resume or a
+  // second stamp); anything else at that name is left exactly as it is.
+  const int fd = ::open(marker.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+  if (fd < 0) return errno == EEXIST && IsMarkerFile(marker);
   const bool synced = ::fsync(fd) == 0;
   ::close(fd);
   return synced && SyncDir(DirOf(marker));
 }
 
-bool IsOwned(const std::string& item) noexcept {
-  struct stat st;
-  return ::lstat(OwnerMarkerPath(item).c_str(), &st) == 0 && S_ISREG(st.st_mode);
-}
+bool IsOwned(const std::string& item) noexcept { return IsMarkerFile(OwnerMarkerPath(item)); }
 
 int CleanLeftovers(const std::string& root, int* failed) noexcept {
   if (failed != nullptr) *failed = 0;
@@ -104,8 +110,8 @@ int CleanLeftovers(const std::string& root, int* failed) noexcept {
     if (!StartsWith(name.c_str(), kStagingPrefix)) continue;
     const std::string path = root + "/" + name;
     if (EndsWith(name, kOwnerSuffix)) {
-      // A marker whose staging directory is gone.
-      if (!Lexists(path.substr(0, path.size() - std::strlen(kOwnerSuffix)))) ::unlink(path.c_str());
+      // A marker whose staging directory is gone. Only a marker: a file with content at that name is not ours.
+      if (!Lexists(path.substr(0, path.size() - std::strlen(kOwnerSuffix))) && IsMarkerFile(path)) ::unlink(path.c_str());
       continue;
     }
     if (!IsOwned(path)) continue;  // a name that only looks like ours
@@ -125,7 +131,11 @@ bool RecoverReplaced(const std::string& root, std::string* restored_from) noexce
   std::string newest;
   for (const std::string& name : ListNames(root)) {
     if (!StartsWith(name.c_str(), kReplacedPrefix) || EndsWith(name, kOwnerSuffix)) continue;
-    if (!IsOwned(root + "/" + name)) continue;
+    const std::string candidate = root + "/" + name;
+    if (!IsOwned(candidate)) continue;
+    // A real directory only: a link here would make `_data` a way into somewhere else.
+    struct stat st;
+    if (::lstat(candidate.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
     if (name > newest) newest = name;  // the stamp is UTC, so names sort by time
   }
   if (newest.empty()) return false;
@@ -139,7 +149,10 @@ bool RecoverReplaced(const std::string& root, std::string* restored_from) noexce
 }
 
 StageStatus InstallStaged(const std::string& root, const std::string& staging, const std::string& utc_stamp,
-                          std::string* replaced_to) {
+                          std::string* replaced_to, const InstallProbe* probe) {
+  const auto at = [probe](const char* point) {
+    if (probe != nullptr && probe->at != nullptr) probe->at(probe->context, point);
+  };
   if (replaced_to != nullptr) replaced_to->clear();
   const std::string target = root + "/_data";
   const bool had_old = Lexists(target);
@@ -150,6 +163,7 @@ StageStatus InstallStaged(const std::string& root, const std::string& staging, c
     // The marker first: a crash after the rename must leave the old tree recognisable as ours.
     marked_before = IsOwned(aside);  // the same stamp twice: leave the earlier marker as it was
     if (!MarkOwned(aside)) return StageStatus::kRenameFailed;
+    at("before_first_rename");
     if (::rename(target.c_str(), aside.c_str()) != 0) {
       if (!marked_before) ::unlink(OwnerMarkerPath(aside).c_str());
       return StageStatus::kRenameFailed;
@@ -157,6 +171,7 @@ StageStatus InstallStaged(const std::string& root, const std::string& staging, c
     SyncDir(root);
     if (replaced_to != nullptr) *replaced_to = aside;
   }
+  at("between_renames");
   if (::rename(staging.c_str(), target.c_str()) != 0) {
     if (had_old && ::rename(aside.c_str(), target.c_str()) == 0) {
       if (!marked_before) ::unlink(OwnerMarkerPath(aside).c_str());
