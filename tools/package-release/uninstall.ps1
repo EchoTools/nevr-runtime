@@ -69,7 +69,7 @@ $legacyAside = $values['legacy']
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
 # #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
 if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($backup)).Contains('NEVR-BUILD ')) {
-  throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
+  throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then delete $state"
 }
 $target = Join-Path $Dir 'BugSplat64.dll'
 # #759: the DLL must be a build of ours: the one recorded, an earlier one install.ps1 recorded when it updated,
