@@ -12,6 +12,7 @@
       ]
     },
     "yaml-cpp",
-    "zstd"
+    "zstd",
+    "zlib"
   ]
 }
