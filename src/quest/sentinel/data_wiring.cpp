@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "android_glue_layout.h"
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
@@ -83,9 +84,16 @@ void Present(const std::string& text, const char* what) noexcept {
   }
   bool prepared = false;
   const char* result = Opts().show(CurrentApp(), text.c_str(), &prepared);
-  sentinel::LogFields(std::strcmp(result, "shown") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+  // "requested": Toast.show() returned. Whether the headset drew it is ADR 0011 measurement 1, so no line says "shown".
+  sentinel::LogFields(std::strcmp(result, "requested") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
                       "data_present",
                       {{"what", what}, {"result", result}, {"looper_prepared", prepared ? "true" : "false"}});
+}
+
+std::unique_ptr<data::CurlTransport> MakeProductionTransport() {
+  return std::make_unique<data::CurlTransport>(data::DataHostRootsPem(), /*allow_plain_http=*/false,
+                                               kConnectTimeoutSeconds, kStallSeconds, data::CheckDataHostRoots,
+                                               kMinBytesPerSecond);
 }
 
 // The measurement probe: `toast <text>` or `block <seconds>`, once.
@@ -122,31 +130,66 @@ void RunProbe() noexcept {
   }
 }
 
-void EndProcess() noexcept {
+// The end of a failed step: nonzero, after the `android_main_returned` line and the before-exit report.
+void EndFailed(const char* reason) noexcept {
   if (Opts().ender != nullptr) {
-    Opts().ender();
+    Opts().ender(process_end::kFailureExitCode, reason);
   } else {
-    process_end::EndProcess();
+    process_end::EndWithExitCode(process_end::kFailureExitCode, reason);
   }
+}
+
+// The message stays up long enough to read: shown, held, shown again, held (two holds of hold_ms, ten seconds).
+void HoldMessage(const std::string& message) noexcept {
+  Sleep(Opts().hold_ms);
+  Present(message, "floor");
+  Sleep(Opts().hold_ms);
+}
+
+// The player has not allowed Storage: nothing is read, fetched or replaced; the message says how to allow it.
+void StopWithoutGrant(permission_wait::StorageOutcome outcome) noexcept {
+  const char* const why = permission_wait::StorageOutcomeName(outcome);
+  sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
+                      {{"outcome", "no_storage_grant"}, {"storage", why}, {"message", data::kNeedsStoragePermission}});
+  Present(data::kNeedsStoragePermission, "floor");
+  HoldMessage(data::kNeedsStoragePermission);
+  EndFailed("no_storage_grant");
+}
+
+// True while the game has not asked its activity to finish (android_app::destroyRequested).
+bool NotDestroyed() noexcept {
+  void* const app = CurrentApp();
+  return app == nullptr || sentinel::glue::ReadInt(app, sentinel::glue::kAppDestroyRequested) == 0;
 }
 
 }  // namespace
 
-void AfterStorage() noexcept {
-  RunProbe();
+void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "data_step_start",
+                      {{"storage", permission_wait::StorageOutcomeName(outcome)}});
+  // No grant, no data step: nothing below touches shared storage without it.
+  if (!permission_wait::StorageGranted(outcome)) {
+    StopWithoutGrant(outcome);
+    return;
+  }
+  if (Opts().probe_enabled) RunProbe();
 
   data::StepConfig config;
   config.exists = Opts().exists != nullptr ? Opts().exists : &obb_skip::DirectoryExists;
   config.build_id = sentinel::pinned::kLibR15BuildId;
   config.fetch_root_override = Opts().fetch_root_override;
+  config.recovery_roots = Opts().recovery_roots;
   config.fetch.utc_stamp = UtcStamp();
   if (!Opts().zip_sha256.empty()) {
     config.fetch.sha256 = Opts().zip_sha256;
     config.fetch.bytes = Opts().zip_bytes;
     config.fetch.extracted_bytes = Opts().extracted_bytes;
     config.fetch.max_attempts = 2;
-    config.fetch.backoff = [](int) { Sleep(0); };
   }
+  // No caller backoff: the fetch's own default applies (2, 4, 8, 16, then 30 s), slept through Sleep so a test can see
+  // it. A player who leaves the game ends the download (keep_going) and every wait of the backoff.
+  config.fetch.sleep_ms = [](unsigned ms) { Sleep(ms); };
+  config.fetch.keep_going = [] { return NotDestroyed(); };
   config.fetch.on_event = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   std::string lastMessage;
@@ -155,20 +198,15 @@ void AfterStorage() noexcept {
     Present(message, "floor");
   };
   config.announce = [] { Present(data::kDownloadNotice, "download_notice"); };
-  const unsigned holdMs = Opts().hold_ms;
-  config.hold = [&lastMessage, holdMs] {
-    // The toast lasts a few seconds: show it again twice so a player who looked away still reads it.
-    for (int repeat = 0; repeat < 2; ++repeat) {
-      Sleep(holdMs);
-      Present(lastMessage, "floor");
-    }
-    Sleep(holdMs);
+  config.hold = [&lastMessage] {
+    // The toast lasts a few seconds: show it again once so a player who looked away still reads it.
+    HoldMessage(lastMessage);
   };
 
   std::unique_ptr<data::CurlTransport> ownedTransport;
   data::Transport* transport = Opts().transport;
   if (transport == nullptr) {
-    ownedTransport = std::make_unique<data::CurlTransport>();
+    ownedTransport = MakeProductionTransport();
     transport = ownedTransport.get();
   }
   const data::StepResult result = data::RunDataStep(config, *transport);
@@ -180,7 +218,7 @@ void AfterStorage() noexcept {
                        {"status", data::FetchStatusName(result.status)},
                        {"message", result.message.c_str()}});
   if (result.outcome == data::StepOutcome::kFetched) obb_skip::ResolveRoot(config.exists);
-  if (failed) EndProcess();
+  if (failed) EndFailed("data_step_failed");
 }
 
 bool Install(const Options& options) noexcept {

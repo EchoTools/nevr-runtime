@@ -341,6 +341,25 @@ TEST(AStalledBodyEndsAsATransportFailureNotAHang) {
   CHECK(took < 15);                           // the server sleeps 20 s
 }
 
+TEST(ATransferUnderTheMinimumRateIsCutEvenWhenItNeverStops) {
+  // 4 KiB/s: above the default 1 KiB/s limit, below the 16 KiB/s the game's transport asks for.
+  CurlTransport slow(g_trust_pem, false, 5, /*stall_seconds=*/3, [] { return RootsCheck{true, 0, ""}; },
+                     /*min_bytes_per_second=*/16 * 1024);
+  const auto start = std::chrono::steady_clock::now();
+  const Got g = Get(slow, TlsUrl("good", "/trickle"), 0);
+  const auto took = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count();
+  CHECK(!g.result.completed);
+  CHECK(!g.result.interrupted);
+  CHECK(g.body.size() > 0);  // what arrived is delivered, so the part can resume
+  CHECK(took < 20);          // the server would go on for 40 s
+
+  // The same server under the default limit is never cut: the 1 KiB/s default does not see 4 KiB/s as a stall.
+  int polls = 0;
+  CurlTransport lax = TestCa();
+  const Got g2 = Get(lax, TlsUrl("good", "/trickle"), 0, [&polls] { return ++polls < 6; });
+  CHECK(g2.result.interrupted);  // only the caller's own stop ended it
+}
+
 TEST(ATlsOneOneServerIsRefused) {
   CurlTransport t = TestCa();
   const Got g = Get(t, TlsUrl("tls11", "/blob"), 0);

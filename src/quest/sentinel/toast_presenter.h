@@ -2,7 +2,7 @@
  * mechanism 2 of "What the player sees").
  *
  * Whether Horizon OS draws a Toast over an immersive native app, and whether one can be made from the android_main
- * thread, are not measured: the result token says how far the call got, and the data step logs it, so a headset run
+ * thread, are not measured: the result token says how far the call got ("requested" is as far as the call can know), and the data step logs it, so a headset run
  * reads the answer from the log (the test sheet in the issue lists the lines). The call never throws and clears every
  * Java exception it causes; it attaches the thread to the VM when it is not attached and detaches only then.
  *
@@ -15,8 +15,11 @@
 namespace nevr_quest::toast {
 
 // Shows `text` (ASCII; the VM takes modified UTF-8). `app` is the game's android_app (process_end::CurrentApp()).
-// Returns a result token: "shown", "no_app", "no_activity", "no_vm", "attach_failed", "env_failed", "looper_failed",
-// "class_failed", "toast_failed" or "show_failed"; `*looperPrepared` is set when Looper.prepare() was called.
+// Returns a result token: "requested" (Toast.show() returned without an exception: the system was asked to draw it, which
+// says nothing about whether it did), "no_app", "no_activity", "no_vm", "attach_failed", "env_failed",
+// "exception_pending", "looper_failed", "class_failed", "toast_failed" or "show_failed"; `*looperPrepared` is set when
+// Looper.prepare() was called. After every JNI call the call's exception, if any, is described and cleared, whether or
+// not the call returned null.
 const char* Show(void* app, const char* text, bool* looperPrepared) noexcept;
 
 }  // namespace nevr_quest::toast

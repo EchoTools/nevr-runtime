@@ -14,6 +14,7 @@ Each line is:
   /zip-flaky   like /zip, but the first request sends 5000 bytes and closes; later ones are served in full
   /redirect    302 to /blob (a client that follows it makes a second logged request)
   /stall       promises the whole blob, sends 100 bytes, then sends nothing for 20 s
+  /trickle     promises 200000 bytes and sends 4096 of them every second for 40 s (about 4 KiB/s)
 """
 import http.server
 import ssl
@@ -95,6 +96,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(BLOB[:100])
             self.wfile.flush()
             time.sleep(20)
+            self.close_connection = True
+        elif self.path == "/trickle":
+            log(self.path, self.headers.get("Range"))
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes 0-199999/200000")
+            self.send_header("Content-Length", "200000")
+            self.end_headers()
+            try:
+                for _ in range(40):
+                    self.wfile.write(b"x" * 4096)
+                    self.wfile.flush()
+                    time.sleep(1)
+            except OSError:
+                pass  # the client gave up: that is the point of the test
             self.close_connection = True
         elif self.path == "/missing":
             log(self.path, self.headers.get("Range"))

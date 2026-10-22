@@ -11,6 +11,7 @@
 
 #include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
+#include "quest/data/staging.h"
 #include "quest/tests/data_test_support.h"
 #include "quest/tests/mini_test.h"
 
@@ -84,6 +85,7 @@ struct Rig {
     config.exists = &FakeExists;
     config.build_id = kBuild;
     config.fetch_root_override = scratch.Path("root");
+    config.recovery_roots = {scratch.Path("root")};  // never the real /sdcard roots
     config.fetch.sha256 = Sha256Hex(zip.data(), zip.size());
     config.fetch.bytes = zip.size();
     config.fetch.extracted_bytes = 1000;
@@ -208,6 +210,8 @@ TEST(NoSpaceNamesTheFreeAndNeededMiB) {
   CHECK_EQ(net.calls, 0);
   CHECK(Contains(r.message, "300 MiB free"));
   CHECK(Contains(r.message, "601 MiB needed"));  // (zip + 1000 bytes) rounded up
+  // The download notice comes after the space check, so a step that cannot download never announces one.
+  CHECK(std::find(rig.order.begin(), rig.order.end(), std::string("announce")) == rig.order.end());
 }
 
 TEST(ATamperedZipIsRefusedAndNothingIsPlaced) {
@@ -232,6 +236,103 @@ TEST(AReplaceThatFailsNamesTheOldDataAndLeavesIt) {
   CHECK_EQ(r.outcome, StepOutcome::kFailed);
   CHECK(Contains(r.message, "left as it is"));
   CHECK_EQ(ReadFile(rig.Root() + "/_data/old"), std::string("old"));
+}
+
+// ---- an interrupted install is put right on every root before the decision ----
+
+namespace {
+
+std::string g_media_dir;
+std::string g_legacy_dir;
+
+// The two real roots, mapped to scratch directories, answered from the real filesystem.
+bool MappedExists(const char* path) noexcept {
+  const std::string p = path;
+  const std::string media = nevr_quest::data_root::kMediaRoot;
+  const std::string legacy = nevr_quest::data_root::kLegacyRoot;
+  std::string real = p;
+  if (p.compare(0, media.size(), media) == 0) real = g_media_dir + p.substr(media.size());
+  else if (p.compare(0, legacy.size(), legacy) == 0) real = g_legacy_dir + p.substr(legacy.size());
+  struct stat st;
+  return ::stat(real.c_str(), &st) == 0;
+}
+
+void MakeTree(const std::string& dir, const std::string& rel_manifest, const std::string& content) {
+  std::string at = dir;
+  std::size_t from = 0;
+  while (true) {
+    const std::size_t slash = rel_manifest.find('/', from);
+    if (slash == std::string::npos) break;
+    at = dir + "/" + rel_manifest.substr(0, slash);
+    ::mkdir(at.c_str(), 0755);
+    from = slash + 1;
+  }
+  WriteFile(dir + "/" + rel_manifest, content);
+}
+
+// `root` as a crash between the two renames leaves it: the old tree under a marked `_data.replaced-<utc>`, no `_data`,
+// and a marked staging directory of an earlier attempt.
+void CrashedReplace(const std::string& root) {
+  ::mkdir(root.c_str(), 0755);
+  const std::string aside = root + "/_data.replaced-20261020T000000Z";
+  ::mkdir(aside.c_str(), 0755);
+  CHECK(MarkOwned(aside));
+  MakeTree(aside, std::string(kManifestRel).substr(std::string("_data/").size()), "manifest");
+  const std::string staging = root + "/_data.staging-0123456789ab";
+  CHECK(MarkOwned(staging));
+  ::mkdir(staging.c_str(), 0755);
+  WriteFile(staging + "/half", "half");
+}
+
+}  // namespace
+
+TEST(ALegacyReplaceThatCrashedIsRecoveredBeforeTheDecisionAndNothingIsFetched) {
+  Rig rig;
+  g_media_dir = rig.scratch.Path("media");
+  g_legacy_dir = rig.scratch.Path("legacy");
+  ::mkdir(g_media_dir.c_str(), 0755);
+  CrashedReplace(g_legacy_dir);
+  rig.config.exists = &MappedExists;
+  rig.config.recovery_roots = {g_media_dir, g_legacy_dir};
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK_EQ(net.calls, 0);
+  CHECK(Exists(g_legacy_dir + "/" + kManifestRel));                       // the old tree is back as `_data`
+  CHECK(!Exists(g_legacy_dir + "/_data.replaced-20261020T000000Z"));      // and nothing is left aside
+  CHECK(!Exists(g_legacy_dir + "/_data.replaced-20261020T000000Z.nevr-owned"));
+  CHECK(!Exists(g_legacy_dir + "/_data.staging-0123456789ab"));           // the staging leftover is cleaned
+  CHECK(!Exists(g_legacy_dir + "/_data.staging-0123456789ab.nevr-owned"));
+  CHECK(rig.shown.empty());
+}
+
+TEST(AMediaReplaceThatCrashedIsRecoveredWhileTheLegacyRootHoldsData) {
+  Rig rig;
+  g_media_dir = rig.scratch.Path("media");
+  g_legacy_dir = rig.scratch.Path("legacy");
+  CrashedReplace(g_media_dir);
+  ::mkdir(g_legacy_dir.c_str(), 0755);
+  ::mkdir((g_legacy_dir + "/_data").c_str(), 0755);
+  MakeTree(g_legacy_dir, kManifestRel, "manifest");
+  rig.config.exists = &MappedExists;
+  rig.config.recovery_roots = {g_media_dir, g_legacy_dir};
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK_EQ(net.calls, 0);
+  CHECK(Exists(g_media_dir + "/" + kManifestRel));  // the media root is recovered too, not only the one chosen
+  CHECK(!Exists(g_media_dir + "/_data.replaced-20261020T000000Z"));
+  CHECK(!Exists(g_media_dir + "/_data.staging-0123456789ab"));
+  bool recovered_event = false;
+  for (const std::string& e : rig.events) recovered_event = recovered_event || e.rfind("data_recover ", 0) == 0;
+  CHECK(recovered_event);
+}
+
+TEST(TheDownloadNoticeIsGivenOnceAndAfterTheSpaceCheck) {
+  Rig rig;
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK_EQ(std::count(rig.order.begin(), rig.order.end(), std::string("announce")), 1);
 }
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

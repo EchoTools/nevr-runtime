@@ -10,6 +10,7 @@
  */
 
 #include "sentinel.h"
+#include "generated/nevr_build_info.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
@@ -96,6 +97,7 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::Show;
+    options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     nevr_quest::data_wiring::Install(options);
     return nevr_quest::permission_wait::Install();
 }

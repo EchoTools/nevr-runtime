@@ -1111,6 +1111,15 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/permission_wait_hook_test" -ldl
     timeout 120 "$out/permission_wait_hook_test"
+    # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
+    # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
+    jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
+    [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
+    mkdir -p "$out/jni"
+    cp "$jni" "$out/jni/jni.h"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs

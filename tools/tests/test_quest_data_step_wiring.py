@@ -33,7 +33,7 @@ class TheHandlerRunsTheStepAfterTheWait(unittest.TestCase):
         self.assertIn("g_spent.exchange(true", body)
         self.assertLess(body.index("g_spent.exchange(true"), body.index("wait(names, count)"))
         self.assertLess(body.index("wait(names, count)"), body.index("g_after.load"))
-        self.assertLess(body.index("g_after.load"), body.index("after()"))
+        self.assertLess(body.index("g_after.load"), body.index("after(outcome)"))
 
     def test_the_handler_reaches_the_step_only_through_a_pointer(self):
         body = extract_braced_function(read("permission_wait_hook.cpp"), "void RequestHandler(")
@@ -50,26 +50,99 @@ class TheAppIsKeptBeforeTheGameRuns(unittest.TestCase):
 
 class TheStepOrder(unittest.TestCase):
     def body(self):
-        return extract_braced_function(read("data_wiring.cpp"), "void AfterStorage() noexcept {")
+        return extract_braced_function(
+            read("data_wiring.cpp"), "void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {"
+        )
 
     def test_the_root_is_resolved_again_only_after_a_fetch_and_before_the_game_continues(self):
         body = self.body()
         self.assertRegex(body, r"kFetched\)\s*obb_skip::ResolveRoot\(config\.exists\)")
 
-    def test_a_failed_step_ends_the_process(self):
+    def test_a_failed_step_ends_nonzero_through_the_end_with_its_reason(self):
         body = self.body()
-        self.assertRegex(body, r"if \(failed\) EndProcess\(\)")
-        self.assertLess(body.index("RunDataStep"), body.index("if (failed) EndProcess()"))
+        self.assertRegex(body, r'if \(failed\) EndFailed\("data_step_failed"\)')
+        self.assertLess(body.index("RunDataStep"), body.index("if (failed) EndFailed("))
+        wiring = extract_braced_function(read("data_wiring.cpp"), "void EndFailed(const char* reason) noexcept {")
+        self.assertIn("process_end::EndWithExitCode(process_end::kFailureExitCode, reason)", wiring)
+        self.assertNotIn("EndProcess", re.sub(r"//[^\n]*", "", read("data_wiring.cpp")))
+        end = extract_braced_function(
+            read("process_end_hook.cpp"), "void EndWithExitCode(int exitCode, const char* reason) noexcept {"
+        )
+        self.assertNotIn("_exit(0)", end)
 
-    def test_the_probe_runs_first(self):
+    def test_no_grant_means_no_data_step_and_no_probe(self):
         body = self.body()
-        self.assertTrue(body.lstrip("{ \n").startswith("RunProbe();"))
+        gate = body.index("if (!permission_wait::StorageGranted(outcome))")
+        self.assertIn("StopWithoutGrant(outcome)", body[gate:])
+        self.assertLess(gate, body.index("RunProbe()"))
+        self.assertLess(gate, body.index("RunDataStep"))
+        stop = extract_braced_function(
+            read("data_wiring.cpp"), "void StopWithoutGrant(permission_wait::StorageOutcome outcome) noexcept {"
+        )
+        self.assertIn("kNeedsStoragePermission", stop)
+        self.assertIn('EndFailed("no_storage_grant")', stop)
+
+    def test_the_probe_runs_only_in_a_development_build_and_after_the_gate(self):
+        body = self.body()
+        self.assertRegex(body, r"if \(Opts\(\)\.probe_enabled\) RunProbe\(\);")
+        entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
+        self.assertIn("options.probe_enabled = nevr_build::kIsDev;", entry)
+
+    def test_the_download_ends_when_the_game_asks_its_activity_to_finish(self):
+        body = self.body()
+        self.assertIn("config.fetch.keep_going = [] { return NotDestroyed(); };", body)
+        self.assertNotIn("config.fetch.backoff", body)  # the fetch's default backoff applies
+        nd = extract_braced_function(read("data_wiring.cpp"), "bool NotDestroyed() noexcept {")
+        self.assertIn("sentinel::glue::kAppDestroyRequested", nd)
+
+    def test_the_download_bounds(self):
+        header = read("data_wiring.h")
+        self.assertRegex(header, r"kStallSeconds\s*=\s*120;")
+        self.assertRegex(header, r"kMinBytesPerSecond\s*=\s*16 \* 1024;")
+        wiring = extract_braced_function(
+            read("data_wiring.cpp"), "std::unique_ptr<data::CurlTransport> MakeProductionTransport() {"
+        )
+        self.assertIn("kStallSeconds", wiring)
+        self.assertIn("kMinBytesPerSecond", wiring)
+
+    def test_the_message_is_held_ten_seconds(self):
+        self.assertRegex(read("data_wiring.h"), r"unsigned hold_ms = 5000;")
+        hold = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
+        self.assertEqual(hold.count("Sleep(Opts().hold_ms)"), 2)
+
+    def test_the_log_never_says_shown_for_a_toast_that_was_only_requested(self):
+        text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp") + read("toast_presenter.cpp"))
+        self.assertIn('"requested"', text)
+        self.assertNotIn('"shown"', text)
 
     def test_the_probe_is_consumed_before_it_acts(self):
         body = extract_braced_function(read("data_wiring.cpp"), "void RunProbe() noexcept {")
         self.assertLess(body.index("std::rename"), body.index('"toast "'))
         self.assertLess(body.index("std::rename"), body.index('"block "'))
         self.assertIn("kMaxProbeBlockSeconds", body)
+
+
+class TheLeftoversArePutRightBeforeTheDecision(unittest.TestCase):
+    def test_recover_runs_before_clean_and_before_resolve_on_every_root(self):
+        data = ROOT / "src/quest/data/data_step.cpp"
+        text = data.read_text()
+        put = extract_braced_function(text, "void PutLeftoversRight(const StepConfig& config) {")
+        self.assertLess(put.index("RecoverReplaced("), put.index("CleanLeftovers("))
+        self.assertIn("data_root::kCandidates", put)
+        run = extract_braced_function(text, "StepResult RunDataStep(const StepConfig& config, Transport& transport) {")
+        self.assertLess(run.index("PutLeftoversRight(config)"), run.index("data_root::Resolve("))
+
+    def test_the_notice_comes_from_the_fetch_after_its_space_check(self):
+        fetch = (ROOT / "src/quest/data/fetch.cpp").read_text()
+        self.assertIn("c.before_download", fetch)
+        self.assertLess(fetch.index("kNoSpace"), fetch.index("c.before_download"))
+
+
+class TheToastClearsEveryException(unittest.TestCase):
+    def test_pending_is_checked_before_the_result_after_every_call(self):
+        text = re.sub(r"//[^\n]*", "", read("toast_presenter.cpp"))
+        self.assertNotRegex(text, r"if \([a-zA-Z]+ == nullptr \|\| Pending\(env\)\)")
+        self.assertIn("ExceptionClear", text)
 
 
 class NoLoadTimeInitializer(unittest.TestCase):

@@ -1,5 +1,7 @@
 #include "quest/data/data_step.h"
 
+#include "quest/data/staging.h"
+
 namespace nevr_quest::data {
 
 namespace {
@@ -59,8 +61,36 @@ std::string BuildFloorMessage(const FloorInfo& info) {
   return text;
 }
 
+namespace {
+
+// An interrupted install leaves the old tree aside, a staging directory and a part. The decision below reads only
+// whether `_data` is there, so these are put right first, on every root the decision could pick (staging.h: run
+// RecoverReplaced before CleanLeftovers and before the data decision).
+void PutLeftoversRight(const StepConfig& config) {
+  std::vector<std::string> roots = config.recovery_roots;
+  if (roots.empty()) {
+    for (const data_root::Candidate& c : data_root::kCandidates) roots.push_back(c.root);
+  }
+  for (const std::string& root : roots) {
+    std::string restored_from;
+    const bool recovered = RecoverReplaced(root, &restored_from);
+    int failed = 0;
+    const int cleaned = CleanLeftovers(root, &failed);
+    if (config.on_step && (recovered || cleaned != 0 || failed != 0)) {
+      config.on_step({"data_recover",
+                      {{"root", root},
+                       {"recovered", recovered ? restored_from : std::string()},
+                       {"cleaned", std::to_string(cleaned)},
+                       {"failed", std::to_string(failed)}}});
+    }
+  }
+}
+
+}  // namespace
+
 StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   StepResult result;
+  PutLeftoversRight(config);
   const data_root::Resolution resolution = data_root::Resolve(config.exists);
   const Decision decision = Decide(resolution, config.exists);
   result.action = decision.action;
@@ -74,8 +104,8 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
     return result;
   }
 
-  if (config.announce) config.announce();
   FetchConfig fetch = config.fetch;
+  fetch.before_download = config.announce;
   fetch.root = config.fetch_root_override.empty() ? std::string(decision.root) : config.fetch_root_override;
   fetch.replacing = decision.action == DataAction::kReplace;
   const FetchResult fr = RunFetch(fetch, transport);

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "quest/data/fetch.h"
 #include "quest/sentinel/data_root.h"
@@ -44,14 +45,22 @@ std::string BuildFloorMessage(const FloorInfo& info);
 inline constexpr const char* kDownloadNotice =
     "Downloading Echo VR game data, about 900 MB, this can take a few minutes.";
 
+// Shown instead of a data step when the storage permission was not granted: nothing is read, fetched or replaced.
+inline constexpr const char* kNeedsStoragePermission =
+    "Echo VR needs the Storage permission to set up its game data. Open the headset's Settings, find Echo VR under "
+    "Apps, allow Storage (Files and media), then start the game again.";
+
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
+  // The roots whose leftovers of an interrupted install are put right before anything is decided (RecoverReplaced,
+  // then CleanLeftovers, on each). Empty: every data-root candidate (data_root.h), the media root and the legacy root.
+  std::vector<std::string> recovery_roots;
   FetchConfig fetch;                      // root and replacing are set by the step
   std::string build_id;
   // Test seam: where a fetch writes when it is not empty. Production leaves it empty and the fetch goes where Decide
   // says (the media root, or the root that holds a `_data` of another build).
   std::string fetch_root_override;
-  std::function<void()> announce;                           // once, before a download starts; null: none
+  std::function<void()> announce;                           // once, when a download is certain to start (after the space check); null: none
   std::function<void(const std::string& message)> present;  // the visible message; null: none
   std::function<void()> hold;                                // after the message, so it can be read; null: none
   std::function<void(const Event&)> on_step;                // data_check; null: none

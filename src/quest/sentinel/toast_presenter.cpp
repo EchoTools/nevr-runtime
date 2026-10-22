@@ -8,43 +8,46 @@ namespace nevr_quest::toast {
 
 namespace {
 
-// True when the last call left a Java exception pending; it is cleared.
-bool Failed(JNIEnv* env) noexcept {
+// True when the last JNI call left a Java exception pending: it is described (logcat) and cleared. Called after EVERY
+// JNI call, before the call's result is looked at: a call that throws may return null or not, and an exception that is
+// left pending makes the game's own next JNI call undefined (an abort under CheckJNI).
+bool Pending(JNIEnv* env) noexcept {
   if (!env->ExceptionCheck()) return false;
+  env->ExceptionDescribe();
   env->ExceptionClear();
   return true;
 }
 
 const char* ShowOnEnv(JNIEnv* env, jobject activity, const char* text, bool* looperPrepared) noexcept {
   jclass looper = env->FindClass("android/os/Looper");
-  if (looper == nullptr || Failed(env)) return "class_failed";
+  if (Pending(env) || looper == nullptr) return "class_failed";
   jmethodID myLooper = env->GetStaticMethodID(looper, "myLooper", "()Landroid/os/Looper;");
-  if (myLooper == nullptr || Failed(env)) return "looper_failed";
+  if (Pending(env) || myLooper == nullptr) return "looper_failed";
   jobject current = env->CallStaticObjectMethod(looper, myLooper);
-  if (Failed(env)) return "looper_failed";
+  if (Pending(env)) return "looper_failed";
   if (current == nullptr) {
     jmethodID prepare = env->GetStaticMethodID(looper, "prepare", "()V");
-    if (prepare == nullptr || Failed(env)) return "looper_failed";
+    if (Pending(env) || prepare == nullptr) return "looper_failed";
     env->CallStaticVoidMethod(looper, prepare);
-    if (Failed(env)) return "looper_failed";
+    if (Pending(env)) return "looper_failed";
     *looperPrepared = true;
   }
 
   jclass toastClass = env->FindClass("android/widget/Toast");
-  if (toastClass == nullptr || Failed(env)) return "class_failed";
+  if (Pending(env) || toastClass == nullptr) return "class_failed";
   jmethodID makeText = env->GetStaticMethodID(
       toastClass, "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
-  if (makeText == nullptr || Failed(env)) return "toast_failed";
+  if (Pending(env) || makeText == nullptr) return "toast_failed";
   jstring message = env->NewStringUTF(text);
-  if (message == nullptr || Failed(env)) return "toast_failed";
+  if (Pending(env) || message == nullptr) return "toast_failed";
   constexpr jint kLengthLong = 1;
   jobject toast = env->CallStaticObjectMethod(toastClass, makeText, activity, message, kLengthLong);
-  if (toast == nullptr || Failed(env)) return "toast_failed";
+  if (Pending(env) || toast == nullptr) return "toast_failed";
   jmethodID show = env->GetMethodID(toastClass, "show", "()V");
-  if (show == nullptr || Failed(env)) return "show_failed";
+  if (Pending(env) || show == nullptr) return "show_failed";
   env->CallVoidMethod(toast, show);
-  if (Failed(env)) return "show_failed";
-  return "shown";
+  if (Pending(env)) return "show_failed";
+  return "requested";
 }
 
 }  // namespace
@@ -70,9 +73,16 @@ const char* Show(void* app, const char* text, bool* looperPrepared) noexcept {
   }
   constexpr jint kLocalRefs = 16;
   const char* result = "toast_failed";
-  if (env->PushLocalFrame(kLocalRefs) == 0) {
-    result = ShowOnEnv(env, clazz, text, looperPrepared);
-    env->PopLocalFrame(nullptr);
+  if (env->ExceptionCheck()) {
+    result = "exception_pending";  // the caller's own exception: no JNI call is safe, and it is not ours to clear
+  } else {
+    const jint pushed = env->PushLocalFrame(kLocalRefs);
+    if (Pending(env) || pushed != 0) {
+      result = "toast_failed";
+    } else {
+      result = ShowOnEnv(env, clazz, text, looperPrepared);
+      env->PopLocalFrame(nullptr);
+    }
   }
   if (attachedHere) vm->DetachCurrentThread();
   return result;

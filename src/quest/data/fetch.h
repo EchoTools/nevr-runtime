@@ -61,6 +61,9 @@ struct FetchConfig {
   std::function<void(unsigned ms)> sleep_ms;           // null: nanosleep
 
   std::function<bool()> keep_going;                   // false cancels
+  // Called once, after the space check passed and before the first request (not when the part is already whole): the point where a download is certain
+  // to start (a player is told about it here, never before a no_space or bad_root failure). Null: none.
+  std::function<void()> before_download;
   std::function<void(const Event&)> on_event;
   std::function<void(std::uint64_t downloaded, std::uint64_t total)> on_progress;
 };

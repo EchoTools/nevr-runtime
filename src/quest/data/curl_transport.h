@@ -6,7 +6,7 @@
  * HTTPS only; allow_plain_http exists for the loopback tests and production passes false.
  *
  * There is no whole-transfer timeout (the body is 937 MB): a connection that never opens ends after
- * `connect_timeout_seconds`, and one that moves under 1 KiB/s for `stall_seconds` ends as a transport failure the
+ * `connect_timeout_seconds`, and one that moves under `min_bytes_per_second` (default 1 KiB/s) for `stall_seconds` ends as a transport failure the
  * fetch retries from the part's size.
  */
 #pragma once
@@ -28,7 +28,8 @@ class CurlTransport : public Transport {
   /// CheckDataHostRoots (a test passes one that fails, since the production table is a constant).
   explicit CurlTransport(std::string roots_pem = DataHostRootsPem(), bool allow_plain_http = false,
                          long connect_timeout_seconds = 15, long stall_seconds = 30,
-                         std::function<RootsCheck()> roots_check = CheckDataHostRoots);
+                         std::function<RootsCheck()> roots_check = CheckDataHostRoots,
+                         long min_bytes_per_second = 1024);
 
   TransportResult GetRange(const std::string& url, std::uint64_t offset, const BodyFn& on_body,
                            const KeepGoingFn& keep_going) override;
@@ -39,6 +40,7 @@ class CurlTransport : public Transport {
   long connect_timeout_seconds_;
   long stall_seconds_;
   std::function<RootsCheck()> roots_check_;
+  long min_bytes_per_second_;
 };
 
 }  // namespace nevr_quest::data

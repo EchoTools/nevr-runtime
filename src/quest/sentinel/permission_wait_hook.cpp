@@ -13,7 +13,7 @@ namespace nevr_quest::permission_wait {
 
 namespace {
 
-using WaitFn = void (*)(const char* const* names, std::uint64_t count) noexcept;
+using WaitFn = StorageOutcome (*)(const char* const* names, std::uint64_t count) noexcept;
 
 constexpr std::size_t kMaxNames = 16;
 constexpr const char kStorageSuffix[] = "_EXTERNAL_STORAGE";
@@ -59,11 +59,11 @@ bool AllGranted(CheckFn check, const char* const* storage, std::size_t n) noexce
 }
 
 // After the original RequestPermissions returned. Reached only through g_wait.
-void WaitForStorage(const char* const* names, std::uint64_t count) noexcept {
+StorageOutcome WaitForStorage(const char* const* names, std::uint64_t count) noexcept {
   const CheckFn check = g_check.load(std::memory_order_acquire);
   if (check == nullptr) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "permission_wait", {{"state", "check_unavailable"}});
-    return;
+    return StorageOutcome::kCheckUnavailable;
   }
   const char* storage[kMaxNames];
   std::size_t n = 0;
@@ -74,12 +74,12 @@ void WaitForStorage(const char* const* names, std::uint64_t count) noexcept {
   }
   if (n == 0) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait", {{"state", "no_storage_permission"}});
-    return;
+    return StorageOutcome::kNoStoragePermission;
   }
   if (AllGranted(check, storage, n)) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait",
                         {{"state", "already_granted"}, {"permissions", static_cast<long long>(n)}});
-    return;
+    return StorageOutcome::kAlreadyGranted;
   }
   g_waits.fetch_add(1, std::memory_order_relaxed);
   const unsigned timeoutMs = g_timeoutMs.load(std::memory_order_relaxed);
@@ -94,13 +94,13 @@ void WaitForStorage(const char* const* names, std::uint64_t count) noexcept {
       g_granted.fetch_add(1, std::memory_order_relaxed);
       sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait",
                           {{"state", "granted"}, {"waited_ms", static_cast<long long>(waited)}});
-      return;
+      return StorageOutcome::kGranted;
     }
     if (waited >= timeoutMs) {
       g_timeouts.fetch_add(1, std::memory_order_relaxed);
       sentinel::LogFields(sentinel::LogLevel::kWarn, "permission_wait",
                           {{"state", "timeout"}, {"waited_ms", static_cast<long long>(waited)}});
-      return;
+      return StorageOutcome::kTimeout;
     }
   }
 }
@@ -111,9 +111,10 @@ void RequestHandler(RequestThunk::Fn original, const char* const* names, std::ui
   g_requests.fetch_add(1, std::memory_order_relaxed);
   if (g_spent.exchange(true, std::memory_order_acq_rel)) return;  // only the boot request waits
   const WaitFn wait = g_wait.load(std::memory_order_acquire);
-  if (wait != nullptr) wait(names, count);
+  // No wait armed: nothing was checked, so nothing is known about the grant.
+  const StorageOutcome outcome = wait != nullptr ? wait(names, count) : StorageOutcome::kCheckUnavailable;
   const AfterStorageFn after = g_after.load(std::memory_order_acquire);
-  if (after != nullptr) after();
+  if (after != nullptr) after(outcome);
 }
 
 NEVR_HOOK_RECORD(kRequestHook, RequestThunk, &RequestHandler);
@@ -151,6 +152,17 @@ CheckFn ResolveCheck(const char** reason) noexcept {
 }
 
 }  // namespace
+
+const char* StorageOutcomeName(StorageOutcome outcome) noexcept {
+  switch (outcome) {
+    case StorageOutcome::kGranted: return "granted";
+    case StorageOutcome::kAlreadyGranted: return "already_granted";
+    case StorageOutcome::kTimeout: return "timeout";
+    case StorageOutcome::kCheckUnavailable: return "check_unavailable";
+    case StorageOutcome::kNoStoragePermission: return "no_storage_permission";
+  }
+  return "unknown";
+}
 
 void SetAfterStorage(AfterStorageFn fn) noexcept { g_after.store(fn, std::memory_order_release); }
 

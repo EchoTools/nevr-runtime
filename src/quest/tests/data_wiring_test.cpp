@@ -55,25 +55,39 @@ const char* FakeShow(void*, const char* text, bool* prepared) noexcept {
   g_shown.push_back(text);
   g_log.push_back("show");
   *prepared = true;
-  return "shown";
+  return "requested";
 }
-void FakeEnd() noexcept {
+int g_exit_code = 0;
+std::string g_exit_reason;
+void FakeEnd(int exitCode, const char* reason) noexcept {
   ++g_ends;
+  g_exit_code = exitCode;
+  g_exit_reason = reason != nullptr ? reason : "";
   g_log.push_back("end");
 }
 void FakeSleep(unsigned ms) noexcept { g_log.push_back("sleep:" + std::to_string(ms)); }
-void* FakeApp() noexcept { return nullptr; }
+// A stand-in android_app: only destroyRequested (offset 0x64) is read by the step.
+unsigned char g_app[0x100];
+bool g_have_app = false;
+void* FakeApp() noexcept { return g_have_app ? static_cast<void*>(g_app) : nullptr; }
+void SetDestroyRequested(int value) { std::memcpy(g_app + 0x64, &value, sizeof(value)); }
 
 void RealRequestPermissions(const char* const*, std::uint64_t) { ++g_requests; }
 bool GrantedCheck(const char*) noexcept { return true; }
+bool DeniedCheck(const char*) noexcept { return false; }
 
 class ServingTransport : public nevr_quest::data::Transport {
  public:
   ServingTransport(std::string payload, bool network) : payload_(std::move(payload)), network_(network) {}
   nevr_quest::data::TransportResult GetRange(const std::string&, std::uint64_t offset, const nevr_quest::data::BodyFn& on_body,
-                                             const nevr_quest::data::KeepGoingFn&) override {
+                                             const nevr_quest::data::KeepGoingFn& keep_going) override {
     ++calls;
     nevr_quest::data::TransportResult r;
+    keep_going_seen = keep_going();
+    if (!keep_going_seen) {
+      r.interrupted = true;
+      return r;
+    }
     if (!network_) {
       r.code = 6;
       return r;
@@ -89,6 +103,7 @@ class ServingTransport : public nevr_quest::data::Transport {
     return r;
   }
   int calls = 0;
+  bool keep_going_seen = true;  // what keep_going answered at the start of the last request
 
  private:
   std::string payload_;
@@ -120,6 +135,10 @@ struct Rig {
     g_log.clear();
     g_ends = 0;
     g_requests = 0;
+    g_exit_code = 0;
+    g_exit_reason.clear();
+    g_have_app = false;
+    SetDestroyRequested(0);
     nevr_quest::obb_skip::ResetForTest();
     pw::ResetForTest();
     pw::RequestThunk::Reset();
@@ -138,9 +157,9 @@ struct Rig {
     options.extracted_bytes = 1000;
   }
   // The game's boot request, through the real hook.
-  void BootRequest() {
+  void BootRequest(bool (*check)(const char*) noexcept = &GrantedCheck) {
     dw::Install(options);
-    pw::ArmForTest(&GrantedCheck, 5, 100);
+    pw::ArmForTest(check, 5, 100);
     static const char* const names[2] = {"android.permission.READ_EXTERNAL_STORAGE",
                                          "android.permission.WRITE_EXTERNAL_STORAGE"};
     RequestEntry()(names, 2);
@@ -175,17 +194,20 @@ void AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess() {
   rig.BootRequest();
   QCHECK(g_requests == 1);
   QCHECK(g_ends == 1);
-  QCHECK(g_shown.size() == 4);  // the download notice, then the message, repeated twice while it is held
+  QCHECK(g_exit_code != 0);  // a failure ends nonzero, with its reason
+  QCHECK(g_exit_reason == "data_step_failed");
+  QCHECK(g_shown.size() == 3);  // the download notice, the message, and the message again after the first hold
   QCHECK(g_shown[0] == nevr_quest::data::kDownloadNotice);
   QCHECK(g_shown[1].find(rig.options.fetch_root_override + "/_data") != std::string::npos);  // the path
   QCHECK(g_shown[1].find(kBuild) != std::string::npos);                                       // the build
   QCHECK(g_shown[1].find("start the game again") != std::string::npos);                       // the action
-  QCHECK(g_shown[2] == g_shown[1] && g_shown[3] == g_shown[1]);
-  // notice, message, (sleep, show) twice, the last hold, then the process ends: nothing after the end.
-  const std::vector<std::string> want = {"show", "show", "sleep:7", "show", "sleep:7", "show", "sleep:7", "end"};
+  QCHECK(g_shown[2] == g_shown[1]);
+  // notice, message, hold, message again, hold, then the process ends: nothing after the end. The fetch's own backoff
+  // sleeps (slices of at most 250 ms) are not the hold.
+  const std::vector<std::string> want = {"show", "show", "sleep:7", "show", "sleep:7", "end"};
   std::vector<std::string> got;
   for (const std::string& e : g_log) {
-    if (e != "sleep:0") got.push_back(e);  // the fetch's own backoff
+    if (e == "sleep:7" || e == "show" || e == "end") got.push_back(e);
   }
   QCHECK(got == want);
 }
@@ -204,6 +226,7 @@ void AToastProbeShowsItsTextOnceAndIsConsumed() {
   Rig rig;
   const std::string media = nevr_quest::data_root::kMediaRoot;
   g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "toast probe text 1\nignored line\n");
   rig.BootRequest();
   QCHECK(g_shown.size() == 1 && g_shown[0] == "probe text 1");
@@ -217,6 +240,7 @@ void ABlockProbeHoldsTheThreadForItsSeconds() {
   Rig rig;
   const std::string media = nevr_quest::data_root::kMediaRoot;
   g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "block 3\n");
   rig.BootRequest();
   QCHECK(std::count(g_log.begin(), g_log.end(), std::string("sleep:1000")) == 3);
@@ -227,9 +251,72 @@ void ABlockProbeIsCapped() {
   Rig rig;
   const std::string media = nevr_quest::data_root::kMediaRoot;
   g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "block 99999\n");
   rig.BootRequest();
   QCHECK(std::count(g_log.begin(), g_log.end(), std::string("sleep:1000")) == 900);
+}
+
+void ADeniedGrantRunsNoDataStepAndEndsNonzeroWithTheHowToMessage() {
+  Rig rig;
+  const std::string media = nevr_quest::data_root::kMediaRoot;
+  g_present = {media, media + "/_data", media + "/" + kManifestRel};  // even with data there, nothing is read
+  rig.options.probe_enabled = true;
+  WriteFile(rig.options.probe_path, "toast must not run\n");
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_requests == 1);  // the game's own call still ran
+  QCHECK(rig.net.calls == 0);
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
+  QCHECK(!g_shown.empty());
+  for (const std::string& m : g_shown) {
+    QCHECK(m == nevr_quest::data::kNeedsStoragePermission);
+    QCHECK(m.find("Storage") != std::string::npos && m.find("Settings") != std::string::npos);
+  }
+  QCHECK(Exists(rig.options.probe_path));  // the probe did not run either
+  QCHECK(!Exists(rig.options.fetch_root_override + "/" + kManifestRel));
+}
+
+void TheProbeIsNotReadInAShippedBuild() {
+  Rig rig;
+  const std::string media = nevr_quest::data_root::kMediaRoot;
+  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  rig.options.probe_enabled = false;
+  WriteFile(rig.options.probe_path, "toast probe text 1\n");
+  rig.BootRequest();
+  QCHECK(g_shown.empty());
+  QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
+}
+
+void TheGamesDestroyRequestEndsTheDownload() {
+  {
+    Rig rig;
+    g_have_app = true;
+    rig.BootRequest();
+    QCHECK(rig.net.calls == 1 && rig.net.keep_going_seen);  // a live game keeps the download going
+  }
+  {
+    Rig rig;
+    g_have_app = true;
+    SetDestroyRequested(1);  // android_app::destroyRequested
+    rig.BootRequest();
+    QCHECK(rig.net.calls == 0);  // the fetch asks keep_going before every request and does not make one
+    QCHECK(g_ends == 1);
+    QCHECK(!Exists(rig.options.fetch_root_override + "/" + kManifestRel));
+  }
+}
+
+void TheRetryWaitUsesTheFetchsDefaultBackoffInSlices() {
+  Rig rig(false);
+  rig.BootRequest();
+  int slices = 0;
+  for (const std::string& e : g_log) {
+    if (e.rfind("sleep:", 0) == 0 && e != "sleep:7") {
+      const unsigned ms = static_cast<unsigned>(std::stoul(e.substr(6)));
+      QCHECK(ms >= 1 && ms <= 250);  // a cancel can end the wait within a slice
+      ++slices;
+    }
+  }
+  QCHECK(slices >= 8);  // the first backoff is 2 s
 }
 
 }  // namespace
@@ -242,6 +329,10 @@ int main() {
   AToastProbeShowsItsTextOnceAndIsConsumed();
   ABlockProbeHoldsTheThreadForItsSeconds();
   ABlockProbeIsCapped();
+  ADeniedGrantRunsNoDataStepAndEndsNonzeroWithTheHowToMessage();
+  TheProbeIsNotReadInAShippedBuild();
+  TheGamesDestroyRequestEndsTheDownload();
+  TheRetryWaitUsesTheFetchsDefaultBackoffInSlices();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "data_wiring_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

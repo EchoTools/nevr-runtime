@@ -78,10 +78,18 @@ bool RunBounded(BeforeExitFn fn, unsigned budgetMs) noexcept {
   return done;
 }
 
-// Steps 1 and 2, after android_main returned. Reached only through g_after.
-void AfterReturn() noexcept {
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
-                      {{"action", "ending_process"}, {"exit_code", 0}});
+void RawExit(int code) noexcept { _exit(code); }
+std::atomic<ExitFn> g_exit{&RawExit};
+
+// Steps 1 and 2: the line and the bounded before-exit callback. `reason` is null on the ordinary return.
+void RunAfterReturn(int exitCode, const char* reason) noexcept {
+  if (reason == nullptr) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
+                        {{"action", "ending_process"}, {"exit_code", exitCode}});
+  } else {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
+                        {{"action", "ending_process"}, {"exit_code", exitCode}, {"reason", reason}});
+  }
   const BeforeExitFn callback = g_beforeExit.load(std::memory_order_acquire);
   if (callback == nullptr) return;
   const bool finished = RunBounded(callback, g_budgetMs.load(std::memory_order_relaxed));
@@ -90,6 +98,9 @@ void AfterReturn() noexcept {
                         {{"action", "before_exit_not_finished"}, {"budget_ms", g_budgetMs.load()}});
   }
 }
+
+// Steps 1 and 2, after android_main returned. Reached only through g_after.
+void AfterReturn() noexcept { RunAfterReturn(0, nullptr); }
 
 // android_main. The handler touches the game only through `original` and reaches the rest through pointers.
 void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app) noexcept {
@@ -111,6 +122,13 @@ sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept { return g_app.load(st
 void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memory_order_release); }
 
 void EndProcess() noexcept { _exit(0); }
+
+void EndWithExitCode(int exitCode, const char* reason) noexcept {
+  RunAfterReturn(exitCode, reason);
+  g_exit.load(std::memory_order_acquire)(exitCode);
+}
+
+void SetExitForTest(ExitFn fn) noexcept { g_exit.store(fn != nullptr ? fn : &RawExit, std::memory_order_release); }
 
 bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept {
   g_ender.store(ender, std::memory_order_release);
@@ -140,6 +158,7 @@ void ResetForTest() noexcept {
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);
   g_returned.store(0, std::memory_order_relaxed);
   g_app.store(nullptr, std::memory_order_relaxed);
+  g_exit.store(&RawExit, std::memory_order_relaxed);
 }
 
 Counts CurrentCounts() noexcept { return {g_returned.load(std::memory_order_relaxed)}; }

@@ -140,6 +140,31 @@ them measured in a headset:
 mechanism that renders in the headset; the progress display of option A needs one that updates (3, or 2 if a toast can be
 refreshed).
 
+## Behaviour of the data step as wired (#807)
+
+- **No grant, no data step.** The step runs after the boot permission wait, and only when the wait ended with Storage granted (or
+  already granted). A denial, a timeout, a missing check, or a request without a storage permission reads, fetches and replaces
+  nothing: the message says Echo VR needs the Storage permission and how to allow it (Settings, Echo VR under Apps, Storage), it
+  is held, and the process ends nonzero with reason `no_storage_grant`.
+- **Leftovers first, on both roots.** Before anything is decided, `RecoverReplaced` and then `CleanLeftovers` run on the media
+  root and on the legacy root, so a replace that crashed between its two renames is put back and its staging leftover removed
+  whichever root the decision then picks.
+- **The download notice** is shown after the space check, so a step that cannot download never announces one.
+- **Cancel and time.** The download ends when the game asks its activity to finish (`android_app::destroyRequested`), including
+  during the backoff wait. A transfer under 16 KiB/s for 120 s fails as a network failure and is retried from the part's size with
+  the fetch's default backoff.
+- **A failure ends the process nonzero** (exit code 1) after the `android_main_returned` line and the before-exit report; the
+  floor message is held ten seconds (two holds of five, with the message shown again between).
+- **The probe** (`nevr-data-probe`) is read only in a development build (`-dev.` in the version).
+
+### Toast fallback plan (measurement 1; written, not built)
+
+The toast is requested from the `android_main` thread, whose Looper is prepared but never run (target SDK 29, legacy TN path), so
+it may not draw. The sentinel log says `requested`, never `shown`: `Toast.show()` returning says nothing about the display. If
+measurement 1 finds no toast, the fallbacks in order are: (a) post the same `makeText(...).show()` to the main looper through a
+`Handler(Looper.getMainLooper())`, which the activity's own thread does run; (b) mechanisms 1 or 4 above; (c) mechanism 3, the
+game's own frames. Nothing of this is built until the measurement says it is needed.
+
 ## Measurements to run first, each with what would falsify the plan
 
 1. On the dev APK, from the sentinel on a headset: show a fixed string through each of the mechanisms 1 to 4 that is cheap to try,

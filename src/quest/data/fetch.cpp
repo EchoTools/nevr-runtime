@@ -280,6 +280,7 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
   }
   Emit(c, "data_fetch", {{"step", "start"}, {"resume_from", Num(have)}, {"total", Num(c.bytes)},
                          {"replacing", c.replacing ? "true" : "false"}});
+  if (c.before_download && have < c.bytes) c.before_download();
 
   bool verified = false;
   std::string last_why;
