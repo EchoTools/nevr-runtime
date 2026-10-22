@@ -13,6 +13,8 @@ import yaml
 
 REPO =pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO / ".github/workflows"
+# Every spelling of a vcpkg install: quoted or not, any path to the binary.
+INSTALL = re.compile(r"vcpkg\"?\s+install\b")
 
 
 class VcpkgPinTest(unittest.TestCase):
@@ -47,7 +49,7 @@ class VcpkgPinTest(unittest.TestCase):
 
     def test_the_justfile_and_the_workflows_pin_the_same_path(self):
         # Run 39433944012: the workflow pinned /usr/local/sbin:...:/bin and the justfile /usr/local/bin:/usr/bin, so
-        # `just verify` rebuilt all 13 mingw packages (about 19 minutes of a 33 minute Verify step).
+        # `just verify` rebuilt all 14 mingw packages (about 19 minutes of a 33 minute Verify step).
         pins = set()
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
             pins.update(re.findall(r"env PATH=(\S+) \\\n\s+\"\$HOME/\.vcpkg/vcpkg\" install", workflow.read_text()))
@@ -59,7 +61,7 @@ class VcpkgPinTest(unittest.TestCase):
         # (runs 38424698584 vs 38429980090: all 14 mingw ABIs differed, the 5 x64-linux ones matched).
         # The pin is the justfile's (_vcpkg-mingw), the one `just verify` installs under: one source, no copy.
         pinned = "env PATH=" + self.justfile_pin()
-        installing = [p for p in sorted(WORKFLOWS.glob("*.yml")) if '"$HOME/.vcpkg/vcpkg" install' in p.read_text()]
+        installing = [p for p in sorted(WORKFLOWS.glob("*.yml")) if INSTALL.search(p.read_text())]
         self.assertGreaterEqual(len(installing), 3, "expected build, vcpkg-cache and defender-scan to install")
         for workflow in installing:
             text = workflow.read_text()
@@ -72,8 +74,13 @@ class VcpkgPinTest(unittest.TestCase):
         # removes and rebuilds all 14 packages inside the Verify step. The image ships the pinned just.
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
             text = workflow.read_text()
-            if '"$HOME/.vcpkg/vcpkg" install' not in text:
+            if not INSTALL.search(text):
                 continue
+            for line in text.splitlines():
+                code = line.split("#", 1)[0]
+                self.assertIsNone(re.search(r"(?<![\w$])PATH=\S*\s+(?:\S+\s+)*just\b", code),
+                                  f"{workflow.name} runs just under its own PATH: {line.strip()}")
+                self.assertIsNone(re.search(r"\bexport\s+PATH=", code), f"{workflow.name} exports PATH: {line.strip()}")
             self.assertNotIn("GITHUB_PATH", text, f"{workflow.name} edits PATH for later steps")
             self.assertNotIn("extractions/setup-just", text, f"{workflow.name} installs just onto PATH")
         build = (WORKFLOWS / "build.yml").read_text()
