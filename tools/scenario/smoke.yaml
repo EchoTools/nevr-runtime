@@ -1,0 +1,15 @@
+# The three things every social scenario assumes, and nothing else. Run by the scheduled smoke
+# (tools/scenario/smoke.sh); it is the loud check that would have caught the 2026-10-03 regression
+# where launch-client.sh dropped -mp and the client never entered multiplayer.
+#   docs/design/2026-10-01-social-scenario-harness.md
+name: smoke
+description: the client reaches in game, the scenario control endpoint listens, and a fire drives the game
+steps:
+  - name: client reached in game (multiplayer entry)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)', timeout: 600}
+  - name: scenario control endpoint is listening
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: a fire drives the game on the next frame (refresh_friends posted)
+    fire: {action: refresh_friends}
+  - name: the fire reached the facade slot
+    expect_log: {pattern: 'slot=45 name=RefreshFriends call=', timeout: 130}

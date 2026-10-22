@@ -198,6 +198,29 @@ class LaunchClientTest(unittest.TestCase):
         self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
         self.assertEqual(self.deployed(), ORIGINAL)
 
+    def test_require_in_game_fails_when_the_client_only_logs_in(self):
+        # The default fake run reaches "to logged in" and stops; with --require-in-game the launcher
+        # must refuse that as never entering multiplayer, not report the one-assertion-short PASS.
+        result = self.run_script("--dll", str(self.dll), "--require-in-game")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached in game", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_require_in_game_passes_when_the_client_reaches_in_game(self):
+        env = dict(self.env, FAKE_LOG_TEXT='{"msg":"NetGame switching state (from logging in, to logged in)"}\\n'
+                                            '{"msg":"NetGame switching state (from ready for game, to in game)"}\\n')
+        result = self.run_script("--dll", str(self.dll), "--require-in-game", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS: client reached in game (multiplayer entry)", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_without_require_in_game_the_launcher_stays_at_logged_in(self):
+        # The player default must not change: without the flag a login-only run is still a PASS.
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS: client reached logged in", result.stdout)
+        self.assertNotIn("PASS: client reached in game", result.stdout)
+
     def run_until_login(self, log_text=None, *extra, timeout_flag=("--login-timeout", "45"), env_extra=None):
         env = dict(self.env, FAKE_WINE_SLEEP="3", NEVR_LOGIN_POLL_SECONDS="0.1")
         if log_text is not None:
