@@ -1,9 +1,11 @@
 #include "runtime/ext/plugin_loader.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -208,6 +210,10 @@ void RecordRefusal(const std::string& file) {
   g_refusals.Record(file);
 }
 
+// Set once LoadPlugins has shown its own notice. From then on a refusal made by a later load shows the notice
+// itself (once per run, the tracker caps it): nothing else would, because LoadPlugins is over.
+std::atomic<bool> g_noticeArmed{false};
+
 // The record (log line, manifest entry) is already written when this runs. One dialog per run, on its own thread
 // so boot never waits on a modal box; never on a server or a headless run.
 void ShowRefusalNoticeIfDue() {
@@ -228,18 +234,29 @@ void ShowRefusalNoticeIfDue() {
   if (thread != nullptr) CloseHandle(thread);
 }
 
+void ShowRefusalNoticeIfDue();
+
+// A load refused after LoadPlugins finished: record it, and tell the player now. A load refused inside a DllMain
+// (the loader lock is held) or while LoadPlugins still runs is shown by LoadPlugins's own notice instead.
+void RecordLateRefusal(const std::string& file) {
+  RecordRefusal(file);
+  if (g_noticeArmed.load() && !nevr_dll_load_hook::LoaderLockHeldByThisThread()) ShowRefusalNoticeIfDue();
+}
+
 // ---- loads a plugin makes after its init (ADR 0010 section 1) --------------------------------------------------
 //
 // DllLoadHook runs this predicate before every LoadLibrary* in the process. A path inside the plugins directory
 // has to pass the same check as a staged plugin (and so does everything it names). The loader's own staged loads
-// were checked before they were made and the OS resolves their imports without the hook, so a thread-local flag
-// marks them and they are not checked twice.
+// were checked before they were made and the OS resolves their imports without the hook, so the path of the load
+// in progress is kept per thread and that one path is not checked twice. A load the plugin itself makes from its
+// DllMain is another path and is checked.
 
-thread_local bool t_stagedLoad = false;
+thread_local std::wstring t_stagedPath;
 
 struct FilterState {
   std::mutex mutex;
   std::wstring dirLower;  // plugins directory, lowercase, backslashes, trailing backslash; empty: filter inactive
+  std::wstring appDir;    // the directory that holds the plugins directory (a relative path is tried against it), lowercase, trailing backslash
   std::string dirNarrow;  // the same directory as the loader spells it, for the dependency walk
   std::wstring dirFinal;  // the directory's final path (long names, no prefix, no reparse points), lowercase, trailing backslash
   // Verified files stay open (FILE_SHARE_READ only) for the life of the process: the bytes that were checked
@@ -330,26 +347,67 @@ bool FinalPathOf(const std::wstring& path, std::wstring* out) {
 void (*g_betweenResolveAndOpen)(const std::wstring& resolved) = nullptr;
 #endif
 
+// Whether `candidate` names a file in the plugins directory, and which one. False: it names nothing there.
+bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate, std::wstring* full) {
+  if (FinalPathOf(candidate, full)) {
+    return full->compare(0, f.dirFinal.size(), f.dirFinal) == 0 && full->size() > f.dirFinal.size();
+  }
+  if (candidate.compare(0, f.dirLower.size(), f.dirLower) == 0 && candidate.size() > f.dirLower.size()) {
+    *full = candidate;  // cannot be resolved (denied, say) but is spelled as a file in the directory: the open decides
+    return true;
+  }
+  return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
+}
+
 bool PluginLoadFilter(const wchar_t* lowerPath) {
-  if (t_stagedLoad || lowerPath == nullptr) return false;
+  if (lowerPath == nullptr) return false;
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
   if (f.dirLower.empty()) return false;
-  const std::wstring p = NormalizeWide(lowerPath);
-  // A bare name searches the usual places; if the plugins directory holds that name, it is the one at risk.
+  // LoadLibrary appends ".dll" to a name with no extension: the file it maps is the one to check.
+  const std::wstring p = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(lowerPath));
+  if (!t_stagedPath.empty() && p == t_stagedPath) return false;  // the loader's own load of a file it checked
+  const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
+  // Where the OS can find the name. A bare name searches the usual places; if the plugins directory holds that
+  // name, it is the one at risk. A relative path with a directory part is tried against the current directory and
+  // against the application directory, because which one the loader takes is not something this code can see.
   const bool bare = p.find_first_of(L"\\:") == std::wstring::npos;
-  const std::wstring candidate = bare ? f.dirLower + p : p;
-  std::wstring full;
-  if (FinalPathOf(candidate, &full)) {
-    if (full.compare(0, f.dirFinal.size(), f.dirFinal) != 0 || full.size() <= f.dirFinal.size()) return false;
-  } else if (!bare && p.compare(0, f.dirLower.size(), f.dirLower) == 0 && p.size() > f.dirLower.size()) {
-    full = p;  // cannot be resolved (denied, say) but is spelled as a file in the directory: the open below decides
+  const bool relative = !bare && p.compare(0, 1, L"\\") != 0 && p.compare(1, 1, L":") != 0;
+  std::vector<std::wstring> candidates;
+  if (bare) {
+    candidates.push_back(f.dirLower + p);
+  } else if (!relative) {
+    candidates.push_back(p);
   } else {
-    return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
+    wchar_t cwdBased[MAX_PATH * 4] = {};
+    const DWORD n = GetFullPathNameW(p.c_str(), static_cast<DWORD>(std::size(cwdBased)), cwdBased, nullptr);
+    if (n == 0 || n >= std::size(cwdBased) || f.appDir.empty()) {
+      // Cannot tell where this relative path leads: refuse (fail closed) rather than let it through unchecked.
+      const std::string name = NarrowName(p);
+      if (enforcing) {
+        if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.PLUGIN] refused a later load of %s: its relative path cannot be resolved to a file", name.c_str());
+        }
+        RecordLateRefusal(name);
+        return true;
+      }
+      return false;
+    }
+    candidates.push_back(NormalizeWide(cwdBased));
+    candidates.push_back(f.appDir + p);
   }
+  std::wstring full;
+  bool inDirectory = false;
+  for (const std::wstring& candidate : candidates) {
+    if (FileInPluginsDirectory(f, candidate, &full)) {
+      inDirectory = true;
+      break;
+    }
+  }
+  if (!inDirectory) return false;
   if (f.verified.count(full) != 0) return false;
 
-  const bool enforcing = nevr_plugin_trust::ActiveMode() == nevr_plugin_trust::Mode::SignedOnly;
   const std::string file = NarrowName(full);
 #ifdef NEVR_TEST_HOOKS
   if (g_betweenResolveAndOpen != nullptr) g_betweenResolveAndOpen(full);
@@ -365,7 +423,7 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
           "[NEVR.PLUGIN] refused a later load of %s: cannot open the file to check its signature: error %lu",
           file.c_str(), static_cast<unsigned long>(error));
     }
-    RecordRefusal(file);
+    RecordLateRefusal(file);
     return true;
   }
   auto entry = std::make_unique<FilterState::Verified>();
@@ -405,21 +463,34 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] refused a later load of %s: %s", file.c_str(), refusal.c_str());
   }
-  RecordRefusal(file);
+  RecordLateRefusal(file);
   return true;
 }
+
+bool g_filterRegistered = false;  // the hook's own Shutdown() clears every filter; a test that ran it forgets this
 
 // Registers the filter once. The plugins directory is the loader's spelling (a trailing backslash).
 void InstallPluginLoadFilter(const std::string& pluginDir) {
   FilterState& f = Filter();
-  static bool registered = false;
+  bool& registered = g_filterRegistered;
   {
     std::lock_guard<std::mutex> lock(f.mutex);
     f.dirNarrow = pluginDir;
-    std::wstring wide;
-    for (char c : pluginDir) wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+    // The directory is spelled in the ANSI code page; a byte above 0x7F is the code page's character, not the
+    // character with that number. An empty result leaves the filter inactive and says so.
+    const std::wstring wide = nevr_dll_load_hook::AnsiPathToLowerWide(pluginDir.c_str());
+    if (wide.empty() && !pluginDir.empty()) {
+      Log(EchoVR::LogLevel::Error,
+          "[NEVR.PLUGIN] the plugins directory %s cannot be converted from the ANSI code page: later loads are NOT checked",
+          pluginDir.c_str());
+    }
     f.dirLower = NormalizeWide(wide.c_str());
     if (!f.dirLower.empty() && f.dirLower.back() != L'\\') f.dirLower.push_back(L'\\');
+    f.appDir.clear();
+    if (!f.dirLower.empty()) {
+      const size_t last = f.dirLower.find_last_of(L'\\', f.dirLower.size() - 2);
+      if (last != std::wstring::npos) f.appDir = f.dirLower.substr(0, last + 1);
+    }
     f.dirFinal.clear();
     if (!f.dirLower.empty() && !FinalPathOf(f.dirLower, &f.dirFinal)) f.dirFinal = f.dirLower;
     if (!f.dirFinal.empty() && f.dirFinal.back() != L'\\') f.dirFinal.push_back(L'\\');
@@ -725,10 +796,12 @@ class PluginLoadRun {
    * The flags require an absolute path (we have one). If the OS rejects them we
    * log and fall back rather than failing to load — but we say so, because a
    * silent fallback would defeat the whole point. */
-  struct StagedLoadScope {  // this thread's loads are the loader's own, already checked (PluginLoadFilter)
-    StagedLoadScope() { t_stagedLoad = true; }
-    ~StagedLoadScope() { t_stagedLoad = false; }
-  } stagedScope;
+  struct StagedLoadScope {  // this path is the loader's own load of a file it checked (PluginLoadFilter)
+    explicit StagedLoadScope(const std::string& staged) {
+      t_stagedPath = nevr_plugin_tree::WithDefaultExtension(NormalizeWide(nevr_dll_load_hook::AnsiPathToLowerWide(staged.c_str()).c_str()));
+    }
+    ~StagedLoadScope() { t_stagedPath.clear(); }
+  } stagedScope(path);
   HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -1064,6 +1137,7 @@ void LoadPlugins(PluginPhase phase) {
 
   PublishPluginReport(run->TakeReport());
   ShowRefusalNoticeIfDue();  // after the record; once per run, client with graphics only
+  g_noticeArmed.store(true);  // a refusal from here on shows the notice itself (RecordLateRefusal)
 }
 
 void UnloadPlugins() {
@@ -1142,10 +1216,14 @@ void TestHook_InstallPluginLoadFilter(const std::string& pluginDir) { InstallPlu
 
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved)) { g_betweenResolveAndOpen = hook; }
 
+void TestHook_ForgetLoadFilterRegistration() { g_filterRegistered = false; }
+
 void TestHook_ResetPluginLoadFilter() {
   FilterState& f = Filter();
   std::lock_guard<std::mutex> lock(f.mutex);
+  g_noticeArmed.store(false);
   f.dirLower.clear();
+  f.appDir.clear();
   f.dirFinal.clear();
   f.dirNarrow.clear();
   f.verified.clear();  // closes the held handles, so a test can delete or rewrite its files

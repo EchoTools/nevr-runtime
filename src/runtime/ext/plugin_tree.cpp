@@ -32,6 +32,40 @@ TreeVerdict Refuse(const std::string& file, const std::string& via, Reason reaso
 }
 }  // namespace
 
+namespace {
+template <typename String>
+String WithDefaultExtensionOf(const String& name) {
+  using Char = typename String::value_type;
+  const size_t slash = name.find_last_of(static_cast<Char>('\\'));
+  const size_t start = slash == String::npos ? 0 : slash + 1;
+  if (name.find(static_cast<Char>('.'), start) != String::npos) return name;
+  String out = name;
+  for (const char* c = ".dll"; *c != '\0'; ++c) out.push_back(static_cast<Char>(*c));
+  return out;
+}
+
+std::string Lower(std::string s) {
+  for (char& c : s) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+  }
+  return s;
+}
+}  // namespace
+
+std::string WithDefaultExtension(const std::string& name) { return WithDefaultExtensionOf(name); }
+std::wstring WithDefaultExtension(const std::wstring& name) { return WithDefaultExtensionOf(name); }
+
+bool SuppliedByTheSystem(const std::string& file) {
+  const std::string lower = Lower(file);
+  if (lower.compare(0, 7, "api-ms-") == 0 || lower.compare(0, 7, "ext-ms-") == 0) return true;  // API sets: no file
+  if (GetModuleHandleA(lower.c_str()) != nullptr) return true;
+  char system[MAX_PATH] = {};
+  const UINT n = GetSystemDirectoryA(system, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return false;
+  const DWORD attributes = GetFileAttributesA((std::string(system) + "\\" + lower).c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
 HeldFiles::~HeldFiles() {
   for (HANDLE h : handles_) CloseHandle(h);
 }
@@ -66,17 +100,24 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
     const std::pair<const std::vector<std::string>*, const char*> kinds[] = {
         {&deps.imports, "import"}, {&deps.delayImports, "delay-load"}, {&deps.forwarders, "forwarder"}};
     for (const auto& kind : kinds) {
-      for (const std::string& name : *kind.first) {
+      for (const std::string& written : *kind.first) {
         // A name with a path in it is resolved relative to something this walk cannot know, so it cannot be checked.
-        if (name.find_first_of("\\/:") != std::string::npos) {
-          return Refuse(name, kind.second, Reason::Unreadable, "a dependency named by a path cannot be checked");
+        if (written.find_first_of("\\/:") != std::string::npos) {
+          return Refuse(written, kind.second, Reason::Unreadable, "a dependency named by a path cannot be checked");
         }
-        if (!seen.insert(name).second) continue;
+        // The loader appends ".dll" to a name with no extension; the file it maps is the one to check.
+        const std::string name = WithDefaultExtension(written);
+        if (!seen.insert(Lower(name)).second) continue;
         HANDLE h = CreateFileA((pluginDir + name).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {
           const DWORD code = GetLastError();
-          if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) continue;  // the OS's, or absent
+          if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
+            if (SuppliedByTheSystem(name)) continue;
+            return Refuse(name, kind.second, Reason::Unreadable,
+                          "not in the plugins directory and not supplied by the system: a file put there before "
+                          "the load would be mapped unchecked");
+          }
           return Refuse(name, kind.second, Reason::Unreadable,
                         "cannot open the file to check it: error " + std::to_string(code));
         }

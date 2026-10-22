@@ -588,9 +588,155 @@ TEST_F(PluginDependencyGateTest, LateLoadOfAnUnsignedFileInThePluginsDirectoryIs
   TestHook_InstallPluginLoadFilter(pluginsDir_);
   EXPECT_TRUE(Blocked("late_unsigned.dll"));
   EXPECT_TRUE(TestLogContains("refused a later load of late_unsigned.dll: unsigned"));
-  TestHook_ShowRefusalNoticeIfDue();
-  ASSERT_EQ(g_refusalDialogs.size(), 1u);
-  EXPECT_NE(g_refusalDialogs[0].find("late_unsigned.dll"), std::string::npos);
+}
+
+// After LoadPlugins has finished nothing else would tell the player: the refusal shows the notice itself, once.
+// The test never calls the dialog hook; production does not either.
+TEST_F(PluginDependencyGateTest, ALateRefusalAfterLoadPluginsShowsTheNoticeItself) {
+  Plan("late_notice_signed.dll", "signed");
+  LoadPlugins();  // loads it, installs the filter, shows its own (empty) notice
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  ASSERT_TRUE(g_refusalDialogs.empty());
+  Plan("late_notice.dll", "unsigned");
+  g_testPluginLoadPlan.pop_back();  // copied into plugins/, never planned to load
+  EXPECT_TRUE(Blocked("late_notice.dll"));
+  ASSERT_EQ(g_refusalDialogs.size(), 1u) << "the player was not told";
+  EXPECT_NE(g_refusalDialogs[0].find("late_notice.dll"), std::string::npos);
+  Plan("late_notice_two.dll", "unsigned");
+  g_testPluginLoadPlan.pop_back();
+  EXPECT_TRUE(Blocked("late_notice_two.dll"));
+  EXPECT_EQ(g_refusalDialogs.size(), 1u) << "one dialog per run";
+}
+
+// A refusal made while LoadPlugins still runs is shown by LoadPlugins's own notice, not before.
+TEST_F(PluginDependencyGateTest, ARefusalBeforeLoadPluginsEndsWaitsForItsNotice) {
+  Plan("early_notice.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("early_notice.dll"));
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+// LoadLibrary appends ".dll" to a name with no extension, so a late load of "<plugins>\late_noext" maps
+// late_noext.dll.
+TEST_F(PluginDependencyGateTest, ALateLoadNamedWithoutAnExtensionIsRefused) {
+  Plan("late_noext.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_noext"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_noext.dll: unsigned"));
+}
+
+TEST_F(PluginDependencyGateTest, ALateLoadByBareNameWithoutAnExtensionIsRefused) {
+  Plan("late_bare_noext.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare_noext", nullptr));
+}
+
+// A relative path with a directory part: the loader finds it from the application directory even when the
+// current directory is somewhere else.
+class CurrentDirectoryScope {
+ public:
+  explicit CurrentDirectoryScope(const wchar_t* to) {
+    wchar_t buf[MAX_PATH * 2] = {};
+    const DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(std::size(buf)), buf);
+    if (n != 0 && n < std::size(buf)) saved_.assign(buf, n);
+    SetCurrentDirectoryW(to);
+  }
+  ~CurrentDirectoryScope() {
+    if (!saved_.empty()) SetCurrentDirectoryW(saved_.c_str());
+  }
+
+ private:
+  std::wstring saved_;
+};
+
+TEST_F(PluginDependencyGateTest, ARelativePathIntoThePluginsDirectoryIsRefusedWhateverTheCurrentDirectory) {
+  Plan("late_rel.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  wchar_t temp[MAX_PATH] = {};
+  ASSERT_GT(GetTempPathW(MAX_PATH, temp), 0u);
+  CurrentDirectoryScope cwd(temp);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"plugins\\late_rel.dll", nullptr));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_rel.dll: unsigned"));
+}
+
+TEST_F(PluginDependencyGateTest, ARelativePathThatCannotBeResolvedIsRefusedNotLetThrough) {
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring tooLong;
+  for (int i = 0; i < 700; ++i) tooLong += L"a\\";
+  tooLong += L"x.dll";
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(tooLong.c_str(), nullptr));
+  EXPECT_TRUE(TestLogContains("its relative path cannot be resolved"));
+}
+
+TEST_F(PluginDependencyGateTest, ADevBuildLetsAnUnresolvableRelativePathThrough) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring tooLong;
+  for (int i = 0; i < 700; ++i) tooLong += L"a\\";
+  tooLong += L"x.dll";
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(tooLong.c_str(), nullptr));
+}
+
+// The game under a path with a character the ANSI code page spells as a byte above 0x7F. The loader's directory is
+// an ANSI string; widening it byte by byte makes a directory no path ever starts with, and the filter checked
+// nothing.
+TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
+  std::wstring wideDir(pluginsDir_.begin(), pluginsDir_.end());
+  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size()) + L"nevr_t\u0161\\";
+  const std::wstring plugins = root + L"plugins\\";
+  CreateDirectoryW(root.c_str(), nullptr);
+  ASSERT_TRUE(CreateDirectoryW(plugins.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS) << GetLastError();
+  BOOL usedDefault = FALSE;
+  char narrow[MAX_PATH] = {};
+  ASSERT_GT(WideCharToMultiByte(CP_ACP, 0, plugins.c_str(), -1, narrow, MAX_PATH, nullptr, &usedDefault), 0);
+  ASSERT_FALSE(usedDefault) << "the ANSI code page cannot spell U+0161: this form is not under test";
+  bool hasHighByte = false;
+  for (const char* c = narrow; *c != '\0'; ++c) hasHighByte = hasHighByte || static_cast<unsigned char>(*c) > 0x7F;
+  ASSERT_TRUE(hasHighByte) << "the spelled path has no byte above 0x7F: this form is not under test";
+  const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe.unsigned"].get<std::string>();
+  const std::wstring target = plugins + L"late_na.dll";
+  ASSERT_TRUE(CopyFileW(std::wstring(source.begin(), source.end()).c_str(), target.c_str(), FALSE)) << GetLastError();
+  TestHook_InstallPluginLoadFilter(narrow);
+  std::wstring lowered = target;
+  for (wchar_t& c : lowered) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  const bool blocked = nevr_dll_load_hook::IsLoadBlocked(lowered.c_str(), nullptr);
+  // The ANSI hooks hand the filter the path through the code page: the same wide spelling.
+  const std::wstring viaHook = nevr_dll_load_hook::AnsiPathToLowerWide(narrow);
+  TestHook_ResetPluginLoadFilter();
+  DeleteFileW(target.c_str());
+  RemoveDirectoryW(plugins.c_str());
+  RemoveDirectoryW(root.c_str());
+  EXPECT_TRUE(blocked);
+  std::wstring expected = plugins;
+  for (wchar_t& c : expected) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  EXPECT_EQ(viaHook, expected);
+}
+
+// A plugin's own DllMain loading another file runs inside the loader's own load of that plugin, with the loader
+// lock held. The file it loads is not the one the loader checked.
+TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
+  Plan("dllmain_victim.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  PlanTree("dllmain_load");
+  const std::wstring victim = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_victim.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", victim.c_str()));
+  // The plugin's LoadLibraryW reaches the filter only through the real hooks.
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const int hooked = nevr_dll_load_hook::Install();
+  if (hooked == 4) LoadPlugins();
+  nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+  MH_Uninitialize();
+  nevr_hook_guard::ResetForTest();
+  TestHook_ForgetLoadFilterRegistration();
+  ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+  EXPECT_EQ(GetModuleHandleA("dllmain_victim.dll"), nullptr) << "a file loaded from a DllMain was mapped unchecked";
+  ASSERT_EQ(g_refusalDialogs.size(), 1u) << "the refusal reached no notice";
+  EXPECT_NE(g_refusalDialogs[0].find("dllmain_victim.dll"), std::string::npos);
 }
 
 // The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified

@@ -127,6 +127,16 @@ def build_dependency_dlls(work):
     build_c(work, "toplevel", '__declspec(dllimport) int Mid(void);\n'
             'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)b;(void)c;return Mid();}\n', [str(mid)])
     build_c(work, "forwarder", stub, defs="EXPORTS\n  Fwd = dep.Dep\n")
+    # A plugin that loads another library from its own DllMain: the file named by NEVR_TEST_DLLMAIN_LOAD. It exports
+    # no plugin entry points; what is under test is the load it makes while the loader still holds the loader lock.
+    build_c(work, "dllmain_loader",
+            '#include <stddef.h>\n'
+            '__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableW(const wchar_t*, wchar_t*, unsigned long);\n'
+            '__declspec(dllimport) void* __stdcall LoadLibraryW(const wchar_t*);\n'
+            'int __stdcall DllMain(void*a,unsigned long b,void*c){(void)a;(void)c;\n'
+            '  if(b==1){wchar_t path[520];unsigned long n=GetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD",path,520);\n'
+            '    if(n>0&&n<520)LoadLibraryW(path);}\n'
+            '  return 1;}\n', ["-lkernel32"])
     # A delay-load descriptor (data directory 13) written by hand: this linker has no delay-load support. The
     # descriptor is the attribute word (1: RVAs, not addresses), the DLL name RVA and six zero words; a zero
     # descriptor ends the table.
@@ -234,6 +244,14 @@ def build_corpus(work):
     data = bytearray(importer)
     assert data.count(b"dep.dll\0") == 1
     put("import_named_by_path", data.replace(b"dep.dll\0", b"a\\b.dll\0"), True)
+
+    # A dependency named without an extension: the loader appends ".dll", so "dep" is dep.dll. A name of the same
+    # length keeps every table where it is ("dep.dll" and "dep" plus padding are both eight bytes with the NUL).
+    data = bytearray(importer)
+    put("import_without_extension", data.replace(b"dep.dll\0", b"dep\0\0\0\0\0"), True)
+    # The same, naming a library the system supplies: hid.dll is in System32 and is not loaded by the test process.
+    data = bytearray(importer)
+    put("import_system_without_extension", data.replace(b"dep.dll\0", b"hid\0\0\0\0\0"), True)
     return corpus
 
 
@@ -560,7 +578,8 @@ def main():
          "dep.dll", "import", "Unsigned")
     tree("import_wrong_signer", "importer.dll", {"importer.dll": ("importer", good), "dep.dll": ("dep", wrong_eku)},
          "dep.dll", "import", "MissingEku")
-    tree("import_absent", "importer.dll", {"importer.dll": ("importer", good)})       # dep.dll is the OS's to find
+    # dep.dll is in the directory of no one and is not the system's: a file put there before the load would map unchecked.
+    tree("import_absent", "importer.dll", {"importer.dll": ("importer", good)}, "dep.dll", "import", "Unreadable")
     tree("delay_ok", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", good)})
     tree("delay_unsigned", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", None)},
          "dep.dll", "delay-load", "Unsigned")
@@ -573,6 +592,7 @@ def main():
          {"toplevel.dll": ("toplevel", good), "mid.dll": ("mid", good), "dep.dll": ("dep", None)},
          "dep.dll", "import", "Unsigned")
     tree("malformed", "broken.dll", {"broken.dll": ("broken", good)}, "the plugin", "", "MalformedSignature")
+    tree("dllmain_load", "dllmain_loader.dll", {"dllmain_loader.dll": ("dllmain_loader", good)})
 
 
     # The 64-file cap: 64 signed dependencies pass, a 65th is refused (and the walk does not fail open).
@@ -595,6 +615,15 @@ def main():
     tree("import_named_by_path", "corpus_import_named_by_path.dll",
          {"corpus_import_named_by_path.dll": ("corpus_import_named_by_path", good)},
          "a\\b.dll", "import", "Unreadable")
+
+    tree("import_without_extension", "corpus_import_without_extension.dll",
+         {"corpus_import_without_extension.dll": ("corpus_import_without_extension", good), "dep.dll": ("dep", None)},
+         "dep.dll", "import", "Unsigned")
+    tree("import_without_extension_absent", "corpus_import_without_extension.dll",
+         {"corpus_import_without_extension.dll": ("corpus_import_without_extension", good)},
+         "dep.dll", "import", "Unreadable")
+    tree("import_system_without_extension", "corpus_import_system_without_extension.dll",
+         {"corpus_import_system_without_extension.dll": ("corpus_import_system_without_extension", good)})
 
     manifest = {
         "now": now,

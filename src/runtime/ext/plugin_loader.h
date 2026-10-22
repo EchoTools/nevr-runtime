@@ -93,6 +93,7 @@ void TestHook_ShowRefusalNoticeIfDue();
 void TestHook_RecordRefusal(const std::string& file);
 void TestHook_InstallPluginLoadFilter(const std::string& pluginDir);
 void TestHook_ResetPluginLoadFilter();
+void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
 // Called by the filter between resolving a late load's path and opening it (null clears it).
 void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 #endif

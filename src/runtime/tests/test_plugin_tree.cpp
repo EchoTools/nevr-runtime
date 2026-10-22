@@ -152,9 +152,45 @@ TEST_F(PluginTree, SignedImportIsAccepted) {
 TEST_F(PluginTree, UnsignedImportIsRefused) { ExpectRefused("import_unsigned"); }
 TEST_F(PluginTree, ImportSignedByAnotherSignerIsRefused) { ExpectRefused("import_wrong_signer"); }
 
-TEST_F(PluginTree, ImportWithNoFileInTheDirectoryIsTheOperatingSystemsToFind) {
-  const TreeVerdict v = Walk("import_absent");
+// A name with no file in the plugins directory is the OS's only when the OS can supply it. Anything else is a name
+// a file could be put under before the load, and it would map unchecked.
+TEST_F(PluginTree, ImportWithNoFileInTheDirectoryAndNoneFromTheSystemIsRefused) {
+  ExpectRefused("import_absent");
+  EXPECT_NE(Walk("import_absent").verdict.detail.find("not supplied by the system"), std::string::npos);
+}
+
+// The loader appends ".dll" to a name with no extension, so "dep" maps dep.dll.
+TEST_F(PluginTree, ImportNamedWithoutAnExtensionIsCheckedAsTheDllFile) { ExpectRefused("import_without_extension"); }
+
+TEST_F(PluginTree, AbsentImportNamedWithoutAnExtensionIsRefusedUnderItsDllName) {
+  ExpectRefused("import_without_extension_absent");
+}
+
+TEST_F(PluginTree, ImportOfASystemLibraryNeedsNoFileInTheDirectory) {
+  char system[MAX_PATH] = {};
+  ASSERT_GT(GetSystemDirectoryA(system, MAX_PATH), 0u);
+  ASSERT_NE(GetFileAttributesA((std::string(system) + "\\hid.dll").c_str()), INVALID_FILE_ATTRIBUTES)
+      << "System32 has no hid.dll: the fixture's system library is not under test";
+  ASSERT_EQ(GetModuleHandleA("hid.dll"), nullptr) << "hid.dll is loaded: the System32 branch is not under test";
+  const TreeVerdict v = Walk("import_system_without_extension");
   EXPECT_TRUE(v.accepted) << v.Describe();
+}
+
+TEST(PluginTreeNames, TheDefaultExtensionIsAppendedToANameWithNone) {
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::string("dep")), "dep.dll");
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::string("dep.dll")), "dep.dll");
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::string("dep.")), "dep.");  // a trailing dot is an extension
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::string("a.b\\dep")), "a.b\\dep.dll");  // the dot is in a directory
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::wstring(L"c:\\plugins\\late")), L"c:\\plugins\\late.dll");
+  EXPECT_EQ(nevr_plugin_tree::WithDefaultExtension(std::wstring(L"late.bin")), L"late.bin");
+}
+
+TEST(PluginTreeNames, OnlyWhatTheSystemSuppliesNeedsNoFileInThePluginsDirectory) {
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem("api-ms-win-core-synch-l1-2-0.dll"));
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem("EXT-MS-WIN-FOO-L1-1-0.dll"));
+  EXPECT_TRUE(nevr_plugin_tree::SuppliedByTheSystem("KERNEL32.DLL"));  // loaded, and in System32
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedByTheSystem("nevr-no-such-library.dll"));
+  EXPECT_FALSE(nevr_plugin_tree::SuppliedByTheSystem("dep.dll"));
 }
 
 TEST_F(PluginTree, SignedDelayLoadIsAccepted) {
