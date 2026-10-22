@@ -45,8 +45,8 @@ std::string BuildFloorMessage(const FloorInfo& info);
 inline constexpr const char* kDownloadNotice =
     "Downloading Echo VR game data, about 900 MB, this can take a few minutes.";
 
-// Shown when the storage permission was not granted and the media root could not be written either: the legacy root,
-// which needs the permission, is then the only place the data could be.
+// Shown when the storage permission was not granted and the media root could not be written either. Without the grant
+// the legacy root cannot be looked at: data the player already has there is only usable once Storage is allowed.
 inline constexpr const char* kNeedsStoragePermission =
     "Echo VR needs the Storage permission to set up its game data. Open the headset's Settings, find Echo VR under "
     "Apps, allow Storage (Files and media), then start the game again.";
@@ -57,6 +57,9 @@ struct StepConfig {
   // (Android/media/<package>, the app's own directory) needs none. False: the legacy root is neither recovered nor
   // looked at, the decision is made on the media root alone, and one `data_legacy_skipped` event says so.
   bool legacy_root_readable = true;
+  // Shown instead of the step's own message when the root cannot be written (FetchStatus::kBadRoot); empty: the step's
+  // own. The caller that has no Storage grant sets it, so the player reads one message, held once.
+  std::string bad_root_message;
   // The roots whose leftovers of an interrupted install are put right before anything is decided (RecoverReplaced,
   // then CleanLeftovers, on each). Empty: every data-root candidate (data_root.h) the config may read.
   std::vector<std::string> recovery_roots;

@@ -58,6 +58,13 @@ bool DirectoryExists(const char* path) noexcept {
   return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+bool PathExists(const char* path) noexcept {
+  struct stat st;
+  if (::stat(path, &st) != 0) return false;
+  if (S_ISDIR(st.st_mode)) return true;
+  return S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
 bool RegisterCounters() noexcept {
   struct Entry {
     const char* name;

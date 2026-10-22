@@ -98,7 +98,7 @@ build, what to do) is not optional.
   headroom, the same 2.2 GiB figure `tools/quest-install.sh` uses, doubled in the mismatch case where the old `_data` stays. Not
   enough: no download, the floor message names the free and needed MiB.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
-  bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
+  bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
   with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
@@ -147,9 +147,10 @@ refreshed).
   permission) the legacy root (`/storage/emulated/0/readyatdawn`) is neither recovered nor read, one `data_legacy_skipped` line
   (`reason=no_storage_permission`) says so, and the decision is made on the media root alone
   (`/sdcard/Android/media/com.readyatdawn.r15/files`): data there is used, none there is fetched there. The "needs Storage"
-  message (Settings, Echo VR under Apps, Storage) is shown only when the media root cannot be written and there is no grant,
-  that is, when the legacy root is the only place the data could be; the message is held and the process ends nonzero with
-  reason `no_storage_grant`.
+  message (Settings, Echo VR under Apps, Storage) replaces the step's own message, so it is shown and held once, only when the
+  media root cannot be written and there is no grant; the process ends nonzero with reason `no_storage_grant`. A fetch always
+  goes to the media root, so the advice helps only a player whose data already sits in the legacy root; without the grant that
+  cannot be told, and with the grant the step's own message is shown.
 - **Leftovers first, on the roots the step may use.** Before anything is decided, `RecoverReplaced` and then `CleanLeftovers`
   run on the media root and, with the grant, on the legacy root, so a replace that crashed between its two renames is put back
   and its staging leftover removed whichever root the decision then picks.
@@ -158,7 +159,7 @@ refreshed).
 - **Cancel is the end of the process.** The step runs on android_main's thread, the only thread that reads the glue's destroy
   command (`android_app::destroyRequested`, +0x64, written by android_main's own looper poll), so nothing can see it while the
   step blocks. A player who quits mid-download has the process ended by the system; the marked `_data.zip.part` stays and the
-  next launch resumes from its size (measurement 5 measures it). A transfer under 16 KiB/s for 120 s fails as a network failure
+  next launch resumes from its size (measurement 6 measures it). A transfer under 16 KiB/s for 120 s fails as a network failure
   and is retried from the part's size with the fetch's default backoff.
 - **Plan, decided by measurements 1 and 2 (not built).** If a headset shows that blocking android_main shows no toast, or ends in
   "not responding", the step moves to a worker thread while android_main pumps its looper (polls the glue's source and sleeps
@@ -188,6 +189,7 @@ game's own frames. Nothing of this is built until the measurement says it is nee
    before the game runs.
 4. Falsifier for the cause above: the `adb shell ls` of `/sdcard/readyatdawn` and `/sdcard/Android/media/com.readyatdawn.r15/files` on an affected headset.
 5. Uninstall the store package, then `adb shell ls /sdcard/Android/media/com.readyatdawn.r15/files`. Falsifier: the folder is gone, in which case the installer's data does not survive an uninstall either and the first-run fetch is needed on every reinstall.
+6. Start the download on a headset, quit the game mid-download (Home), relaunch. Falsifier: the log does not show a ranged request from the `.part`'s size, or the `.part` is gone, in which case a quit costs the whole download.
 
 ## Tests
 

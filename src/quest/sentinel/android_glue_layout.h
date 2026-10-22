@@ -22,14 +22,6 @@ inline constexpr std::size_t kActivityVm = 0x8;             // ANativeActivity::
 inline constexpr std::size_t kActivityEnv = 0x10;           // ANativeActivity::env (JNIEnv*)
 inline constexpr std::size_t kActivityClazz = 0x18;         // ANativeActivity::clazz (jobject)
 
-// The int stored `offset` bytes into `base`; 0 when `base` is null.
-inline int ReadInt(const void* base, std::size_t offset) noexcept {
-  if (base == nullptr) return 0;
-  int value = 0;
-  std::memcpy(&value, static_cast<const unsigned char*>(base) + offset, sizeof(value));
-  return value;
-}
-
 // The pointer stored `offset` bytes into `base`; null when `base` is null.
 inline void* ReadPointer(const void* base, std::size_t offset) noexcept {
   if (base == nullptr) return nullptr;

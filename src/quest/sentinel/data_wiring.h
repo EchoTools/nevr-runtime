@@ -61,7 +61,7 @@ using AppFn = void* (*)() noexcept;
 struct Options {
   ShowFn show = nullptr;                       // required for a visible message; null: the message is only logged
   AppFn app = nullptr;                         // the android_app; null: process_end::CurrentApp
-  data_root::ExistsFn exists = nullptr;        // null: obb_skip::DirectoryExists
+  data_root::ExistsFn exists = nullptr;        // null: obb_skip::PathExists (directories and non-empty files)
   data::Transport* transport = nullptr;        // null: a CurlTransport with the pinned roots (data_host_roots.h)
   EnderFn ender = nullptr;                     // null: process_end::EndWithExitCode
   SleepFn sleep = nullptr;                     // null: nanosleep

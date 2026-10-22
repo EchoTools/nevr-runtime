@@ -23,8 +23,9 @@ storage permission is not granted yet, so the package manifest cannot be read); 
 One GOT hook on libr15's `android_main` slot (`LibR15AndroidMain`, build-ID pinned like the others). The handler calls the original;
 when it returns, for any reason:
 
-1. logs `{"event":"android_main_returned","action":"ending_process","exit_code":0}`. The line also carries a `reason` when the
-   process is ended by `EndWithExitCode` (a failed first-run data step), which can run when `android_main` has not returned;
+1. logs `{"event":"android_main_returned","action":"ending_process","exit_code":0}`. When `EndWithExitCode` ends the process (a
+   failed first-run data step, which can run when `android_main` has not returned) the line is
+   `{"event":"android_main_returned","action":"ending_process","exit_code":1,"reason":"<reason>"}`;
 2. runs the before-exit callback on a helper thread and waits for it at most 500 ms. The integration registers
    `ReportAndroidMainReturned` there: it reports the self-check `android_main_returned` (its Info line, `self_check` in the
    sentinel's log, is the record) and flushes the unit once. The remote string is **best effort**, and the ADR does not promise it:

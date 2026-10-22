@@ -83,6 +83,14 @@ class TheStepOrder(unittest.TestCase):
         self.assertIn('EndFailed("no_storage_grant")', body[gate:])
         self.assertNotIn("StopWithoutGrant", re.sub(r"//[^\n]*", "", read("data_wiring.cpp")))
 
+    def test_the_production_exists_check_accepts_the_manifest_file(self):
+        body = self.body()
+        self.assertIn("Opts().exists != nullptr ? Opts().exists : &obb_skip::PathExists;", body)
+        path = extract_braced_function(read("obb_skip_hook.cpp"), "bool PathExists(const char* path) noexcept {")
+        self.assertIn("S_ISREG(st.st_mode)", path)
+        self.assertIn("st.st_size > 0", path)
+        self.assertIn("S_ISDIR(st.st_mode)", path)
+
     def test_the_probe_runs_only_in_a_development_build_and_after_the_gate(self):
         body = self.body()
         self.assertRegex(body, r"if \(granted && Opts\(\)\.probe_enabled\) RunProbe\(\);")

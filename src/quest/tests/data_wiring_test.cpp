@@ -12,6 +12,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <vector>
 
@@ -298,6 +299,16 @@ void ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero() 
   QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
   QCHECK(!g_shown.empty() && g_shown.back() == nevr_quest::data::kNeedsStoragePermission);
   QCHECK(g_shown.back().find("Storage") != std::string::npos && g_shown.back().find("Settings") != std::string::npos);
+  // One message, held once (shown, then again after the first hold): not the step's own and then this one.
+  int storage = 0;
+  for (const std::string& m : g_shown) {
+    QCHECK(m == nevr_quest::data::kNeedsStoragePermission || m == nevr_quest::data::kDownloadNotice);
+    storage += m == nevr_quest::data::kNeedsStoragePermission ? 1 : 0;
+  }
+  QCHECK(storage == 2);
+  int holds = 0;
+  for (const std::string& e : g_log) holds += e == "sleep:7" ? 1 : 0;
+  QCHECK(holds == 2);
 }
 
 void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
@@ -307,6 +318,60 @@ void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
   rig.BootRequest();  // granted
   QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed");
   for (const std::string& m : g_shown) QCHECK(m != nevr_quest::data::kNeedsStoragePermission);
+}
+
+// ---- the production exists check (obb_skip::PathExists), over two launches ----
+
+std::string g_map_root;  // where the media root lives in this test
+
+// The data roots are fixed absolute paths: this rewrites the media root's prefix to a scratch directory and then asks
+// the production check about the real file. Nothing else is stood in for.
+bool MappedPathExists(const char* path) noexcept {
+  const std::string media = nevr_quest::data_root::kMediaRoot;
+  const std::string p = path;
+  if (p.compare(0, media.size(), media) != 0) return false;  // the legacy root: nothing there
+  return nevr_quest::obb_skip::PathExists((g_map_root + p.substr(media.size())).c_str());
+}
+
+void ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly() {
+  Scratch scratch;
+  const std::string dir = scratch.Path("d");
+  ::mkdir(dir.c_str(), 0755);
+  WriteFile(scratch.Path("full"), "manifest");
+  WriteFile(scratch.Path("empty"), "");
+  QCHECK(nevr_quest::obb_skip::PathExists(dir.c_str()));
+  QCHECK(nevr_quest::obb_skip::PathExists(scratch.Path("full").c_str()));  // the manifest is a regular file
+  QCHECK(!nevr_quest::obb_skip::PathExists(scratch.Path("empty").c_str()));
+  QCHECK(!nevr_quest::obb_skip::PathExists(scratch.Path("missing").c_str()));
+  QCHECK(!nevr_quest::obb_skip::DirectoryExists(scratch.Path("full").c_str()));  // why the old default failed
+}
+
+void ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain() {
+  Rig first;
+  g_map_root = first.options.fetch_root_override;
+  first.options.exists = &MappedPathExists;
+  first.BootRequest();
+  QCHECK(first.net.calls == 1);
+  QCHECK(Exists(g_map_root + "/" + kManifestRel));
+  QCHECK(g_ends == 0);
+
+  // Launch 2 and 3: the data is there as the real files the fetch wrote, so the step uses it.
+  for (int launch = 2; launch <= 3; ++launch) {
+    Rig again;
+    again.options.fetch_root_override = g_map_root;
+    again.options.exists = &MappedPathExists;
+    again.BootRequest();
+    QCHECK(again.net.calls == 0);
+    QCHECK(g_ends == 0 && g_shown.empty());
+  }
+  // Nothing was set aside: the media root holds `_data` and no `_data.replaced-*`.
+  QCHECK(Exists(g_map_root + "/_data"));
+  int aside = 0;
+  if (DIR* d = ::opendir(g_map_root.c_str())) {
+    while (const dirent* e = ::readdir(d)) aside += std::strncmp(e->d_name, "_data.replaced-", 15) == 0 ? 1 : 0;
+    ::closedir(d);
+  }
+  QCHECK(aside == 0);
 }
 
 void TheProbeIsNotReadInAShippedBuild() {
@@ -361,6 +426,8 @@ int main() {
   ADeniedGrantNeverReadsTheLegacyRoot();
   ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
+  ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
+  ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain();
   TheProbeIsNotReadInAShippedBuild();
   TheProbeIsNotReadWithoutTheGrant();
   TheRetryWaitUsesTheFetchsDefaultBackoffInSlices();

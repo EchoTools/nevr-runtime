@@ -59,6 +59,11 @@ void ResolveRoot(data_root::ExistsFn exists) noexcept;
 // The real filesystem for ResolveRoot: true when `path` is an existing directory.
 bool DirectoryExists(const char* path) noexcept;
 
+// The real filesystem for the data step: true for an existing directory or a non-empty regular file. The step asks
+// about the data root and `_data` (directories) and about the manifest under it (a regular file, 828213 bytes in the
+// pinned zip), so DirectoryExists would call present data missing.
+bool PathExists(const char* path) noexcept;
+
 // Test support: arms both handlers without touching a GOT slot, and clears the "skipped" state.
 void ArmForTest() noexcept;
 void ResetForTest() noexcept;

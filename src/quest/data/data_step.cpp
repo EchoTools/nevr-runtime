@@ -89,7 +89,8 @@ data_root::Resolution ResolveMediaOnly(data_root::ExistsFn exists) noexcept {
   return {data_root::kMediaRoot, "none", false};
 }
 
-// A whole download left beside data that is in use is ours to remove, when it carries our marker: nothing will resume it.
+// A download left beside data that is in use (whole or not) is ours to remove, when it carries our marker: nothing
+// will resume it.
 void RemoveUsedPart(const StepConfig& config, const std::string& root) {
   const std::string part = root + "/" + kPartName;
   if (!IsOwned(part)) return;
@@ -156,6 +157,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   info.available_bytes = fr.available_bytes;
   result.outcome = StepOutcome::kFailed;
   result.message = BuildFloorMessage(info);
+  if (fr.status == FetchStatus::kBadRoot && !config.bad_root_message.empty()) result.message = config.bad_root_message;
   if (config.present) config.present(result.message);
   if (config.hold) config.hold();
   return result;

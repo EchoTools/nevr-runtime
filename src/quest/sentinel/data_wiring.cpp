@@ -156,8 +156,10 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   if (granted && Opts().probe_enabled) RunProbe();
 
   data::StepConfig config;
-  config.exists = Opts().exists != nullptr ? Opts().exists : &obb_skip::DirectoryExists;
+  config.exists = Opts().exists != nullptr ? Opts().exists : &obb_skip::PathExists;
   config.legacy_root_readable = granted;
+  // Without the grant an unwritable media root is reported once, with the Storage advice, not twice.
+  if (!granted) config.bad_root_message = data::kNeedsStoragePermission;
   config.build_id = sentinel::pinned::kLibR15BuildId;
   config.fetch_root_override = Opts().fetch_root_override;
   config.recovery_roots = Opts().recovery_roots;
@@ -201,13 +203,11 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
                        {"message", result.message.c_str()}});
   if (result.outcome == data::StepOutcome::kFetched) obb_skip::ResolveRoot(config.exists);
   if (failed && !granted && result.status == data::FetchStatus::kBadRoot) {
-    // The media root cannot be written and there is no permission: the legacy root is the only place the data could
-    // be, so the message says how to allow Storage.
+    // The media root cannot be written and there is no permission: the step already showed and held the Storage
+    // message (bad_root_message), so this only records why the process ends.
     sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
                         {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},
                          {"message", data::kNeedsStoragePermission}});
-    Present(data::kNeedsStoragePermission, "floor");
-    HoldMessage(data::kNeedsStoragePermission);
     EndFailed("no_storage_grant");
     return;
   }
