@@ -223,6 +223,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out")
     parser.add_argument("--now", type=int, default=int(time.time()))
+    parser.add_argument("--plugin-dll", action="append", default=[],
+                        help="a real plugin DLL: also written signed by the good signer (<stem>.signed.dll), signed "
+                             "with another signer's EKU (<stem>.wrong_eku.dll) and unsigned (<stem>.unsigned.dll)")
     args = parser.parse_args()
     for tool in ("openssl", "osslsigncode", "x86_64-w64-mingw32-gcc"):
         if shutil.which(tool) is None:
@@ -284,6 +287,17 @@ def main():
     make("stamped_after_expiry", old, pinned_chain, now - 2 * DAY)
     make("good_unstamped", good, pinned_chain, None)
     make("tsa_untrusted", good, pinned_chain, now, tsa_=tsa_foreign)   # stamped by an authority the pinned root did not issue
+
+    plugins = {}
+    for source in args.plugin_dll:
+        stem = Path(source).stem
+        for kind, leaf_ in (("signed", good), ("wrong_eku", wrong_eku)):
+            name = f"{stem}.{kind}"
+            sign(Path(source), out / f"{name}.dll", leaf_, pinned_chain, tsa, now)
+            files[name] = f"{name}.dll"
+        shutil.copy(source, out / f"{stem}.unsigned.dll")
+        files[f"{stem}.unsigned"] = f"{stem}.unsigned.dll"
+        plugins[stem] = {k: f"{stem}.{k}" for k in ("signed", "wrong_eku", "unsigned")}
 
     data = bytearray((out / "good.dll").read_bytes())
     data[1024] ^= 0x01                                           # a code byte (the first section starts at 0x400)
@@ -355,6 +369,7 @@ def main():
         "serials": {"good": good["serial_hex"], "old": old["serial_hex"]},
         "stamp_time": {"good": now, "expired_stamped_inside": now - 7 * DAY, "stamped_after_expiry": now - 2 * DAY},
         "files": files,
+        "plugins": plugins,
     }
     (out / "fixtures.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"gen_plugin_signature_fixtures: wrote {len(files)} files and fixtures.json to {out}")

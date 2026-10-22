@@ -48,9 +48,10 @@ def identity(version, commit=COMMIT):
     return f"NEVR-BUILD {version} {commit}".encode()
 
 
-def binary(version, commit=COMMIT, literals=1, extra=b""):
-    """A fake binary: the defaults, the identity literal NUL-bounded `literals` times, then `extra`."""
-    parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals
+def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST signed-only",)):
+    """A fake binary: the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
+    literal(s) in `trust` (ADR 0010), then `extra`."""
+    parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals + list(trust)
     return b"MZ" + b"\0" + b"\0".join(parts) + b"\0" + extra
 
 
@@ -402,6 +403,22 @@ class ReleaseStagesTest(PackageFixture):
         result = self.stamp("--version", RELEASE, "--commit", "d" * 40)
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
+
+    # --- the plugin signature gate (ADR 0010, #741) --------------------------------------------------
+
+    def test_a_binary_that_loads_unsigned_plugins_is_never_stamped_or_packaged(self):
+        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST unsigned-allowed",)))
+        result = self.stamp("--version", RELEASE)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("'unsigned-allowed', not 'signed-only'", result.stderr)
+        self.dll.write_bytes(binary(DEV, trust=(b"NEVR-PLUGIN-TRUST unsigned-allowed",)))
+        self.assertEqual(self.stamp().returncode, 1)  # a dev build is refused too: it can be handed to players
+
+    def test_a_binary_without_the_plugin_trust_literal_is_refused_and_so_are_two(self):
+        self.dll.write_bytes(binary(RELEASE, trust=()))
+        self.assertIn("found 0", self.stamp("--version", RELEASE).stderr)
+        self.dll.write_bytes(binary(RELEASE, trust=(b"NEVR-PLUGIN-TRUST signed-only",) * 2))
+        self.assertIn("found 2", self.stamp("--version", RELEASE).stderr)
 
     def test_stamp_refuses_a_version_argument_that_is_not_x_y_z(self):
         result = self.stamp("--version", "v5.0.0")

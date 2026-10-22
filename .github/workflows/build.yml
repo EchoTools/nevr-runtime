@@ -300,6 +300,9 @@ jobs:
       run: python3 tools/package_release.py stamp --dll build/mingw-release/bin/BugSplat64.dll --version "$VERSION" --commit "$GITHUB_SHA"
 
     - name: Verify
+      env:
+        # A release or draft build never fetches the real signed plugin fixture from outside GitHub (justfile, test-auth-unit).
+        NEVR_RELEASE_BUILD: ${{ steps.release.outputs.version != '' && '1' || '' }}
       run: just verify
 
     # Built for a dry run on a tag too (a version is set), because the Windows zip is made from this package's

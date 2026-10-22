@@ -253,6 +253,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 // ============================================================================
 
 #include "runtime/ext/plugin_loader.h"
+#include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
 #include "runtime/patch/matchmaker_host_patch.h"
@@ -315,14 +316,122 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     ClearTestLogs();
     EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
     ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    // These tests are about the loader, not the signature gate: their fixture DLLs are unsigned. The gate has
+    // its own fixture below (PluginSignatureGateTest), which enforces.
+    nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, nullptr);
   }
 
   void TearDown() override {
     UnloadPlugins();
     g_testPluginLoadPlan.clear();
     ClearTestLogs();
+    nevr_plugin_trust::TestHook_ResetTrust();
   }
 };
+
+// ============================================================================
+// The plugin signature gate in the real loader (ADR 0010, #741): real LoadPlugins, real files, a policy that
+// pins the test root. The fixtures are the test plugin signed by a throwaway PKI, made by
+// tools/gen_plugin_signature_fixtures.py (--plugin-dll) into $NEVR_SIGFIX_DIR; a missing directory fails the
+// tests, it does not skip them.
+// ============================================================================
+
+class PluginSignatureGateTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    const char* dir = std::getenv("NEVR_SIGFIX_DIR");
+    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: just test-auth-unit makes the fixtures and sets it";
+    fixtures_ = dir;
+    std::ifstream in(fixtures_ + "/fixtures.json");
+    ASSERT_TRUE(in.good()) << "no fixtures.json in " << fixtures_;
+    manifest_ = nlohmann::json::parse(in);
+    ASSERT_TRUE(manifest_["plugins"].contains("test_plugin_onframe"));
+    std::ifstream root(fixtures_ + "/" + manifest_["root_der"].get<std::string>(), std::ios::binary);
+    policy_.rootDer.assign(std::istreambuf_iterator<char>(root), std::istreambuf_iterator<char>());
+    ASSERT_FALSE(policy_.rootDer.empty());
+    policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
+    nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::SignedOnly, &policy_);
+
+    char exePath[MAX_PATH] = {};
+    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+    pluginsDir_ = std::string(exePath);
+    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
+    pluginsDir_ += "plugins\\";
+  }
+
+  void TearDown() override {
+    UnloadPlugins();
+    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+
+  // Puts fixture `kind` (signed, wrong_eku, unsigned) of the test plugin into plugins/ as `name` and plans it.
+  void Plan(const std::string& name, const std::string& kind, bool required = false) {
+    const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe." + kind].get<std::string>();
+    const std::string target = pluginsDir_ + name;
+    ASSERT_TRUE(CopyFileA(source.c_str(), target.c_str(), FALSE)) << source << " error " << GetLastError();
+    copies_.push_back(target);
+    g_testPluginLoadPlan.push_back({name, name, required, "", "{}"});
+  }
+
+  std::string fixtures_;
+  std::string pluginsDir_;
+  nlohmann::json manifest_;
+  nevr_plugin_signature::Policy policy_;
+  std::vector<std::string> copies_;
+};
+
+TEST_F(PluginSignatureGateTest, PluginSignedByThePinnedSignerLoads) {
+  Plan("gate_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_NE(BuildPluginManifestJson().find("gate_signed.dll"), std::string::npos);
+}
+
+TEST_F(PluginSignatureGateTest, UnsignedPluginIsRefusedWithOneLineAndAManifestEntry) {
+  Plan("gate_unsigned.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("gate_unsigned.dll"), nullptr) << "a refused file was mapped";
+  EXPECT_TRUE(TestLogContains("plugin=gate_unsigned.dll file=gate_unsigned.dll refused: unsigned"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: unsigned");
+}
+
+TEST_F(PluginSignatureGateTest, PluginSignedByAnotherProfileIsRefused) {
+  Plan("gate_other.dll", "wrong_eku");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("gate_other.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("file=gate_other.dll refused: EKU"));
+}
+
+TEST_F(PluginSignatureGateTest, DevBuildLoadsAnUnsignedPluginWithAWarning) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("gate_dev.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "file=gate_dev.dll UNSIGNED, loaded because this is a dev build"));
+}
+
+TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
+  Plan("gate_a_unsigned.dll", "unsigned");
+  Plan("gate_b_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("file=gate_a_unsigned.dll refused: unsigned"));
+}
+
+TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyBuild) {
+  EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(true, ERROR_INVALID_PARAMETER));
+  EXPECT_TRUE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_INVALID_PARAMETER));
+  EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_FILE_NOT_FOUND));
+}
 
 TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndContinues) {
   g_testPluginLoadPlan.push_back(

@@ -34,6 +34,8 @@ Commit `@COMMIT@`.
 @IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
 
 ## Signing
+The runtime in this release loads only plugins signed through the release-signer pipeline. An unsigned plugin (or one with a changed byte) is refused and listed in the plugin manifest; a plugin marked required that is refused stops a server.
+
 A separate signing step may sign `BugSplat64.dll`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
 signature, and `SIGNING.txt` inside the zip says how to check each one. Compare the zip's SHA-256 with
