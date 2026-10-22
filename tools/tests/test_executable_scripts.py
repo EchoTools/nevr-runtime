@@ -1,8 +1,9 @@
 """Every tracked file that starts with a shebang is recorded executable.
 
-The worktrees run with core.fileMode=false, so an exec bit set on disk is never recorded; a recipe
-that runs such a file directly from a clean checkout then fails with exit 126 (Permission denied).
-`git update-index --chmod=+x <path>` records it.
+With core.fileMode=false an exec bit set on disk is never recorded; a recipe that runs such a file
+directly from a clean checkout then fails with exit 126 (Permission denied). `git update-index
+--chmod=+x <path>` records it. The tracked pre-push hook (tools/git-hooks/pre-push, installed by
+`just install-hooks`) runs this file before every push.
 """
 from __future__ import annotations
 

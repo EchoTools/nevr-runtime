@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# pre-push: refuse a push whose commits record a shebang script without the executable bit (#794).
+#
+# core.fileMode=false made `git add` forget the exec bit on three scripts in one day, and the timer or
+# `just verify` then failed with exit 126 on a fresh checkout. The hook reads the refs git is about to
+# push from stdin (<local ref> <local sha> <remote ref> <remote sha>), skips deletions, and for each
+# pushed tip lists its tree and refuses any 100644 blob that starts with `#!`, naming the file and the
+# ref. It checks what is pushed, never the checkout: a mode fixed in the index but not committed does
+# not pass, and a branch or tag that is not checked out is checked like any other. It fails loudly
+# (exit 1) when it cannot run (no python3, or the check itself crashed); its only bypass is git's own
+# `--no-verify`.
+set -u
+
+# Builtins only up to here: the PATH may lack even `cat`, and that must not read as "nothing pushed".
+refs=""
+while IFS= read -r line || [ -n "$line" ]; do
+    refs="$refs$line"$'\n'
+done
+[ -n "$refs" ] || exit 0
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "pre-push: python3 is not installed, so the push could not be checked for scripts recorded without the exec bit; refusing" >&2
+    exit 1
+fi
+
+NEVR_PUSH_REFS="$refs" python3 -I - <<'PY'
+import os, subprocess, sys
+
+ZERO = "0" * 40
+SHEBANG = b"#!"
+
+
+def git(*args, input_bytes=None):
+    return subprocess.run(["git", *args], input=input_bytes, capture_output=True, check=True).stdout
+
+
+def starts_with_shebang(blobs):
+    """blob sha -> whether its content starts with #!, through one `git cat-file --batch`."""
+    if not blobs:
+        return {}
+    out = git("cat-file", "--batch", input_bytes="".join(b + "\n" for b in blobs).encode())
+    result, pos = {}, 0
+    for blob in blobs:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise RuntimeError(f"unexpected cat-file header for {blob}: {out[pos:end]!r}")
+        size = int(header[2])
+        result[blob] = out[end + 1:end + 1 + size].startswith(SHEBANG)
+        pos = end + 1 + size + 1
+    return result
+
+
+def main():
+    bad_total = 0
+    seen = {}
+    for line in os.environ["NEVR_PUSH_REFS"].splitlines():
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        local_ref, local_sha, remote_ref, _ = parts
+        if set(local_sha) == {"0"}:
+            continue  # a deletion pushes no commit
+        try:
+            commit = git("rev-parse", "--verify", "-q", f"{local_sha}^{{commit}}").decode().strip()
+        except subprocess.CalledProcessError:
+            continue  # a tag of a tree or a blob carries no scripts
+        entries = [e for e in git("ls-tree", "-r", "-z", commit).split(b"\0") if e]
+        plain = []
+        for entry in entries:
+            meta, path = entry.split(b"\t", 1)
+            mode, kind, blob = meta.decode().split()
+            if mode == "100644" and kind == "blob":
+                plain.append((blob, path.decode(errors="replace")))
+        todo = [blob for blob, _ in plain if blob not in seen]
+        seen.update(starts_with_shebang(sorted(set(todo))))
+        for blob, path in plain:
+            if seen[blob]:
+                print(f"pre-push: {path} starts with #! but is recorded 100644 in {remote_ref} ({commit[:12]})", file=sys.stderr)
+                bad_total += 1
+    if bad_total:
+        print("pre-push: refusing the push. Run 'git update-index --chmod=+x <path>' and COMMIT the mode change "
+              "(an uncommitted change is not pushed), then push again.", file=sys.stderr)
+        sys.exit(1)
+
+
+try:
+    main()
+except (subprocess.CalledProcessError, RuntimeError, ValueError, OSError) as exc:
+    print(f"pre-push: the check itself failed ({type(exc).__name__}: {exc}); refusing the push", file=sys.stderr)
+    sys.exit(2)
+PY
+rc=$?
+if [ "$rc" -eq 2 ]; then
+    exit 1
+fi
+exit "$rc"
