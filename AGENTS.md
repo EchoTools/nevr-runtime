@@ -613,6 +613,11 @@ your seat name, for example `claude-main` or `codex`.
   files the repo's own tools write at the scratch root stay where they are. When you are done,
   delete the scripts, copies and build output you created, outright, not into the user's trash.
   Run logs and evidence are kept. Never delete by pattern across the shared directory.
+- **Ownership is proven, never inferred.** Remove a worktree, branch or scratch path only when your ledger row
+  names it, or `whence <path>` (it prints the sessions that mention the path, the oldest first, which is its
+  birth) shows your own session made it. A name that looks like yours, or a location under your scratch
+  directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
+  seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
   `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
   and `git status --short --ignored` lists only build output (move any run log you need out

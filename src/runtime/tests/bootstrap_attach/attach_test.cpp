@@ -422,6 +422,11 @@ void ValidateHostRecords(const Expectation& expect) {
     const auto wait = reinterpret_cast<int (*)()>(
         GetProcAddress(GetModuleHandleW(L"BugSplat64.dll"), "nevr_host_test_WaitFailureFlush"));
     Require(wait != nullptr && wait() == 1, "the host's failure flush did not finish");
+    const auto on_attach_thread = reinterpret_cast<std::size_t (*)()>(
+        GetProcAddress(GetModuleHandleW(L"BugSplat64.dll"), "nevr_host_test_FlushesOnAttachThread"));
+    Require(on_attach_thread != nullptr, "the host shim's attach-thread flush counter did not resolve");
+    Require(on_attach_thread() == 0,
+            "the journal was flushed on the thread inside DllMain attach (a file cannot be written under the loader lock)");
     flush();
   }
   const std::vector<nlohmann::json> records = ReadHostRecords();
@@ -706,6 +711,12 @@ int RunChildScenario(const std::string& mode) {
     expect.dispatched = false;
     image_kind = mode == "bad-timestamp" ? kImageWrongTimestamp : kImageWrongPrologue;
     expect.rejected_step = mode == "bad-timestamp" ? "image_check" : "prologue_check";
+  } else if (mode == "exit-at-once") {
+    // The failed attach's journal must reach the disk although the process ends before the flush thread runs.
+    expect.hooked = false;
+    expect.dispatched = false;
+    image_kind = kImageWrongPrologue;
+    expect.rejected_step = "prologue_check";
   } else if (mode == "reentrant-init") {
     expect.lone = Expectation::Lone::kExactlyOne;
   } else if (mode == "concurrent-first") {
@@ -747,6 +758,7 @@ int RunChildScenario(const std::string& mode) {
   Require(host != nullptr, "probe host failed to load");
   BootstrapProbeRecordEvent(kHostLoadReturned, 0);
   InterlockedExchange(&g_host_loaded, 1);
+  if (mode == "exit-at-once") return 0;  // the process ends now: no wait for the flush thread, no deferred flush
 
   if (!hammers.empty()) {
     for (int wait = 0; wait < 500 && InterlockedCompareExchange(&g_hammer_calls_after_load, 0, 0) < 200; ++wait) {
@@ -882,11 +894,24 @@ int RunSuite() {
     use_scenario_directory(mode);
     RunChild(L"\"" + std::wstring(self, length) + L"\" --child " + mode, scenario.mode);
   }
+  // A process that ends right after a failed attach: its decisive record (the prologue mismatch) must be on disk
+  // every time, because the flush thread may not have run, or may be killed mid-write (#804).
+  constexpr int kExitAtOnceRuns = 12;
+  StageRuntimeFixture(root, L"good");
+  for (int run = 0; run < kExitAtOnceRuns; ++run) {
+    use_scenario_directory(L"exit-at-once-" + std::to_wstring(run));
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", "exit-at-once");
+    const std::vector<nlohmann::json> records = ReadHostRecords();
+    Require(CountRecords(records, "host_attach", "prologue_check") == 1,
+            "a process that ended at once after a failed attach lost the prologue mismatch record");
+    Require(CountRecords(records, "host_attach", "image_check") == 1,
+            "a process that ended at once after a failed attach lost the image check record");
+  }
   StageRuntimeFixture(root, L"good");
   use_scenario_directory(L"static-import");
   RunChild(L"\"" + root + L"test_bootstrap_attach_static.exe\"", "static-import");
-  std::printf("bootstrap attach test: PASS: all %llu dynamic scenarios + static-import\n",
-              static_cast<unsigned long long>(sizeof(scenarios) / sizeof(scenarios[0])));
+  std::printf("bootstrap attach test: PASS: all %llu dynamic scenarios + %d exit-at-once runs + static-import\n",
+              static_cast<unsigned long long>(sizeof(scenarios) / sizeof(scenarios[0])), kExitAtOnceRuns);
   return 0;
 }
 

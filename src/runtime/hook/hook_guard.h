@@ -25,7 +25,7 @@ namespace nevr_hook_guard {
 /// PatchDetour call site is covered without touching the site.
 /// Once the fixed table is full the call is counted (DroppedCount) and reported at ERROR by the
 /// next VerifyAll — never silent — but it never fails the boot: this is a diagnostic. It does
-/// not log itself, because it runs under the loader lock.
+/// not log itself, because it runs in the boot phase, before the game's log exists.
 void Record(const void* target, const char* name);
 
 /// Record `target` under `name` with the first bytes the owner of the hook read there after enabling it

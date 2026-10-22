@@ -9,6 +9,8 @@
 //                             memory only, plus the one MinHook detour. Loads nothing.
 //                             A refused image, prologue or hook is reported by a thread started here (a file cannot
 //                             be written under the loader lock), so the host log says why the runtime is off.
+//   OnProcessDetach           DllMain, DLL_PROCESS_DETACH at process termination: writes the attach journal's
+//                             remainder, so a process that exits at once still says why the runtime is off.
 //   SetGameModule             NEVR_SetGameModule, the external launcher contract.
 //   CreateReport              MiniDmpSender::createReport, the minidump path.
 //   OnCrashReporterConstructed  MiniDmpSender::MiniDmpSender, the always-present trigger
@@ -28,6 +30,10 @@ namespace nevr_host {
 /// (the rendezvous then loads nothing from disk); it is kept for SetGameModule.
 void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode,
                      NevrGetRuntimeApiFn in_process_runtime = nullptr) noexcept;
+
+/// DllMain, DLL_PROCESS_DETACH. `process_terminating` is `lpReserved != NULL`. On termination, writes whatever the
+/// attach journal still holds (see BootstrapDiagnostics::FlushAttachJournalAtExit); a dynamic unload does nothing.
+void OnProcessDetach(bool process_terminating) noexcept;
 
 /// After an attach that left the game unhooked (a refused image, prologue or hook), waits up to `timeout_ms` for
 /// the thread that writes the attach journal to finish. True when it finished or none was started. The game never

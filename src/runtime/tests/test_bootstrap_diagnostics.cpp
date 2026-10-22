@@ -1040,3 +1040,117 @@ TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilIt
   EXPECT_EQ(records[1].at("mh_status"), 1001);
   EXPECT_EQ(records[1].at("stage"), "create");
 }
+
+namespace {
+
+// A sink that holds the flushing thread before its first record is stored, the way a thread killed mid-write
+// leaves the entries it claimed unwritten.
+std::mutex g_kill_lock;
+std::vector<nlohmann::json>* g_kill_records = nullptr;
+DWORD g_kill_thread = 0;
+HANDLE g_kill_held_event = nullptr;
+HANDLE g_kill_release_event = nullptr;
+bool g_kill_held_once = false;
+
+void KilledFlushSink(const nlohmann::json& record) {
+  if (GetCurrentThreadId() == g_kill_thread && !g_kill_held_once) {
+    g_kill_held_once = true;
+    SetEvent(g_kill_held_event);
+    WaitForSingleObject(g_kill_release_event, 10000);
+  }
+  std::lock_guard<std::mutex> guard(g_kill_lock);
+  if (g_kill_records != nullptr) g_kill_records->push_back(record);
+}
+
+DWORD WINAPI FlushOnceOnAThread(void* raw) {
+  static_cast<BootstrapDiagnostics*>(raw)->FlushAttachJournal();
+  return 0;
+}
+
+}  // namespace
+
+// The flush thread of a failed attach is killed when the process ends at once, after it claimed the entries and
+// before it wrote them. The last flush writes them, the failing step first.
+TEST(BootstrapDiagnostics, TheLastFlushWritesWhatAKilledFlushClaimedAndTheFailingStepFirst) {
+  std::vector<nlohmann::json> records;
+  g_kill_records = &records;
+  g_kill_held_once = false;
+  g_kill_held_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  g_kill_release_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  BootstrapDiagnostics::SetEmitSinkForTest(&KilledFlushSink);
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+
+  HANDLE flusher = CreateThread(nullptr, 0, &FlushOnceOnAThread, &diagnostics, 0, &g_kill_thread);
+  ASSERT_NE(flusher, nullptr);
+  ASSERT_EQ(WaitForSingleObject(g_kill_held_event, 10000), WAIT_OBJECT_0);
+  EXPECT_EQ(diagnostics.JournalFlushed(), 3u);  // all three claimed, none written
+  EXPECT_TRUE(records.empty());
+
+  diagnostics.FlushAttachJournalAtExit();  // the flusher is still held: it stands for the killed thread
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");  // the failing steps first, in journal order
+  EXPECT_EQ(records[1].at("step"), "hook_install");
+  EXPECT_EQ(records[2].at("step"), "image_check");
+
+  SetEvent(g_kill_release_event);
+  WaitForSingleObject(flusher, 10000);
+  CloseHandle(flusher);
+  BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
+  g_kill_records = nullptr;
+  CloseHandle(g_kill_held_event);
+  CloseHandle(g_kill_release_event);
+}
+
+TEST(BootstrapDiagnostics, TheLastFlushWritesNothingTwiceAndNothingWhenEverythingIsWritten) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.FlushAttachJournal();
+  ASSERT_EQ(records.size(), 2u);
+  diagnostics.FlushAttachJournalAtExit();
+  diagnostics.FlushAttachJournalAtExit();
+  EXPECT_EQ(records.size(), 2u);
+
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);  // recorded after the last flush
+  diagnostics.FlushAttachJournalAtExit();
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[2].at("step"), "hook_install");
+}
+
+// The last flush reports entries the journal had no room for, once.
+TEST(BootstrapDiagnostics, TheLastFlushReportsTheDroppedEntriesOnce) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity + 2; ++at) {
+    diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  }
+  diagnostics.FlushAttachJournalAtExit();
+  diagnostics.FlushAttachJournalAtExit();
+  std::size_t overflow = 0;
+  for (const nlohmann::json& record : records) overflow += record.value("step", "") == "journal" ? 1u : 0u;
+  EXPECT_EQ(overflow, 1u);
+}
+
+// A flush on the thread inside DllMain attach is counted, so the attach path cannot write the journal itself.
+TEST(BootstrapDiagnostics, AFlushOnTheAttachThreadIsCounted) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  const std::size_t before = BootstrapDiagnostics::FlushesOnAttachThread();
+  diagnostics.FlushAttachJournal();  // no attach thread named: not counted
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before);
+  BootstrapDiagnostics::MarkAttachThread(GetCurrentThreadId());
+  diagnostics.FlushAttachJournal();
+  diagnostics.FlushAttachJournalAtExit();
+  BootstrapDiagnostics::MarkAttachThread(0);
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before + 2);
+  diagnostics.FlushAttachJournal();
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before + 2);
+}

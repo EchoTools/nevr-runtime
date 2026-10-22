@@ -340,6 +340,14 @@ class ReleaseContractTest(unittest.TestCase):
         )
         self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
         self.assertNotIn("InitializeGameModule", dllmain)
+        # #804: a process that ends right after a failed attach never reaches a later flush trigger, so DllMain's
+        # process-detach hands termination (lpReserved != NULL) to the host, which writes the journal's remainder.
+        detach = dllmain.split("case DLL_PROCESS_DETACH:", 1)[1]
+        self.assertRegex(
+            detach.split("break;", 1)[0],
+            r"nevr_host::OnProcessDetach\(\s*lpReserved\s*!=\s*(NULL|nullptr)\s*\)",
+            "DLL_PROCESS_DETACH must call nevr_host::OnProcessDetach(lpReserved != NULL)",
+        )
         self.assertIn("InitializeGameModule(host->game_module)", entry)
         route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
         self.assertIn("RunWithSupportedGameModule", route)

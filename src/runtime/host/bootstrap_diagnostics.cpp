@@ -109,6 +109,13 @@ std::atomic<HANDLE> g_log_mutex{nullptr};
 // there is no per-process budget.
 std::atomic<bool> g_log_lock_unreliable{false};
 
+// How long an append waits on the log mutex. The last flush of a process that is ending sets it to 0.
+std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
+
+// The thread inside the host's DllMain attach, and how many flushes ran on it.
+std::atomic<DWORD> g_attach_thread{0};
+std::atomic<std::size_t> g_flushes_on_attach_thread{0};
+
 #if defined(NEVR_HOST_TESTING)
 wchar_t g_log_mutex_name_for_test[128] = {};  // empty: the production name
 #endif
@@ -246,7 +253,17 @@ bool BootstrapDiagnostics::AttachDegraded() const noexcept {
   return dropped_.load() != 0;
 }
 
+void BootstrapDiagnostics::MarkAttachThread(DWORD thread_id) noexcept { g_attach_thread.store(thread_id); }
+
+std::size_t BootstrapDiagnostics::FlushesOnAttachThread() noexcept { return g_flushes_on_attach_thread.load(); }
+
+void BootstrapDiagnostics::NoteFlushCaller() noexcept {
+  const DWORD attach_thread = g_attach_thread.load();
+  if (attach_thread != 0 && attach_thread == GetCurrentThreadId()) g_flushes_on_attach_thread.fetch_add(1);
+}
+
 void BootstrapDiagnostics::FlushAttachJournal() noexcept {
+  NoteFlushCaller();
   // Claim the entries from the written mark up to the first one that is not complete yet. RecordAttach
   // reserves a slot before it fills it, so the count can run ahead of what is written: an entry is
   // emitted only once its ready flag says so, and the claim stops at the first gap so the mark never
@@ -272,8 +289,39 @@ void BootstrapDiagnostics::FlushAttachJournal() noexcept {
       } catch (const std::exception& error) {
         ReportBuildFailure("host_attach", error.what());
       }
+      journal_[at].written.store(1, std::memory_order_release);
     }
   }
+  EmitDroppedTotal();
+}
+
+void BootstrapDiagnostics::FlushAttachJournalAtExit() noexcept {
+  NoteFlushCaller();
+  // Other threads are dead, so nothing writes while this runs and no entry is half-written by a live thread:
+  // an entry whose flag says "not written" is one a flush claimed and did not finish. The failing steps go
+  // first: they are the reason the log is read.
+  const DWORD previous_wait = g_log_wait_ms.exchange(0);
+  std::size_t count = journal_count_.load();
+  if (count > kJournalCapacity) count = kJournalCapacity;
+  for (int pass = 0; pass < 2; ++pass) {
+    for (std::size_t at = 0; at < count; ++at) {
+      JournalEntry& entry = journal_[at];
+      if (entry.ready.load(std::memory_order_acquire) == 0) continue;
+      if ((entry.outcome != AttachOutcome::kAccepted) != (pass == 0)) continue;
+      if (entry.written.exchange(1) != 0) continue;
+      try {
+        EmitJournalEntry(entry);
+      } catch (const std::exception& error) {
+        ReportBuildFailure("host_attach", error.what());
+      }
+    }
+  }
+  flushed_upto_.store(count);
+  EmitDroppedTotal();
+  g_log_wait_ms.store(previous_wait);
+}
+
+void BootstrapDiagnostics::EmitDroppedTotal() noexcept {
   // Entries the full journal had no room for: one record with the running total, whenever it grew.
   const std::size_t dropped = dropped_.load();
   std::size_t reported = dropped_reported_.load();
@@ -445,7 +493,7 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   DWORD waited = WAIT_OBJECT_0;
   DWORD wait_error = 0;
   if (lock != nullptr && !g_log_lock_unreliable.load()) {
-    waited = WaitForSingleObject(lock, kBootstrapLogLockWaitMs);
+    waited = WaitForSingleObject(lock, g_log_wait_ms.load());
     if (waited == WAIT_FAILED) wait_error = GetLastError();
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
     if (!locked) marked_unreliable = !g_log_lock_unreliable.exchange(true);
@@ -460,7 +508,7 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     char buffer[512];
     JsonLine record(buffer, sizeof(buffer), "host_log_lock");
     record.Str("stage", "wait").Str("outcome", waited == WAIT_FAILED ? "failed" : "timeout");
-    record.UInt("wait_result", waited).UInt("wait_ms", kBootstrapLogLockWaitMs);
+    record.UInt("wait_result", waited).UInt("wait_ms", g_log_wait_ms.load());
     if (wait_error != 0) record.UInt("win32_error", wait_error);
     record.Str("next", "later_appends_write_without_the_lock");
     const std::size_t record_length = record.Finish();

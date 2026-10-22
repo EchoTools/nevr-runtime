@@ -51,6 +51,12 @@ void InstallRendezvous(HMODULE game_module) noexcept {
 
 void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode,
                      NevrGetRuntimeApiFn in_process_runtime) noexcept {
+  // Under the loader lock no file is written: a flush that runs on this thread before it returns is a defect, and
+  // BootstrapDiagnostics counts it (FlushesOnAttachThread).
+  struct AttachThreadMark {
+    AttachThreadMark() { BootstrapDiagnostics::MarkAttachThread(GetCurrentThreadId()); }
+    ~AttachThreadMark() { BootstrapDiagnostics::MarkAttachThread(0); }
+  } attach_thread_mark;
   g_host_module = host_module;
   g_in_process_runtime = in_process_runtime;
   // Fixed memory and one kernel32 call under the loader lock: the diagnostic and crash paths, and
@@ -62,6 +68,15 @@ void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mod
   g_attached_at_dll_main.store(true);  // the process image is checked (and hooked, or refused) here
   InstallRendezvous(game_module);
   if (!g_rendezvous.Installed()) FlushJournalOffTheLoaderLock();  // refused image, prologue or hook: say why
+}
+
+void OnProcessDetach(bool process_terminating) noexcept {
+  if (!process_terminating) return;
+  // The process is ending: the thread that flushes an attach failure may have been killed before it wrote, and
+  // no later trigger will come (a game that exits at once never constructs its crash reporter). This is the last
+  // chance to say why the runtime is off. Every other thread is dead, so the write needs no loader-lock
+  // reasoning beyond kernel32 file calls; the flush takes no wait.
+  g_diagnostics.FlushAttachJournalAtExit();
 }
 
 bool WaitForAttachFailureFlush(DWORD timeout_ms) noexcept {

@@ -95,6 +95,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                                  &nevr_runtime_entry::GetRuntimeApi);
       break;
     case DLL_PROCESS_DETACH:
+      nevr_host::OnProcessDetach(lpReserved != NULL);  // the last chance to report a failed attach
       // Only do clean shutdown on dynamic unload (lpReserved == NULL).
       // During process termination (lpReserved != NULL), threads are already
       // dead and joining would deadlock under the loader lock.

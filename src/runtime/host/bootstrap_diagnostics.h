@@ -116,6 +116,18 @@ class BootstrapDiagnostics {
   /// crash reporter even though no detour exists to trigger it earlier.
   void FlushAttachJournal() noexcept;
 
+  /// The last flush: the process is ending (DLL_PROCESS_DETACH with lpReserved != NULL), so every other thread
+  /// is already dead. Writes each recorded step not yet written, including those a flush thread claimed and was
+  /// killed before it wrote, the failing steps first. It never waits on the log mutex (the mutex a killed thread
+  /// held is abandoned, and one that cannot be taken is written around, as a crash record is), and it takes no
+  /// other lock. A step already written is not written again.
+  void FlushAttachJournalAtExit() noexcept;
+
+  /// Name the thread that is inside the host's DllMain attach (0: none). A flush that runs on it is a defect (a
+  /// file cannot be written under the loader lock) and is counted, so a test can fail on it.
+  static void MarkAttachThread(DWORD thread_id) noexcept;
+  static std::size_t FlushesOnAttachThread() noexcept;
+
   /// True when any recorded attach step was a rejection or a failure, an install record says its
   /// hook bytes were unread, or the journal dropped entries.
   bool AttachDegraded() const noexcept;
@@ -189,9 +201,13 @@ class BootstrapDiagnostics {
     // Stored last, with release ordering: RecordAttach reserves a slot before it fills it, so a flush
     // must not read an entry until this says it is complete.
     std::atomic<std::uint32_t> ready;
+    // Set once the entry's record has been appended; FlushAttachJournalAtExit writes the entries without it.
+    std::atomic<std::uint32_t> written;
   };
 
   void EmitJournalEntry(const JournalEntry& entry);
+  void EmitDroppedTotal() noexcept;
+  void NoteFlushCaller() noexcept;
   DiagnosticDestination EmitChecked(const nlohmann::json& record);
   void EnsureLogMutex() noexcept;
   bool AppendTo(const wchar_t* dir, bool create_dir, const char* line, std::size_t length) noexcept;

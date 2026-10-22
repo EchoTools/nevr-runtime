@@ -45,7 +45,16 @@ extern "C" __declspec(dllexport) int nevr_host_test_WaitFailureFlush() {
   return nevr_host::WaitForAttachFailureFlush(10000) ? 1 : 0;
 }
 
-BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
+// Flushes that ran on the thread inside DllMain attach: zero in a correct host (a file cannot be written there).
+extern "C" __declspec(dllexport) std::size_t nevr_host_test_FlushesOnAttachThread() {
+  return nevr_host::BootstrapDiagnostics::FlushesOnAttachThread();
+}
+
+BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
+  if (reason == DLL_PROCESS_DETACH) {
+    nevr_host::OnProcessDetach(reserved != nullptr);
+    return TRUE;
+  }
   if (reason != DLL_PROCESS_ATTACH) return TRUE;
   HMODULE exe = GetModuleHandleW(nullptr);
   g_record = exe == nullptr ? nullptr
