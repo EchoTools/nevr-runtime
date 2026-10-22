@@ -118,8 +118,9 @@ class BootstrapDiagnostics {
 
   /// The last flush: the process is ending (DLL_PROCESS_DETACH with lpReserved != NULL), so every other thread
   /// is already dead. Writes each recorded step not yet written, including those a flush thread claimed and was
-  /// killed before it wrote, the failing steps first. Each record carries its journal index as `seq` (with the
-  /// record's `pid`, one key per step): a claimed step is looked up in the log before it is written again. The
+  /// killed before it wrote, the failing steps first. Each record carries its journal index as `seq` and
+  /// the process's `run` token (one key (run, seq) per step; the pid is not part of it, since pids are reused): a claimed
+  /// step is looked up in the log before it is written again. The
   /// wait on the log mutex, which a live process on the same prefix can hold, is at most
   /// kBootstrapExitLogLockWaitMs; when it is not taken the flush writes nothing (an unlocked line could
   /// interleave with the holder's) and stops. It takes no other lock. A step already written is not written again.
@@ -134,7 +135,8 @@ class BootstrapDiagnostics {
   /// hook bytes were unread, or the journal dropped entries.
   bool AttachDegraded() const noexcept;
 
-  /// Append one record built with nlohmann::json. `tag`, `ts` and `pid` are added.
+  /// Append one record built with nlohmann::json. `tag`, `ts`, `pid` and `run` (the process's run token, 16 hex
+  /// digits) are added.
   /// A record larger than kMaxRecordBytes is replaced by a marker record rather
   /// than truncated.
   /// Never throws: a failure to build the record is reported on stderr and returned as
@@ -178,6 +180,13 @@ class BootstrapDiagnostics {
 
   /// True once an append's wait on the log mutex timed out.
   static bool LogLockUnreliableForTest();
+
+  /// Set the process's run token (0: compute it again), so a test can stand for another process that had this pid.
+  static void SetRunTokenForTest(std::uint64_t token);
+  static std::uint64_t RunTokenForTest();
+
+  /// An entry's flush state (0, kEntryClaimed, kEntryWritten), so a test can see it while a record is being written.
+  std::uint32_t EntryStateForTest(std::size_t at) const { return journal_[at].written.load(); }
 
   /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
   /// flush has returned; more means an entry was claimed twice.

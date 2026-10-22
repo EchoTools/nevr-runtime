@@ -614,7 +614,7 @@ your seat name, for example `claude-main` or `codex`.
   delete the scripts, copies and build output you created, outright, not into the user's trash.
   Run logs and evidence are kept. Never delete by pattern across the shared directory.
 - **Ownership is proven, never inferred.** Remove a worktree, branch or scratch path only when your ledger row
-  (`~/.local/share/repo-hygiene/nevr-runtime-ledger.md`, the ledger above) names it, or `whence <path>` (it prints the sessions that mention the path, the oldest first, which is its
+  (`~/.local/share/repo-hygiene/nevr-runtime-ledger.md`, the ledger above) names it, or `~/.local/bin/whence <path>` (call it by that path: zsh's builtin `whence` shadows the bare name and prints nothing; it prints the sessions that mention the path, the oldest first, which is its
   birth) shows your own session made it. A name that looks like yours, or a location under your scratch
   directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
   seat's; leave it and ask its owner.

@@ -14,7 +14,9 @@
 // where the game's CLog still does not exist, and the tee keeps the same rules).
 //
 // DESIGN DECISION (N43): The addendum forbids opening file handles from
-// DllMain.  This module does it deliberately, documented as an exception,
+// DllMain.  Initialize() no longer runs there (it runs from the host's wrapper
+// detour), but this module still opens its file in the boot phase, deliberately,
+// documented as an exception to the loader-lock-safe rules,
 // because the boot phase of Initialize() runs before the game's own log exists
 // and the only alternative is a crash-only post-mortem.  The kernel32 API path
 // avoids CRT locks entirely; WriteFile to a simple log file does not

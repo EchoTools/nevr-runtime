@@ -120,6 +120,39 @@ std::atomic<bool> g_exit_flush{false};
 std::atomic<bool> g_exit_lock_lost{false};
 std::atomic<std::size_t> g_exit_skipped{0};
 
+// The run token: 64 bits that name this process incarnation, stamped on every record as `run` (16 hex digits). A pid
+// is not enough: Wine hands out the same pids launch after launch (the game is pid 32 every time), so a reader and the
+// exit flush key a journal record by (run, seq). It is the process's creation time, its pid and the performance counter
+// at the first call, mixed; no heap, no I/O, kernel32 only, so it is safe under the loader lock. Zero means "not yet
+// computed". A test can set it to stand for another process.
+std::atomic<std::uint64_t> g_run_token{0};
+
+std::uint64_t MixToken(std::uint64_t value) noexcept {  // splitmix64 finalizer
+  value += 0x9E3779B97F4A7C15ull;
+  value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+  value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+  return value ^ (value >> 31);
+}
+
+std::uint64_t RunToken() noexcept {
+  const std::uint64_t token = g_run_token.load(std::memory_order_acquire);
+  if (token != 0) return token;
+  FILETIME created = {};
+  FILETIME exited = {};
+  FILETIME kernel = {};
+  FILETIME user = {};
+  GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+  LARGE_INTEGER counter = {};
+  QueryPerformanceCounter(&counter);
+  std::uint64_t made = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  made = MixToken(made ^ MixToken(static_cast<std::uint64_t>(GetCurrentProcessId())) ^
+                  MixToken(static_cast<std::uint64_t>(counter.QuadPart)));
+  if (made == 0) made = 1;
+  std::uint64_t expected = 0;
+  g_run_token.compare_exchange_strong(expected, made, std::memory_order_acq_rel);
+  return g_run_token.load(std::memory_order_acquire);
+}
+
 // The thread inside the host's DllMain attach, and how many flushes ran on it.
 std::atomic<DWORD> g_attach_thread{0};
 std::atomic<std::size_t> g_flushes_on_attach_thread{0};
@@ -186,6 +219,9 @@ void BootstrapDiagnostics::EnsureLogMutex() noexcept {
 }
 
 #if defined(NEVR_HOST_TESTING)
+void BootstrapDiagnostics::SetRunTokenForTest(std::uint64_t token) { g_run_token.store(token); }
+std::uint64_t BootstrapDiagnostics::RunTokenForTest() { return RunToken(); }
+
 void BootstrapDiagnostics::PrepareForTest(const wchar_t* local_app_data, const wchar_t* temp,
                                           const wchar_t* host_dir) {
   primary_ready_ = false;
@@ -314,7 +350,7 @@ void BootstrapDiagnostics::FlushAttachJournalAtExit() noexcept {
   NoteFlushCaller();
   // Other threads are dead, so nothing writes while this runs and no entry is half-written by a live thread: an
   // entry that is not "written" is one a flush claimed and did not finish, or never reached. A claimed entry may
-  // have reached the file before its thread was killed, so the log is read for its (pid, seq) first. The failing
+  // have reached the file before its thread was killed, so the log is read for its (run, seq) first. The failing
   // steps go first: they are the reason the log is read.
   g_exit_lock_lost.store(false);
   g_exit_skipped.store(0);
@@ -350,9 +386,9 @@ bool BootstrapDiagnostics::EntryIsInLog(std::size_t seq) const noexcept {
   // The last part of each log file: the records of this process are at its end. Reads take no lock.
   const wchar_t* const dirs[3] = {primary_ready_ ? primary_dir_ : nullptr, fallback_ready_ ? fallback_dir_ : nullptr,
                                   host_dir_ready_ ? host_dir_ : nullptr};
-  char pid_key[40];
+  char run_key[48];
   char seq_key[40];
-  snprintf(pid_key, sizeof(pid_key), "\"pid\":%lu", static_cast<unsigned long>(GetCurrentProcessId()));
+  snprintf(run_key, sizeof(run_key), "\"run\":\"%016llx\"", static_cast<unsigned long long>(RunToken()));
   snprintf(seq_key, sizeof(seq_key), "\"seq\":%llu", static_cast<unsigned long long>(seq));
   for (const wchar_t* dir : dirs) {
     if (dir == nullptr) continue;
@@ -377,7 +413,7 @@ bool BootstrapDiagnostics::EntryIsInLog(std::size_t seq) const noexcept {
         for (char* line = buffer; line < buffer + got;) {
           char* end = std::strchr(line, '\n');
           if (end != nullptr) *end = '\0';
-          if (std::strstr(line, "\"event\":\"host_attach\"") != nullptr && std::strstr(line, pid_key) != nullptr &&
+          if (std::strstr(line, "\"event\":\"host_attach\"") != nullptr && std::strstr(line, run_key) != nullptr &&
               std::strstr(line, seq_key) != nullptr) {
             // "seq":1 must not match "seq":12: the next character is not a digit.
             const char* hit = std::strstr(line, seq_key);
@@ -423,7 +459,8 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
   {
     nlohmann::json record;
     record["event"] = "host_attach";
-    // With the record's pid, the key of this entry in this process: a reader keeps one record per (pid, seq).
+    // With the record's `run` (stamped by Emit), the key of this entry: a reader keeps one record per (run, seq).
+    // The pid is not part of the key, since pids are reused.
     record["seq"] = static_cast<std::size_t>(&entry - journal_);
     record["step"] = StepName(entry.step);
     record["outcome"] = OutcomeName(entry.step, entry.outcome, entry.note);
@@ -507,6 +544,11 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
     stamped["ts"] = FormatUtcTimestamp(timestamp) ? timestamp : "unknown";
   }
   if (!stamped.contains("pid")) stamped["pid"] = GetCurrentProcessId();
+  if (!stamped.contains("run")) {
+    char run[17] = {};
+    snprintf(run, sizeof(run), "%016llx", static_cast<unsigned long long>(RunToken()));
+    stamped["run"] = run;
+  }
 
   // error_handler_t::replace: a record with invalid UTF-8 (a path from the file system) is
   // written with U+FFFD instead of throwing out of the host.
@@ -515,6 +557,7 @@ DiagnosticDestination BootstrapDiagnostics::EmitChecked(const nlohmann::json& re
     nlohmann::json marker = {{"tag", "NEVR.HOST"},
                              {"ts", stamped.at("ts")},
                              {"pid", stamped.at("pid")},
+                             {"run", stamped.at("run")},
                              {"event", record.value("event", "unknown")},
                              {"error", "record_too_large"},
                              {"record_bytes", line.size()}};
