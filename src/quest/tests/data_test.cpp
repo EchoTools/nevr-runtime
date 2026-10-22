@@ -610,6 +610,153 @@ TEST(RecoverReplacedLeavesAPlayersOwnBackupAlone) {
   CHECK_EQ(ReadFile(s.Path("_data.replaced-my-backup/b")), std::string("backup"));
 }
 
+namespace {
+
+std::string Absolute(const std::string& path) {
+  char* abs = ::realpath(path.c_str(), nullptr);
+  const std::string out = abs != nullptr ? abs : "";
+  std::free(abs);
+  return out;
+}
+
+std::string Snapshot(const std::string& root, const std::string& aside, const std::string& staging) {
+  std::string out;
+  out += Exists(root + "/_data") ? "data " : "nodata ";
+  out += Exists(aside) ? "aside " : "noaside ";
+  out += IsOwned(aside) ? "asidemarked " : "asideunmarked ";
+  out += Exists(staging) ? "staging" : "nostaging";
+  return out;
+}
+
+}  // namespace
+
+// The two states a crash during InstallStaged leaves. The marker is written before anything moves, so a crash after
+// the first rename leaves the old tree recognisable as ours, and RecoverReplaced puts it back.
+TEST(InstallStagedWritesTheMarkerBeforeItMovesAnythingAndCanBeRecoveredBetweenTheRenames) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/old"), "old");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/new", "new");
+
+  struct Ctx {
+    const std::string* root;
+    const std::string* aside;
+    const std::string* staging;
+    std::string first;
+    std::string between;
+  } ctx{&s.dir, &aside, &staging, {}, {}};
+  InstallProbe probe;
+  probe.context = &ctx;
+  probe.at = [](void* raw, const char* point) {
+    auto* c = static_cast<Ctx*>(raw);
+    const std::string state = Snapshot(*c->root, *c->aside, *c->staging);
+    if (std::strcmp(point, "before_first_rename") == 0) c->first = state;
+    if (std::strcmp(point, "between_renames") == 0) c->between = state;
+  };
+  std::string replaced;
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced, &probe), StageStatus::kOk);
+  // Before anything moved: the old tree is still `_data`, and the aside marker already exists.
+  CHECK_EQ(ctx.first, std::string("data noaside asidemarked staging"));
+  // Between the renames: no `_data`, the old tree aside and marked, the new one still staged.
+  CHECK_EQ(ctx.between, std::string("nodata aside asidemarked staging"));
+  CHECK_EQ(ReadFile(s.Path("_data/new")), std::string("new"));
+}
+
+TEST(ARecoveryFromTheStateBetweenTheRenamesPutsTheOldTreeBack) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(aside));
+  CHECK_EQ(::mkdir(aside.c_str(), 0755), 0);
+  WriteFile(aside + "/old", "old");
+  CHECK(RecoverReplaced(s.dir, nullptr));
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+  CHECK(!IsOwned(aside));
+}
+
+TEST(AFailedFirstRenameLeavesNoNewMarkerAndKeepsAnEarlierOne) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/old"), "old");
+  CHECK_EQ(::mkdir(aside.c_str(), 0755), 0);  // a non-empty directory of that name: rename onto it fails
+  WriteFile(aside + "/x", "x");
+  const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  std::string replaced;
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced), StageStatus::kRenameFailed);
+  CHECK(!IsOwned(aside));  // the marker this call made is gone
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+  CHECK_EQ(ReadFile(aside + "/x"), std::string("x"));
+
+  CHECK(MarkOwned(aside));  // an earlier marker of ours stays
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced), StageStatus::kRenameFailed);
+  CHECK(IsOwned(aside));
+}
+
+TEST(MarkOwnedNeverTruncatesOrFollowsWhatIsAlreadyAtTheMarkerName) {
+  Scratch s;
+  const std::string item = s.Path("_data.replaced-20261022T000000Z");
+  const std::string marker = OwnerMarkerPath(item);
+  WriteFile(marker, "the player's notes");  // a file with content at the exact marker name
+  CHECK(!MarkOwned(item));
+  CHECK_EQ(ReadFile(marker), std::string("the player's notes"));
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+
+  WriteFile(s.Path("target"), "user file");  // a link there is refused and its target is untouched
+  CHECK_EQ(::symlink(Absolute(s.Path("target")).c_str(), marker.c_str()), 0);
+  CHECK(!MarkOwned(item));
+  CHECK_EQ(ReadFile(s.Path("target")), std::string("user file"));
+  CHECK(RemoveTree(marker));
+
+  CHECK(MarkOwned(item));  // an empty file of ours is accepted again, as a resume does
+  CHECK(MarkOwned(item));
+  CHECK(IsOwned(item));
+}
+
+TEST(IsOwnedNeedsAnEmptyRegularFile) {
+  Scratch s;
+  const std::string item = s.Path("_data.staging-aaaaaaaaaaaa");
+  const std::string marker = OwnerMarkerPath(item);
+  CHECK_EQ(::mkdir(marker.c_str(), 0755), 0);  // a directory
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(s.Path("empty"), "");
+  CHECK_EQ(::symlink(Absolute(s.Path("empty")).c_str(), marker.c_str()), 0);  // a link to an empty file
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(marker, "content");  // a file with content
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(marker, "");
+  CHECK(IsOwned(item));
+}
+
+TEST(CleanLeftoversKeepsAFileWithContentThatOnlyLooksLikeAnOrphanMarker) {
+  Scratch s;
+  const std::string file = s.Path("_data.staging-notes.nevr-owned");
+  WriteFile(file, "mine");
+  int failed = 0;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 0);
+  CHECK_EQ(ReadFile(file), std::string("mine"));
+}
+
+TEST(RecoverReplacedNeverTakesALinkEvenWithAMarker) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("userdir").c_str(), 0755), 0);
+  WriteFile(s.Path("userdir/keep"), "k");
+  const std::string link = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(link));
+  CHECK_EQ(::symlink(Absolute(s.Path("userdir")).c_str(), link.c_str()), 0);
+  CHECK(!RecoverReplaced(s.dir, nullptr));
+  CHECK(!Exists(s.Path("_data")));
+  CHECK_EQ(ReadFile(s.Path("userdir/keep")), std::string("k"));
+}
+
 TEST(RemoveTreeDoesNotFollowLinks) {
   Scratch s;
   CHECK_EQ(::mkdir(s.Path("outside").c_str(), 0755), 0);
