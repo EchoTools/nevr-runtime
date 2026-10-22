@@ -295,10 +295,11 @@ std::string NarrowName(const std::wstring& wide) {
   return out;
 }
 
-// The final path of an open file or directory: long names, symbolic links and junctions resolved, the \\?\ prefix
-// removed, lowercase. This is what the plugins directory is compared with. The text of the path a caller passes
-// cannot be: an 8.3 short name, a \\?\ prefix, a trailing dot or space and a junction all name a file in the
-// plugins directory without spelling it.
+// The final path of an open file or directory: long names resolved, the extended-length prefix removed, lowercase.
+// This is what the plugins directory is compared with. The text of the path a caller passes cannot be: an 8.3 short
+// name, an extended-length prefix, a trailing dot or space and a junction all name a file in the plugins directory
+// without spelling it. Windows resolves symbolic links and junctions in the final path; Wine does not resolve a unix
+// symbolic link, so a link to the plugins directory is not recognised there (#788).
 bool FinalPathOfHandle(HANDLE handle, std::wstring* out) {
   std::wstring buf(512, L'\0');
   for (;;) {
@@ -359,19 +360,6 @@ bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate,
   return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
 }
 
-// Whether a normalized path (backslashes only) has a ".." component.
-bool HasParentComponent(const std::wstring& path) {
-  size_t start = 0;
-  while (start <= path.size()) {
-    const size_t end = path.find(L'\\', start);
-    const size_t stop = end == std::wstring::npos ? path.size() : end;
-    if (path.compare(start, stop - start, L"..") == 0 && stop - start == 2) return true;
-    if (end == std::wstring::npos) break;
-    start = end + 1;
-  }
-  return false;
-}
-
 bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (lowerPath == nullptr) return false;
   FilterState& f = Filter();
@@ -393,13 +381,15 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
     candidates.push_back(p);
   } else {
     // The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
-    // directories set with SetDllDirectory), not only the current and the application directory tried below. A ".."
-    // component can climb from any of them into the plugins directory, so no candidate list is complete for it.
-    if (enforcing && HasParentComponent(p)) {
+    // directories set with SetDllDirectory, and each of those through links), so no list of candidates is complete:
+    // a "..", an ancestor of plugins\\ or a junction in one of them each reach it. In a signed-only build a relative
+    // path with a directory part is refused whatever it leads to; a plugin that needs such a load passes a full path.
+    if (enforcing) {
       const std::string name = NarrowName(p);
       if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PLUGIN] refused a later load of %s: a relative path with a \"..\" component cannot be checked",
+            "[NEVR.PLUGIN] refused a later load of %s: a relative path with a directory part cannot be checked; "
+            "load it by its full path",
             name.c_str());
       }
       RecordLateRefusal(name);

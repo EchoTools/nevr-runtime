@@ -652,51 +652,53 @@ class CurrentDirectoryScope {
   std::wstring saved_;
 };
 
-TEST_F(PluginDependencyGateTest, ARelativePathIntoThePluginsDirectoryIsRefusedWhateverTheCurrentDirectory) {
+// The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
+// SetDllDirectory directories, each of them through links), so no list of candidates is complete: a "..", an
+// ancestor of plugins\ and a junction in a search directory each reach it. In a signed-only build every relative
+// path with a directory part, "\" or "/", is refused, whatever it leads to.
+static const wchar_t* const kRelativeWithADirectoryPart[] = {
+    L"plugins\\late_rel.dll",           L"plugins/late_rel.dll",       L".\\late_cwd.dll",
+    L"./late_cwd.dll",                  L"..\\..\\no-such-dir\\late_up.dll",
+    L".\\..\\x.dll",                    L"./../x.dll",                 L"sub\\..\\..\\x.dll",
+    L"..\\x.dll",                       L"../x.dll",                   L"no-such-dir\\a..b.dll",
+    L"work\\ancestor\\of\\plugins\\k.dll", L"a/b.dll",
+};
+
+TEST_F(PluginDependencyGateTest, ARelativePathWithADirectoryPartIsRefusedWhateverItLeadsTo) {
   Plan("late_rel.dll", "unsigned");
   g_testPluginLoadPlan.clear();
   TestHook_InstallPluginLoadFilter(pluginsDir_);
   wchar_t temp[MAX_PATH] = {};
   ASSERT_GT(GetTempPathW(MAX_PATH, temp), 0u);
   CurrentDirectoryScope cwd(temp);
-  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"plugins\\late_rel.dll", nullptr));
-  EXPECT_TRUE(TestLogContains("refused a later load of late_rel.dll: unsigned"));
+  for (const wchar_t* spelling : kRelativeWithADirectoryPart) {
+    SCOPED_TRACE(std::string(spelling, spelling + wcslen(spelling)));
+    EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(spelling, nullptr));
+  }
+  EXPECT_TRUE(TestLogContains("a relative path with a directory part cannot be checked"));
 }
 
-// The current directory is what a relative path starts from when it names a file there.
-TEST_F(PluginDependencyGateTest, ARelativePathFromTheCurrentDirectoryIntoThePluginsDirectoryIsRefused) {
-  Plan("late_cwd.dll", "unsigned");
+// A name with no directory part, and a full path, keep the rules they had: a bare name is the plugins directory's
+// when that directory holds it; a file that is not there is the real load's to report.
+TEST_F(PluginDependencyGateTest, ABareNameAndAFullPathKeepTheirOwnRules) {
+  Plan("late_bare.dll", "unsigned");
   g_testPluginLoadPlan.clear();
   TestHook_InstallPluginLoadFilter(pluginsDir_);
-  const std::wstring inPlugins(pluginsDir_.begin(), pluginsDir_.end());
-  CurrentDirectoryScope cwd(inPlugins.c_str());
-  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L".\\late_cwd.dll", nullptr));
-  EXPECT_TRUE(TestLogContains("refused a later load of late_cwd.dll: unsigned"));
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare.dll", nullptr));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_bare.dll: unsigned"));
+  std::wstring full = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"late_bare.dll";
+  for (wchar_t& c : full) c = static_cast<wchar_t>(towlower(c));  // the hook hands the filter a lower-cased path
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(full.c_str(), nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"no-such-file.dll", nullptr));
 }
 
-// The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
-// SetDllDirectory directories), so a ".." component can climb from one of those into the plugins directory where
-// neither the current nor the application directory candidate lands. Such a path is refused, whatever it leads to.
-TEST_F(PluginDependencyGateTest, ARelativePathWithAParentComponentIsRefusedEvenWhereNoCandidateReachesThePlugins) {
-  TestHook_InstallPluginLoadFilter(pluginsDir_);
-  wchar_t temp[MAX_PATH] = {};
-  ASSERT_GT(GetTempPathW(MAX_PATH, temp), 0u);
-  CurrentDirectoryScope cwd(temp);
-  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"..\\..\\no-such-dir\\late_up.dll", nullptr));
-  EXPECT_TRUE(TestLogContains("a relative path with a \"..\" component cannot be checked"));
-}
-
-TEST_F(PluginDependencyGateTest, ADevBuildLetsARelativePathWithAParentComponentThrough) {
+TEST_F(PluginDependencyGateTest, ADevBuildLetsARelativePathWithADirectoryPartThrough) {
   nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
   TestHook_InstallPluginLoadFilter(pluginsDir_);
-  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"..\\..\\no-such-dir\\late_up.dll", nullptr));
-}
-
-// Only a whole ".." component climbs; a name that merely contains two dots is an ordinary relative path.
-TEST_F(PluginDependencyGateTest, ADoubleDotInsideANameIsNotAParentComponent) {
-  TestHook_InstallPluginLoadFilter(pluginsDir_);
-  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"no-such-dir\\a..b.dll", nullptr));
-  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"no-such-dir\\...\\x.dll", nullptr));
+  for (const wchar_t* spelling : kRelativeWithADirectoryPart) {
+    SCOPED_TRACE(std::string(spelling, spelling + wcslen(spelling)));
+    EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(spelling, nullptr));
+  }
 }
 
 TEST_F(PluginDependencyGateTest, ARelativePathThatCannotBeResolvedIsRefusedNotLetThrough) {
@@ -705,7 +707,7 @@ TEST_F(PluginDependencyGateTest, ARelativePathThatCannotBeResolvedIsRefusedNotLe
   for (int i = 0; i < 700; ++i) tooLong += L"a\\";
   tooLong += L"x.dll";
   EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(tooLong.c_str(), nullptr));
-  EXPECT_TRUE(TestLogContains("its relative path cannot be resolved"));
+  EXPECT_TRUE(TestLogContains("a relative path with a directory part cannot be checked"));
 }
 
 TEST_F(PluginDependencyGateTest, ADevBuildLetsAnUnresolvableRelativePathThrough) {
