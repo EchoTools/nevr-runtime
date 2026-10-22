@@ -305,7 +305,7 @@ class ReleaseStagesTest(PackageFixture):
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
         self.assertIn("Two zips", texts["RELEASE-NOTES.md"])
-        self.assertIn("nevr-runtime-v5.0.0.zip", texts["RELEASE-NOTES.md"])
+        self.assertIn("nevr-runtime-v5.0.0-windows-server.zip", texts["RELEASE-NOTES.md"])
         self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):

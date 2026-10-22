@@ -59,6 +59,7 @@ BRAND_PROSE_SPELLINGS = {
     "CONTRIBUTING.md": {"nEVR"},
     "README.md": {"nEVR"},
     "docs/README.md": {"nEVR"},
+    "RELEASING.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
     "docs/adr/0010-signed-plugins-only.md": {"nEVR"},
