@@ -22,8 +22,8 @@ Install
 Update
   Unzip the newer package and run its install.ps1 the same way. When the BugSplat64.dll in the folder is
   one this folder's install put there, the script replaces it with the new one and keeps your original
-  BugSplat64.dll backup as it was; uninstall.ps1 then still puts your original back. It stops, and changes
-  nothing, when the file is one it did not put there.
+  BugSplat64.dll backup as it was; uninstall.ps1 then still puts your original back. It stops and leaves
+  the file alone when it is one the script did not put there.
 
 Uninstall
   Close Echo VR, then:

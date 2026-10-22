@@ -550,7 +550,7 @@ class InstallScriptsTest(unittest.TestCase):
         self.set_package(self.runtime("5.4.4"))
         result = self.ps("install.ps1", "-Dir", str(self.game))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("nEVR runtime", result.stdout + result.stderr)
+        self.assertIn("NEVR runtime", result.stdout + result.stderr)
         self.assertEqual(list(self.game.glob("BugSplat64.dll.original-*")), [])
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.runtime("5.4.3"))
         self.assertTrue((self.game / "dbgcore.dll").exists(), "nothing was set aside")

@@ -152,10 +152,10 @@ if (Test-Path -LiteralPath $state) {
   exit 0
 }
 
-# The file about to be backed up as the original must be the game's own. An nEVR runtime carries the
+# The file about to be backed up as the original must be the game's own. A NEVR runtime carries the
 # NEVR-BUILD identity literal; backing one up would make uninstall.ps1 "restore" a runtime (#759).
 if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')) {
-  throw 'the installed BugSplat64.dll is an nEVR runtime, not the game''s own file, and nevr-install.txt is missing; nothing was changed. Restore the game''s original BugSplat64.dll first (for example, Verify Files in the Meta Horizon app), then run install.ps1 again'
+  throw 'the installed BugSplat64.dll is a NEVR runtime, not the game''s own file, and nevr-install.txt is missing; the file was left as it is. Restore the game''s original BugSplat64.dll first (for example, Verify Files in the Meta Horizon app), then run install.ps1 again'
 }
 
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
