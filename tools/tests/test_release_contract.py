@@ -252,7 +252,7 @@ class ReleaseContractTest(unittest.TestCase):
         # files get a build-provenance attestation instead (not code signing).
         self.assertIn('name: "sign: stubbed, policy signer not built yet"', workflow)
         self.assertIn("PLACEHOLDER: the signer dispatch goes here", workflow)
-        self.assertIn("actions/attest-build-provenance@", workflow)
+        self.assertIn("actions/attest@", workflow)
         self.assertNotIn("azure/", workflow)
         self.assertNotIn("environment: codesign", workflow)
         self.assertNotIn("windows-latest", workflow)

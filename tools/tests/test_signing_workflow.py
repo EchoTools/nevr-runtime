@@ -214,7 +214,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
         self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
                          ["actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
-                          "actions/download-artifact", "actions/attest-build-provenance", "softprops/action-gh-release",
+                          "actions/download-artifact", "actions/attest", "softprops/action-gh-release",
                           "softprops/action-gh-release"])
         text = steps_text(publish)
         for word in ("pip", "apt-get", "cmake", "tools/"):
@@ -228,18 +228,27 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_the_release_files_get_a_provenance_attestation_in_the_publish_job_only(self):
         data, _ = load()
         for name, job in data["jobs"].items():
-            has_attest = "actions/attest-build-provenance" in steps_text(job)
+            has_attest = "actions/attest@" in steps_text(job)
             self.assertEqual(has_attest, name == "publish", name)
             permissions = job.get("permissions", {})
             self.assertEqual(permissions.get("id-token") == "write", name == "publish", name)
         self.assertEqual(data["jobs"]["publish"]["permissions"]["attestations"], "write")
+
+    def test_the_attestation_is_actions_attest_v4_pinned_by_sha_and_nothing_older(self):
+        """The release files are attested by actions/attest at v4 (GitHub Docs, "Using artifact attestations to
+        establish provenance for builds"), pinned by a full commit SHA with the version in a comment."""
+        text = (REPO / ".github/workflows/build.yml").read_text()
+        self.assertNotIn("attest-build-provenance", text)
+        self.assertRegex(text, r"uses: actions/attest@[0-9a-f]{40} # v4(\.\d+)*\n")
+        publish = load()[0]["jobs"]["publish"]
+        self.assertEqual(publish["permissions"], {"contents": "write", "id-token": "write", "attestations": "write"})
 
     def test_the_attested_files_are_exactly_the_uploaded_files(self):
         """`gh attestation verify <file>` finds a file only if its digest is a subject of an attestation: a
         file the release receives that is not attested has nothing to verify (#450), and an attested file
         that is never uploaded is a lie. The two lists are the same set."""
         steps = load()[0]["jobs"]["publish"]["steps"]
-        attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest-build-provenance@")]
+        attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest@")]
         uploads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
         self.assertEqual(len(attest), 1)
         self.assertEqual(len(uploads), 2)

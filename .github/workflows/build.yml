@@ -733,7 +733,10 @@ jobs:
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security
-    # features"). They are not code signing.
+    # features"). They are not code signing. The step is actions/attest at v4 with `subject-path`; its permissions are
+    # id-token: write, contents: read and attestations: write (GitHub Docs, "Using artifact attestations to establish
+    # provenance for builds"); this job also holds contents: write for the upload. Check a file with
+    # `gh attestation verify <file> -R EchoTools/nevr-runtime` (RELEASING.md).
     permissions:
       contents: write
       id-token: write
@@ -761,7 +764,7 @@ jobs:
         path: quest-asset
 
     - name: Attest build provenance of the release files
-      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
       with:
         subject-path: |
           dist/*.zip
