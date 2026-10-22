@@ -45,6 +45,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -811,6 +812,49 @@ void StageRuntimeFixture(const std::wstring& root, const wchar_t* fixture) {
   }
 }
 
+// `count` copies of one child at once, all sharing this process's environment (so one log directory and one named
+// log mutex), each waited for.
+void RunChildrenAtOnce(const std::wstring& command_line, int count, const char* label) {
+  STARTUPINFOW startup = {};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  for (HANDLE handle : {startup.hStdOutput, startup.hStdError}) {
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+      SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    }
+  }
+  std::vector<HANDLE> processes;
+  std::fflush(stdout);
+  std::fflush(stderr);
+  for (int at = 0; at < count; ++at) {
+    std::wstring command = command_line;
+    PROCESS_INFORMATION process = {};
+    Require(CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup,
+                           &process) != FALSE,
+            "could not launch a scenario child");
+    CloseHandle(process.hThread);
+    processes.push_back(process.hProcess);
+  }
+  bool failed = false;
+  for (HANDLE process : processes) {
+    if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0) {
+      TerminateProcess(process, 2);
+      failed = true;
+    }
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process, &exit_code);
+    CloseHandle(process);
+    if (exit_code != 0) {
+      std::fprintf(stderr, "scenario %s: a child exited 0x%lx\n", label, static_cast<unsigned long>(exit_code));
+      failed = true;
+    }
+  }
+  if (failed) Fail("a scenario child failed or timed out");
+}
+
 void RunChild(const std::wstring& command_line, const char* label) {
   std::wstring command = command_line;
   // The child's timeline and PASS/FAIL lines are the evidence: hand it this
@@ -906,6 +950,35 @@ int RunSuite() {
             "a process that ended at once after a failed attach lost the prologue mismatch record");
     Require(CountRecords(records, "host_attach", "image_check") == 1,
             "a process that ended at once after a failed attach lost the image check record");
+    std::set<unsigned long long> seqs;
+    for (const nlohmann::json& record : records) {
+      if (record.value("event", "") != "host_attach") continue;
+      Require(record.contains("seq"), "a host_attach record lacks its seq");
+      Require(seqs.insert(record.at("seq").get<unsigned long long>()).second,
+              "a process that ended at once wrote a journal step twice");
+    }
+  }
+  // Twelve of them at once into one log, under one named log mutex: a live process may hold the lock the others wait
+  // for, so the last flush waits (bounded) and never writes without it. Every process leaves both its records, every
+  // line parses (a blank line would fail the read), and no (pid, seq) appears twice.
+  constexpr int kConcurrentRuns = 12;
+  for (int round = 0; round < 3; ++round) {
+    use_scenario_directory(L"exit-at-once-together-" + std::to_wstring(round));
+    RunChildrenAtOnce(L"\"" + std::wstring(self, length) + L"\" --child exit-at-once", kConcurrentRuns,
+                      "exit-at-once-together");
+    const std::vector<nlohmann::json> records = ReadHostRecords();
+    Require(CountRecords(records, "host_attach", "prologue_check") == static_cast<std::size_t>(kConcurrentRuns),
+            "twelve processes that ended at once did not each leave the prologue mismatch record");
+    Require(CountRecords(records, "host_attach", "image_check") == static_cast<std::size_t>(kConcurrentRuns),
+            "twelve processes that ended at once did not each leave the image check record");
+    std::set<std::pair<unsigned long long, unsigned long long>> keys;
+    for (const nlohmann::json& record : records) {
+      if (record.value("event", "") != "host_attach") continue;
+      Require(record.contains("pid") && record.contains("seq"), "a host_attach record lacks its pid or seq");
+      const bool fresh = keys.insert({record.at("pid").get<unsigned long long>(), record.at("seq").get<unsigned long long>()})
+                             .second;
+      Require(fresh, "a (pid, seq) appears twice in the host log");
+    }
   }
   StageRuntimeFixture(root, L"good");
   use_scenario_directory(L"static-import");

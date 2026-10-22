@@ -118,9 +118,11 @@ class BootstrapDiagnostics {
 
   /// The last flush: the process is ending (DLL_PROCESS_DETACH with lpReserved != NULL), so every other thread
   /// is already dead. Writes each recorded step not yet written, including those a flush thread claimed and was
-  /// killed before it wrote, the failing steps first. It never waits on the log mutex (the mutex a killed thread
-  /// held is abandoned, and one that cannot be taken is written around, as a crash record is), and it takes no
-  /// other lock. A step already written is not written again.
+  /// killed before it wrote, the failing steps first. Each record carries its journal index as `seq` (with the
+  /// record's `pid`, one key per step): a claimed step is looked up in the log before it is written again. The
+  /// wait on the log mutex, which a live process on the same prefix can hold, is at most
+  /// kBootstrapExitLogLockWaitMs; when it is not taken the flush writes nothing (an unlocked line could
+  /// interleave with the holder's) and stops. It takes no other lock. A step already written is not written again.
   void FlushAttachJournalAtExit() noexcept;
 
   /// Name the thread that is inside the host's DllMain attach (0: none). A flush that runs on it is a defect (a
@@ -145,6 +147,8 @@ class BootstrapDiagnostics {
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
+  static constexpr std::uint32_t kEntryClaimed = 1;  // a flush took the entry and may not have finished its write
+  static constexpr std::uint32_t kEntryWritten = 2;
   static constexpr std::size_t kJournalCapacity = 8;
 
   // Read-only accessors.
@@ -179,6 +183,12 @@ class BootstrapDiagnostics {
   /// flush has returned; more means an entry was claimed twice.
   std::size_t JournalClaimed() const;
 
+  /// Set an entry's flush state (0, kEntryClaimed, kEntryWritten): a flush thread killed between the write and the mark.
+  void SetEntryStateForTest(std::size_t at, std::uint32_t state) { journal_[at].written.store(state); }
+
+  /// Appends the last flush skipped because the log mutex was held (by another process) past its wait.
+  static std::size_t ExitFlushSkippedForTest();
+
   /// Replace the output: every record Emit would write goes to `sink` instead. Null restores the file.
   using EmitSink = void (*)(const nlohmann::json& record);
   static void SetEmitSinkForTest(EmitSink sink);
@@ -201,12 +211,13 @@ class BootstrapDiagnostics {
     // Stored last, with release ordering: RecordAttach reserves a slot before it fills it, so a flush
     // must not read an entry until this says it is complete.
     std::atomic<std::uint32_t> ready;
-    // Set once the entry's record has been appended; FlushAttachJournalAtExit writes the entries without it.
+    // 0: not taken by a flush; kEntryClaimed: a flush is writing it, or was killed doing so; kEntryWritten.
     std::atomic<std::uint32_t> written;
   };
 
   void EmitJournalEntry(const JournalEntry& entry);
   void EmitDroppedTotal() noexcept;
+  bool EntryIsInLog(std::size_t seq) const noexcept;
   void NoteFlushCaller() noexcept;
   DiagnosticDestination EmitChecked(const nlohmann::json& record);
   void EnsureLogMutex() noexcept;

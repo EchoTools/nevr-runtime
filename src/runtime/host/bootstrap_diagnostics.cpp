@@ -109,8 +109,16 @@ std::atomic<HANDLE> g_log_mutex{nullptr};
 // there is no per-process budget.
 std::atomic<bool> g_log_lock_unreliable{false};
 
-// How long an append waits on the log mutex. The last flush of a process that is ending sets it to 0.
+// How long an append waits on the log mutex.
 std::atomic<DWORD> g_log_wait_ms{kBootstrapLogLockWaitMs};
+
+// The last flush of a process that is ending (FlushAttachJournalAtExit). The log mutex is named, so a live process on
+// the same prefix can hold it. The exit flush waits at most kBootstrapExitLogLockWaitMs for it and, when it does not
+// get it, writes nothing: an unlocked write could interleave with a live process's line. After the first such
+// failure the rest of the exit flush skips at once.
+std::atomic<bool> g_exit_flush{false};
+std::atomic<bool> g_exit_lock_lost{false};
+std::atomic<std::size_t> g_exit_skipped{0};
 
 // The thread inside the host's DllMain attach, and how many flushes ran on it.
 std::atomic<DWORD> g_attach_thread{0};
@@ -257,6 +265,10 @@ void BootstrapDiagnostics::MarkAttachThread(DWORD thread_id) noexcept { g_attach
 
 std::size_t BootstrapDiagnostics::FlushesOnAttachThread() noexcept { return g_flushes_on_attach_thread.load(); }
 
+#if defined(NEVR_HOST_TESTING)
+std::size_t BootstrapDiagnostics::ExitFlushSkippedForTest() { return g_exit_skipped.load(); }
+#endif
+
 void BootstrapDiagnostics::NoteFlushCaller() noexcept {
   const DWORD attach_thread = g_attach_thread.load();
   if (attach_thread != 0 && attach_thread == GetCurrentThreadId()) g_flushes_on_attach_thread.fetch_add(1);
@@ -284,12 +296,15 @@ void BootstrapDiagnostics::FlushAttachJournal() noexcept {
     claimed_.fetch_add(end - from);
 #endif
     for (std::size_t at = from; at < end; ++at) {
+      // Claimed before the write: a process that ends while this thread is in the write leaves the entry
+      // "claimed", and the last flush then looks in the log for it before it writes it again.
+      journal_[at].written.store(kEntryClaimed, std::memory_order_release);
       try {
         EmitJournalEntry(journal_[at]);
       } catch (const std::exception& error) {
         ReportBuildFailure("host_attach", error.what());
       }
-      journal_[at].written.store(1, std::memory_order_release);
+      journal_[at].written.store(kEntryWritten, std::memory_order_release);
     }
   }
   EmitDroppedTotal();
@@ -297,28 +312,90 @@ void BootstrapDiagnostics::FlushAttachJournal() noexcept {
 
 void BootstrapDiagnostics::FlushAttachJournalAtExit() noexcept {
   NoteFlushCaller();
-  // Other threads are dead, so nothing writes while this runs and no entry is half-written by a live thread:
-  // an entry whose flag says "not written" is one a flush claimed and did not finish. The failing steps go
-  // first: they are the reason the log is read.
-  const DWORD previous_wait = g_log_wait_ms.exchange(0);
+  // Other threads are dead, so nothing writes while this runs and no entry is half-written by a live thread: an
+  // entry that is not "written" is one a flush claimed and did not finish, or never reached. A claimed entry may
+  // have reached the file before its thread was killed, so the log is read for its (pid, seq) first. The failing
+  // steps go first: they are the reason the log is read.
+  g_exit_lock_lost.store(false);
+  g_exit_skipped.store(0);
+  g_exit_flush.store(true);
   std::size_t count = journal_count_.load();
   if (count > kJournalCapacity) count = kJournalCapacity;
-  for (int pass = 0; pass < 2; ++pass) {
-    for (std::size_t at = 0; at < count; ++at) {
+  for (int pass = 0; pass < 2 && !g_exit_lock_lost.load(); ++pass) {
+    for (std::size_t at = 0; at < count && !g_exit_lock_lost.load(); ++at) {
       JournalEntry& entry = journal_[at];
       if (entry.ready.load(std::memory_order_acquire) == 0) continue;
       if ((entry.outcome != AttachOutcome::kAccepted) != (pass == 0)) continue;
-      if (entry.written.exchange(1) != 0) continue;
+      const std::uint32_t state = entry.written.load(std::memory_order_acquire);
+      if (state == kEntryWritten) continue;
+      if (state == kEntryClaimed && EntryIsInLog(at)) {
+        entry.written.store(kEntryWritten, std::memory_order_release);
+        continue;
+      }
+      entry.written.store(kEntryClaimed, std::memory_order_release);
       try {
         EmitJournalEntry(entry);
       } catch (const std::exception& error) {
         ReportBuildFailure("host_attach", error.what());
       }
+      if (!g_exit_lock_lost.load()) entry.written.store(kEntryWritten, std::memory_order_release);
     }
   }
   flushed_upto_.store(count);
-  EmitDroppedTotal();
-  g_log_wait_ms.store(previous_wait);
+  if (!g_exit_lock_lost.load()) EmitDroppedTotal();
+  g_exit_flush.store(false);
+}
+
+bool BootstrapDiagnostics::EntryIsInLog(std::size_t seq) const noexcept {
+  // The last part of each log file: the records of this process are at its end. Reads take no lock.
+  const wchar_t* const dirs[3] = {primary_ready_ ? primary_dir_ : nullptr, fallback_ready_ ? fallback_dir_ : nullptr,
+                                  host_dir_ready_ ? host_dir_ : nullptr};
+  char pid_key[40];
+  char seq_key[40];
+  snprintf(pid_key, sizeof(pid_key), "\"pid\":%lu", static_cast<unsigned long>(GetCurrentProcessId()));
+  snprintf(seq_key, sizeof(seq_key), "\"seq\":%llu", static_cast<unsigned long long>(seq));
+  for (const wchar_t* dir : dirs) {
+    if (dir == nullptr) continue;
+    wchar_t path[MAX_PATH] = {};
+    if (!AppendPath(path, MAX_PATH, dir, kBootstrapLogName)) continue;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) continue;
+    LARGE_INTEGER size = {};
+    char buffer[64 * 1024 + 1];
+    DWORD got = 0;
+    bool found = false;
+    if (GetFileSizeEx(file, &size)) {
+      LARGE_INTEGER at = {};
+      at.QuadPart = size.QuadPart > static_cast<LONGLONG>(sizeof(buffer) - 1)
+                        ? size.QuadPart - static_cast<LONGLONG>(sizeof(buffer) - 1)
+                        : 0;
+      if (SetFilePointerEx(file, at, nullptr, FILE_BEGIN) &&
+          ReadFile(file, buffer, static_cast<DWORD>(sizeof(buffer) - 1), &got, nullptr)) {
+        buffer[got] = '\0';
+        // Line by line: the keys must be on one line, and it must be a journal record.
+        for (char* line = buffer; line < buffer + got;) {
+          char* end = std::strchr(line, '\n');
+          if (end != nullptr) *end = '\0';
+          if (std::strstr(line, "\"event\":\"host_attach\"") != nullptr && std::strstr(line, pid_key) != nullptr &&
+              std::strstr(line, seq_key) != nullptr) {
+            // "seq":1 must not match "seq":12: the next character is not a digit.
+            const char* hit = std::strstr(line, seq_key);
+            const char next = hit[std::strlen(seq_key)];
+            if (next < '0' || next > '9') {
+              found = true;
+              break;
+            }
+          }
+          if (end == nullptr) break;
+          line = end + 1;
+        }
+      }
+    }
+    CloseHandle(file);
+    if (found) return true;
+  }
+  return false;
 }
 
 void BootstrapDiagnostics::EmitDroppedTotal() noexcept {
@@ -346,6 +423,8 @@ void BootstrapDiagnostics::EmitJournalEntry(const JournalEntry& entry) {
   {
     nlohmann::json record;
     record["event"] = "host_attach";
+    // With the record's pid, the key of this entry in this process: a reader keeps one record per (pid, seq).
+    record["seq"] = static_cast<std::size_t>(&entry - journal_);
     record["step"] = StepName(entry.step);
     record["outcome"] = OutcomeName(entry.step, entry.outcome, entry.note);
     const bool target_step = entry.step == AttachStep::kImageCheck ||
@@ -480,6 +559,8 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
     CreateDirectories(dir_copy);
   }
 
+  const bool exiting = g_exit_flush.load();
+  if (exiting && g_exit_lock_lost.load() && g_log_mutex.load(std::memory_order_acquire) != nullptr) return false;
   HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
@@ -492,7 +573,18 @@ bool BootstrapDiagnostics::AppendTo(const wchar_t* dir, bool create_dir, const c
   bool marked_unreliable = false;
   DWORD waited = WAIT_OBJECT_0;
   DWORD wait_error = 0;
-  if (lock != nullptr && !g_log_lock_unreliable.load()) {
+  if (exiting && lock != nullptr) {
+    // The last flush: a bounded wait, then no write. The unreliable mark of earlier appends does not apply: it
+    // was set by a wait in this process, and the holder may be another one.
+    waited = WaitForSingleObject(lock, kBootstrapExitLogLockWaitMs);
+    locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;
+    if (!locked) {
+      g_exit_lock_lost.store(true);
+      g_exit_skipped.fetch_add(1);
+      CloseHandle(file);
+      return false;
+    }
+  } else if (lock != nullptr && !g_log_lock_unreliable.load()) {
     waited = WaitForSingleObject(lock, g_log_wait_ms.load());
     if (waited == WAIT_FAILED) wait_error = GetLastError();
     locked = waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED;

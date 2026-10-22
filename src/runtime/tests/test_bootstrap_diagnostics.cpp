@@ -1123,6 +1123,91 @@ TEST(BootstrapDiagnostics, TheLastFlushWritesNothingTwiceAndNothingWhenEverythin
   EXPECT_EQ(records[2].at("step"), "hook_install");
 }
 
+// A flush thread killed after its record reached the file and before it marked the entry leaves the entry
+// "claimed": the last flush finds the record by (pid, seq) and does not write it again. A claimed entry that is not
+// in the file is written.
+TEST(BootstrapDiagnostics, TheLastFlushDoesNotRepeatAClaimedStepThatIsAlreadyInTheLogAndWritesOneThatIsNot) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+  diagnostics.FlushAttachJournal();
+  ASSERT_EQ(ReadRecords(local + kLogsFile).size(), 3u);
+
+  diagnostics.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // written, not marked
+  diagnostics.FlushAttachJournalAtExit();
+  std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  EXPECT_EQ(records.size(), 3u);
+
+  const std::wstring other = MakeTempDir(L"local");
+  BootstrapDiagnostics lost;
+  lost.PrepareForTest(other.c_str(), nullptr, nullptr);
+  lost.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  lost.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  lost.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // claimed, never written
+  lost.FlushAttachJournalAtExit();
+  records = ReadRecords(other + kLogsFile);
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");
+  EXPECT_EQ(records[1].at("step"), "image_check");
+}
+
+// Every journal record carries its journal index as `seq`; with the record's pid it is a key no step shares.
+TEST(BootstrapDiagnostics, EachJournalRecordCarriesItsSeqAndNoPidSeqPairRepeats) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  for (int at = 0; at < 5; ++at) diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.FlushAttachJournal();
+  diagnostics.FlushAttachJournalAtExit();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 5u);
+  std::set<std::pair<unsigned long long, unsigned long long>> keys;
+  for (std::size_t at = 0; at < records.size(); ++at) {
+    EXPECT_EQ(records[at].at("seq").get<std::size_t>(), at);
+    keys.insert({records[at].at("pid").get<unsigned long long>(), records[at].at("seq").get<unsigned long long>()});
+  }
+  EXPECT_EQ(keys.size(), 5u);
+}
+
+// The log mutex is named and shared by every process on the prefix: a live process can hold it. The last flush waits
+// at most kBootstrapExitLogLockWaitMs and then writes nothing (an unlocked line could interleave with the holder's);
+// a holder that never lets go must not hold the exiting process.
+TEST(BootstrapDiagnostics, TheLastFlushIsNotHeldForeverByAnotherThreadHoldingTheLogLockAndWritesNothingUnlocked) {
+  ScopedLogMutexName scoped(UniqueMutexName(L"exitheld"));
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+  HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
+
+  const auto start = std::chrono::steady_clock::now();
+  diagnostics.FlushAttachJournalAtExit();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  EXPECT_LT(elapsed.count(), 1500);  // one bounded wait, not one per record and not the holder's 10 s
+  EXPECT_GE(elapsed.count(), 200);   // it did wait for the lock first
+  EXPECT_EQ(BootstrapDiagnostics::ExitFlushSkippedForTest(), 1u);
+  EXPECT_TRUE(ReadAll(local + kLogsFile).empty());  // nothing was written without the lock
+
+  SetEvent(handles[1]);
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(handles[0]);
+  CloseHandle(handles[1]);
+
+  diagnostics.FlushAttachJournalAtExit();  // the lock is free now: everything that was skipped is written, once
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");
+}
+
 // The last flush reports entries the journal had no room for, once.
 TEST(BootstrapDiagnostics, TheLastFlushReportsTheDroppedEntriesOnce) {
   std::vector<nlohmann::json> records;

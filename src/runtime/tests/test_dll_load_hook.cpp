@@ -814,8 +814,8 @@ TEST_F(DllLoadHookOnLoad, AnAlreadyLoadedDllIsLoggedDurablyInBootAndAfter) {
       << AllClogText();
 }
 
-// The boot phase is itself run under the loader lock; Log() is safe there because it goes to the tee, so
-// the line is written at once, not held.
+// A refusal made while this thread holds the loader lock, in the boot phase: Log() goes to the tee, so the line is
+// written at once, not held. (The test takes the lock itself; initialization no longer runs under it.)
 TEST_F(DllLoadHookFilter, ARefusalMadeUnderTheLoaderLockInTheBootPhaseIsWrittenAtOnce) {
   ASSERT_EQ(MH_Initialize(), MH_OK);
   nevr_dll_load_hook::Install();
