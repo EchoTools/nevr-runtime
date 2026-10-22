@@ -649,6 +649,114 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.runtime("5.4.3"))
         self.assertTrue((self.game / "dbgcore.dll").exists(), "nothing was set aside")
 
+    # #780: the installed hash is never also listed in previous_sha256. A to B to A to B (updates) and B copied in by
+    # hand over a record that lists it as previous are the inputs that put it there when the filter is dropped.
+    def test_updating_back_and_forth_never_lists_the_installed_hash_as_previous(self):
+        a, b = self.plain("5.4.3"), self.plain("5.4.4")
+        for payload in (a, b, a, b):
+            self.set_package(payload)
+            result = self.ps("install.ps1", "-Dir", str(self.game))
+            self.assertEqual(result.returncode, 0, self.output(result))
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(b).hexdigest())
+        self.assertEqual(self.state()["previous_sha256"], hashlib.sha256(a).hexdigest())
+
+    def test_a_hand_copied_dll_the_record_lists_as_previous_becomes_the_installed_one_and_leaves_previous(self):
+        a, b = self.plain("5.4.3"), self.plain("5.4.4")
+        for payload in (a, b):
+            self.set_package(payload)
+            self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        self.set_package(a)  # the older package, its DLL copied in by hand over B
+        (self.game / "BugSplat64.dll").write_bytes(a)
+        again = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(again.returncode, 0, self.output(again))
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(a).hexdigest())
+        self.assertEqual(self.state()["previous_sha256"], hashlib.sha256(b).hexdigest())
+
+    # #779: an install made before #762 may have saved a NEVR runtime as the .original backup. Neither script uses
+    # a backup that carries the runtime literal; both say how to get the game's own file back.
+    def poison_the_backup(self):
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (backup,) = self.game.glob("BugSplat64.dll.original-*")
+        backup.write_bytes(self.runtime("5.0.0"))
+        return backup
+
+    def assert_refused_over_a_runtime_backup(self, result, backup):
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("Verify Files", self.output(result))
+        self.assertIn("NEVR runtime", self.output(result))
+        self.assertEqual(backup.read_bytes(), self.runtime("5.0.0"))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"), "nothing was changed")
+        self.assertTrue((self.game / "nevr-install.txt").exists(), "the record is kept")
+
+    def test_uninstall_refuses_a_backup_that_is_a_runtime(self):
+        backup = self.poison_the_backup()
+        self.assert_refused_over_a_runtime_backup(self.ps("uninstall.ps1", "-Dir", str(self.game)), backup)
+
+    def test_an_update_refuses_a_backup_that_is_a_runtime(self):
+        backup = self.poison_the_backup()
+        self.set_package(self.plain("5.4.4"))
+        self.assert_refused_over_a_runtime_backup(self.ps("install.ps1", "-Dir", str(self.game)), backup)
+
+    def test_recording_a_hand_copied_dll_refuses_a_backup_that_is_a_runtime(self):
+        backup = self.poison_the_backup()  # installed: 5.4.3
+        self.set_package(self.plain("5.4.4"))
+        # the record names 5.4.3; this package's 5.4.4 DLL copied in by hand is what install would only record
+        (self.game / "BugSplat64.dll").write_bytes(self.plain("5.4.4"))
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("Verify Files", self.output(result))
+        self.assertEqual(backup.read_bytes(), self.runtime("5.0.0"))
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.plain("5.4.3")).hexdigest(), "nothing was recorded")
+
+    def test_the_uninstall_refusal_ends_at_deleting_the_record_and_install_keeps_its_own_wording(self):
+        # Someone uninstalling has the stock file back after Verify Files; install.ps1 would only reinstall the runtime.
+        self.poison_the_backup()
+        undone = self.output(self.ps("uninstall.ps1", "-Dir", str(self.game)))
+        self.assertIn("Verify Files", undone)
+        self.assertIn("nevr-install.txt", undone)
+        self.assertNotIn("install.ps1 again", undone)
+        self.set_package(self.plain("5.4.4"))
+        self.assertIn("then run install.ps1 again", self.output(self.ps("install.ps1", "-Dir", str(self.game))))
+
+    # The marker is the exact bytes the build writes (build_identity.cpp): "NEVR-BUILD " with the trailing space,
+    # upper case. A backup that only resembles it is not a runtime and is restored.
+    def assert_a_backup_with_these_bytes_is_restored(self, payload):
+        backup = self.poison_the_backup()
+        backup.write_bytes(payload)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, self.output(undone))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), payload)
+
+    def test_a_backup_with_the_marker_but_no_trailing_space_is_not_a_runtime(self):
+        self.assert_a_backup_with_these_bytes_is_restored(b"MZ\0NEVR-BUILD\0" + b"a" * 8)
+
+    def test_a_backup_with_the_marker_in_lower_case_is_not_a_runtime(self):
+        self.assert_a_backup_with_these_bytes_is_restored(b"MZ\0nevr-build 5.0.0 " + b"a" * 8)
+
+    def test_an_update_with_the_backup_deleted_says_so_and_changes_nothing(self):
+        self.set_package(self.plain("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (backup,) = self.game.glob("BugSplat64.dll.original-*")
+        backup.unlink()
+        self.set_package(self.plain("5.4.4"))
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0, self.output(result))
+        self.assertIn("the backup is gone", self.output(result))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.3"))
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.plain("5.4.3")).hexdigest())
+
+    def test_after_verify_files_and_deleting_the_record_install_backs_up_the_games_own_file(self):
+        backup = self.poison_the_backup()
+        (self.game / "BugSplat64.dll").write_bytes(b"ORIGINAL")  # Verify Files
+        (self.game / "nevr-install.txt").unlink()
+        moved = backup.with_name("BugSplat64.dll.original-kept")  # a second install in the same second must not collide
+        backup.rename(moved)
+        installed = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(installed.returncode, 0, self.output(installed))
+        fresh = [p for p in self.game.glob("BugSplat64.dll.original-*") if p != moved]
+        self.assertEqual([p.read_bytes() for p in fresh], [b"ORIGINAL"])
+
     def ps_typed(self, typed, script, *args):
         return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
                               input=typed, capture_output=True, text=True, timeout=60)
