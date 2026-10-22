@@ -672,7 +672,7 @@ test-quest-data: _vcpkg-quest-host
     mkdir -p "$out"
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
-    for f in sha256 zip staging; do
+    for f in sha256 zip staging fetch; do
         g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
             "src/quest/data/$f.cpp" -o "$out/$f.o"
     done
@@ -680,6 +680,46 @@ test-quest-data: _vcpkg-quest-host
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" src/quest/tests/data_test.cpp "$host/lib/libz.a" \
         -o "$out/data_test"
     timeout -k 5 300 "$out/data_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" src/quest/tests/fetch_test.cpp "$host/lib/libz.a" \
+        -o "$out/fetch_test"
+    timeout -k 5 300 "$out/fetch_test"
+
+# The data fetch over real HTTP (src/quest/data/curl_transport.cpp and fetch.cpp against src/quest/tests/range_server.py):
+# explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
+# plain http, and a whole fetch that resumes. Needs system libcurl, openssl, python3 and zlib development files, as
+# test-quest-tls does for libcurl; zlib comes from the host vcpkg install.
+test-quest-data-net: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tool in openssl python3 pkg-config g++; do
+        command -v "$tool" >/dev/null || { echo "test-quest-data-net: missing tool: $tool" >&2; exit 1; }
+    done
+    pkg-config --exists libcurl || { echo "test-quest-data-net: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-data-net-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$host/include" $(pkg-config --cflags libcurl) \
+        src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
+        src/quest/data/curl_transport.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/curl_transport_test.cpp \
+        "$host/lib/libz.a" -o "$out/curl_transport_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    cd "$out"
+    export NEVR_TEST_TMP="$PWD"
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout trust.key -out trust.pem -subj "/CN=nevr-data-test-ca" -days 2 \
+        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+    mkdir trust
+    cp trust.pem trust/trust.pem
+    ./curl_transport_test write-zip payload.zip
+    : > requests.log
+    python3 -I ../../src/quest/tests/range_server.py server.port requests.log payload.zip &
+    server=$!
+    trap 'kill "$server" 2>/dev/null || true' EXIT
+    for _ in $(seq 1 100); do [ -s server.port ] && break; sleep 0.1; done
+    [ -s server.port ] || { echo "test-quest-data-net: the range server did not start" >&2; exit 1; }
+    timeout -k 5 300 ./curl_transport_test "$(cat server.port)" requests.log trust
+    echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
@@ -1329,9 +1369,9 @@ verify:
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     # --- Parallel test block --------------------------------------------------
-    # Nine independent suites run concurrently (capped at nproc) instead of one after
+    # Ten independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
-    # it, so the serial wall clock was ~9 compiles back to back. The shared vcpkg host
+    # it, so the serial wall clock was ~10 compiles back to back. The shared vcpkg host
     # prereq (yaml-cpp) is built once, serially, here, so the workers that depend on it hit
     # the idempotent guard in _vcpkg-quest-host and never run vcpkg concurrently.
     # tools/verify-parallel.sh fails closed and names the failing suite: any suite failing
@@ -1346,6 +1386,7 @@ verify:
         test-quest-redirect \
         test-quest-social \
         test-quest-data \
+        test-quest-data-net \
         test-quest-integration
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
