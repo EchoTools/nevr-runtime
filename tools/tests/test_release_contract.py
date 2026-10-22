@@ -171,7 +171,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()
         build = justfile.split("# Build all components\n", 1)[1].split("# Build only", 1)[0]
-        dist = justfile.split("# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
+        dist = justfile.split("# Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
         self.assertIn("cmake --build --preset {{ preset }}", build)
         self.assertNotIn("|", build)
         self.assertIn("cmake --build --preset {{ preset }} --target dist", dist)
