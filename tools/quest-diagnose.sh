@@ -3,14 +3,20 @@
 #
 # Reads facts from ONE headset over adb (headset model and OS build, the game's version, the data folders, the
 # runtime's own log and crash files), starts the game ONCE and reads the log of that launch, prints a one-screen
-# verdict, then writes everything to nevr-diagnose-<UTC>.zip. It never installs, uninstalls or deletes anything on the
-# headset or here. It closes the game if it is running (the launch has to be clean).
+# verdict, then writes everything to nevr-diagnose-<UTC>.zip. It never installs or uninstalls anything and deletes
+# nothing on the headset; here it deletes only its own temporary folder. On the headset it does three things: it closes
+# the game if it is running, it erases the headset's log buffer (after saving a copy as logcat_before_launch.txt), and
+# it starts the game once.
 #
-# Not collected: device_login.txt (the sign-in link and code), the credential cache, config files. The device serial
-# and any e-mail address are replaced with <device-serial> and <email> in every text file and in the verdict.
+# Not collected: device_login.txt (the sign-in link and code), the credential cache, config files. The adb serial, the
+# hardware serial (ro.serialno) and any e-mail address are replaced with <device-serial> and <email> in every text file
+# and in the verdict. NOT masked: the zip holds the runtime's crash dumps as they are and the headset's whole system log,
+# which can show the Wi-Fi name, the BSSID and IP addresses. Send the zip by direct message to sprockee or a sister,
+# never in a public channel.
 #
 # usage: tools/quest-diagnose.sh [--adb PATH] [--out DIR] [--wait SECONDS]
 # adb is taken from --adb, else from the PATH. Connect exactly one headset by USB with USB debugging on.
+# Needs bash 4 or newer (mapfile); the bash 3.2 that macOS ships is too old.
 set -uo pipefail
 pkg=com.readyatdawn.r15
 activity=com.oculus.gles3jni.MainActivity
@@ -30,14 +36,16 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --adb) adb_path=${2:-}; [ -n "$adb_path" ] || fail "--adb needs a path"; shift 2 ;;
     --out) out_dir=${2:-}; [ -n "$out_dir" ] || fail "--out needs a folder"; shift 2 ;;
-    --wait) wait_s=${2:-}; shift 2 ;;
-    -h|--help) sed -n '2,13p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --wait) wait_s=${2:-}; [ -n "$wait_s" ] || fail "--wait needs a number of seconds"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) fail "unknown argument '$1' (see --help)" ;;
   esac
 done
 case "$wait_s" in ''|*[!0-9]*) fail "--wait needs a whole number of seconds" ;; esac
 [ -n "$out_dir" ] || out_dir=$here
 [ -d "$out_dir" ] || fail "the output folder does not exist: $out_dir"
+# Absolute before anything changes directory: the zip is written from inside the working folder.
+out_dir=$(cd "$out_dir" && pwd) || fail "cannot enter the output folder: $out_dir"
 
 if [ -n "$adb_path" ]; then
   [ -f "$adb_path" ] || fail "adb not found: $adb_path"
@@ -66,11 +74,17 @@ case "$state" in
 esac
 dev() { local secs=$1; shift; with_limit "$secs" "$adb_path" -s "$serial" "$@" 2>&1; }
 
+# The hardware serial also shows up in logcat when the headset is connected over Wi-Fi (the adb serial is then an address).
+hw_serial=$(dev 30 shell getprop ro.serialno | tr -d '\r')
+printf '%s' "$hw_serial" | grep -Eq '^[A-Za-z0-9._:-]{4,}$' || hw_serial=""
+
 work=$(mktemp -d "${TMPDIR:-/var/tmp}/nevr-diagnose.XXXXXX") || fail "could not make a working folder"
 trap 'rm -rf "$work"' EXIT
-serial_re=$(printf '%s' "$serial" | sed 's/[][\.*^$/]/\\&/g')
-# Replaces the serial and anything shaped like an e-mail address.
-protect() { sed -E -e "s/$serial_re/<device-serial>/g" -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/<email>/g'; }
+escape_re() { printf '%s' "$1" | sed 's/[][\.*^$/+?(){}|]/\\&/g'; }
+mask="s/$(escape_re "$serial")/<device-serial>/g"
+if [ -n "$hw_serial" ] && [ "$hw_serial" != "$serial" ]; then mask="$mask;s/$(escape_re "$hw_serial")/<device-serial>/g"; fi
+# Replaces both serials and anything shaped like an e-mail address.
+protect() { sed -E -e "$mask" -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/<email>/g'; }
 save() { local rel=$1; mkdir -p "$work/$(dirname "$rel")"; protect >"$work/$rel"; }
 
 utc=$(date -u '+%Y%m%dT%H%M%SZ')
@@ -104,6 +118,8 @@ list android_data_files.txt "$filesdir"
 remote_dir() { [ "$(dev 30 shell "[ -d $1 ] && echo yes || echo no" | tr -d '\r')" = yes ]; }
 data_media=no; remote_dir "$media/files/_data" && data_media=yes
 data_legacy=no; remote_dir "$legacy/_data" && data_legacy=yes
+# The runtime also serves the Android/media files folder when it exists without _data (android_media_unmarked, #749).
+media_dir=no; remote_dir "$media/files" && media_dir=yes
 
 # The runtime's own log and crash files: these two names only.
 mkdir -p "$work/sentinel"
@@ -115,8 +131,9 @@ while IFS= read -r f; do
 done < <(find "$work/sentinel/nevr-crashes" -type f 2>/dev/null)
 printf 'nevr-sentinel.log: exit %s %s\nnevr-crashes: exit %s %s\n' "$log_rc" "$log_pull" "$crash_rc" "$crash_pull" | save sentinel/pull_results.txt
 
-# ONE clean launch.
-echo "Starting the game once and waiting $wait_s s (this closes it first if it is running) ..."
+# ONE clean launch. The headset's log of the run the tester came with is saved first: logcat -c erases it.
+echo "Starting the game once and waiting $wait_s s (this closes it first if it is running and erases the headset's log buffer after saving a copy) ..."
+dev 120 logcat -d -b all | tr -d '\r' | save logcat_before_launch.txt
 dev 30 shell am force-stop "$pkg" >/dev/null
 dev 30 logcat -c >/dev/null
 start_out=$(dev 60 shell am start -n "$pkg/$activity" | tr -d '\r')
@@ -138,7 +155,7 @@ if [ -n "$line" ]; then
 fi
 crash_marker=$(printf '%s\n' "$logcat" | grep -o -m1 -E 'FATAL EXCEPTION|Fatal signal|am_crash|ANR in ' | head -n1)
 problems=()
-[ "$data_media" = yes ] || [ "$data_legacy" = yes ] || problems+=("NO GAME DATA: neither $media/files/_data nor $legacy/_data exists.")
+[ "$data_media" = yes ] || [ "$data_legacy" = yes ] || [ "$media_dir" = yes ] || problems+=("NO GAME DATA: neither $media/files nor $legacy/_data exists.")
 if printf '%s' "$start_out" | grep -q 'Error'; then problems+=("The game did not start: $start_out")
 elif [ "$running" != yes ]; then problems+=("The game was not running $wait_s s after it started (it ended or crashed).")
 fi
@@ -147,18 +164,20 @@ fi
 if [ "${#problems[@]}" -eq 0 ]; then result="No problem found in these facts. Send the zip anyway if the game still misbehaves."
 else result=$(printf '%s\n           ' "${problems[@]}"); result=${result%$'\n           '}; fi
 present() { if [ "$1" = yes ]; then echo present; else echo absent; fi; }
+media_note=""
+if [ "$data_media" != yes ] && [ "$media_dir" = yes ]; then media_note=" (the files folder exists; the runtime serves it as android_media_unmarked)"; fi
 verdict=$(cat <<V
 NEVR Quest diagnose  $(date -u '+%Y-%m-%d %H:%M:%S')Z
 Headset:   $model, OS build $os_build
 Game:      $pkg versionCode ${version_code:-(not installed?)}, versionName ${version_name:--}
 Installer: ${installer:-no .echo_installer_version found}
-Data:      $media/files/_data: $(present "$data_media")
+Data:      $media/files/_data: $(present "$data_media")$media_note
            $legacy/_data: $(present "$data_legacy")
 Launch:    the game mounted data at: ${obb:-(no line)}
            runtime data_root line: ${data_root:-none (this build does not log one)}
            running after $wait_s s: $running
 Verdict:   $result
-Zip:       $zip_path  (send this file)
+Zip:       $(basename "$zip_path")  (in the --out folder, else next to this script; send this file)
 V
 )
 verdict=$(printf '%s\n' "$verdict" | protect)
@@ -168,7 +187,7 @@ printf '%s\n' "$verdict"
 
 # The zip: verdict first.
 if command -v zip >/dev/null 2>&1; then
-  (cd "$work" && zip -q "$zip_path" verdict.txt && zip -qr "$zip_path" . -x verdict.txt) || fail "zip failed"
+  (cd "$work" && zip -q "$zip_path" verdict.txt && zip -qrD "$zip_path" . -x verdict.txt) || fail "zip failed"
 elif command -v python3 >/dev/null 2>&1; then
   python3 -I - "$work" "$zip_path" <<'PY' || fail "python3 could not write the zip"
 import os, sys, zipfile
@@ -183,3 +202,4 @@ else
   fail "neither zip nor python3 is installed, so the zip could not be written"
 fi
 run_log "OK quest-diagnose.sh wrote $zip_path problems=${#problems[@]}"
+echo "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses). Send it by direct message to sprockee or a sister, never in a public channel."

@@ -25,8 +25,20 @@ LEGACY = "/sdcard/readyatdawn"
 FILES = "/sdcard/Android/data/com.readyatdawn.r15/files"
 GOOD_DIRS = f"{MEDIA}:{MEDIA}/files:{MEDIA}/files/_data:{MEDIA}/asset_patches:{FILES}"
 
+HWSERIAL = "HWSER0987654"
+WIFI_SERIAL = "192.168.1.5:5555"
+PRIVACY = "never in a public channel"
+ZIP_FILES = {
+    "verdict.txt", "device.txt", "package.txt", "installer_version.txt", "launch.txt", "logcat.txt",
+    "logcat_before_launch.txt", "listings/readyatdawn.txt", "listings/readyatdawn_data.txt", "listings/media.txt",
+    "listings/media_files.txt", "listings/media_files_data.txt", "listings/media_asset_patches.txt",
+    "listings/android_data_files.txt", "sentinel/nevr-sentinel.log", "sentinel/pull_results.txt",
+    "sentinel/nevr-crashes/crash-1.txt", "sentinel/nevr-crashes/crash-1.dmp",
+}
+
 LOGCAT = f"""10-21 22:00:01.000  100  100 I NEVR-Sentinel: {{"event":"sentinel_ctor","account":"{EMAIL}"}}
 10-21 22:00:02.000  100  100 I NEVR-Sentinel: serial {SERIAL} attached
+10-21 22:00:02.500  100  100 I Settings: ro.serialno={HWSERIAL} ssid="HomeNet" bssid=aa:bb:cc:dd:ee:ff ip=192.168.1.50
 10-21 22:00:03.000  100  100 I EchoVR : Loading OBB from '/sdcard/obb/main.obb'
 10-21 22:00:03.100  100  100 I EchoVR : OBB mounted at '{MEDIA}/files'
 10-21 22:00:03.200  100  100 I NEVR-Sentinel: {{"event":"data_root","result":"found","source":"android_media","root":"{MEDIA}/files"}}
@@ -48,10 +60,11 @@ case "$*" in
       */nevr-crashes)
         mkdir -p "$3/nevr-crashes"
         printf 'MDMP-binary' > "$3/nevr-crashes/crash-1.dmp"
-        printf 'crash for %s\n' "$FAKE_SERIAL" > "$3/nevr-crashes/crash-1.txt"
+        printf 'crash for %s and %s\n' "$FAKE_SERIAL" "$FAKE_HWSERIAL" > "$3/nevr-crashes/crash-1.txt"
         echo "2 files pulled"; exit 0 ;;
       *) echo "unexpected pull $2" >&2; exit 1 ;;
     esac ;;
+  "shell getprop ro.serialno") echo "$FAKE_HWSERIAL" ;;
   "shell getprop ro.product.model") echo "Quest 2" ;;
   "shell getprop ro.build.display.id") echo "SQ3A.220605.009.A1.TEST" ;;
   "shell getprop ro.build.version.release") echo "12" ;;
@@ -115,7 +128,7 @@ class DiagnoseCases:
         env = {"PATH": f"{self.fakebin}:{self.farm}", "HOME": str(self.tmp / "home"), "TMPDIR": str(self.tmp),
                "APPDATA": str(self.tmp / "Roaming"), "LOCALAPPDATA": str(self.tmp / "Local"),
                "FAKE_ADB_LOG": str(self.adb_log), "FAKE_DIRS": GOOD_DIRS, "FAKE_LOGCAT": str(self.logcat),
-               "FAKE_SERIAL": SERIAL, "FAKE_EMAIL": EMAIL}
+               "FAKE_SERIAL": SERIAL, "FAKE_EMAIL": EMAIL, "FAKE_HWSERIAL": HWSERIAL}
         env.update(extra)
         return env
 
@@ -148,12 +161,19 @@ class DiagnoseCases:
         self.assertIn(b"echo-installer 2.0.1", data["installer_version.txt"])
         self.assertTrue(re.fullmatch(r"nevr-diagnose-\d{8}T\d{6}Z\.zip", self.zips()[0].name), self.zips()[0].name)
 
+    def test_the_zip_holds_exactly_the_listed_files(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data, _ = self.members()
+        self.assertEqual(set(data), ZIP_FILES)
+
     def test_the_verdict_prints_first_on_one_screen_and_says_where_the_data_was_found(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         start = result.stdout.index("NEVR Quest diagnose")
-        verdict = result.stdout[start:].strip().splitlines()
+        verdict = result.stdout[start:].split("Privacy:")[0].strip().splitlines()
         self.assertLessEqual(len(verdict), 16, verdict)
+        self.assertFalse([line for line in verdict if line.startswith("Zip:")][0].count("/"), verdict)
         text = "\n".join(verdict)
         self.assertIn("Headset:   Quest 2, OS build SQ3A.220605.009.A1.TEST", text)
         self.assertIn("versionCode 4987566, versionName 4987566", text)
@@ -178,12 +198,71 @@ class DiagnoseCases:
             everything.append(log.read_text())
         for text in everything:
             self.assertNotIn(SERIAL, text)
+            self.assertNotIn(HWSERIAL, text)
             self.assertNotIn(EMAIL, text)
         self.assertIn(b"<device-serial>", data["logcat.txt"])
         self.assertIn(b"<email>", data["logcat.txt"])
         self.assertIn(b"<device-serial>", data["sentinel/nevr-sentinel.log"])
         self.assertIn(b"<email>", data["sentinel/nevr-sentinel.log"])
         self.assertIn(b"<email>", data["package.txt"] + data["sentinel/nevr-sentinel.log"])
+
+    def test_the_hardware_serial_is_masked_when_the_headset_is_connected_over_wifi(self):
+        result = self.run_script(FAKE_DEVICES=f"{WIFI_SERIAL}\\tdevice\\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data, _ = self.members()
+        everything = [result.stdout, result.stderr] + [body.decode("utf-8", "replace") for body in data.values()]
+        for text in everything:
+            self.assertNotIn(HWSERIAL, text)
+            self.assertNotIn(WIFI_SERIAL, text)
+        self.assertIn(b"<device-serial>", data["logcat.txt"])
+        self.assertIn(b"<device-serial>", data["logcat_before_launch.txt"])
+        self.assertIn(b"<device-serial>", data["sentinel/nevr-crashes/crash-1.txt"])
+        # What is not masked stays, and the zip says so (the privacy line).
+        self.assertIn(b"bssid=aa:bb:cc:dd:ee:ff", data["logcat.txt"])
+
+    def test_the_last_line_says_what_the_zip_holds_and_where_to_send_it(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        last = [line for line in result.stdout.splitlines() if line.strip()][-1]
+        for needle in ("crash dumps", "system log", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY):
+            self.assertIn(needle, last)
+
+    def test_the_log_of_the_run_the_tester_came_with_is_saved_before_it_is_erased(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        cleared = calls.index("logcat -c")
+        self.assertIn("logcat -d -b all", calls[:cleared])
+        self.assertIn("logcat -d -b all", calls[cleared:])
+        data, _ = self.members()
+        self.assertIn(b"OBB mounted at", data["logcat_before_launch.txt"])
+
+    def test_the_zip_line_names_the_file_not_the_folder(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        zip_line = [line for line in result.stdout.splitlines() if line.startswith("Zip:")]
+        self.assertEqual(len(zip_line), 1, result.stdout)
+        self.assertIn(self.zips()[0].name, zip_line[0])
+        self.assertNotIn(str(self.out), zip_line[0])
+        self.assertNotIn(str(self.out), self.members()[0]["verdict.txt"].decode())
+
+    def test_a_relative_output_folder_is_resolved_before_the_work_folder_is_entered(self):
+        cwd = self.tmp / "cwd"
+        (cwd / "rel out").mkdir(parents=True)
+        for out, folder in (("rel out", cwd / "rel out"), (".", cwd)):
+            result = self.run_script(out=out, cwd=cwd)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            made = sorted(folder.glob("nevr-diagnose-*.zip"))
+            self.assertEqual(len(made), 1, f"--out {out!r}: {sorted(p.name for p in folder.iterdir())}")
+            with zipfile.ZipFile(made[0]) as z:
+                self.assertEqual(z.namelist()[0], "verdict.txt")
+
+    def test_the_files_folder_alone_is_data_the_runtime_serves_and_the_verdict_says_so(self):
+        result = self.run_script(FAKE_DIRS=f"{MEDIA}:{MEDIA}/files:{FILES}")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("NO GAME DATA", result.stdout)
+        self.assertRegex(result.stdout, rf"{re.escape(MEDIA)}/files/_data: absent")
+        self.assertIn("android_media_unmarked", result.stdout)
 
     def test_device_login_txt_is_never_collected(self):
         result = self.run_script()
@@ -303,17 +382,35 @@ class SourceShape(unittest.TestCase):
             self.assertNotRegex(code, r"adb[^\n]*\b(install|uninstall|push|rm|clear)\b", path.name)
 
 
+    def test_the_scripts_and_the_readme_say_the_same_things_about_privacy_and_what_changes(self):
+        readme = (REPO / "tools/package-release/README.template.txt").read_text()
+        for path in (PS1, SH):
+            header = " ".join(re.sub(r"^#\s?", "", line) for line in path.read_text().splitlines()[:25] if line.startswith("#"))
+            header = re.sub(r"\s+", " ", header)
+            for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY,
+                           "ro.serialno", "erases the headset's log buffer", "logcat_before_launch.txt"):
+                self.assertIn(needle, header, f"{path.name}: {needle}")
+            self.assertNotIn("changes nothing", header)
+        flat = re.sub(r"\s+", " ", readme)
+        for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY,
+                       "serial numbers", "erases the headset's log buffer"):
+            self.assertIn(needle, flat, needle)
+        self.assertNotIn("changes nothing", flat)
+        self.assertIn("Needs bash 4", SH.read_text())
+
+
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh not installed")
 class QuestDiagnosePs1Test(DiagnoseCases, unittest.TestCase):
     script_source = PS1
 
-    def run_script(self, adb=None, pause=False, stdin="\n", **extra):
-        cmd = [shutil.which("pwsh"), "-NoProfile", "-File", str(self.script), "-OutDir", str(self.out),
+    def run_script(self, adb=None, pause=False, stdin="\n", out=None, cwd=None, **extra):
+        cmd = [shutil.which("pwsh"), "-NoProfile", "-File", str(self.script), "-OutDir", out or str(self.out),
                "-LaunchWaitSeconds", "0"]
         if adb:
             cmd += ["-Adb", adb]
         cmd.append("-Pause" if pause else "-NoPause")
-        return subprocess.run(cmd, env=self.env(**extra), input=stdin, capture_output=True, text=True, timeout=120)
+        return subprocess.run(cmd, env=self.env(**extra), input=stdin, capture_output=True, text=True, timeout=120,
+                              cwd=cwd)
 
     def test_adb_is_found_in_sidequests_folder_after_the_path(self):
         platform_tools = self.tmp / "Roaming" / "SideQuest" / "platform-tools"
@@ -338,11 +435,19 @@ class QuestDiagnosePs1Test(DiagnoseCases, unittest.TestCase):
 class QuestDiagnoseShTest(DiagnoseCases, unittest.TestCase):
     script_source = SH
 
-    def run_script(self, adb=None, **extra):
-        cmd = [shutil.which("bash"), str(self.script), "--out", str(self.out), "--wait", "0"]
+    def run_script(self, adb=None, out=None, cwd=None, **extra):
+        cmd = [shutil.which("bash"), str(self.script), "--out", out or str(self.out), "--wait", "0"]
         if adb:
             cmd += ["--adb", adb]
-        return subprocess.run(cmd, env=self.env(**extra), input="", capture_output=True, text=True, timeout=120)
+        return subprocess.run(cmd, env=self.env(**extra), input="", capture_output=True, text=True, timeout=120,
+                              cwd=cwd)
+
+    def test_wait_without_a_value_fails_fast_with_a_plain_message(self):
+        result = subprocess.run([shutil.which("bash"), str(self.script), "--wait"], env=self.env(), input="",
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("--wait needs a number of seconds", result.stderr)
+        self.assertEqual(self.calls(), [])
 
     def test_the_zip_is_written_without_the_zip_tool_when_python3_exists(self):
         no_zip = self.tmp / "no-zip-farm"

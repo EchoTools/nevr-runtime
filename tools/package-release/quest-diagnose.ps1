@@ -3,12 +3,15 @@
 # Reads facts from ONE headset over adb (headset model and OS build, the game's version, the data folders,
 # the runtime's own log and crash files), then starts the game ONCE and reads the log of that launch. It
 # prints a one-screen verdict first, then writes everything to nevr-diagnose-<UTC>.zip next to this script.
-# Send us that zip. It never installs, uninstalls or deletes anything on the headset or the PC. It closes the
-# game if it is running (the launch has to be clean).
+# Send us that zip. It never installs or uninstalls anything and deletes nothing on the headset; on the PC it
+# deletes only its own temporary folder. On the headset it does three things: it closes the game if it is running,
+# it erases the headset's log buffer (after saving a copy as logcat_before_launch.txt), and it starts the game once.
 #
 # Not collected: device_login.txt (the sign-in link and code), the credential cache, config files. Only the
-# files named above are copied; the device serial and any e-mail address are replaced with <device-serial>
-# and <email> in every text file and in the verdict.
+# files named above are copied. The adb serial, the hardware serial (ro.serialno) and any e-mail address are
+# replaced with <device-serial> and <email> in every text file and in the verdict. NOT masked: the zip holds
+# the runtime's crash dumps as they are and the headset's whole system log, which can show the Wi-Fi name, the
+# BSSID and IP addresses. Send the zip by direct message to sprockee or a sister, never in a public channel.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File quest-diagnose.ps1 [-Adb <path to adb>] [-Pause | -NoPause]
 # adb is searched on the PATH, then in SideQuest's folder (%APPDATA%\SideQuest\platform-tools\adb.exe).
@@ -132,10 +135,19 @@ function Get-OneSerial {
   return $fields[0]
 }
 
-# Replaces the serial and anything shaped like an e-mail address.
+# The hardware serial also shows up in logcat when the headset is connected over Wi-Fi (the adb serial is then an address).
+function Get-HardwareSerial {
+  $result = Invoke-Device 30 @('shell', 'getprop', 'ro.serialno')
+  $value = $result.Output.Trim()
+  if ($result.Code -eq 0 -and $value -match '^[A-Za-z0-9._:-]{4,}$') { return $value }
+  return ''
+}
+
+# Replaces both serials and anything shaped like an e-mail address.
 function Protect-Text([string]$text) {
   if ($null -eq $text) { return '' }
   if ($script:Serial) { $text = $text.Replace($script:Serial, '<device-serial>') }
+  if ($script:HwSerial) { $text = $text.Replace($script:HwSerial, '<device-serial>') }
   return [regex]::Replace($text, '[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+', '<email>')
 }
 
@@ -154,12 +166,14 @@ function Get-DeviceText([int]$seconds, [string[]]$arguments) {
 $exitCode = 0
 $script:AdbPath = ''
 $script:Serial = ''
+$script:HwSerial = ''
 $script:Work = ''
 $zipPath = ''
 try {
   $script:AdbPath = Find-Adb
   Write-Host "Using adb: $script:AdbPath"
   $script:Serial = Get-OneSerial
+  $script:HwSerial = Get-HardwareSerial
   $utc = [DateTime]::UtcNow
   $stamp = $utc.ToString('yyyyMMdd\THHmmss\Z')
   if (-not $OutDir) { $OutDir = $here }
@@ -203,6 +217,8 @@ try {
   }
   $dataMedia = Test-RemoteDir "$mediaRoot/files/_data"
   $dataLegacy = Test-RemoteDir "$legacyRoot/_data"
+  # The runtime also serves the Android/media files folder when it exists without _data (android_media_unmarked, #749).
+  $mediaDir = Test-RemoteDir "$mediaRoot/files"
 
   # The runtime's own log and crash files: these two names only.
   New-Item -ItemType Directory -Path (Join-Path $script:Work 'sentinel') -Force | Out-Null
@@ -217,8 +233,9 @@ try {
   }
   Save-Text 'sentinel/pull_results.txt' ("nevr-sentinel.log: exit $($sentinelLog.Code) $($sentinelLog.Output)`nnevr-crashes: exit $($crashes.Code) $($crashes.Output)`n")
 
-  # ONE clean launch.
-  Write-Host "Starting the game once and waiting $LaunchWaitSeconds s (this closes it first if it is running) ..."
+  # ONE clean launch. The headset's log of the run the tester came with is saved first: logcat -c erases it.
+  Write-Host "Starting the game once and waiting $LaunchWaitSeconds s (this closes it first if it is running and erases the headset's log buffer after saving a copy) ..."
+  Save-Text 'logcat_before_launch.txt' (Get-DeviceText 120 @('logcat', '-d', '-b', 'all'))
   Invoke-Device 30 @('shell', 'am', 'force-stop', $package) | Out-Null
   Invoke-Device 30 @('logcat', '-c') | Out-Null
   $start = Invoke-Device 60 @('shell', 'am', 'start', '-n', "$package/$activity")
@@ -242,7 +259,7 @@ try {
   $startFailed = ($start.Output -match 'Error')
 
   $problems = New-Object System.Collections.Generic.List[string]
-  if (-not $dataMedia -and -not $dataLegacy) { $problems.Add("NO GAME DATA: neither $mediaRoot/files/_data nor $legacyRoot/_data exists.") }
+  if (-not $dataMedia -and -not $dataLegacy -and -not $mediaDir) { $problems.Add("NO GAME DATA: neither $mediaRoot/files nor $legacyRoot/_data exists.") }
   if ($startFailed) { $problems.Add('The game did not start: ' + $start.Output) }
   elseif (-not $running) { $problems.Add("The game was not running $LaunchWaitSeconds s after it started (it ended or crashed).") }
   if ($crashMarker) { $problems.Add("The launch log has a crash marker: $crashMarker") }
@@ -250,18 +267,19 @@ try {
   $result = if ($problems.Count -eq 0) { 'No problem found in these facts. Send the zip anyway if the game still misbehaves.' } else { $problems -join "`n           " }
 
   $yesNo = { param($b) if ($b) { 'present' } else { 'absent' } }
+  $mediaNote = if (-not $dataMedia -and $mediaDir) { ' (the files folder exists; the runtime serves it as android_media_unmarked)' } else { '' }
   $verdict = @(
     "NEVR Quest diagnose  $($utc.ToString('yyyy-MM-dd HH:mm:ss'))Z",
     "Headset:   $model, OS build $osBuild",
     "Game:      $package versionCode $(if ($versionCode) { $versionCode } else { '(not installed?)' }), versionName $(if ($versionName) { $versionName } else { '-' })",
     "Installer: $(if ($installer) { $installer } else { 'no .echo_installer_version found' })",
-    "Data:      $mediaRoot/files/_data: $(& $yesNo $dataMedia)",
+    "Data:      $mediaRoot/files/_data: $(& $yesNo $dataMedia)$mediaNote",
     "           $legacyRoot/_data: $(& $yesNo $dataLegacy)",
     "Launch:    the game mounted data at: $(if ($obb) { $obb } else { '(no line)' })",
     "           runtime data_root line: $(if ($dataRoot) { $dataRoot } else { 'none (this build does not log one)' })",
     "           running after ${LaunchWaitSeconds} s: $(if ($running) { 'yes' } else { 'no' })",
     "Verdict:   $result",
-    "Zip:       $zipPath  (send this file)"
+    "Zip:       $(Split-Path -Leaf $zipPath)  (in the -OutDir folder, else next to this script; send this file)"
   ) -join "`n"
   $verdict = Protect-Text $verdict
   Save-Text 'verdict.txt' ($verdict + "`n")
@@ -283,6 +301,7 @@ try {
     $zip.Dispose()
   }
   Write-RunLog ("OK $scriptName wrote $zipPath problems=$($problems.Count)")
+  Write-Host "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses). Send it by direct message to sprockee or a sister, never in a public channel."
 } catch {
   $exitCode = 1
   $message = Protect-Text $_.Exception.Message

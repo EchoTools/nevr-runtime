@@ -294,6 +294,12 @@ class ReleaseStagesTest(PackageFixture):
             self.assertNotRegex(text, r"(?i)\b(pre-?release)\b", f"{name} must not depend on the pre-release flag")
         self.assertEqual(texts["SIGNING.txt"], package_release.SIGNING_TEXT)
         self.assertIn("may sign", texts["SIGNING.txt"])
+        # quest-diagnose.ps1 is a shipped script: SIGNING.txt names it as signable and as checkable (#750).
+        self.assertEqual(texts["SIGNING.txt"].count("quest-diagnose.ps1"), 2)
+        # The README section says what the diagnose zip holds and where to send it (#750).
+        for needle in ("-File quest-diagnose.ps1", "nevr-diagnose-YYYYMMDDTHHMMSSZ.zip", "crash dumps",
+                       "Wi-Fi name", "never in a public channel"):
+            self.assertIn(needle, texts["README.txt"], needle)
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
         self.assertIn("Two zips", texts["RELEASE-NOTES.md"])

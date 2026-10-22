@@ -27,10 +27,13 @@ Uninstall
 If the Quest build will not start
   Connect the headset by USB (USB debugging on), then:
        powershell -NoProfile -ExecutionPolicy Bypass -File quest-diagnose.ps1
-  It reads the headset's facts, starts the game once, shows a short verdict and writes nevr-diagnose-<date>.zip
-  next to the script. Send us that zip. It changes nothing on the headset or the PC (it closes the game if it
-  is running), does not copy your sign-in link, and replaces the headset serial and any e-mail address with
-  <device-serial> and <email>.
+  It reads the headset's facts, starts the game once, shows a short verdict and writes
+  nevr-diagnose-YYYYMMDDTHHMMSSZ.zip next to the script. It installs and deletes nothing on the headset. On the
+  headset it closes the game if it is running, erases the headset's log buffer (after saving a copy) and starts
+  the game once. It does not copy your sign-in link. It replaces the headset's serial numbers and any e-mail
+  address with <device-serial> and <email>, and masks nothing else: the zip holds the runtime's crash dumps as
+  they are and the headset's whole system log, which can show your Wi-Fi name, its BSSID and IP addresses.
+  Send the zip by direct message to sprockee or a sister, never in a public channel.
 
 Signing
   SIGNING.txt in this package says how to check whether each file is signed. A file that is not signed may be
