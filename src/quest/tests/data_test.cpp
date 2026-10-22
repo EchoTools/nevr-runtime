@@ -80,6 +80,11 @@ struct SrcEntry {
   std::int64_t usize_delta = 0;   // added to the uncompressed size the directory records
   std::string raw_payload;        // when not empty, the bytes stored as the entry's payload instead of the compressed data
   bool use_raw = false;
+  std::int32_t local_method = -1;      // >= 0: the method the LOCAL header says, the directory keeps `method`
+  std::string local_name;              // not empty: the name the LOCAL header carries (same length as the name)
+  std::int64_t local_crc_delta = 0;    // added to the CRC the LOCAL header records
+  std::int64_t local_usize_delta = 0;  // added to the uncompressed size the LOCAL header records
+  std::uint16_t local_flags = 0;       // flags of the LOCAL header only
 };
 
 void Put16(std::string& s, std::uint16_t v) {
@@ -109,6 +114,9 @@ std::string Deflate(const std::string& in) {
 struct ZipOptions {
   bool zip64_marker = false;     // 0xFFFF in the end record's entry counts
   std::uint16_t disk = 0;
+  bool zip64_locator = false;    // a zip64 end-of-central-directory locator in front of the end record
+  std::string trailing;          // bytes after the end record
+  std::uint16_t comment_len = 0; // the comment length the end record claims (no comment follows)
 };
 
 std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt = {}) {
@@ -124,15 +132,15 @@ std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt
     const std::uint32_t offset = static_cast<std::uint32_t>(body.size());
     Put32(body, 0x04034b50);
     Put16(body, 20);
-    Put16(body, e.flags);
-    Put16(body, e.method);
+    Put16(body, static_cast<std::uint16_t>(e.flags | e.local_flags));
+    Put16(body, static_cast<std::uint16_t>(e.local_method >= 0 ? e.local_method : e.method));
     Put32(body, 0);
-    Put32(body, rec_crc);
+    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(rec_crc) + e.local_crc_delta));
     Put32(body, static_cast<std::uint32_t>(payload.size()));
-    Put32(body, usize);
+    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(usize) + e.local_usize_delta));
     Put16(body, static_cast<std::uint16_t>(e.name.size()));
     Put16(body, 0);
-    body += e.name;
+    body += e.local_name.empty() ? e.name : e.local_name;
     body += payload;
     Put32(central, 0x02014b50);
     Put16(central, e.made_by);
@@ -155,6 +163,10 @@ std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt
   std::string out = body;
   const std::uint32_t cd_offset = static_cast<std::uint32_t>(out.size());
   out += central;
+  if (opt.zip64_locator) {
+    Put32(out, 0x07064b50);
+    out.append(16, '\0');
+  }
   Put32(out, 0x06054b50);
   Put16(out, opt.disk);
   Put16(out, 0);
@@ -163,7 +175,8 @@ std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt
   Put16(out, count);
   Put32(out, static_cast<std::uint32_t>(central.size()));
   Put32(out, cd_offset);
-  Put16(out, 0);
+  Put16(out, opt.comment_len);
+  out += opt.trailing;
   return out;
 }
 
@@ -178,6 +191,11 @@ struct Extracted {
   std::string detail;
   std::uint64_t bytes;
 };
+
+std::uint64_t FileSize(const std::string& path) {
+  struct stat st;
+  return ::stat(path.c_str(), &st) == 0 ? static_cast<std::uint64_t>(st.st_size) : ~std::uint64_t{0};
+}
 
 Extracted Extract(const Scratch& s, const std::string& zip_bytes, const ZipLimits& limits = {},
                   const std::string& prefix = "_data/") {
@@ -396,13 +414,100 @@ TEST(ExistingDestinationIsRefused) {
   CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}})).status, ZipStatus::kDestExists);
 }
 
-TEST(ExtractDoesNotFollowALinkPlantedInTheDestination) {
-  // A directory entry after a file whose parent is a link would write through it: MakeDirs refuses a link.
+TEST(MakeDirsBelowNeverFollowsALink) {
+  // A link planted where a directory component is expected: the call fails and nothing is made through the link.
   Scratch s;
+  CHECK_EQ(::mkdir(s.Path("base").c_str(), 0755), 0);
   CHECK_EQ(::mkdir(s.Path("target").c_str(), 0755), 0);
-  const Extracted r = Extract(s, BuildZip({{"_data/d/", "", 0}, {"_data/d/f", "x", 0}}));
-  CHECK_EQ(r.status, ZipStatus::kOk);
-  CHECK(!Exists(s.Path("target/f")));
+  char* abs = ::realpath(s.Path("target").c_str(), nullptr);
+  CHECK(abs != nullptr);
+  CHECK_EQ(::symlink(abs, s.Path("base/d").c_str()), 0);
+  std::free(abs);
+  CHECK(!MakeDirsBelow(s.Path("base"), "d"));
+  CHECK(!MakeDirsBelow(s.Path("base"), "d/sub"));
+  CHECK(!Exists(s.Path("target/sub")));
+  // A file where a directory is expected fails too, and a real directory path is made.
+  WriteFile(s.Path("base/f"), "x");
+  CHECK(!MakeDirsBelow(s.Path("base"), "f/sub"));
+  CHECK(MakeDirsBelow(s.Path("base"), "a/b/c"));
+  CHECK(Exists(s.Path("base/a/b/c")));
+}
+
+TEST(AnEntryThatExpandsPastItsSizeIsStoppedBeforeItIsWritten) {
+  // 3 MiB of zeros declared as 1000 bytes: the first inflate chunk already exceeds the record, so no byte is written.
+  Scratch s;
+  const Extracted r = Extract(s, BuildZip({{"_data/bomb", std::string(3u << 20, '\0'), 8}}));
+  CHECK_EQ(r.status, ZipStatus::kOk);  // control: an honest size extracts
+  Scratch t;
+  std::vector<SrcEntry> lie = {{"_data/bomb", std::string(3u << 20, '\0'), 8}};
+  lie[0].usize_delta = 1000 - static_cast<std::int64_t>(3u << 20);
+  const Extracted bomb = Extract(t, BuildZip(lie));
+  CHECK_EQ(bomb.status, ZipStatus::kSizeMismatch);
+  CHECK_EQ(FileSize(t.Path("out/bomb")), std::uint64_t{0});
+}
+
+TEST(AZip64LocatorIsRefused) {
+  Scratch s;
+  ZipOptions opt;
+  opt.zip64_locator = true;
+  CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}}, opt)).status, ZipStatus::kZip64);
+}
+
+TEST(BytesAfterTheEndRecordOrALyingCommentLengthAreRefused) {
+  Scratch s;
+  ZipOptions trailing;
+  trailing.trailing = "1234567";
+  CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}}, trailing)).status, ZipStatus::kNoEndRecord);
+  ZipOptions lying;
+  lying.comment_len = 3;  // no comment follows
+  CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}}, lying)).status, ZipStatus::kNoEndRecord);
+  ZipOptions honest;
+  honest.comment_len = 7;
+  honest.trailing = "comment";
+  CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}}, honest)).status, ZipStatus::kOk);
+}
+
+TEST(ALocalHeaderThatDisagreesWithTheDirectoryIsRefused) {
+  const auto status = [](const std::vector<SrcEntry>& entries) {
+    Scratch s;  // a failed extraction leaves its directory, so each case gets its own
+    return Extract(s, BuildZip(entries)).status;
+  };
+  std::vector<SrcEntry> method = {{"_data/a", "hello", 0}};
+  method[0].local_method = 8;
+  CHECK_EQ(status(method), ZipStatus::kBadLocalHeader);
+  std::vector<SrcEntry> name = {{"_data/a", "hello", 0}};
+  name[0].local_name = "_data/b";
+  CHECK_EQ(status(name), ZipStatus::kBadLocalHeader);
+  std::vector<SrcEntry> crc = {{"_data/a", "hello", 0}};
+  crc[0].local_crc_delta = 1;
+  CHECK_EQ(status(crc), ZipStatus::kBadLocalHeader);
+  std::vector<SrcEntry> size = {{"_data/a", "hello", 0}};
+  size[0].local_usize_delta = 1;
+  CHECK_EQ(status(size), ZipStatus::kBadLocalHeader);
+  // With a data descriptor (flag bit 3) the local CRC and sizes are not authoritative.
+  std::vector<SrcEntry> descriptor = {{"_data/a", "hello", 0}};
+  descriptor[0].local_flags = 0x8;
+  descriptor[0].local_crc_delta = 1;
+  CHECK_EQ(status(descriptor), ZipStatus::kOk);
+  // An encryption flag on the local header only.
+  std::vector<SrcEntry> encrypted = {{"_data/a", "hello", 0}};
+  encrypted[0].local_flags = 0x1;
+  CHECK_EQ(status(encrypted), ZipStatus::kBadLocalHeader);
+}
+
+TEST(NamesThatDifferOnlyInCaseAreRefused) {
+  Scratch s;
+  CHECK_EQ(Extract(s, BuildZip({{"_data/a", "x", 0}, {"_data/A", "y", 0}})).status, ZipStatus::kConflict);
+  CHECK_EQ(Extract(s, BuildZip({{"_data/A", "x", 0}, {"_data/a/b", "y", 0}})).status, ZipStatus::kConflict);
+  CHECK_EQ(Extract(s, BuildZip({{"_data/Dir/", "", 0}, {"_data/dir", "y", 0}})).status, ZipStatus::kConflict);
+}
+
+TEST(ControlBytesInAnEntryNameDoNotReachTheDetail) {
+  Scratch s;
+  const Extracted r = Extract(s, BuildZip({{"_data/a\x1b[31m\nforged", "x", 0}}));
+  CHECK_EQ(r.status, ZipStatus::kBadEntryPath);
+  for (const char c : r.detail) CHECK(static_cast<unsigned char>(c) >= 0x20 && static_cast<unsigned char>(c) != 0x7f);
+  CHECK_EQ(r.detail, std::string("_data/a?[31m?forged"));
 }
 
 // ---------------- the pinned zip ----------------
@@ -484,11 +589,21 @@ TEST(DecideFetchesToTheMediaRootWhenThereIsNothing) {
   CHECK_EQ(std::string(d.root), kMedia);
 }
 
-TEST(DecideUsesAnUnmarkedMediaRootAsItIs) {
-  Present({kMedia.c_str()});
-  const Decision d = Decide(nevr_quest::data_root::Resolve(&InList), &InList);
-  CHECK(d.action == DataAction::kUse);
-  CHECK_EQ(std::string(d.source), std::string("android_media_unmarked"));
+TEST(DecideFetchesIntoAnUnmarkedMediaRoot) {
+  // The media directory exists and holds nothing: an interrupted first fetch must be retried, not used.
+  const auto fetches = [](std::initializer_list<const char*> present) {
+    Present(present);
+    const Decision d = Decide(nevr_quest::data_root::Resolve(&InList), &InList);
+    return d.action == DataAction::kFetch && std::string(d.root) == kMedia &&
+           std::string(d.source) == "android_media_unmarked";
+  };
+  const std::string part = kMedia + "/_data.zip.part";
+  const std::string staging = kMedia + "/_data.staging-fc2eedeacc50";
+  const std::string replaced = kMedia + "/_data.replaced-20261022T000000Z";
+  CHECK(fetches({kMedia.c_str()}));
+  CHECK(fetches({kMedia.c_str(), part.c_str()}));
+  CHECK(fetches({kMedia.c_str(), staging.c_str()}));
+  CHECK(fetches({kMedia.c_str(), replaced.c_str()}));
 }
 
 // ---------------- staging ----------------
@@ -534,22 +649,122 @@ TEST(InstallStagedPutsTheOldTreeBackWhenTheFinalRenameFails) {
   CHECK(!Exists(s.Path("_data.replaced-20261022T000000Z")));
 }
 
-TEST(CleanLeftoversRemovesOnlyOurPrefixes) {
+TEST(CleanLeftoversRemovesOnlyAMarkedStagingDirectory) {
   Scratch s;
-  CHECK_EQ(::mkdir(s.Path("_data.staging-aaaaaaaaaaaa").c_str(), 0755), 0);
-  WriteFile(s.Path("_data.staging-aaaaaaaaaaaa/f"), "x");
-  CHECK_EQ(::mkdir(s.Path("_data.replaced-20261022T000000Z").c_str(), 0755), 0);
+  const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/f", "x");
   CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/f"), "player");
   WriteFile(s.Path("_data.zip.part"), "partial");
   WriteFile(s.Path("keep.txt"), "k");
+  // Names that only look like ours: a player's own.
+  CHECK_EQ(::mkdir(s.Path("_data.staging-notes").c_str(), 0755), 0);
+  WriteFile(s.Path("_data.staging-notes/n"), "notes");
+  CHECK_EQ(::mkdir(s.Path("_data.replaced-my-backup").c_str(), 0755), 0);
+  WriteFile(s.Path("_data.replaced-my-backup/b"), "backup");
   int failed = -1;
-  CHECK_EQ(CleanLeftovers(s.dir, &failed), 2);
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 1);
   CHECK_EQ(failed, 0);
-  CHECK(!Exists(s.Path("_data.staging-aaaaaaaaaaaa")));
-  CHECK(!Exists(s.Path("_data.replaced-20261022T000000Z")));
-  CHECK(Exists(s.Path("_data")));
+  CHECK(!Exists(staging));
+  CHECK(!Exists(OwnerMarkerPath(staging)));
+  CHECK_EQ(ReadFile(s.Path("_data/f")), std::string("player"));
   CHECK(Exists(s.Path("_data.zip.part")));  // the resumable download is not a leftover
   CHECK(Exists(s.Path("keep.txt")));
+  CHECK_EQ(ReadFile(s.Path("_data.staging-notes/n")), std::string("notes"));
+  CHECK_EQ(ReadFile(s.Path("_data.replaced-my-backup/b")), std::string("backup"));
+}
+
+TEST(CleanLeftoversNeverDeletesAMarkedReplacedDirectory) {
+  Scratch s;
+  const std::string replaced = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(replaced));
+  CHECK_EQ(::mkdir(replaced.c_str(), 0755), 0);
+  WriteFile(replaced + "/old", "old");
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  CHECK_EQ(CleanLeftovers(s.dir, nullptr), 0);
+  CHECK_EQ(ReadFile(replaced + "/old"), std::string("old"));
+  CHECK(IsOwned(replaced));
+}
+
+TEST(CleanLeftoversRemovesAnOrphanMarkerOnly) {
+  Scratch s;
+  const std::string staging = s.Path("_data.staging-bbbbbbbbbbbb");
+  CHECK(MarkOwned(staging));  // the crash came before the directory was made
+  CHECK_EQ(CleanLeftovers(s.dir, nullptr), 0);
+  CHECK(!Exists(OwnerMarkerPath(staging)));
+}
+
+TEST(InstallStagedMarksTheKeptAsideTreeAndDropsTheStagingMarker) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/f"), "old");
+  const std::string staging = StagingPath(s.dir, kZipSha256);
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/f", "new");
+  std::string aside;
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &aside), StageStatus::kOk);
+  CHECK(IsOwned(aside));
+  CHECK(!Exists(OwnerMarkerPath(staging)));
+  CHECK_EQ(CleanLeftovers(s.dir, nullptr), 0);
+  CHECK_EQ(ReadFile(aside + "/f"), std::string("old"));
+}
+
+TEST(AFailedSwapLeavesNoMarkerBehind) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  std::string aside;
+  CHECK_EQ(InstallStaged(s.dir, s.Path("no-such-staging"), "20261022T000000Z", &aside), StageStatus::kRenameFailed);
+  CHECK(!Exists(s.Path("_data.replaced-20261022T000000Z.nevr-owned")));
+}
+
+TEST(ACrashBetweenTheTwoRenamesIsRecoveredOnTheNextLaunch) {
+  // The old tree is aside and marked, the new one is in staging, `_data` does not exist.
+  Scratch s;
+  const std::string replaced = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(replaced));
+  CHECK_EQ(::mkdir(replaced.c_str(), 0755), 0);
+  WriteFile(replaced + "/old", "old");
+  const std::string staging = StagingPath(s.dir, kZipSha256);
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/new", "new");
+  std::string from;
+  CHECK(RecoverReplaced(s.dir, &from));
+  CHECK_EQ(from, replaced);
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+  CHECK(!Exists(replaced));
+  CHECK(!Exists(OwnerMarkerPath(replaced)));
+  CHECK_EQ(CleanLeftovers(s.dir, nullptr), 1);
+  CHECK(!Exists(staging));
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+}
+
+TEST(RecoverReplacedTakesTheNewestMarkedOneAndOnlyWhenDataIsMissing) {
+  Scratch s;
+  for (const char* stamp : {"20261020T000000Z", "20261022T000000Z"}) {
+    const std::string dir = s.Path(std::string("_data.replaced-") + stamp);
+    CHECK(MarkOwned(dir));
+    CHECK_EQ(::mkdir(dir.c_str(), 0755), 0);
+    WriteFile(dir + "/id", stamp);
+  }
+  CHECK(RecoverReplaced(s.dir, nullptr));
+  CHECK_EQ(ReadFile(s.Path("_data/id")), std::string("20261022T000000Z"));
+  CHECK(Exists(s.Path("_data.replaced-20261020T000000Z")));
+  // `_data` is there now: nothing more is moved.
+  CHECK(!RecoverReplaced(s.dir, nullptr));
+  CHECK_EQ(ReadFile(s.Path("_data/id")), std::string("20261022T000000Z"));
+}
+
+TEST(RecoverReplacedLeavesAPlayersOwnBackupAlone) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("_data.replaced-my-backup").c_str(), 0755), 0);
+  WriteFile(s.Path("_data.replaced-my-backup/b"), "backup");
+  CHECK(!RecoverReplaced(s.dir, nullptr));
+  CHECK(!Exists(s.Path("_data")));
+  CHECK_EQ(ReadFile(s.Path("_data.replaced-my-backup/b")), std::string("backup"));
 }
 
 TEST(RemoveTreeDoesNotFollowLinks) {
