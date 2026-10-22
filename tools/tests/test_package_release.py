@@ -734,6 +734,32 @@ class InstallScriptsTest(unittest.TestCase):
     def test_a_backup_with_the_marker_in_lower_case_is_not_a_runtime(self):
         self.assert_a_backup_with_these_bytes_is_restored(b"MZ\0nevr-build 5.0.0 " + b"a" * 8)
 
+    # install.ps1 reads the same marker (Test-NevrRuntime): over a backup, and over the BugSplat64.dll it is about to
+    # back up. A look-alike is the game's own file to it, not a runtime.
+    def assert_install_treats_these_bytes_as_the_games_own_file(self, payload):
+        backup = self.poison_the_backup()
+        backup.write_bytes(payload)
+        self.set_package(self.plain("5.4.4"))
+        updated = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(updated.returncode, 0, self.output(updated))
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.plain("5.4.4"))
+        self.assertEqual(backup.read_bytes(), payload, "the backup is kept as it was")
+        # a first install over a BugSplat64.dll with these bytes backs it up instead of refusing it as a runtime
+        fresh = self.tmp / "fresh" / "bin" / "win10"
+        fresh.mkdir(parents=True)
+        (fresh / "echovr.exe").write_bytes(b"exe")
+        (fresh / "BugSplat64.dll").write_bytes(payload)
+        first = self.ps("install.ps1", "-Dir", str(fresh))
+        self.assertEqual(first.returncode, 0, self.output(first))
+        (saved,) = fresh.glob("BugSplat64.dll.original-*")
+        self.assertEqual(saved.read_bytes(), payload)
+
+    def test_install_does_not_count_the_marker_without_the_trailing_space_as_a_runtime(self):
+        self.assert_install_treats_these_bytes_as_the_games_own_file(b"MZ\0NEVR-BUILD\0" + b"a" * 8)
+
+    def test_install_does_not_count_the_marker_in_lower_case_as_a_runtime(self):
+        self.assert_install_treats_these_bytes_as_the_games_own_file(b"MZ\0nevr-build 5.0.0 " + b"a" * 8)
+
     def test_an_update_with_the_backup_deleted_says_so_and_changes_nothing(self):
         self.set_package(self.plain("5.4.3"))
         self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
