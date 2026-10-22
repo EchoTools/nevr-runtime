@@ -78,6 +78,10 @@ void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigne
 // A real ix client/server pair: the server drops the login remote and its Close callback ends the session. False when
 // the callback's thread never came back (then end the process; do not tear down).
 bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs);
+// #738: a send on a login remote whose connection has gone, from the thread that made it. `path` 0 SendFrameToServer, 1 the
+// game->server forward, 2 the flush on the remote's open. 0: the send failed and returned; 1: the sending thread never
+// came back (end the process); 2: no send failed (the rig, not the bridge).
+int TestHook_SendOnDroppedRemote(int path, unsigned int timeoutMs);
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx);
 bool  TestHook_N61_HasActiveCallback();
 int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none
