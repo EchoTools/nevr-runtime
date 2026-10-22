@@ -348,6 +348,15 @@ class DiagnoseCases:
         self.assertIn("No failure seen: running after 0 s", text)
         self.assertIn("the data step can't be confirmed from the log", text)
 
+    def test_a_runtime_data_root_line_confirms_the_data_step_without_an_obb_line(self):
+        self.logcat.write_text(
+            f'10-22 00:02:33.000  100  100 I NEVR-Sentinel: {{"event":"data_root","result":"found","source":"legacy","root":"{LEGACY}"}}\n')
+        result = self.run_script()
+        text = result.stdout.split("Privacy:")[0]
+        self.assertIn("runtime data_root line: result=found source=legacy", text)
+        self.assertIn("No problem found in these facts", text)
+        self.assertNotIn("can't be confirmed", text)
+
     def test_an_initialization_error_is_a_failure_and_names_the_file_the_game_wanted(self):
         wanted = "/storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2"
         self.logcat.write_text(
