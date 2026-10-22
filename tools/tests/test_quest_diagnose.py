@@ -220,6 +220,16 @@ class DiagnoseCases:
         # What is not masked stays, and the zip says so (the privacy line).
         self.assertIn(b"bssid=aa:bb:cc:dd:ee:ff", data["logcat.txt"])
 
+    def test_a_serial_with_characters_that_mean_something_in_a_pattern_is_still_masked(self):
+        odd = "Q+1(a)|b.c?"
+        self.logcat.write_text(LOGCAT + f"10-21 22:00:04.000  100  100 I X: serial={odd} again\n")
+        result = self.run_script(FAKE_DEVICES=f"{odd}\\tdevice\\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data, _ = self.members()
+        for text in [result.stdout, result.stderr] + [body.decode("utf-8", "replace") for body in data.values()]:
+            self.assertNotIn(odd, text)
+        self.assertIn(b"serial=<device-serial> again", data["logcat.txt"])
+
     def test_the_last_line_says_what_the_zip_holds_and_where_to_send_it(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
