@@ -51,6 +51,7 @@
 #include "runtime/compat/status_redirect_check.h"
 #include "core/logging.h"
 #include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <future>
 #include <stdexcept>
@@ -786,18 +787,24 @@ static bool SendFrameToServer(const std::string& frame) {
   if (RouterOwnsLogin()) {
     sent = RouterSendToSession(frame);
   } else {
-    std::lock_guard<std::mutex> lock(g_pairsMutex);
-    for (auto& entry : g_pairs) {
-      ProxyPair& pair = *entry.second;
-      if (pair.connIdx != 1 || !pair.remoteWs) continue;
-      if (!pair.remoteOpen) {
-        pair.pendingToRemote.push_back(frame);
-        sent = true;
-      } else {
-        sent = pair.remoteWs->sendBinary(frame).success;
+    // The send runs outside g_pairsMutex: a send that fails runs the remote's Close callback on this thread, and
+    // that callback takes the mutex (#738).
+    std::shared_ptr<ix::WebSocket> remote;
+    {
+      std::lock_guard<std::mutex> lock(g_pairsMutex);
+      for (auto& entry : g_pairs) {
+        ProxyPair& pair = *entry.second;
+        if (pair.connIdx != 1 || !pair.remoteWs) continue;
+        if (!pair.remoteOpen) {
+          pair.pendingToRemote.push_back(frame);
+          sent = true;
+        } else {
+          remote = pair.remoteWs;
+        }
+        break;
       }
-      break;
     }
+    if (remote) sent = remote->sendBinary(frame).success;
   }
   if (sent) {
     ObserveSocialFrames("game->server", 1, frame);
@@ -1118,6 +1125,163 @@ static void PatchCnsUserLoginState(uint64_t discordId) {
         }
       }
     }
+  }
+}
+
+// Forwards a frame the game sent on `gameWs` to the remote its pair is bound to (queued while that remote is not
+// open yet).
+static void ForwardGameFrameToRemote(ix::WebSocket& gameWs, const std::string& frame, bool binary) {
+  // The send runs outside g_pairsMutex: a send that fails runs the remote's Close callback on this thread, and
+  // that callback takes the mutex (#738).
+  std::shared_ptr<ix::WebSocket> remote;
+  int connIdx = -1;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    auto it = g_pairs.find(&gameWs);
+    if (it == g_pairs.end()) {
+      // N.B.: if g_pairs loses an entry (e.g. a Close/Message race) while the
+      // game keeps sending on that socket, every subsequent message would
+      // independently re-trigger this WARNING with zero new signal after the
+      // first — count instead of flooding.
+      static std::atomic<uint64_t> s_droppedCount{0};
+      uint64_t dropped = ++s_droppedCount;
+      if (dropped == 1 || dropped % 100 == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
+            static_cast<unsigned long long>(dropped));
+      }
+      return;
+    }
+    auto& pair = it->second;
+    CheckFirstFrameRoleLocked(*pair, frame);
+    if (!pair->remoteOpen) {
+      pair->pendingToRemote.push_back(frame);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
+          pair->pendingToRemote.size());
+      return;
+    }
+    // A pair that shares its remote with a pair still flushing queues behind that flush, on the flushing pair's
+    // queue, so frames from both sockets reach the remote in the order they arrived here.
+    for (auto& entry : g_pairs) {
+      ProxyPair& other = *entry.second;
+      if (&other != pair.get() && other.remoteWs == pair->remoteWs && !other.remoteOpen) {
+        other.pendingToRemote.push_back(frame);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued behind the login flush (%zu pending)",
+            other.pendingToRemote.size());
+        return;
+      }
+    }
+    remote = pair->remoteWs;
+    connIdx = pair->connIdx;
+  }
+  // A shared login session can die while the game sits idle; the game then
+  // waits forever on its MATCHMAKING screen. Say so instead of dropping quietly.
+  const ix::ReadyState remoteState = remote->getReadyState();
+  bool sent = false;
+  if (binary) {
+    sent = remote->sendBinary(frame).success;
+    Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)", sent ? "true" : "false");
+  } else {
+    sent = remote->sendText(frame).success;
+  }
+  if (!sent || remoteState != ix::ReadyState::Open) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] game->server message NOT delivered: conn=%d (%s) send_success=%s "
+        "remote_state=%s bytes=%zu — the remote session is gone; the game will wait "
+        "on this request indefinitely",
+        connIdx, ConnLabel(connIdx), sent ? "true" : "false", RemoteStateName(remoteState), frame.size());
+  }
+}
+
+// True while `pair` is still owned by g_pairs (a game socket that closed meanwhile takes its pair with it).
+static bool PairRegisteredLocked(const ProxyPair* pair) {
+  for (const auto& entry : g_pairs) {
+    if (entry.second.get() == pair) return true;
+  }
+  return false;
+}
+
+// The remote's Open: the login request goes out on the login socket, and what the game sent meanwhile is flushed,
+// in order, before the pair takes frames directly (remoteOpen stays false until then, so a frame that arrives
+// during the flush queues behind it). Every send runs outside g_pairsMutex: a send that fails runs the remote's
+// Close callback on this thread, and that callback takes the mutex (#738).
+static void HandleRemoteOpen(ProxyPair* pair, int connIdx, uint64_t discordId, const std::string& accountName,
+                             const std::string& bearerToken) {
+  std::shared_ptr<ix::WebSocket> remote;
+  std::vector<std::string> batch;
+  uint64_t injectedPlatform = 0;
+  size_t injectedSize = 0;
+  bool injected = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    if (!PairRegisteredLocked(pair)) return;
+    remote = pair->remoteWs;
+    const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
+        g_remoteUri);
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
+
+    // Inject LoginRequest on the login socket (not config, and not a further /login: N91).
+    // pnsrad.dll won't send its own because it has no user identity
+    // (OVR SDK is bypassed). The LoginRequest is built and injected here.
+    //
+    // Before injecting, set the CNSUser's login state to "logging in"
+    // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
+    // response. Without this, LogInSuccessCB silently discards the message
+    // because the user's login state at +0x90 is still 0 (logged out).
+    if (pair->role == nevr_socket_role::Role::Login && !pair->loginInjected) {
+      pair->loginInjected = true;
+
+      // Set CNSUser login state only on the actual login connection.
+      // Later connections (matchmaker, etc.) must not reset the state
+      // or the game loses its logged-in status during lobby join.
+      PatchCnsUserLoginState(discordId);
+
+      std::string cfgPasswordStr;
+      {
+        const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+        const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+        bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
+        injectedPlatform = nevr_evr_codec::SelectPlatformCode(hasUrlCreds, g_noOvr);
+        if (cfgPassword) cfgPasswordStr = cfgPassword;
+      }
+      g_lastInjectedDiscordId = discordId;
+      nevr_social_party::Global().SetSelf(discordId, accountName);
+      std::string loginMsg = BuildLoginRequest(discordId, injectedPlatform, accountName, bearerToken, cfgPasswordStr);
+      if (loginMsg.empty()) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.WS] login NOT injected conn=%d (%s): the request could not be built",
+            connIdx, ConnLabel(connIdx));
+      } else {
+        injected = true;
+        injectedSize = loginMsg.size();
+        batch.push_back(std::move(loginMsg));
+      }
+    }
+    batch.insert(batch.end(), std::make_move_iterator(pair->pendingToRemote.begin()),
+                 std::make_move_iterator(pair->pendingToRemote.end()));
+    pair->pendingToRemote.clear();
+  }
+
+  bool loginLogged = !injected;
+  for (;;) {
+    for (const std::string& frame : batch) remote->sendBinary(frame);
+    if (!loginLogged) {
+      loginLogged = true;
+      const std::string xpid =
+          std::string(nevr_evr_codec::PlatformPrefix(injectedPlatform)) + "-" + std::to_string(discordId);
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu", xpid.c_str(),
+          static_cast<int>(injectedPlatform), connIdx, ConnLabel(connIdx), injectedSize);
+    }
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    // The address alone can be handed to a new pair once the old one is freed; the remote this call holds
+    // cannot be reused while it holds it, so a pair that now has another remote is not the one it opened for.
+    if (!PairRegisteredLocked(pair) || pair->remoteWs != remote) return;
+    if (pair->pendingToRemote.empty()) {
+      pair->remoteOpen = true;
+      return;
+    }
+    batch.clear();
+    batch.swap(pair->pendingToRemote);
   }
 }
 
@@ -1688,60 +1852,9 @@ void InstallWebSocketBridge() {
                 [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken,
                  remoteAddress = static_cast<const ix::WebSocket*>(remote.get())](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
-                    case ix::WebSocketMessageType::Open: {
-                      std::lock_guard<std::mutex> lk(g_pairsMutex);
-                      pairPtr->remoteOpen = true;
-                      const std::string diagnostic = nevr_log_diagnostics::FormatRedactedUrlDiagnostic(
-                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
-                          g_remoteUri);
-                      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
-
-                      // Inject LoginRequest on the login socket (not config, and not a further /login: N91).
-                      // pnsrad.dll won't send its own because it has no user identity
-                      // (OVR SDK is bypassed). The LoginRequest is built and injected here.
-                      //
-                      // Before injecting, set the CNSUser's login state to "logging in"
-                      // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
-                      // response. Without this, LogInSuccessCB silently discards the message
-                      // because the user's login state at +0x90 is still 0 (logged out).
-                      if (pairPtr->role == nevr_socket_role::Role::Login && !pairPtr->loginInjected) {
-                        pairPtr->loginInjected = true;
-
-                        // Set CNSUser login state only on the actual login connection.
-                        // Later connections (matchmaker, etc.) must not reset the state
-                        // or the game loses its logged-in status during lobby join.
-                        PatchCnsUserLoginState(discordId);
-
-                        uint64_t platformCode;
-                        std::string cfgPasswordStr;
-                        {
-                          const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
-                          const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-                          bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
-                          platformCode = nevr_evr_codec::SelectPlatformCode(hasUrlCreds, g_noOvr);
-                          if (cfgPassword) cfgPasswordStr = cfgPassword;
-                        }
-                        g_lastInjectedDiscordId = discordId;
-                        nevr_social_party::Global().SetSelf(discordId, accountName);
-                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
-                        if (loginMsg.empty()) {
-                          Log(EchoVR::LogLevel::Error, "[NEVR.WS] login NOT injected conn=%d (%s): the request could not be built",
-                              connIdx, ConnLabel(connIdx));
-                        } else {
-                          pairPtr->remoteWs->sendBinary(loginMsg);
-                          std::string xpid = std::string(nevr_evr_codec::PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
-                          Log(EchoVR::LogLevel::Info,
-                              "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
-                              xpid.c_str(), static_cast<int>(platformCode), connIdx, ConnLabel(connIdx), loginMsg.size());
-                        }
-                      }
-
-                      for (auto& pending : pairPtr->pendingToRemote) {
-                        pairPtr->remoteWs->sendBinary(pending);
-                      }
-                      pairPtr->pendingToRemote.clear();
+                    case ix::WebSocketMessageType::Open:
+                      HandleRemoteOpen(pairPtr, connIdx, discordId, accountName, bearerToken);
                       break;
-                    }
                     case ix::WebSocketMessageType::Message: {
                       ObserveSocialFrames("server->game", connIdx, rmsg->str);
                       // First message's symbol (marker@0, symbol@8, length@16), for the decodes below.
@@ -1939,49 +2052,7 @@ void InstallWebSocketBridge() {
               routed->router.OnGameFrame(*routedId, msg->str, msg->binary);
               break;
             }
-            std::lock_guard<std::mutex> lk(g_pairsMutex);
-            auto it = g_pairs.find(&gameWs);
-            if (it != g_pairs.end()) {
-              auto& pair = it->second;
-              CheckFirstFrameRoleLocked(*pair, msg->str);
-              if (pair->remoteOpen) {
-                // A shared login session can die while the game sits idle; the game then
-                // waits forever on its MATCHMAKING screen. Say so instead of dropping quietly.
-                const ix::ReadyState remoteState = pair->remoteWs->getReadyState();
-                bool sent = false;
-                if (msg->binary) {
-                  sent = pair->remoteWs->sendBinary(msg->str).success;
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
-                      sent ? "true" : "false");
-                } else {
-                  sent = pair->remoteWs->sendText(msg->str).success;
-                }
-                if (!sent || remoteState != ix::ReadyState::Open) {
-                  Log(EchoVR::LogLevel::Warning,
-                      "[NEVR.WS] game->server message NOT delivered: conn=%d (%s) send_success=%s "
-                      "remote_state=%s bytes=%zu — the remote session is gone; the game will wait "
-                      "on this request indefinitely",
-                      pair->connIdx, ConnLabel(pair->connIdx), sent ? "true" : "false",
-                      RemoteStateName(remoteState), msg->str.size());
-                }
-              } else {
-                pair->pendingToRemote.push_back(msg->str);
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
-                    pair->pendingToRemote.size());
-              }
-            } else {
-              // N.B.: if g_pairs loses an entry (e.g. a Close/Message race) while the
-              // game keeps sending on that socket, every subsequent message would
-              // independently re-trigger this WARNING with zero new signal after the
-              // first — count instead of flooding.
-              static std::atomic<uint64_t> s_droppedCount{0};
-              uint64_t dropped = ++s_droppedCount;
-              if (dropped == 1 || dropped % 100 == 0) {
-                Log(EchoVR::LogLevel::Warning,
-                    "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
-                    static_cast<unsigned long long>(dropped));
-              }
-            }
+            ForwardGameFrameToRemote(gameWs, msg->str, msg->binary);
             break;
           }
 
@@ -2368,65 +2439,124 @@ void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigne
   CloseGameSocketsForRemote(remotePtr->get(), connIdx, code);
 }
 
-// The login remote is a real ix::WebSocket reaching a real local ix server through a TCP forwarder that drops
-// both of its connections once the handshake is done: the remote sees the connection vanish (code 1006) with its
-// state still OPEN, ix calls the Close callback on the remote's own thread under its non-recursive
-// _setReadyStateMutex, and a send on that remote fails in sendOnSocket and takes that mutex again (#723). True when
-// the callback's CloseGameSocketsForRemote returned in time; false leaves that thread stuck, so the caller must end
-// the process rather than tear down.
-bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
-  ix::initNetSystem();
-  std::unique_ptr<ix::WebSocketServer> server;
-  int serverPort = 0;
-  std::mt19937 rng{std::random_device{}()};
-  for (int attempt = 0; attempt < 50 && !server; ++attempt) {
-    serverPort = 20000 + static_cast<int>(rng() % 30000);
-    auto candidate = std::make_unique<ix::WebSocketServer>(serverPort, "127.0.0.1");
-    if (candidate->listen().first) server = std::move(candidate);
-  }
-  if (!server) return false;
-  std::promise<void> serverSawOpen;
-  std::future<void> opened = serverSawOpen.get_future();
-  std::atomic<bool> openSignalled{false};
-  server->setOnClientMessageCallback([&](std::shared_ptr<ix::ConnectionState>, ix::WebSocket&,
-                                         const ix::WebSocketMessagePtr& msg) {
-    if (msg->type == ix::WebSocketMessageType::Open && !openSignalled.exchange(true)) serverSawOpen.set_value();
-  });
-  server->start();
+namespace {
 
-  // The forwarder: front port <-> server port, so the test can drop the TCP connection without a close frame.
-  SOCKET front = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = 0;
-  int addrLen = sizeof(addr);
-  if (front == INVALID_SOCKET || bind(front, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
-      listen(front, 1) != 0 || getsockname(front, reinterpret_cast<sockaddr*>(&addr), &addrLen) != 0) {
-    if (front != INVALID_SOCKET) closesocket(front);
-    server->stop();
-    return false;
+// A real ix::WebSocket reaching a real local ix server through a TCP forwarder that can end both of its connections
+// with no close frame, so the remote sees the connection vanish with its state still OPEN.
+class DropRig {
+ public:
+  using RemoteCallback = std::function<void(const ix::WebSocketMessagePtr&)>;
+
+  // serverGreets: the server sends the client one message as soon as it opens.
+  bool Start(bool serverGreets, RemoteCallback onRemote) {
+    ix::initNetSystem();
+    std::mt19937 rng{std::random_device{}()};
+    for (int attempt = 0; attempt < 50 && !server_; ++attempt) {
+      serverPort_ = 20000 + static_cast<int>(rng() % 30000);
+      auto candidate = std::make_unique<ix::WebSocketServer>(serverPort_, "127.0.0.1");
+      if (candidate->listen().first) server_ = std::move(candidate);
+    }
+    if (!server_) return false;
+    opened_ = serverSawOpen_.get_future();
+    server_->setOnClientMessageCallback([this, serverGreets](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& ws,
+                                                             const ix::WebSocketMessagePtr& msg) {
+      if (msg->type != ix::WebSocketMessageType::Open) return;
+      if (serverGreets) ws.sendBinary("greeting");
+      if (!openSignalled_.exchange(true)) serverSawOpen_.set_value();
+    });
+    server_->start();
+
+    front_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    int addrLen = sizeof(addr);
+    if (front_ == INVALID_SOCKET || bind(front_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        listen(front_, 1) != 0 || getsockname(front_, reinterpret_cast<sockaddr*>(&addr), &addrLen) != 0) {
+      if (front_ != INVALID_SOCKET) closesocket(front_);
+      front_ = INVALID_SOCKET;
+      server_->stop();
+      return false;
+    }
+    const int frontPort = ntohs(addr.sin_port);
+    acceptor_ = std::thread([this] { Accept(); });
+
+    clientOpen_ = clientSawOpen_.get_future();
+    remote = std::make_shared<ix::WebSocket>();
+    remote->setUrl("ws://127.0.0.1:" + std::to_string(frontPort) + "/");
+    remote->disableAutomaticReconnection();
+    remote->setOnMessageCallback([this, onRemote = std::move(onRemote)](const ix::WebSocketMessagePtr& msg) {
+      if (msg->type == ix::WebSocketMessageType::Open && !clientOpenSignalled_.exchange(true)) {
+        clientSawOpen_.set_value();
+      }
+      onRemote(msg);
+    });
+    remote->start();
+    return true;
   }
-  const int frontPort = ntohs(addr.sin_port);
-  std::atomic<SOCKET> clientSide{INVALID_SOCKET};
-  std::atomic<SOCKET> serverSide{INVALID_SOCKET};
-  std::vector<std::thread> pumps;
-  std::mutex pumpsMutex;
-  std::thread acceptor([&] {
-    SOCKET a = accept(front, nullptr, nullptr);
+
+  // Both ends have seen the connection open (the drop must come after, or it is a failed connect).
+  bool WaitOpen(std::chrono::milliseconds limit) {
+    return opened_.wait_for(limit) == std::future_status::ready &&
+           clientOpen_.wait_for(limit) == std::future_status::ready;
+  }
+
+  // reset: the forwarder's sockets are closed with a reset, so the remote's next send fails (a shutdown leaves the
+  // remote able to write into the kernel's buffer).
+  void Drop(bool reset = false) {
+    for (std::atomic<SOCKET>* side : {&clientSide_, &serverSide_}) {
+      const SOCKET s = side->load();
+      if (s == INVALID_SOCKET) continue;
+      if (reset) {
+        linger abortive{1, 0};
+        setsockopt(s, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&abortive), sizeof(abortive));
+        side->store(INVALID_SOCKET);
+        closesocket(s);
+      } else {
+        shutdown(s, SD_BOTH);
+      }
+    }
+  }
+
+  // Ends everything. Only when no thread of the rig is stuck.
+  void Teardown() {
+    remote->stop();
+    if (front_ != INVALID_SOCKET) closesocket(front_);  // wakes the acceptor if the client never connected
+    acceptor_.join();
+    for (std::thread& t : pumps_) t.join();
+    for (SOCKET s : {clientSide_.load(), serverSide_.load()}) {
+      if (s != INVALID_SOCKET) closesocket(s);
+    }
+    server_->stop();
+  }
+
+  // A thread may be stuck and the helper threads still use this frame: leave them running and detached for the
+  // caller to end the process.
+  void Detach() {
+    acceptor_.detach();
+    std::lock_guard<std::mutex> lk(pumpsMutex_);
+    for (std::thread& t : pumps_) t.detach();
+  }
+
+  std::shared_ptr<ix::WebSocket> remote;
+
+ private:
+  void Accept() {
+    SOCKET a = accept(front_, nullptr, nullptr);
     if (a == INVALID_SOCKET) return;
     SOCKET b = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     sockaddr_in to{};
     to.sin_family = AF_INET;
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    to.sin_port = htons(static_cast<u_short>(serverPort));
+    to.sin_port = htons(static_cast<u_short>(serverPort_));
     if (b == INVALID_SOCKET || connect(b, reinterpret_cast<sockaddr*>(&to), sizeof(to)) != 0) {
       closesocket(a);
       if (b != INVALID_SOCKET) closesocket(b);
       return;
     }
-    clientSide = a;
-    serverSide = b;
+    clientSide_ = a;
+    serverSide_ = b;
     auto pump = [](SOCKET from, SOCKET dest) {
       char buf[4096];
       for (;;) {
@@ -2435,64 +2565,155 @@ bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
         if (send(dest, buf, n, 0) != n) return;
       }
     };
-    std::lock_guard<std::mutex> lk(pumpsMutex);
-    pumps.emplace_back(pump, a, b);
-    pumps.emplace_back(pump, b, a);
-  });
+    std::lock_guard<std::mutex> lk(pumpsMutex_);
+    pumps_.emplace_back(pump, a, b);
+    pumps_.emplace_back(pump, b, a);
+  }
 
-  auto remote = std::make_shared<ix::WebSocket>();
-  remote->setUrl("ws://127.0.0.1:" + std::to_string(frontPort) + "/");
-  remote->disableAutomaticReconnection();
-  void* remoteHandle = new std::shared_ptr<ix::WebSocket>(remote);
+  std::unique_ptr<ix::WebSocketServer> server_;
+  int serverPort_ = 0;
+  SOCKET front_ = INVALID_SOCKET;
+  std::atomic<SOCKET> clientSide_{INVALID_SOCKET};
+  std::atomic<SOCKET> serverSide_{INVALID_SOCKET};
+  std::vector<std::thread> pumps_;
+  std::mutex pumpsMutex_;
+  std::thread acceptor_;
+  std::promise<void> serverSawOpen_;
+  std::future<void> opened_;
+  std::atomic<bool> openSignalled_{false};
+  std::promise<void> clientSawOpen_;
+  std::future<void> clientOpen_;
+  std::atomic<bool> clientOpenSignalled_{false};
+};
+
+}  // namespace
+
+// The login remote dropped by its server: ix calls the Close callback on the remote's own thread under its
+// non-recursive _setReadyStateMutex, and a send on that remote fails in sendOnSocket and takes that mutex again
+// (#723). True when the callback's CloseGameSocketsForRemote returned in time; false leaves that thread stuck, so the
+// caller must end the process rather than tear down.
+bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs) {
+  DropRig rig;
+  std::promise<void> returned;
+  std::future<void> finished = returned.get_future();
+  std::atomic<bool> fired{false};
+  DropRig* rigPtr = &rig;  // the callback reads the remote's address when it runs, after Start has set it
+  if (!rig.Start(false, [&](const ix::WebSocketMessagePtr& msg) {
+        if (msg->type != ix::WebSocketMessageType::Close || fired.exchange(true)) return;
+        CloseGameSocketsForRemote(rigPtr->remote.get(), 1, msg->closeInfo.code);
+        returned.set_value();
+      })) {
+    return false;
+  }
+  void* remoteHandle = new std::shared_ptr<ix::WebSocket>(rig.remote);
   void* gameHandle = TestHook_N61_CreateMockWs();
   TestHook_N61_RegisterLogin(remoteHandle, gameHandle);
 
-  std::promise<void> returned;
-  std::future<void> finished = returned.get_future();
-  std::promise<void> clientSawOpen;  // the drop must come after the remote itself is open, or it is a failed connect
-  std::future<void> clientOpen = clientSawOpen.get_future();
-  std::atomic<bool> clientOpenSignalled{false};
-  ix::WebSocket* raw = remote.get();
-  std::atomic<bool> fired{false};
-  remote->setOnMessageCallback([&](const ix::WebSocketMessagePtr& msg) {
-    if (msg->type == ix::WebSocketMessageType::Open && !clientOpenSignalled.exchange(true)) clientSawOpen.set_value();
-    if (msg->type != ix::WebSocketMessageType::Close || fired.exchange(true)) return;
-    CloseGameSocketsForRemote(raw, 1, msg->closeInfo.code);
-    returned.set_value();
-  });
-  remote->start();
-
   const auto deadline = std::chrono::milliseconds(timeoutMs);
-  bool ok = opened.wait_for(deadline) == std::future_status::ready &&
-            clientOpen.wait_for(deadline) == std::future_status::ready;
+  bool ok = rig.WaitOpen(deadline);
   if (!ok) std::fprintf(stderr, "TestHook_LoginRemoteDroppedThroughRealIx: the remote never opened\n");
   if (ok) {
-    for (SOCKET s : {clientSide.load(), serverSide.load()}) {
-      if (s != INVALID_SOCKET) shutdown(s, SD_BOTH);  // the connection ends with no close frame
-    }
+    rig.Drop();  // the connection ends with no close frame
     ok = finished.wait_for(deadline) == std::future_status::ready;
     if (!ok) std::fprintf(stderr, "TestHook_LoginRemoteDroppedThroughRealIx: the Close callback never returned\n");
   }
   if (!ok) {
-    // The remote's thread may be stuck, and the helper threads still use this frame: leave them running and
-    // detached for the caller to end the process.
-    acceptor.detach();
-    std::lock_guard<std::mutex> lk(pumpsMutex);
-    for (std::thread& t : pumps) t.detach();
+    rig.Detach();
     return false;
   }
-
-  remote->stop();
-  closesocket(front);  // wakes the acceptor if the client never connected
-  acceptor.join();
-  for (std::thread& t : pumps) t.join();
-  for (SOCKET s : {clientSide.load(), serverSide.load()}) {
-    if (s != INVALID_SOCKET) closesocket(s);
-  }
-  server->stop();
+  rig.Teardown();
   TestHook_N61_DestroyMockWs(gameHandle);
   delete static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
   return true;
+}
+
+// #738: the bridge sends on the login remote from the caller's own thread. When the connection has gone, that send
+// fails inside ix and ix runs the remote's Close callback on the sending thread; the callback takes g_pairsMutex, so
+// a sender that holds g_pairsMutex deadlocks on itself. The remote's reader is parked inside a Message callback so
+// the failure is found by the send and not by the reader. `path` names the production send under test: 0 is
+// SendFrameToServer, 1 the game->server forward, 2 the flush when the remote opens. 0: the send failed and its
+// Close callback returned; 1: the sending thread never came back (end the process); 2: no send ever failed (the rig
+// is broken, not the bridge).
+int TestHook_SendOnDroppedRemote(int path, unsigned int timeoutMs) {
+  DropRig rig;
+  std::promise<void> parked;
+  std::future<void> parkedF = parked.get_future();
+  std::promise<void> release;
+  std::shared_future<void> releaseF = release.get_future().share();
+  std::atomic<bool> parkedSignalled{false};
+  std::promise<void> closed;
+  std::future<void> closedF = closed.get_future();
+  std::atomic<bool> closeFired{false};
+  std::atomic<bool> closeEntered{false};  // ix has run the Close callback (on the sender or the reader)
+  DropRig* rigPtr = &rig;
+  if (!rig.Start(true, [&](const ix::WebSocketMessagePtr& msg) {
+        if (msg->type == ix::WebSocketMessageType::Message) {
+          if (!parkedSignalled.exchange(true)) parked.set_value();
+          releaseF.wait();  // the reader stays here: it cannot be the one to notice the drop
+        } else if (msg->type == ix::WebSocketMessageType::Close && !closeFired.exchange(true)) {
+          closeEntered = true;
+          CloseGameSocketsForRemote(rigPtr->remote.get(), 1, msg->closeInfo.code);
+          closed.set_value();
+        }
+      })) {
+    return 2;
+  }
+  void* remoteHandle = new std::shared_ptr<ix::WebSocket>(rig.remote);
+  void* gameHandle = TestHook_N61_CreateMockWs();
+  ix::WebSocket* rawGame = static_cast<ix::WebSocket*>(TestHook_N61_RegisterLogin(remoteHandle, gameHandle));
+  const auto deadline = std::chrono::milliseconds(timeoutMs);
+  const bool ready = rig.WaitOpen(deadline) && parkedF.wait_for(deadline) == std::future_status::ready;
+  int result = 2;
+  if (ready) {
+    rig.Drop(true);
+    std::promise<void> workerDone;
+    std::future<void> workerDoneF = workerDone.get_future();
+    std::thread worker([&] {
+      const std::string frame = "frame";
+      while (closedF.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
+        if (path == 0) {
+          SendFrameToServer(frame);
+        } else if (path == 1) {
+          ForwardGameFrameToRemote(*rawGame, frame, true);
+        } else {
+          ProxyPair* pair = nullptr;
+          {
+            std::lock_guard<std::mutex> lk(g_pairsMutex);
+            pair = g_pairs.at(rawGame).get();
+            pair->remoteOpen = false;
+            pair->loginInjected = true;  // the flush under test, not the login request
+            pair->pendingToRemote.assign(1, frame);
+          }
+          HandleRemoteOpen(pair, 1, 0, "", "");
+        }
+      }
+      workerDone.set_value();
+    });
+    if (workerDoneF.wait_for(deadline) == std::future_status::ready) {
+      worker.join();
+      result = 0;
+    } else {
+      // Stuck with the Close callback entered: the sender is waiting on g_pairsMutex inside it. Stuck without: no send
+      // ever failed and no Close ran, which is the rig's fault.
+      result = closeEntered.load() ? 1 : 2;
+      std::fprintf(stderr, "TestHook_SendOnDroppedRemote(path=%d): the sending thread never returned (close_entered=%d)\n",
+                   path, closeEntered.load() ? 1 : 0);
+      worker.detach();
+    }
+  }
+  if (result != 0 && ready) {
+    rig.Detach();
+    return result;
+  }
+  release.set_value();
+  rig.Teardown();
+  TestHook_N61_DestroyMockWs(gameHandle);
+  delete static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    g_pairs.erase(rawGame);
+  }
+  return result;
 }
 
 size_t TestHook_GameSocketsBoundTo(void* remoteHandle) {
@@ -2587,6 +2808,179 @@ void TestHook_N61_ResetState() {
   g_activeGameWs = nullptr;
   g_roles.Reset();
   nevr_socket_role::GlobalAdvertisement().Reset();
+}
+
+// ---- test rig for the flush in HandleRemoteOpen ----------------------------------------------------------------
+// A real ix server that records every frame it receives, in order, and a real ix client (R1) connected to it. A
+// login pair on R1 is registered with remoteOpen=false and frames queued, the way the production Open handler finds
+// it. The test parks HandleRemoteOpen between its first batch of sends and its re-lock (through the test binary's
+// Log, on the "login injected" line) and drives the other paths while it is parked.
+namespace {
+struct FlushRig {
+  std::unique_ptr<ix::WebSocketServer> server;
+  std::mutex m;
+  std::condition_variable cv;
+  std::vector<std::string> got;
+  std::shared_ptr<ix::WebSocket> r1;
+  std::promise<void> r1Open;
+  std::atomic<bool> r1OpenSignalled{false};
+  void* game1 = nullptr;  // TestHook_N61_CreateMockWs handles (only their addresses are used)
+  void* game2 = nullptr;
+  void* game3 = nullptr;
+  std::shared_ptr<ix::WebSocket> r2;  // the replacement pair's own remote: never started
+  ProxyPair* pair = nullptr;          // the login pair HandleRemoteOpen is given
+  ProxyPair* replacement = nullptr;   // the pair registered under game2 at the same address
+};
+}  // namespace
+
+void* TestHook_FlushRig_Start(unsigned int timeoutMs) {
+  ix::initNetSystem();
+  auto* rig = new FlushRig();
+  std::mt19937 rng{std::random_device{}()};
+  int port = 0;
+  for (int attempt = 0; attempt < 50 && !rig->server; ++attempt) {
+    port = 20000 + static_cast<int>(rng() % 30000);
+    auto candidate = std::make_unique<ix::WebSocketServer>(port, "127.0.0.1");
+    if (candidate->listen().first) rig->server = std::move(candidate);
+  }
+  if (!rig->server) { delete rig; return nullptr; }
+  rig->server->setOnClientMessageCallback([rig](std::shared_ptr<ix::ConnectionState>, ix::WebSocket&,
+                                                const ix::WebSocketMessagePtr& msg) {
+    if (msg->type != ix::WebSocketMessageType::Message) return;
+    std::lock_guard<std::mutex> lk(rig->m);
+    rig->got.push_back(msg->str);
+    rig->cv.notify_all();
+  });
+  rig->server->start();
+  rig->r1 = std::make_shared<ix::WebSocket>();
+  rig->r1->setUrl("ws://127.0.0.1:" + std::to_string(port) + "/");
+  rig->r1->disableAutomaticReconnection();
+  rig->r1->setOnMessageCallback([rig](const ix::WebSocketMessagePtr& msg) {
+    if (msg->type == ix::WebSocketMessageType::Open && !rig->r1OpenSignalled.exchange(true)) rig->r1Open.set_value();
+  });
+  std::future<void> opened = rig->r1Open.get_future();
+  rig->r1->start();
+  if (opened.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready) return nullptr;
+
+  rig->game1 = TestHook_N61_CreateMockWs();
+  rig->game2 = TestHook_N61_CreateMockWs();
+  rig->game3 = TestHook_N61_CreateMockWs();
+  rig->r2 = std::make_shared<ix::WebSocket>();
+  auto pair = std::make_unique<ProxyPair>();
+  pair->remoteWs = rig->r1;
+  pair->remoteOpen = false;
+  pair->loginInjected = false;
+  pair->connIdx = 1;
+  pair->role = nevr_socket_role::Role::Login;
+  pair->pendingToRemote = {"q1", "q2"};
+  rig->pair = pair.get();
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* g1 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game1)->get();
+  g_pairs[g1] = std::move(pair);
+  g_loginRemoteWs = rig->r1;
+  g_loginGameWs = g1;
+  g_activeGameWs = g1;
+  return rig;
+}
+
+// The production Open handler for the login pair, on the calling thread.
+void TestHook_FlushRig_RunOpen(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  HandleRemoteOpen(rig->pair, 1, 4242, "verify748", "");
+}
+
+// The production game->server forward for game socket 1 (the login socket) or 3 (a matchmaker sharing R1).
+void TestHook_FlushRig_Forward(void* handle, int game, const std::string& frame) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  void* h = game == 3 ? rig->game3 : rig->game1;
+  ForwardGameFrameToRemote(*static_cast<std::shared_ptr<ix::WebSocket>*>(h)->get(), frame, true);
+}
+
+// A matchmaker pair sharing R1, registered as the production Open handler does (remoteOpen=true at admission).
+void TestHook_FlushRig_AddMatchmaker(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  auto pair = std::make_unique<ProxyPair>();
+  pair->remoteWs = rig->r1;
+  pair->remoteOpen = true;
+  pair->loginInjected = true;
+  pair->connIdx = 2;
+  pair->role = nevr_socket_role::Role::Matchmaker;
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  g_pairs[static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game3)->get()] = std::move(pair);
+}
+
+// The login game socket closes (its pair is erased, as RetireGameWsLocked does) and a new game socket's pair is
+// registered under game2 at the address the erased pair had. allocatorReused: the allocator handed the address
+// back (false: not reproduced on this run, nothing registered).
+bool TestHook_FlushRig_ReplacePairAtSameAddress(void* handle, bool* allocatorReused) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* g1 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game1)->get();
+  ix::WebSocket* g2 = static_cast<std::shared_ptr<ix::WebSocket>*>(rig->game2)->get();
+  auto it = g_pairs.find(g1);
+  if (it == g_pairs.end()) return false;
+  ProxyPair* const old = it->second.get();
+  g_pairs.erase(it);  // frees the old pair
+  // The allocator only: up to 1000 live allocations of the same type until one lands on the freed address.
+  std::vector<std::unique_ptr<ProxyPair>> misses;
+  std::unique_ptr<ProxyPair> fresh = std::make_unique<ProxyPair>();
+  while (fresh.get() != old && misses.size() < 1000) {
+    misses.push_back(std::move(fresh));
+    fresh = std::make_unique<ProxyPair>();
+  }
+  *allocatorReused = fresh.get() == old;
+  std::fprintf(stderr, "flush rig: old pair %p, new pair %p after %zu misses\n", static_cast<void*>(old),
+               static_cast<void*>(fresh.get()), misses.size());
+  if (!*allocatorReused) return false;
+  fresh->remoteWs = rig->r2;  // its own remote, still connecting
+  fresh->remoteOpen = false;
+  fresh->loginInjected = false;
+  fresh->connIdx = 1;
+  fresh->role = nevr_socket_role::Role::Login;
+  fresh->pendingToRemote = {"x-for-r2"};
+  rig->replacement = fresh.get();
+  g_pairs[g2] = std::move(fresh);
+  g_loginGameWs = g2;
+  g_activeGameWs = g2;
+  return true;
+}
+
+void TestHook_FlushRig_ReplacementState(void* handle, bool* remoteOpen, size_t* pending) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  *remoteOpen = rig->replacement->remoteOpen;
+  *pending = rig->replacement->pendingToRemote.size();
+}
+
+bool TestHook_FlushRig_LoginPairOpen(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return PairRegisteredLocked(rig->pair) && rig->pair->remoteOpen;
+}
+
+// Frames the server received, waiting until there are at least `n` or the time runs out.
+std::vector<std::string> TestHook_FlushRig_Received(void* handle, size_t n, unsigned int timeoutMs) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  std::unique_lock<std::mutex> lk(rig->m);
+  rig->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] { return rig->got.size() >= n; });
+  return rig->got;
+}
+
+void TestHook_FlushRig_Stop(void* handle) {
+  auto* rig = static_cast<FlushRig*>(handle);
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    g_pairs.clear();
+    g_loginRemoteWs.reset();
+    g_loginGameWs = nullptr;
+    g_activeGameWs = nullptr;
+  }
+  rig->r1->stop();
+  rig->server->stop();
+  TestHook_N61_DestroyMockWs(rig->game1);
+  TestHook_N61_DestroyMockWs(rig->game2);
+  TestHook_N61_DestroyMockWs(rig->game3);
+  delete rig;
 }
 
 #endif  // NEVR_TEST_HOOKS

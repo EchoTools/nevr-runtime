@@ -21,6 +21,18 @@ class LoadScenarioTest(unittest.TestCase):
         last = scenario["steps"][-1]
         self.assertIn("target=1000000000000000001", last["expect_log"]["pattern"])
 
+    def test_smoke_scenario_loads_with_the_three_checks(self):
+        scenario = run_scenario.load_scenario(REPO / "tools/scenario/smoke.yaml")
+        self.assertEqual(scenario["name"], "smoke")
+        self.assertEqual([s["kind"] for s in scenario["steps"]], ["wait_log", "wait_log", "fire", "expect_log"])
+        self.assertIn("to in game", scenario["steps"][0]["wait_log"]["pattern"])
+        # A cold load of the lobby level takes 177-185 s on a quiet machine, so 300 s left under
+        # 50 s of headroom and a loaded machine failed the step (#792).
+        self.assertEqual(scenario["steps"][0]["wait_log"]["timeout"], 600)
+        self.assertIn("control listening", scenario["steps"][1]["wait_log"]["pattern"])
+        self.assertEqual(scenario["steps"][2]["fire"]["action"], "refresh_friends")
+        self.assertIn("slot=45 name=RefreshFriends", scenario["steps"][3]["expect_log"]["pattern"])
+
     def test_a_step_with_two_kinds_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "bad.yaml"
@@ -310,3 +322,51 @@ class ListStateTest(unittest.TestCase):
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "contains": "77"}})[0])
         self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 77}})[0])
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 9}})[0])
+
+
+CONSOLE = (
+    "\x1b[90m2026-10-22T09:21:01.746Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from logged out, to loading root)\n"
+    "noise line without a state\n"
+    "\x1b[90m2026-10-22T09:21:05.782Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from loading root, to logged in)\n"
+    "\x1b[90m2026-10-22T09:25:15.532Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from ready for game, to in game)\n"
+)
+
+
+class StateTimelineTest(unittest.TestCase):
+    def test_every_state_change_is_listed_with_its_timestamp(self):
+        self.assertEqual(run_scenario.state_timeline(CONSOLE), [
+            {"from": "logged out", "to": "loading root", "ts": "2026-10-22T09:21:01.746Z"},
+            {"from": "loading root", "to": "logged in", "ts": "2026-10-22T09:21:05.782Z"},
+            {"from": "ready for game", "to": "in game", "ts": "2026-10-22T09:25:15.532Z"},
+        ])
+
+    def test_a_console_without_states_gives_an_empty_list(self):
+        self.assertEqual(run_scenario.state_timeline("nothing here\n"), [])
+
+    def test_a_state_line_without_a_timestamp_keeps_its_states_and_a_null_ts(self):
+        self.assertEqual(run_scenario.state_timeline("NetGame switching state (from a, to b)\n"),
+                         [{"from": "a", "to": "b", "ts": None}])
+
+
+class BuildReportTest(unittest.TestCase):
+    def test_the_report_carries_the_load_at_start_and_the_state_timeline(self):
+        report = run_scenario.build_report("smoke", pathlib.Path("/x/BugSplat64.dll"), True, True,
+                                           "1.00 2.00 3.00", CONSOLE, [{"step": "s", "result": "PASS"}])
+        self.assertEqual(report["loadavg_start"], "1.00 2.00 3.00")
+        self.assertEqual([s["to"] for s in report["states"]], ["loading root", "logged in", "in game"])
+        self.assertEqual((report["scenario"], report["passed"], report["dll_restored"]), ("smoke", True, True))
+        self.assertEqual(report["steps"], [{"step": "s", "result": "PASS"}])
+
+
+class LoadavgTest(unittest.TestCase):
+    def test_reads_the_three_averages_from_the_given_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "loadavg"
+            path.write_text("11.20 63.69 143.84 3/4779 777090\n")
+            self.assertEqual(run_scenario.read_loadavg(path), "11.20 63.69 143.84")
+
+    def test_an_unreadable_file_gives_none_not_an_exception(self):
+        self.assertIsNone(run_scenario.read_loadavg(pathlib.Path("/nonexistent/loadavg")))

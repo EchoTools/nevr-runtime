@@ -67,8 +67,24 @@ foreach ($key in 'backup', 'legacy', 'installed_sha256') {
 $backup = $values['backup']
 $legacyAside = $values['legacy']
 if (-not (Test-Path -LiteralPath $backup)) { throw "the backup is gone: ${backup}; nothing was changed" }
+# #779: an install made before #762 may have saved a NEVR runtime as the original; restoring it would restore the runtime.
+if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($backup)).Contains('NEVR-BUILD ')) {
+  throw "the backup ${backup} is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), then delete $state"
+}
 $target = Join-Path $Dir 'BugSplat64.dll'
-if ((Test-Path -LiteralPath $target) -and ((Get-Sha $target) -ne $values['installed_sha256'])) {
+# #759: the DLL must be a build of ours: the one recorded, an earlier one install.ps1 recorded when it updated,
+# or the one in the package this script came with (a DLL copied in by hand from a newer package).
+$known = @($values['installed_sha256'])
+if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+$sums = Join-Path $here 'SHA256SUMS'
+if (Test-Path -LiteralPath $sums) {
+  foreach ($line in Get-Content -LiteralPath $sums) {
+    if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -eq 'BugSplat64.dll') { $known += $Matches[1].ToLower() }
+  }
+}
+# A DLL carrying the NEVR-BUILD identity literal is a NEVR runtime: putting the original back over it is safe.
+$isRuntime = (Test-Path -LiteralPath $target) -and [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')
+if ((Test-Path -LiteralPath $target) -and ($known -notcontains (Get-Sha $target)) -and -not $isRuntime) {
   throw 'BugSplat64.dll is not the one install.ps1 put there (changed since); nothing was changed'
 }
 if ($legacyAside -ne '') {

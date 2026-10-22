@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -48,6 +49,10 @@ void AddLoadFilter(const char* name, LoadFilter filter);
  * last '\\' or '/') contains "ovrplatform", e.g. libovrplatform64_1.dll. A folder named like that
  * does not match, so a library under such a directory is not refused. */
 bool IsOculusPlatformPath(const wchar_t* lower_path);
+
+/* The lowercase (ASCII fold) wide spelling of an ANSI path, converted through the ANSI code page: what the
+ * LoadLibraryA/ExA hooks hand to the filters. Empty for a null or empty path, or one that cannot be converted. */
+std::wstring AnsiPathToLowerWide(const char* path);
 
 /* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests).
  * `blocked_by` remains valid until the next IsLoadBlocked call on the same thread. */
