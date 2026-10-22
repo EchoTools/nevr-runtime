@@ -40,6 +40,10 @@ struct FloorInfo {
 // The visible message: which path, which build, what to do. A no-space failure names the free and needed MiB.
 std::string BuildFloorMessage(const FloorInfo& info);
 
+// Shown when a download is about to start, so a first-run player does not read the wait as a hang.
+inline constexpr const char* kDownloadNotice =
+    "Downloading Echo VR game data, about 900 MB, this can take a few minutes.";
+
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
   FetchConfig fetch;                      // root and replacing are set by the step
@@ -47,6 +51,7 @@ struct StepConfig {
   // Test seam: where a fetch writes when it is not empty. Production leaves it empty and the fetch goes where Decide
   // says (the media root, or the root that holds a `_data` of another build).
   std::string fetch_root_override;
+  std::function<void()> announce;                           // once, before a download starts; null: none
   std::function<void(const std::string& message)> present;  // the visible message; null: none
   std::function<void()> hold;                                // after the message, so it can be read; null: none
   std::function<void(const Event&)> on_step;                // data_check; null: none

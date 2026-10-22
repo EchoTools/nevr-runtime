@@ -76,7 +76,7 @@ struct Rig {
   std::set<std::string> present;
   StepConfig config;
   std::vector<std::string> shown;   // what present() received, in order
-  std::vector<std::string> order;   // "present" and "hold", in call order
+  std::vector<std::string> order;   // "announce", "present" and "hold", in call order
   std::vector<std::string> events;
 
   explicit Rig(const std::string& zip_bytes = GoodZip()) : zip(zip_bytes) {
@@ -91,6 +91,7 @@ struct Rig {
     config.fetch.utc_stamp = "20261022T000000Z";
     config.fetch.available_bytes = [](const std::string&) { return std::uint64_t{1} << 40; };
     config.fetch.backoff = [](int) {};
+    config.announce = [this] { order.push_back("announce"); };
     config.present = [this](const std::string& m) {
       shown.push_back(m);
       order.push_back("present");
@@ -126,6 +127,7 @@ TEST(DataInTheMediaRootIsUsedAndNotFetched) {
   CHECK_EQ(r.root, Media());
   CHECK_EQ(net.calls, 0);
   CHECK(rig.shown.empty());
+  CHECK(rig.order.empty());  // data that is there is not announced
   CHECK_EQ(rig.events.size(), static_cast<std::size_t>(1));
   CHECK(Contains(rig.events[0], "data_check action=use source=android_media"));
 }
@@ -161,6 +163,8 @@ TEST(NoDataFetchesVerifiesAndPlacesIt) {
   CHECK_EQ(net.calls, 1);
   CHECK(Exists(rig.Root() + "/" + kManifestRel));
   CHECK(rig.shown.empty());
+  CHECK_EQ(rig.order.size(), static_cast<std::size_t>(1));  // the announcement only
+  CHECK_EQ(rig.order[0], std::string("announce"));
   CHECK(Contains(rig.events[0], "action=fetch source=none"));
 }
 
@@ -186,9 +190,10 @@ TEST(NoNetworkShowsTheFloorMessageThenHoldsIt) {
   CHECK(Contains(r.message, rig.Root() + "/_data"));  // the path
   CHECK(Contains(r.message, kBuild));                 // the build
   CHECK(Contains(r.message, "Check the network connection and start the game again"));  // the action
-  CHECK_EQ(rig.order.size(), static_cast<std::size_t>(2));
-  CHECK_EQ(rig.order[0], std::string("present"));
-  CHECK_EQ(rig.order[1], std::string("hold"));
+  CHECK_EQ(rig.order.size(), static_cast<std::size_t>(3));
+  CHECK_EQ(rig.order[0], std::string("announce"));  // before the download
+  CHECK_EQ(rig.order[1], std::string("present"));
+  CHECK_EQ(rig.order[2], std::string("hold"));
   CHECK(!Exists(rig.Root() + "/_data"));
 }
 

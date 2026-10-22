@@ -74,6 +74,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
     return result;
   }
 
+  if (config.announce) config.announce();
   FetchConfig fetch = config.fetch;
   fetch.root = config.fetch_root_override.empty() ? std::string(decision.root) : config.fetch_root_override;
   fetch.replacing = decision.action == DataAction::kReplace;

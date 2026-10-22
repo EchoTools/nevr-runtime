@@ -19,6 +19,7 @@
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "quest/data/data_step.h"
 #include "quest/data/sha256.h"
 #include "quest/tests/data_test_support.h"
 #include "quest/tests/test_check.h"
@@ -164,7 +165,8 @@ void AFetchPlacesTheDataAndTheGameIsServedTheRoot() {
   QCHECK(rig.net.calls == 1);
   QCHECK(Exists(rig.options.fetch_root_override + "/" + kManifestRel));
   QCHECK(g_ends == 0);
-  QCHECK(g_shown.empty());
+  // The download notice is shown once, before the download starts: nothing else.
+  QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kDownloadNotice);
   QCHECK(std::strcmp(nevr_quest::obb_skip::CurrentRoot(), nevr_quest::data_root::kMediaRoot) == 0);
 }
 
@@ -173,13 +175,14 @@ void AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess() {
   rig.BootRequest();
   QCHECK(g_requests == 1);
   QCHECK(g_ends == 1);
-  QCHECK(g_shown.size() == 3);  // shown, then repeated twice while it is held
-  QCHECK(g_shown[0].find(rig.options.fetch_root_override + "/_data") != std::string::npos);  // the path
-  QCHECK(g_shown[0].find(kBuild) != std::string::npos);                                       // the build
-  QCHECK(g_shown[0].find("start the game again") != std::string::npos);                       // the action
-  QCHECK(g_shown[1] == g_shown[0] && g_shown[2] == g_shown[0]);
-  // show, (sleep, show) twice, the last hold, then the process ends: nothing after the end.
-  const std::vector<std::string> want = {"show", "sleep:7", "show", "sleep:7", "show", "sleep:7", "end"};
+  QCHECK(g_shown.size() == 4);  // the download notice, then the message, repeated twice while it is held
+  QCHECK(g_shown[0] == nevr_quest::data::kDownloadNotice);
+  QCHECK(g_shown[1].find(rig.options.fetch_root_override + "/_data") != std::string::npos);  // the path
+  QCHECK(g_shown[1].find(kBuild) != std::string::npos);                                       // the build
+  QCHECK(g_shown[1].find("start the game again") != std::string::npos);                       // the action
+  QCHECK(g_shown[2] == g_shown[1] && g_shown[3] == g_shown[1]);
+  // notice, message, (sleep, show) twice, the last hold, then the process ends: nothing after the end.
+  const std::vector<std::string> want = {"show", "show", "sleep:7", "show", "sleep:7", "show", "sleep:7", "end"};
   std::vector<std::string> got;
   for (const std::string& e : g_log) {
     if (e != "sleep:0") got.push_back(e);  // the fetch's own backoff
@@ -190,7 +193,7 @@ void AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess() {
 void ARequestThatIsNotTheBootRequestRunsNothing() {
   Rig rig(false);
   rig.BootRequest();
-  const int shown = static_cast<int>(g_shown.size());
+  const int shown = static_cast<int>(g_shown.size());  // includes the notice from the boot request
   const int calls = rig.net.calls;
   static const char* const script[1] = {"android.permission.WRITE_EXTERNAL_STORAGE"};
   RequestEntry()(script, 1);

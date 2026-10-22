@@ -76,15 +76,16 @@ std::string UtcStamp() {
 }
 
 // Shows `text` and logs how far it got.
-void Present(const std::string& text) noexcept {
+void Present(const std::string& text, const char* what) noexcept {
   if (Opts().show == nullptr) {
-    sentinel::LogFields(sentinel::LogLevel::kWarn, "data_present", {{"result", "no_presenter"}});
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "data_present", {{"what", what}, {"result", "no_presenter"}});
     return;
   }
   bool prepared = false;
   const char* result = Opts().show(CurrentApp(), text.c_str(), &prepared);
   sentinel::LogFields(std::strcmp(result, "shown") == 0 ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
-                      "data_present", {{"result", result}, {"looper_prepared", prepared ? "true" : "false"}});
+                      "data_present",
+                      {{"what", what}, {"result", result}, {"looper_prepared", prepared ? "true" : "false"}});
 }
 
 // The measurement probe: `toast <text>` or `block <seconds>`, once.
@@ -107,7 +108,7 @@ void RunProbe() noexcept {
   }
   if (std::strncmp(buf, "toast ", 6) == 0) {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "start"}});
-    Present(buf + 6);
+    Present(buf + 6, "probe");
     sentinel::LogFields(sentinel::LogLevel::kInfo, "data_probe", {{"kind", "toast"}, {"state", "end"}});
   } else if (std::strncmp(buf, "block ", 6) == 0) {
     unsigned long seconds = std::strtoul(buf + 6, nullptr, 10);
@@ -151,14 +152,15 @@ void AfterStorage() noexcept {
   std::string lastMessage;
   config.present = [&lastMessage](const std::string& message) {
     lastMessage = message;
-    Present(message);
+    Present(message, "floor");
   };
+  config.announce = [] { Present(data::kDownloadNotice, "download_notice"); };
   const unsigned holdMs = Opts().hold_ms;
   config.hold = [&lastMessage, holdMs] {
     // The toast lasts a few seconds: show it again twice so a player who looked away still reads it.
     for (int repeat = 0; repeat < 2; ++repeat) {
       Sleep(holdMs);
-      Present(lastMessage);
+      Present(lastMessage, "floor");
     }
     Sleep(holdMs);
   };
