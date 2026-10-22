@@ -13,8 +13,9 @@
 #
 # The timer runs it from a worktree dedicated to it (the unit's WorkingDirectory), and the first thing
 # it does is fast-forward that worktree to origin/main and re-exec itself from the updated file, so the
-# timer never runs a dev branch or a stale checkout. A tree it cannot fast-forward (dirty, diverged,
-# detached, no route to origin) fails loudly with the alarm; the smoke never runs on stale code.
+# timer never runs a dev branch or a stale checkout. A tree it cannot bring to exactly origin/main on
+# its own branch (dirty, diverged, ahead, detached, another branch, no route to origin within the
+# fetch timeout) fails loudly with the alarm; the smoke never runs on stale code.
 # The one-time setup of that worktree is in tools/scenario/systemd/README.md.
 #
 # The record ($STATUS_DIR/last.json and the run's result.json) carries the load average at the run's
@@ -37,6 +38,8 @@ RUN_DIR="$STATUS_DIR/run"
 ALARM_FROM="scenario-smoke"
 GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
 SLOW_SECONDS=300
+# The branch this worktree exists to track origin/main on; any other state is a dev tree.
+SMOKE_BRANCH="${NEVR_SMOKE_BRANCH:-nevr-runtime/792-smoke-main}"
 
 ORIG_ARGS=("$@")
 SYNC=1
@@ -109,9 +112,16 @@ sync_failed() {
   exit 1
 }
 if [[ $SYNC -eq 1 && $SYNCED -eq 0 ]]; then
-  git -C "$REPO" fetch --quiet origin main || sync_failed "cannot fetch origin/main for $REPO; the smoke never runs on a stale tree"
+  # No prompt and a bounded wait: an unreachable or hung origin is a loud failure, not a hung timer.
+  GIT_TERMINAL_PROMPT=0 timeout "${SMOKE_FETCH_TIMEOUT_SECONDS:-120}" git -C "$REPO" fetch --quiet origin main \
+    || sync_failed "cannot fetch origin/main for $REPO within ${SMOKE_FETCH_TIMEOUT_SECONDS:-120} s; the smoke never runs on a stale tree"
+  branch="$(git -C "$REPO" symbolic-ref --short -q HEAD || true)"
+  [[ "$branch" == "$SMOKE_BRANCH" ]] || sync_failed "$REPO is on ${branch:-a detached HEAD}, not $SMOKE_BRANCH; the smoke runs only from the worktree that tracks origin/main"
   [[ -z "$(git -C "$REPO" status --porcelain)" ]] || sync_failed "$REPO has uncommitted changes; the smoke worktree must be clean (it tracks origin/main and nothing else)"
-  git -C "$REPO" merge --quiet --ff-only origin/main || sync_failed "cannot fast-forward $REPO to origin/main (diverged or detached); the smoke never runs on a dev branch"
+  git -C "$REPO" merge --quiet --ff-only origin/main || sync_failed "cannot fast-forward $REPO to origin/main (diverged); the smoke never runs on a dev branch"
+  # A fast-forward succeeds when HEAD is already ahead of origin/main; that is a dev commit.
+  [[ "$(git -C "$REPO" rev-parse HEAD)" == "$(git -C "$REPO" rev-parse origin/main)" ]] \
+    || sync_failed "$REPO is not at origin/main after the fast-forward (it carries commits of its own); the smoke never runs on a dev commit"
   echo "=== smoke: $REPO at $(git -C "$REPO" rev-parse --short=8 HEAD) (origin/main) ==="
   [[ $SYNC_ONLY -eq 1 ]] && exit 0
   exec "$REPO/tools/scenario/smoke.sh" --synced "${ORIG_ARGS[@]}"
@@ -142,9 +152,8 @@ if [[ $BUILD -eq 1 ]]; then
     waited=$((waited + 10))
   done
   echo "=== smoke: building the scenario DLL (just preset=mingw-scenario build) ==="
-  # `just build` greps its own output and always exits 0, so the raw cmake build after it is the check:
-  # a failed build must never run the smoke on a stale DLL.
-  (cd "$REPO" && just worktree-setup && just preset=mingw-scenario build && cmake --build --preset mingw-scenario) \
+  # `just build` fails on a failed build, so a broken build never runs the smoke on a stale DLL.
+  (cd "$REPO" && just worktree-setup && just preset=mingw-scenario build) \
     || { write_record FAIL 1 "the scenario build failed"; alarm "the scenario build failed"; exit 1; }
 fi
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist after build" >&2; exit 2; }

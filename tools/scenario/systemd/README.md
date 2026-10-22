@@ -5,8 +5,9 @@
 tracks `origin/main`; no one develops in it. `smoke.sh` fetches, fast-forwards that worktree to
 `origin/main`, re-runs itself from the updated file, builds the `mingw-scenario` DLL, boots one client
 on `:101` and checks that it reaches in game, that the control endpoint listens and that a fire drives
-the game. It fails with the alarm (bonk and a courier to spritz) when it cannot fast-forward, when the
-build fails or when a check fails.
+the game. It fails with the alarm (bonk and a courier to spritz) when the worktree is not clean, on
+`nevr-runtime/792-smoke-main` (`NEVR_SMOKE_BRANCH`) and exactly at `origin/main` after the fast-forward,
+when `git fetch` does not finish within 120 s, when the build fails or when a check fails.
 
 The record is `/var/tmp/work-nevr-runtime/scenario-smoke/last.json` and `last.txt`; the run's own
 `result.json`, `console.log` and `game.jsonl` are in `.../scenario-smoke/run/`. `result.json` and

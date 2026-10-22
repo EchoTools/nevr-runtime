@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -62,7 +63,8 @@ class SmokeSyncTest(unittest.TestCase):
             fake.write_text(f'#!/bin/sh\necho "{tool} $*" >> "{self.alarms}"\n')
             fake.chmod(0o755)
         self.status = self.tmp / "status"
-        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", NEVR_SMOKE_STATUS_DIR=str(self.status))
+        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", NEVR_SMOKE_STATUS_DIR=str(self.status),
+                        NEVR_SMOKE_BRANCH="main")
 
     def push_commit(self, text="two\n", name="marker.txt"):
         (self.seed / name).write_text(text)
@@ -128,6 +130,63 @@ class SmokeSyncTest(unittest.TestCase):
         result = self.run_smoke("--sync-only")
         self.assert_loud(result, "cannot fetch origin/main")
 
+    def commit_locally(self):
+        (self.tree / "local.txt").write_text("local\n")
+        git(self.tree, "add", "-A")
+        git(self.tree, "commit", "-q", "-m", "local commit")
+        return git(self.tree, "rev-parse", "HEAD")
+
+    def test_a_tree_ahead_of_origin_main_is_a_dev_tree_and_fails_loudly(self):
+        dev = self.commit_locally()
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "not at origin/main after the fast-forward")
+        self.assertEqual(git(self.tree, "rev-parse", "HEAD"), dev)
+
+    def test_a_detached_head_at_a_dev_commit_fails_loudly(self):
+        self.commit_locally()
+        git(self.tree, "checkout", "-q", "--detach")
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "a detached HEAD, not main")
+
+    def test_a_detached_head_behind_origin_main_fails_loudly_and_is_not_moved(self):
+        self.push_commit()
+        git(self.tree, "checkout", "-q", "--detach")
+        before = git(self.tree, "rev-parse", "HEAD")
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "a detached HEAD, not main")
+        self.assertEqual(git(self.tree, "rev-parse", "HEAD"), before)
+
+    def test_another_branch_with_a_dev_commit_fails_loudly(self):
+        git(self.tree, "checkout", "-q", "-b", "dev")
+        self.commit_locally()
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "on dev, not main")
+
+    def test_another_branch_behind_origin_main_fails_loudly_and_its_ref_is_not_moved(self):
+        self.push_commit()
+        git(self.tree, "checkout", "-q", "-b", "dev")
+        before = git(self.tree, "rev-parse", "dev")
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "on dev, not main")
+        self.assertEqual(git(self.tree, "rev-parse", "dev"), before)
+
+    def test_an_untracked_file_makes_the_tree_dirty(self):
+        (self.tree / "stray.txt").write_text("x\n")
+        result = self.run_smoke("--sync-only")
+        self.assert_loud(result, "uncommitted changes")
+
+    def test_a_fetch_that_hangs_fails_loudly_at_the_timeout(self):
+        real_git = shutil.which("git")
+        shim = self.bin / "git"
+        shim.write_text(f'#!/bin/sh\ncase " $* " in *" fetch "*) sleep 30; exit 0;; esac\nexec {real_git} "$@"\n')
+        shim.chmod(0o755)
+        self.env["SMOKE_FETCH_TIMEOUT_SECONDS"] = "1"
+        started = time.monotonic()
+        result = self.run_smoke("--sync-only")
+        self.assertLess(time.monotonic() - started, 20)
+        self.assert_loud(result, "cannot fetch origin/main for")
+        self.assertIn("within 1 s", result.stderr)
+
     def test_a_dry_run_alarm_records_the_failure_and_fires_nothing(self):
         (self.tree / "marker.txt").write_text("local edit\n")
         result = self.run_smoke("--sync-only", "--dry-run-alarm")
@@ -150,6 +209,11 @@ class SmokeSyncTest(unittest.TestCase):
         self.assertEqual(record["loadavg_start"], "1.00 2.00 3.00")
         self.assertEqual(record["states"][0]["to"], "loading global")
         self.assertFalse(self.alarms.exists())
+
+    def test_exactly_300_s_is_not_slow(self):
+        result = self.run_the_smoke(300.0, True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.record()["slow"])
 
     def test_a_pass_over_300_s_is_still_a_pass_flagged_slow_and_raises_no_alarm(self):
         result = self.run_the_smoke(400.0, True)

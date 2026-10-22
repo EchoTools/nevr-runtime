@@ -328,7 +328,6 @@ scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
 
 # The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
@@ -342,7 +341,6 @@ scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_all.py {{ARGS}}
 
 # Run plugin ground truth tests (no game binary needed)
