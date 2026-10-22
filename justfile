@@ -414,11 +414,18 @@ test-auth-unit:
     trap 'rm -rf "$sigfix"' EXIT
     python3 tools/gen_plugin_signature_fixtures.py "$sigfix" --plugin-dll "build/{{ preset }}/bin/plugins/test_plugin_onframe.dll"
     export NEVR_SIGFIX_DIR="$sigfix"
-    # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/ (a release build
-    # runs no test recipe, so a release never fetches it): test_plugin_trust verifies the production pins against
-    # it. A failed fetch or a digest that does not match fails the recipe, and a test without the file fails.
-    NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
-    export NEVR_REAL_SIGNED_DLL
+    # The real signed v5.4.3 BugSplat64.dll (#745), fetched by digest once and kept under build/: test_plugin_trust
+    # verifies the production pins against it. A failed fetch or a digest that does not match fails the recipe, and
+    # a RealSigned test without the file fails. A release build (build.yml sets NEVR_RELEASE_BUILD=1 on the Verify
+    # step of a release or a draft) never fetches from a host outside GitHub: it excludes the RealSigned tests and
+    # says so, and the PR/local run is where they run.
+    if [[ "${NEVR_RELEASE_BUILD:-}" == "1" ]]; then
+        echo "test-auth-unit: release build: the RealSigned tests are excluded (no fixture fetch outside GitHub); PR and local runs run them" >&2
+        export GTEST_FILTER='-RealSigned.*'
+    else
+        NEVR_REAL_SIGNED_DLL="$(python3 tools/fetch_real_signed_dll.py build/real-signed-cache)"
+        export NEVR_REAL_SIGNED_DLL
+    fi
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
