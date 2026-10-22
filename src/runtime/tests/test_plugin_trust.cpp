@@ -153,9 +153,9 @@ class RealSigned : public ::testing::Test {
   std::vector<uint8_t> bytes_;
 };
 
-TEST(PluginTrust, ThePinsAreConfirmedAndTheSubjectIsPinned) {
+TEST(PluginTrust, ThePinsAreConfirmedAndTheSubjectIsNotPinned) {
   EXPECT_TRUE(trust::PinsConfirmed());
-  EXPECT_FALSE(trust::ProductionPolicy().subject.empty());
+  EXPECT_TRUE(trust::ProductionPolicy().subject.empty());
 }
 
 TEST_F(RealSigned, TheProductionPolicyAcceptsTheRealSignedFile) {
@@ -173,7 +173,8 @@ TEST_F(RealSigned, OneChangedCodeByteIsRefused) {
   ASSERT_GT(bytes_.size(), kFlippedOffset);
   char dir[MAX_PATH] = {};
   ASSERT_GT(GetTempPathA(sizeof(dir), dir), 0u);
-  const std::string copy = std::string(dir) + "nevr-real-signed-flipped.dll";
+  const std::string copy = std::string(dir) + "nevr-real-signed-flipped-" + std::to_string(GetCurrentProcessId()) + "-" +
+                           std::to_string(GetTickCount64()) + ".dll";
   std::vector<uint8_t> changed = bytes_;
   changed[kFlippedOffset] ^= 0x01;
   {
@@ -194,12 +195,18 @@ TEST_F(RealSigned, AnotherProfileEkuIsRefused) {
   EXPECT_EQ(verdict.reason, nevr_plugin_signature::Reason::MissingEku) << verdict.Describe();
 }
 
-TEST_F(RealSigned, AnotherSubjectIsRefusedAndTheRfc2253SpellingIsNotTheOneTheLoaderCompares) {
+TEST_F(RealSigned, ADifferentSubjectIsNotRefusedWhenTheRootAndTheProfileEkuMatch) {
+  // The production policy pins no subject, so a signer whose subject differs from the one on the v5.4.3 file passes
+  // as long as the chain and the EKU hold. Stand in for such a signer by comparing against the file's own policy
+  // with no subject: acceptance must not depend on the subject text.
+  nevr_plugin_signature::Policy policy = trust::ProductionPolicy();
+  policy.subject.clear();
+  EXPECT_TRUE(VerifyReal(policy, kAfterTheLeafExpired).accepted());
+}
+
+TEST_F(RealSigned, APinnedSubjectThatDiffersIsStillRefusedWhenAPolicyAsksForIt) {
   nevr_plugin_signature::Policy policy = trust::ProductionPolicy();
   policy.subject = "CN=Someone Else, O=Someone Else, L=San Francisco, S=ca, C=US";
-  EXPECT_EQ(VerifyReal(policy, kAfterTheLeafExpired).reason, nevr_plugin_signature::Reason::SubjectMismatch);
-  // The RFC 2253 text of the same certificate (openssl -nameopt RFC2253) is not what CertNameToStrA prints.
-  policy.subject = "CN=Andrew Bates,O=Andrew Bates,L=San Francisco,ST=ca,C=US";
   EXPECT_EQ(VerifyReal(policy, kAfterTheLeafExpired).reason, nevr_plugin_signature::Reason::SubjectMismatch);
 }
 

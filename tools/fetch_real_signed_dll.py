@@ -23,6 +23,7 @@ ZIP_URL = "https://echo.taxi/nevr-runtime/windows/nevr-runtime-v5.4.3-windows-si
 ZIP_SHA256 = "68ea39a914f17b33276131fed075cea410f6b3a379ad3d98bf5063b453eed287"
 DLL_SHA256 = "a97767e62721503d4e249b016b734c42619a5aaa209ecdcd7a25a434f6d2a629"
 MEMBER = "BugSplat64.dll"
+MAX_ZIP_BYTES = 64 * 1024 * 1024  # the real zip is a few MB; a response past this is not it
 
 
 def sha256(data: bytes) -> str:
@@ -36,7 +37,9 @@ def fetch(cache: Path, url: str) -> Path:
     # echo.taxi answers 403 to urllib's default User-Agent.
     request = urllib.request.Request(url, headers={"User-Agent": "nevr-runtime-fetch-real-signed-dll"})
     with urllib.request.urlopen(request, timeout=120) as response:
-        zip_bytes = response.read()
+        zip_bytes = response.read(MAX_ZIP_BYTES + 1)
+    if len(zip_bytes) > MAX_ZIP_BYTES:
+        raise SystemExit(f"fetch_real_signed_dll: the response from {url} is larger than {MAX_ZIP_BYTES} bytes")
     if sha256(zip_bytes) != ZIP_SHA256:
         raise SystemExit(f"fetch_real_signed_dll: the zip from {url} has SHA-256 {sha256(zip_bytes)}, expected {ZIP_SHA256}")
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
