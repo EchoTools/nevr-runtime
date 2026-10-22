@@ -298,7 +298,8 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(texts["SIGNING.txt"].count("quest-diagnose.ps1"), 2)
         # The README section says what the diagnose zip holds and where to send it (#750).
         for needle in ("-File quest-diagnose.ps1", "nevr-diagnose-YYYYMMDDTHHMMSSZ.zip", "crash dumps",
-                       "Wi-Fi name", "never in a public channel"):
+                       "Wi-Fi name", "numeric user ids", "sprockee on the EchoVRCE Discord",
+                       "never in a public channel"):
             self.assertIn(needle, texts["README.txt"], needle)
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)

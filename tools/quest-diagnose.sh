@@ -11,8 +11,8 @@
 # Not collected: device_login.txt (the sign-in link and code), the credential cache, config files. The adb serial, the
 # hardware serial (ro.serialno) and any e-mail address are replaced with <device-serial> and <email> in every text file
 # and in the verdict. NOT masked: the zip holds the runtime's crash dumps as they are and the headset's whole system log,
-# which can show the Wi-Fi name, the BSSID and IP addresses. Send the zip by direct message to sprockee or a sister,
-# never in a public channel.
+# which can show the Wi-Fi name, the BSSID, IP addresses and numeric user ids. Send the zip by direct message to
+# sprockee on the EchoVRCE Discord, never in a public channel.
 #
 # usage: tools/quest-diagnose.sh [--adb PATH] [--out DIR] [--wait SECONDS]
 # adb is taken from --adb, else from the PATH. Connect exactly one headset by USB with USB debugging on.
@@ -202,4 +202,4 @@ else
   fail "neither zip nor python3 is installed, so the zip could not be written"
 fi
 run_log "OK quest-diagnose.sh wrote $zip_path problems=${#problems[@]}"
-echo "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses). Send it by direct message to sprockee or a sister, never in a public channel."
+echo "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses, numeric user ids). Send it by direct message to sprockee on the EchoVRCE Discord, never in a public channel."
