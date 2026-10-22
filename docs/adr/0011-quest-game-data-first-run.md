@@ -10,10 +10,11 @@ what to do. Today they get neither: the game returns to Home with nothing shown.
 
 **What the game needs.** The game reads its data from `<root>/_data/<version>/rad15/android/manifests/<id>`. The sentinel serves
 the root for the skipped OBB mount (ADR 0007, `src/quest/sentinel/obb_skip_hook.cpp`): `data_root::Resolve`
-(`src/quest/sentinel/data_root.h:58-63`) takes `/sdcard/Android/media/com.readyatdawn.r15/files` or
-`/storage/emulated/0/readyatdawn` when either holds `_data`, and otherwise returns the legacy root with `found=false`;
-`ResolveRoot` (`obb_skip_hook.cpp:83-101`) logs one error event `data_root result=not_found` and goes on; `Install`
-(`obb_skip_hook.cpp:104`) arms the hooks either way.
+(`src/quest/sentinel/data_root.h`) takes `/sdcard/Android/media/com.readyatdawn.r15/files` or
+`/storage/emulated/0/readyatdawn` when either holds `_data`; when neither does but the `Android/media` directory exists, it returns
+that directory as found (source `android_media_unmarked`), and `ResolveRoot` (`obb_skip_hook.cpp`) logs a warning; otherwise it
+returns the legacy root with `found=false`, and `ResolveRoot` logs one error event `data_root result=not_found` and goes on;
+`Install` (`obb_skip_hook.cpp`) arms the hooks either way.
 
 **Why the OBB is not a source.** Horizon OS refuses keyed OBB mounts (ADR 0007, Context), so the store OBB under
 `/sdcard/Android/obb/com.readyatdawn.r15/` cannot be mounted. The owner's statement of the consequence: `/sdcard/readyatdawn/_data`
@@ -26,7 +27,7 @@ to this design.
 `/home/andrew/metis/gopher-spritz/findings/2026-10-22-758-no-game-data-diagnosis.md`), every launch logged, in order,
 `RAD: Initialization Error: Unknown error while loading the game.`, then
 `Failed to find package manifest file /storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2`,
-then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008). The process ended; the player saw Home. The build on the
+then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008, `0008-quest-process-end.md`). The process ended; the player saw Home. The build on the
 headset (`c4b37a28`) predates #755; #755 adds the one `data_root` log line and fails the same way.
 
 **The likely cause for players who already had the data.** The data version is not the cause: the `_data.zip` that
@@ -77,8 +78,10 @@ runtime is the trust: the owner judged it enough (his answer to decision 2), so 
    happens.
 2. `_data` exists but the manifest does not (version mismatch): do not delete or overwrite the player's `_data`. Extract the matching data into a staging directory beside it; when it verifies, rename the old `_data` to
    `_data.replaced-<utc stamp>` and the staging directory to `_data`, in that order. Keeping both needs space for both.
-3. No `_data` at all: fetch, same staging and a single rename into place.
-4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0008) instead of
+3. No `_data` at all: fetch, same staging and a single rename into place. This includes the case `data_root::Resolve` reports as
+   found with a warning (`android_media_unmarked`: the `Android/media` directory exists without `_data`); the fetch fills that
+   directory, and `found` alone is not the test for case 1.
+4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0008, `0008-quest-process-end.md`) instead of
    letting the game fail its own load.
 
 The floor message names the missing file and what to do, in these cases: `Echo VR data is missing: <path the game wants>. Copy the
