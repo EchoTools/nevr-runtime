@@ -2,12 +2,17 @@
 // against src/quest/tests/range_server.py (just test-quest-data-net).
 //
 //   curl_transport_test write-zip <path>
-//   curl_transport_test <port> <request-log> <trust-dir>
+//   curl_transport_test <port> <request-log> <trust-pem>
 
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 
 #include "quest/data/curl_transport.h"
 #include "quest/data/fetch.h"
@@ -22,7 +27,7 @@ namespace {
 
 int g_port = 0;
 std::string g_log_path;
-std::string g_trust_dir;
+std::string g_trust_pem;
 
 std::string Url(const std::string& path, const char* scheme = "http") {
   return std::string(scheme) + "://127.0.0.1:" + std::to_string(g_port) + path;
@@ -73,7 +78,7 @@ Got Get(CurlTransport& t, const std::string& url, std::uint64_t offset, KeepGoin
   return g;
 }
 
-CurlTransport Plain() { return CurlTransport({}, nullptr, /*allow_plain_http=*/true, 5, 5); }
+CurlTransport Plain() { return CurlTransport("", /*allow_plain_http=*/true, 5, 5); }
 
 std::string ZipForTheServer() {
   std::string noise;
@@ -154,7 +159,7 @@ TEST(ARefusedBodyEndsTheTransfer) {
 
 TEST(HttpsWithNoTrustAnchorsFailsClosedBeforeAnyRequest) {
   const std::size_t before = Count(RequestLog(), "/blob");
-  CurlTransport t({}, nullptr, false, 5, 5);
+  CurlTransport t("", false, 5, 5);
   const Got g = Get(t, Url("/blob", "https"), 0);
   CHECK(!g.result.completed);
   CHECK_EQ(g.result.code, CurlTransport::kNoTrustAnchors);
@@ -163,11 +168,35 @@ TEST(HttpsWithNoTrustAnchorsFailsClosedBeforeAnyRequest) {
 
 TEST(PlainHttpIsRefusedWhenNotAllowedEvenWithTrustAnchors) {
   const std::size_t before = Count(RequestLog(), "/blob");
-  CurlTransport t({g_trust_dir}, nullptr, false, 5, 5);
+  CurlTransport t(g_trust_pem, false, 5, 5);
   const Got g = Get(t, Url("/blob", "http"), 0);
   CHECK(!g.result.completed);
   CHECK(g.result.code != 0);
   CHECK_EQ(Count(RequestLog(), "/blob"), before);
+}
+
+TEST(TheDataHostRootIsTheOneCertificateWeMeasured) {
+  BIO* bio = BIO_new_mem_buf(kDataHostRootsPem, static_cast<int>(sizeof(kDataHostRootsPem) - 1));
+  CHECK(bio != nullptr);
+  X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+  CHECK(cert != nullptr);
+  X509* second = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);  // exactly one certificate
+  CHECK(second == nullptr);
+  unsigned char md[EVP_MAX_MD_SIZE];
+  unsigned int n = 0;
+  CHECK(X509_digest(cert, EVP_sha256(), md, &n) == 1);
+  std::string hex;
+  for (unsigned int i = 0; i < n; ++i) {
+    char b[3];
+    std::snprintf(b, sizeof(b), "%02x", md[i]);
+    hex += b;
+  }
+  CHECK_EQ(hex, std::string(kDataHostRootSha256));
+  CHECK(X509_cmp_current_time(X509_get0_notAfter(cert)) > 0);  // not expired
+  CHECK(X509_NAME_cmp(X509_get_subject_name(cert), X509_get_issuer_name(cert)) == 0);  // self-signed: a root
+  X509_free(cert);
+  BIO_free(bio);
+  ERR_clear_error();
 }
 
 TEST(AnUnreachablePortIsATransportFailure) {
@@ -230,11 +259,16 @@ int main(int argc, char** argv) {
     return out ? 0 : 1;
   }
   if (argc != 4) {
-    std::fprintf(stderr, "usage: curl_transport_test write-zip <path> | <port> <request-log> <trust-dir>\n");
+    std::fprintf(stderr, "usage: curl_transport_test write-zip <path> | <port> <request-log> <trust-pem>\n");
     return 2;
   }
   g_port = std::atoi(argv[1]);
   g_log_path = argv[2];
-  g_trust_dir = argv[3];
+  {
+    std::ifstream pem(argv[3]);
+    std::stringstream ss;
+    ss << pem.rdbuf();
+    g_trust_pem = ss.str();
+  }
   return mini_test::RunAll(0, nullptr);
 }

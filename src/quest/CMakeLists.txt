@@ -187,9 +187,9 @@ target_link_libraries(nevr_quest_token_auth PUBLIC nevr_quest_atomic_write nlohm
   nevr_quest_prompt_board)
 target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
 
-# The libcurl Transport the data fetch downloads through; trust anchors come from the CA loader in nevr_quest_token_auth.
+# The libcurl Transport the data fetch downloads through; its one trust anchor is data/data_host_roots.h.
 add_library(nevr_quest_data_net STATIC data/curl_transport.cpp)
-target_link_libraries(nevr_quest_data_net PUBLIC nevr_quest_data nevr_quest_token_auth CURL::libcurl)
+target_link_libraries(nevr_quest_data_net PUBLIC nevr_quest_data CURL::libcurl)
 target_compile_options(nevr_quest_data_net PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 
 add_executable(auth_core_test tests/auth_core_test.cpp)
