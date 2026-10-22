@@ -209,6 +209,8 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
   if (available < needed) {
     result.status = FetchStatus::kNoSpace;
     result.detail = "need " + Num(needed) + " bytes, " + Num(available) + " free";
+    result.needed_bytes = needed;
+    result.available_bytes = available;
     Emit(c, "data_fetch", {{"outcome", "no_space"}, {"needed", Num(needed)}, {"available", Num(available)}});
     return result;
   }

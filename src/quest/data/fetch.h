@@ -60,6 +60,8 @@ struct FetchResult {
   std::string detail;      // the failing step's reason, for the visible message
   int attempts = 0;
   std::string replaced_to;  // where the old `_data` went, when one was replaced
+  std::uint64_t needed_bytes = 0;     // kNoSpace: what the fetch needed
+  std::uint64_t available_bytes = 0;  // kNoSpace: what was free
 };
 
 FetchResult RunFetch(const FetchConfig& config, Transport& transport);

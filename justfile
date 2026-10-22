@@ -672,7 +672,7 @@ test-quest-data: _vcpkg-quest-host
     mkdir -p "$out"
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
-    for f in sha256 zip staging fetch; do
+    for f in sha256 zip staging fetch data_step; do
         g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
             "src/quest/data/$f.cpp" -o "$out/$f.o"
     done
@@ -684,6 +684,10 @@ test-quest-data: _vcpkg-quest-host
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" src/quest/tests/fetch_test.cpp "$host/lib/libz.a" \
         -o "$out/fetch_test"
     timeout -k 5 300 "$out/fetch_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" "$out/data_step.o" src/quest/tests/data_step_test.cpp "$host/lib/libz.a" \
+        -o "$out/data_step_test"
+    timeout -k 5 300 "$out/data_step_test"
 
 # The data fetch over real HTTP (src/quest/data/curl_transport.cpp and fetch.cpp against src/quest/tests/range_server.py):
 # explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
