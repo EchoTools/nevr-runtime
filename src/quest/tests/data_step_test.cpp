@@ -140,14 +140,16 @@ TEST(DataInTheLegacyRootIsUsedAndNotFetched) {
   CHECK_EQ(net.calls, 0);
 }
 
-TEST(AnUnmarkedMediaRootIsUsedAsItIsAndNotFetched) {
+TEST(AnUnmarkedMediaRootIsFetchedInto) {
+  // The media directory exists and holds no `_data` (a first fetch that was interrupted, or a directory Android made).
   Rig rig;
-  rig.present = {Media()};  // the directory exists, `_data` is not directly under it
+  rig.present = {Media()};
   OneShotTransport net(rig.zip, true);
   const StepResult r = RunDataStep(rig.config, net);
-  CHECK_EQ(r.outcome, StepOutcome::kUsed);
-  CHECK_EQ(net.calls, 0);
-  CHECK(Contains(rig.events[0], "source=android_media_unmarked"));
+  CHECK_EQ(r.outcome, StepOutcome::kFetched);
+  CHECK_EQ(r.action, DataAction::kFetch);
+  CHECK_EQ(net.calls, 1);
+  CHECK(Contains(rig.events[0], "action=fetch source=android_media_unmarked"));
 }
 
 TEST(NoDataFetchesVerifiesAndPlacesIt) {
