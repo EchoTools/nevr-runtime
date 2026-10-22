@@ -1,6 +1,6 @@
 # ADR 0011: Quest game data: how a headset-only install gets `_data`, and what the player sees when it is missing
 
-Status: proposed (tracking issue #758). Nothing in this ADR is built. It goes to the owner before any code.
+Status: accepted by the owner (tracking issue #758; his answers of 2026-10-22, relayed by the Spritz seat: option A, for every player, from the existing R2-hosted `_data.zip`, with the pinned sha256 as the trust). Nothing in this ADR is built yet; the measurements below come first.
 
 The goal, in the owner's words (#nevr-runtime-testing): "i'm literally going for 0 jank". A player who sideloads the APK on the
 headset alone (no PC, no installer) must end with a game that starts, or with a message they can read in the headset that says
@@ -29,11 +29,13 @@ to this design.
 then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008). The process ended; the player saw Home. The build on the
 headset (`c4b37a28`) predates #755; #755 adds the one `data_root` log line and fails the same way.
 
-**A second candidate, not confirmed: a data version mismatch.** The three friends' headsets were reported to hold `_data` already
-(they played Echo on echovrce, and uninstalling the store app does not touch it; owner, 00:09:37). If their `_data` is from another
-game build, the folder exists and the manifest above does not, and the game quits the same way. The one observation that
-separates the two: `adb shell ls /sdcard/readyatdawn/_data/ /sdcard/readyatdawn/_data/*/rad15/android/manifests/` on an affected
-headset, or the `Failed to find package manifest file` path in its log set against the listing. This ADR plans both branches.
+**The likely cause for players who already had the data.** The data version is not the cause: the `_data.zip` that
+Mia's installer extracts has the same version folder and manifest id (`5932408047`, `48037dc70b0ecab2`) as the one this build asks
+for. The t5 manifest line above came from our own hidden-data test. What differs is where the data sits: the Quest installer at
+quest.echovr.de (Mia / Crafter-1's Quest-EchoVR-Installer) extracts to
+`/storage/emulated/0/Android/media/com.readyatdawn.r15/files`, and builds before #755 look only at `/sdcard/readyatdawn`; #755
+resolves `Android/media` first (`data_root.h`). Not measured: whether `Android/media/<pkg>` survives uninstalling the store app
+(measurement 5). The `adb shell ls` of both roots on an affected headset still separates this cause from a missing `_data`.
 
 ## What can run before the game reads its data
 
@@ -59,20 +61,24 @@ run time is **not established**. The check must take them from the game's own pa
 | D. A companion app | A separate APK with its own screen downloads the data. | A second install and a second signing identity; the player must be told to run it first, which is jank. |
 | E. OBB as a source | Dropped by the owner (see Context). | n/a |
 
-**Pick: A, with the message of the floor below, and the fetch is gated by a decision the owner makes (below).** It is the only
-option that serves a headset-only install with no second artifact and no PC. C is the alternative if the owner wants no network
-at first launch and accepts the APK size. B stays for testers with a PC. This pick stands only if measurement 1 finds a way to
+**Pick: A (owner, 2026-10-22), with the visible message below as the floor.** It is the only option that serves a headset-only
+install with no second artifact and no PC. B stays for testers with a PC. The pick stands only if measurement 1 finds a way to
 show the player progress; without that, A is a long blank screen, which is the jank the goal rules out.
+
+**Relation to earlier rulings.** The owner's 2026-10-15 ruling on #538 was "no player-facing data downloader". His 2026-10-22
+answer on #758 replaces it for the Quest sentinel: the game data is fetched for every player, with no switch. Both are cited here
+so a reader of #538 finds the change. The source is the file `just quest-install` already uses, `https://mia.cdn.echo.taxi/_data.zip`
+(sha256 `fc2eedea...543c`), which is in the owner's own Cloudflare R2; no new path is introduced. The sha256 baked into the signed
+runtime is the trust: the owner judged it enough (his answer to decision 2), so the zip carries no separate signature.
 
 ## The order of fallbacks
 
 1. The game's data is present for this build: the manifest path exists under the resolved root. Start the game; nothing else
    happens.
-2. `_data` exists but the manifest does not (version mismatch): do not delete or overwrite the player's `_data`. If a fetch is
-   allowed, extract the matching data into a staging directory beside it; when it verifies, rename the old `_data` to
+2. `_data` exists but the manifest does not (version mismatch): do not delete or overwrite the player's `_data`. Extract the matching data into a staging directory beside it; when it verifies, rename the old `_data` to
    `_data.replaced-<utc stamp>` and the staging directory to `_data`, in that order. Keeping both needs space for both.
-3. No `_data` at all: fetch (if allowed), same staging and a single rename into place.
-4. Fetch not allowed, or it failed: show the visible message (the floor), then end the process cleanly (ADR 0008) instead of
+3. No `_data` at all: fetch, same staging and a single rename into place.
+4. The fetch failed (no network, no space, a digest that does not match): show the visible message (the floor), then end the process cleanly (ADR 0008) instead of
    letting the game fail its own load.
 
 The floor message names the missing file and what to do, in these cases: `Echo VR data is missing: <path the game wants>. Copy the
@@ -136,7 +142,8 @@ refreshed).
 3. Resolve the version folder and manifest id from `libr15.so` (build ID `b243509c08ce677aeb95fa348016949b3fc45230`) with ReVault
    (searched across the project's binaries, `searched N of N`). Falsifier: they are derived from data the sentinel cannot read
    before the game runs.
-4. Falsifier for the second cause: the `adb shell ls` above on an affected headset.
+4. Falsifier for the cause above: the `adb shell ls` of `/sdcard/readyatdawn` and `/sdcard/Android/media/com.readyatdawn.r15/files` on an affected headset.
+5. Uninstall the store package, then `adb shell ls /sdcard/Android/media/com.readyatdawn.r15/files`. Falsifier: the folder is gone, in which case the installer's data does not survive an uninstall either and the first-run fetch is needed on every reinstall.
 
 ## Tests
 
@@ -155,10 +162,14 @@ refreshed).
 - `quest-diagnose` (#750) must not call a running game failed because a log line is absent: a separate issue, since its verdict
   says "the game did not reach its data step" when the build does not log `OBB mounted at`.
 
-## Decisions for the owner
+## Decisions (owner, 2026-10-22)
 
-1. Is the fetch for every player, or only for testers (a config switch the sentinel reads)? The Quest sentinel has no feature
-   flags today (ADR 0007); a switch is a second code path, and "tester" has no definition the runtime can check.
-2. Is the download pin (trust-on-first-use digest, `mia.cdn.echo.taxi`) acceptable for a runtime that writes into shared storage
-   on the player's behalf, or does the zip need a signature like the plugins' (ADR 0010)?
-3. Option C instead of A, if first launch must not need the network.
+1. The fetch is for every player. There is no tester switch and no second code path.
+2. The sha256 pin baked into the signed runtime is enough; the zip needs no signature of its own. (Trust-on-first-use is the
+   `justfile`'s own description of the digest; the runtime that carries it is signed, ADR 0010.)
+3. Option A, not C: the first launch needs the network.
+
+## Order of work
+
+Measurements first (1 to 5 above), each with its falsifier; then build A with the visible message as the floor. A measurement
+that needs the headset is run on the owner's hardware or reported as blocked; none is assumed.
