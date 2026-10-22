@@ -79,6 +79,11 @@ struct SrcEntry {
   std::int64_t usize_delta = 0;   // added to the uncompressed size the directory records
   std::string raw_payload;        // when not empty, the bytes stored as the entry's payload instead of the compressed data
   bool use_raw = false;
+  std::int32_t local_method = -1;      // >= 0: the method the LOCAL header says, the directory keeps `method`
+  std::string local_name;              // not empty: the name the LOCAL header carries (same length as the name)
+  std::int64_t local_crc_delta = 0;    // added to the CRC the LOCAL header records
+  std::int64_t local_usize_delta = 0;  // added to the uncompressed size the LOCAL header records
+  std::uint16_t local_flags = 0;       // flags of the LOCAL header only
 };
 
 inline void Put16(std::string& s, std::uint16_t v) {
@@ -108,6 +113,9 @@ inline std::string Deflate(const std::string& in) {
 struct ZipOptions {
   bool zip64_marker = false;     // 0xFFFF in the end record's entry counts
   std::uint16_t disk = 0;
+  bool zip64_locator = false;    // a zip64 end-of-central-directory locator in front of the end record
+  std::string trailing;          // bytes after the end record
+  std::uint16_t comment_len = 0; // the comment length the end record claims (no comment follows)
 };
 
 inline std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt = {}) {
@@ -123,15 +131,15 @@ inline std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptio
     const std::uint32_t offset = static_cast<std::uint32_t>(body.size());
     Put32(body, 0x04034b50);
     Put16(body, 20);
-    Put16(body, e.flags);
-    Put16(body, e.method);
+    Put16(body, static_cast<std::uint16_t>(e.flags | e.local_flags));
+    Put16(body, static_cast<std::uint16_t>(e.local_method >= 0 ? e.local_method : e.method));
     Put32(body, 0);
-    Put32(body, rec_crc);
+    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(rec_crc) + e.local_crc_delta));
     Put32(body, static_cast<std::uint32_t>(payload.size()));
-    Put32(body, usize);
+    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(usize) + e.local_usize_delta));
     Put16(body, static_cast<std::uint16_t>(e.name.size()));
     Put16(body, 0);
-    body += e.name;
+    body += e.local_name.empty() ? e.name : e.local_name;
     body += payload;
     Put32(central, 0x02014b50);
     Put16(central, e.made_by);
@@ -154,6 +162,10 @@ inline std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptio
   std::string out = body;
   const std::uint32_t cd_offset = static_cast<std::uint32_t>(out.size());
   out += central;
+  if (opt.zip64_locator) {
+    Put32(out, 0x07064b50);
+    out.append(16, '\0');
+  }
   Put32(out, 0x06054b50);
   Put16(out, opt.disk);
   Put16(out, 0);
@@ -162,7 +174,8 @@ inline std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptio
   Put16(out, count);
   Put32(out, static_cast<std::uint32_t>(central.size()));
   Put32(out, cd_offset);
-  Put16(out, 0);
+  Put16(out, opt.comment_len);
+  out += opt.trailing;
   return out;
 }
 

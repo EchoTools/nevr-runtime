@@ -23,10 +23,14 @@ inline constexpr const char* kZipPrefix = "_data/";
 // A file the pinned zip carries, relative to the data root: proves the `_data` there is this version.
 inline constexpr const char* kManifestPath = "_data/5932408047/rad15/android/manifests/48037dc70b0ecab2";
 
-// Names below the data root. The leftovers carry our prefix and are the only things the step deletes.
+// Names below the data root. Our staging directory, the download and a `_data` kept aside carry a marker file beside
+// them (`<name>.nevr-owned`, staging.h); only an item with its marker is ours. The step deletes a marked staging
+// directory and nothing else: a kept-aside `_data` is never deleted, and a name that only starts like ours (a player's
+// own `_data.replaced-my-backup`) is left alone.
 inline constexpr const char* kPartName = "_data.zip.part";
 inline constexpr const char* kStagingPrefix = "_data.staging-";
 inline constexpr const char* kReplacedPrefix = "_data.replaced-";
+inline constexpr const char* kOwnerSuffix = ".nevr-owned";
 
 // Disk the fetch needs below the data root: the zip plus its extracted tree (about 2.2 GiB), plus the old `_data`
 // kept aside when one is replaced.
@@ -46,11 +50,12 @@ struct Decision {
 
 // `resolution` comes from data_root::Resolve. A fetch goes to the media root (needs no storage permission); the legacy
 // root is only ever used when it already holds data. An unmarked media root (it exists, `_data` is not directly under
-// it) is used as it is: where `_data` sits under it is unconfirmed, so it is never replaced.
+// it) is a fetch into that directory (ADR 0011, order of fallbacks, case 3): it holds no data, and treating it as data
+// would stop a fetch that was interrupted after the directory was made from ever being retried.
 inline Decision Decide(const data_root::Resolution& resolution, data_root::ExistsFn exists) noexcept {
   if (!resolution.found) return {DataAction::kFetch, data_root::kMediaRoot, resolution.source};
   if (std::strcmp(resolution.source, "android_media_unmarked") == 0) {
-    return {DataAction::kUse, resolution.root, resolution.source};
+    return {DataAction::kFetch, resolution.root, resolution.source};
   }
   char path[512];
   const int n = std::snprintf(path, sizeof(path), "%s/%s", resolution.root, kManifestPath);

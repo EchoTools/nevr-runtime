@@ -3,8 +3,11 @@
  *
  * The data is extracted into `<root>/_data.staging-<sha prefix>` and moved into place by one rename to `<root>/_data`,
  * so `_data` is either absent, the old tree, or the complete new one. A `_data` being replaced is renamed to
- * `<root>/_data.replaced-<utc>` first. Leftovers (a staging directory, a replaced one) carry our prefixes; they are
- * the only things CleanLeftovers deletes.
+ * `<root>/_data.replaced-<utc>` first and kept: the step never deletes it.
+ *
+ * Ownership is a marker file beside the item, `<item>.nevr-owned`, created before the item exists. A name that only
+ * starts with our prefix is not ours: CleanLeftovers deletes a marked staging directory and nothing else, and
+ * RecoverReplaced puts back only a marked replaced directory. Every rename is followed by an fsync of the root.
  */
 #pragma once
 
@@ -23,9 +26,26 @@ std::string StagingPath(const std::string& root, const std::string& sha256_hex);
 // Removes a file or a whole tree without following symbolic links. A path that does not exist is success.
 bool RemoveTree(const std::string& path) noexcept;
 
-// Deletes `<root>/_data.staging-*` and `<root>/_data.replaced-*`. Returns how many it removed; `failed` (when not null)
-// gets how many it could not.
+// `<item>.nevr-owned`
+std::string OwnerMarkerPath(const std::string& item);
+
+// Creates the marker beside `item` (the item need not exist yet) and syncs its directory. Call it before creating the
+// staging directory or the download.
+bool MarkOwned(const std::string& item) noexcept;
+bool IsOwned(const std::string& item) noexcept;
+
+// fsync of a directory, so a rename or create in it survives a power loss.
+bool SyncDir(const std::string& dir) noexcept;
+
+// Deletes each `<root>/_data.staging-*` that has its marker (and the marker). A marker whose item is gone is removed
+// too. Nothing else is deleted: not an unmarked name, not a `_data.replaced-*`, not the download. Returns how many
+// staging directories it removed; `failed` (when not null) gets how many it could not.
 int CleanLeftovers(const std::string& root, int* failed) noexcept;
+
+// The crash between the two renames of InstallStaged leaves no `<root>/_data` and the old tree under a marked
+// `<root>/_data.replaced-<utc>`. When `_data` is missing it renames the newest such directory back (and removes its
+// marker). Returns true when it restored one. Run it before CleanLeftovers and before the data decision.
+bool RecoverReplaced(const std::string& root, std::string* restored_from) noexcept;
 
 // Moves a complete `staging` directory into place as `<root>/_data`. When `<root>/_data` exists it is first renamed to
 // `<root>/_data.replaced-<utc_stamp>`; when that rename fails nothing else is touched. When the final rename fails the

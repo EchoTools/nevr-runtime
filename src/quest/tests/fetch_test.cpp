@@ -318,6 +318,7 @@ TEST(AnEntryThatFailsMidExtractionLeavesNoStagingAndNoData) {
   CHECK_EQ(r.status, FetchStatus::kExtractFailed);
   CHECK(r.detail.find("crc_mismatch") == 0);
   CHECK(!Exists(StagingPath(rig.config.root, rig.config.sha256)));
+  CHECK(!Exists(OwnerMarkerPath(StagingPath(rig.config.root, rig.config.sha256))));
   CHECK(!Exists(rig.config.root + "/_data"));
 }
 
@@ -340,16 +341,90 @@ TEST(CancelEndsTheTransferAndKeepsThePart) {
   CHECK(Exists(rig.Part()));
 }
 
-TEST(LeftoversAreCleanedBeforeTheFetch) {
+TEST(OurStagingIsCleanedAndAPlayersDirectoriesAreKept) {
   Rig rig;
   CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
-  CHECK_EQ(::mkdir((rig.config.root + "/_data.staging-aaaaaaaaaaaa").c_str(), 0755), 0);
-  CHECK_EQ(::mkdir((rig.config.root + "/_data.replaced-20250101T000000Z").c_str(), 0755), 0);
+  const std::string ours = rig.config.root + "/_data.staging-aaaaaaaaaaaa";
+  CHECK(MarkOwned(ours));
+  CHECK_EQ(::mkdir(ours.c_str(), 0755), 0);
+  const std::string notes = rig.config.root + "/_data.staging-notes";
+  CHECK_EQ(::mkdir(notes.c_str(), 0755), 0);
+  WriteFile(notes + "/n", "notes");
+  const std::string backup = rig.config.root + "/_data.replaced-my-backup";
+  CHECK_EQ(::mkdir(backup.c_str(), 0755), 0);
+  WriteFile(backup + "/b", "backup");
   ScriptedTransport net(rig.zip, {Step{}});
   CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
-  CHECK(!Exists(rig.config.root + "/_data.staging-aaaaaaaaaaaa"));
-  CHECK(!Exists(rig.config.root + "/_data.replaced-20250101T000000Z"));
-  CHECK(rig.HasEvent("step=cleanup removed=2"));
+  CHECK(!Exists(ours));
+  CHECK(!Exists(OwnerMarkerPath(ours)));
+  CHECK_EQ(ReadFile(notes + "/n"), std::string("notes"));
+  CHECK_EQ(ReadFile(backup + "/b"), std::string("backup"));
+  CHECK(rig.HasEvent("step=cleanup removed=1"));
+}
+
+TEST(AFetchNeverDeletesThePlayersReplacedData) {
+  // Replacing: the old tree goes aside, the fetch succeeds, and a later fetch run does not delete it.
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  CHECK_EQ(::mkdir((rig.config.root + "/_data").c_str(), 0755), 0);
+  WriteFile(rig.config.root + "/_data/old", "old");
+  rig.config.replacing = true;
+  ScriptedTransport net(rig.zip, {Step{}});
+  const FetchResult first = RunFetch(rig.config, net);
+  CHECK_EQ(first.status, FetchStatus::kOk);
+  ScriptedTransport again(rig.zip, {Step{}});
+  rig.config.replacing = false;
+  rig.config.utc_stamp = "20261023T000000Z";
+  CHECK_EQ(RunFetch(rig.config, again).status, FetchStatus::kOk);
+  CHECK_EQ(ReadFile(first.replaced_to + "/old"), std::string("old"));
+}
+
+TEST(ACrashBetweenTheSwapRenamesIsRecoveredEvenWhenTheFetchFails) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string aside = rig.config.root + "/_data.replaced-20261021T000000Z";
+  CHECK(MarkOwned(aside));
+  CHECK_EQ(::mkdir(aside.c_str(), 0755), 0);
+  WriteFile(aside + "/old", "old");
+  Step down;
+  down.completes = false;
+  ScriptedTransport net(rig.zip, {down});
+  const FetchResult r = RunFetch(rig.config, net);
+  CHECK_EQ(r.status, FetchStatus::kRetriesExhausted);
+  CHECK_EQ(ReadFile(rig.config.root + "/_data/old"), std::string("old"));
+  CHECK(rig.HasEvent("step=recover"));
+}
+
+TEST(AStagingDirectoryThatIsNotOursIsNeverDeleted) {
+  Rig rig;
+  CHECK_EQ(::mkdir(rig.config.root.c_str(), 0755), 0);
+  const std::string staging = StagingPath(rig.config.root, rig.config.sha256);
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/theirs", "theirs");
+  ScriptedTransport net(rig.zip, {Step{}});
+  const FetchResult r = RunFetch(rig.config, net);
+  CHECK_EQ(r.status, FetchStatus::kExtractFailed);
+  CHECK_EQ(r.detail, std::string("staging_not_ours"));
+  CHECK_EQ(ReadFile(staging + "/theirs"), std::string("theirs"));
+}
+
+TEST(NoMarkerIsLeftBehindAfterASuccessfulFetch) {
+  Rig rig;
+  ScriptedTransport net(rig.zip, {Step{}});
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kOk);
+  CHECK(!Exists(OwnerMarkerPath(rig.Part())));
+  CHECK(!Exists(OwnerMarkerPath(StagingPath(rig.config.root, rig.config.sha256))));
+}
+
+TEST(ThePartIsMarkedWhileItIsKept) {
+  Rig rig;
+  Step drop;
+  drop.drop_after = 1000;
+  ScriptedTransport net(rig.zip, {drop, drop, drop, drop});
+  rig.config.max_attempts = 1;
+  CHECK_EQ(RunFetch(rig.config, net).status, FetchStatus::kRetriesExhausted);
+  CHECK(Exists(rig.Part()));
+  CHECK(IsOwned(rig.Part()));
 }
 
 TEST(APartLongerThanThePinIsDiscarded) {
