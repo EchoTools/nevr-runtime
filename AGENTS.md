@@ -935,8 +935,8 @@ When something fails, the first act is reading the failing program's **own** log
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):
-  `just build`, then a second real `cmake --build` (because `just build` greps its
-  own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
+  `just build`, then a second `cmake --build` whose exit code is read directly (`just build` fails on a
+  failed build, so the second pass confirms the artifact), then `test-auth-unit` and `test-quest-shared`,
   the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.
 
