@@ -210,16 +210,17 @@ What the rendezvous leaves outside the runtime:
 
 ### The tree today
 
-The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it hooks
-the wrapper itself: `InstallGameMainHook` in `crash_recovery.cpp`, called from
-`initialize.cpp` in `DllMain`, detours the wrapper with `PatchDetour`, and
-`GameMainWrapperHook` holds the `setjmp`. The runtime has no `game_main` entry yet. The
-descriptor, the host units and their harnesses describe the target. The flip comes first: the
-runtime adopts the host contract inside the one DLL, so `initialize` runs from the host's
-detour at the wrapper's entry, `game_main` replaces `GameMainWrapperHook`, and the runtime
-stops hooking the wrapper. The split follows: the runtime moves into `nevr.dll`. Until the
-flip the harness runtimes are stand-ins whose `game_main` runs the original wrapper through
-the trampoline.
+The shipped `BugSplat64.dll` is still the whole of `src/runtime/` in one DLL, and it
+adopts the host contract inside that DLL. `DllMain` and `NEVR_SetGameModule` call
+`nevr_host::OnProcessAttach` and `SetGameModule` (`src/runtime/host/host_entry.cpp`), which
+install the one detour on the wrapper. The runtime is handed to the host's loader as an
+in-process provider (`RuntimeLoader::PrepareInProcess`; the load record carries
+`source: in_process`), so nothing is loaded from disk. `initialize` (`runtime_entry.cpp`)
+runs from the detour at the wrapper's entry, outside the loader lock, and arms
+`RuntimeGameMain` (`ArmGameMain`, `crash_recovery.cpp`), which holds the `setjmp` and is
+the descriptor's `game_main`. The runtime registers the host's hook with HookGuard from the
+bytes the host wrote and installs no hook on the wrapper. The split follows: the runtime
+moves into `nevr.dll`.
 
 Vocabulary: "host" in this record is `BugSplat64.dll`. In the plugin ABI
 (`src/extension/plugin_interface.h`) "host" is the runtime.
