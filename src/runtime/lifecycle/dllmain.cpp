@@ -12,7 +12,9 @@
 #include "runtime/patch/broadcaster_guard.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/host/host_entry.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/runtime_entry.h"
 #include "runtime/lifecycle/system_module_loader.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/patch/binary_bug_fixes.h"
@@ -62,7 +64,9 @@ extern "C" __declspec(dllexport) BOOL WINAPI MiniDumpWriteDump(
 
 extern "C" {
   void BugSplat_MiniDmpSender_Ctor(void*, const wchar_t*, const wchar_t*,
-                                    const wchar_t*, const wchar_t*, unsigned long) {}
+                                    const wchar_t*, const wchar_t*, unsigned long) {
+    nevr_host::OnCrashReporterConstructed();  // reports the attach decisions recorded so far
+  }
   void BugSplat_MiniDmpSender_Dtor(void*) {}
   void BugSplat_createReport(void*, PEXCEPTION_POINTERS) {}
   unsigned long BugSplat_getFlags(void*) { return 0; }
@@ -76,7 +80,7 @@ extern "C" {
 // --- Launcher entry point ---
 
 extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
-  InitializeGameModule(hGame);
+  nevr_host::SetGameModule(hGame);
 }
 
 // --- DLL entry point ---
@@ -84,9 +88,11 @@ extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-      if (GetModuleHandleA("echovr_game.dll") == NULL) {
-        InitializeGameModule(GetModuleHandle(NULL));
-      }
+      // The host's attach: validate the image and install the one detour on the game's main
+      // wrapper. Nothing initializes here; the runtime's initialize runs from that detour.
+      nevr_host::OnProcessAttach(hModule, GetModuleHandleW(nullptr),
+                                 GetModuleHandleA("echovr_game.dll") != NULL,
+                                 &nevr_runtime_entry::GetRuntimeApi);
       break;
     case DLL_PROCESS_DETACH:
       // Only do clean shutdown on dynamic unload (lpReserved == NULL).

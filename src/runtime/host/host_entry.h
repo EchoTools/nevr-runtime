@@ -22,7 +22,10 @@ namespace nevr_host {
 
 /// `game_module` is the process image in direct-import mode. In launcher mode the
 /// image arrives later through SetGameModule, so the host only prepares here.
-void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode) noexcept;
+/// `in_process_runtime`, when set, is the entry point of a runtime compiled into this image
+/// (the rendezvous then loads nothing from disk); it is kept for SetGameModule.
+void OnProcessAttach(HMODULE host_module, HMODULE game_module, bool launcher_mode,
+                     NevrGetRuntimeApiFn in_process_runtime = nullptr) noexcept;
 
 /// Validate the game image (ending the process with the stable image-guard exit
 /// code on an unsupported one, after recording the refusal) and install the same

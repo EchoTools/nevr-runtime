@@ -324,10 +324,16 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(sample, rf"(?m)^\s*{section}")
 
     def test_dllmain_and_launcher_both_enter_the_validated_game_module_route(self):
+        # #800: DllMain and NEVR_SetGameModule hand the process to the host (runtime/host), which installs
+        # the one detour on the game's main wrapper; the runtime's initialize, called from that detour,
+        # is the only caller of InitializeGameModule.
         dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
-        self.assertIn("InitializeGameModule(GetModuleHandle(NULL))", dllmain)
-        self.assertIn("InitializeGameModule(hGame)", dllmain)
+        self.assertIn("nevr_host::OnProcessAttach(", dllmain)
+        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
+        self.assertNotIn("InitializeGameModule", dllmain)
+        self.assertIn("InitializeGameModule(host->game_module)", entry)
         route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
         self.assertIn("RunWithSupportedGameModule", route)
         self.assertNotIn("VerifyGameVersion", initialize)

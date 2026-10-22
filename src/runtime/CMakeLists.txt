@@ -7,6 +7,14 @@ set(PATCHES_SOURCES
     "lifecycle/dllmain.cpp"
     "lifecycle/initialize.cpp"
     "lifecycle/game_image_guard.cpp"
+    "lifecycle/runtime_entry.cpp"
+    # The host units (runtime/host/) are compiled in without NEVR_HOST_TESTING: the DLL's
+    # DllMain and exports call them, and the runtime is handed to the host as an in-process provider.
+    "host/bootstrap_diagnostics.cpp"
+    "host/crash_capture.cpp"
+    "host/host_entry.cpp"
+    "host/runtime_load.cpp"
+    "host/runtime_rendezvous.cpp"
     "lifecycle/system_module_loader.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
@@ -209,6 +217,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
+set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

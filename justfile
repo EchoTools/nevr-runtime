@@ -1859,11 +1859,15 @@ verify:
         echo "verify: FAIL — N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp." >&2
         exit 1
     fi
-    # The recovery hook must be INSTALLED, and no other sensor verifies it. A dropped
-    # InstallGameMainHook() call means the server no longer sets up its longjmp point
-    # and dies on the first crash it was built to survive.
-    if ! grep -q 'InstallGameMainHook()' src/runtime/lifecycle/initialize.cpp; then
-        echo "verify: FAIL — N125 initialize.cpp no longer calls InstallGameMainHook()." >&2
+    # The recovery point must be REACHED, and no other sensor verifies it: the runtime's descriptor
+    # must carry RuntimeGameMain as its game_main and its initialize must call ArmGameMain. A dropped
+    # entry means the host never runs the setjmp, the VEH's longjmp has nowhere to land, and a server
+    # crash terminates instead of recovering.
+    N125_RE_RC=0; N125_RE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/runtime_entry.cpp) || N125_RE_RC=$?
+    sensor_stage1 "N125 runtime entry reaches the recovery point" "src/runtime/lifecycle/runtime_entry.cpp" "$N125_RE_RC"
+    sensor_nonempty "N125 runtime entry reaches the recovery point" "non-comment lines of runtime_entry.cpp" "$N125_RE"
+    if ! grep -qF 'api.game_main = &RuntimeGameMain;' <<<"$N125_RE" || ! grep -qF 'ArmGameMain(host);' <<<"$N125_RE"; then
+        echo "verify: FAIL — N125 runtime_entry.cpp no longer hands the host RuntimeGameMain and arms it (ArmGameMain)." >&2
         echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
         exit 1
     fi

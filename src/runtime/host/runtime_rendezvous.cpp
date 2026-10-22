@@ -82,11 +82,16 @@ void RuntimeRendezvous::SetInstallEventForTest(HANDLE event) {
 #endif
 
 void RuntimeRendezvous::Prepare(HMODULE host_module, HMODULE game_module,
-                                BootstrapDiagnostics& diagnostics) {
+                                BootstrapDiagnostics& diagnostics,
+                                NevrGetRuntimeApiFn in_process_runtime) {
   host_module_ = host_module;
   game_module_ = game_module;
   diagnostics_ = &diagnostics;
-  loader_.Prepare(host_module);
+  if (in_process_runtime != nullptr) {
+    loader_.PrepareInProcess(host_module, in_process_runtime);
+  } else {
+    loader_.Prepare(host_module);
+  }
   g_active_rendezvous = this;
 }
 

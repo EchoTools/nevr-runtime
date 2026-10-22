@@ -28,6 +28,12 @@ namespace nevr_hook_guard {
 /// not log itself, because it runs under the loader lock.
 void Record(const void* target, const char* name);
 
+/// Record `target` under `name` with the first bytes the owner of the hook read there after enabling it
+/// (16 bytes), instead of reading them now. The wrapper hook belongs to the host (runtime/host), which
+/// hands the runtime what it wrote; a hook that changed the bytes since is then a mismatch at the first
+/// VerifyAll. Same table, same never-fails contract as Record.
+void RecordBytes(const void* target, const char* name, const unsigned char (&bytes)[16]);
+
 /// Re-read every recorded address and compare. Logs one ERROR per mismatch with
 /// the address, the name, expected vs actual bytes, and `context` (what just
 /// happened — normally the plugin filename). Returns the number of mismatches.

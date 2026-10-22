@@ -518,8 +518,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
+  // The game-main wrapper is hooked by the host; the runtime's initialize arms RuntimeGameMain
+  // after this returns (lifecycle/runtime_entry.cpp, ArmGameMain, N125).
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing server crash-recovery hooks...\n");
-  InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();

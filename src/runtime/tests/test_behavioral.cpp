@@ -3949,6 +3949,39 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
         << "guard did NOT detect a foreign detour overwriting a recorded address";
 }
 
+// #800: the wrapper's hook belongs to the host. The runtime records the bytes the host read after it
+// enabled its hook (the host's jump), not the bytes it finds when it gets round to recording, so a
+// re-hook between the host's enable and the runtime's init is a mismatch from the first VerifyAll.
+TEST(N84_HookGuard, RecordBytes_HostBytesMatchingTheTargetIsNoMismatch) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    unsigned char hostBytes[16];
+    memset(hostBytes, 0x90, sizeof(hostBytes));
+    hostBytes[0] = 0xE9;
+    memcpy(s.page, hostBytes, sizeof(hostBytes));
+
+    nevr_hook_guard::RecordBytes(s.page, "host_hook", hostBytes);
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:host-bytes"), 0);
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(s.page));
+}
+
+TEST(N84_HookGuard, RecordBytes_HostBytesDifferingFromTheTargetIsAMismatch) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    unsigned char hostBytes[16];
+    memset(hostBytes, 0x90, sizeof(hostBytes));
+    hostBytes[0] = 0xE9;
+    memcpy(s.page, hostBytes, sizeof(hostBytes));
+    static_cast<unsigned char*>(s.page)[1] = 0x42;  // another hooker wrote over the host's jump
+
+    nevr_hook_guard::RecordBytes(s.page, "host_hook_rehooked", hostBytes);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:host-bytes-rehooked"), 1);
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(s.page));
+}
+
 // IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
 // are still our own jump. Recorded and unchanged: yes. Never recorded, or overwritten since: no.
 TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
