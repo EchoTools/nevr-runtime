@@ -107,12 +107,18 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
         }
         // The loader appends ".dll" to a name with no extension; the file it maps is the one to check.
         const std::string name = WithDefaultExtension(written);
-        if (!seen.insert(name).second) continue;
+        if (seen.count(name) != 0) continue;
+        const bool isDelayLoad = kind.first == &deps.delayImports;
         HANDLE h = CreateFileA((pluginDir + name).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {
           const DWORD code = GetLastError();
           if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
+            // A delay-load is resolved when it is first called, by a LoadLibrary the late-load filter sees then; an
+            // optional one (nvapi64.dll on a machine without it) must not refuse a plugin that loads fine. It is not
+            // marked seen: the same name as a static import or forwarder is still held to the rule below.
+            if (isDelayLoad) continue;
+            seen.insert(name);
             if (SuppliedByTheSystem(name)) continue;
             return Refuse(name, kind.second, Reason::Unreadable,
                           "not in the plugins directory and not supplied by the system: a file put there before "
@@ -121,6 +127,7 @@ TreeVerdict VerifyPluginTree(const std::string& pluginDir, HANDLE root, const ne
           return Refuse(name, kind.second, Reason::Unreadable,
                         "cannot open the file to check it: error " + std::to_string(code));
         }
+        seen.insert(name);
         if (++checked > kMaxFiles) {
           CloseHandle(h);
           return Refuse(name, kind.second, Reason::Unreadable, "the plugin's dependency tree is over 64 files");

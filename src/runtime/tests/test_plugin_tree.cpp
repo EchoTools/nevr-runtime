@@ -213,6 +213,13 @@ TEST_F(PluginTree, SignedDelayLoadIsAccepted) {
 
 TEST_F(PluginTree, UnsignedDelayLoadIsRefused) { ExpectRefused("delay_unsigned"); }
 
+// A delay-load that names a file nowhere is optional until it is called; the late-load filter checks it then. The
+// walk must not refuse a plugin the loader would load (nvapi64.dll on a machine without it).
+TEST_F(PluginTree, AnAbsentDelayLoadIsNotRefused) {
+  const TreeVerdict v = Walk("delay_absent");
+  EXPECT_TRUE(v.accepted) << v.Describe();
+}
+
 TEST_F(PluginTree, SignedForwarderTargetIsAccepted) {
   const TreeVerdict v = Walk("forwarder_ok");
   EXPECT_TRUE(v.accepted) << v.Describe();

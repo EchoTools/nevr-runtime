@@ -359,6 +359,19 @@ bool FileInPluginsDirectory(const FilterState& f, const std::wstring& candidate,
   return false;  // not a file in the plugins directory, or no file at all (the real load reports that)
 }
 
+// Whether a normalized path (backslashes only) has a ".." component.
+bool HasParentComponent(const std::wstring& path) {
+  size_t start = 0;
+  while (start <= path.size()) {
+    const size_t end = path.find(L'\\', start);
+    const size_t stop = end == std::wstring::npos ? path.size() : end;
+    if (path.compare(start, stop - start, L"..") == 0 && stop - start == 2) return true;
+    if (end == std::wstring::npos) break;
+    start = end + 1;
+  }
+  return false;
+}
+
 bool PluginLoadFilter(const wchar_t* lowerPath) {
   if (lowerPath == nullptr) return false;
   FilterState& f = Filter();
@@ -379,6 +392,19 @@ bool PluginLoadFilter(const wchar_t* lowerPath) {
   } else if (!relative) {
     candidates.push_back(p);
   } else {
+    // The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
+    // directories set with SetDllDirectory), not only the current and the application directory tried below. A ".."
+    // component can climb from any of them into the plugins directory, so no candidate list is complete for it.
+    if (enforcing && HasParentComponent(p)) {
+      const std::string name = NarrowName(p);
+      if (!nevr_dll_load_hook::LoaderLockHeldByThisThread()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] refused a later load of %s: a relative path with a \"..\" component cannot be checked",
+            name.c_str());
+      }
+      RecordLateRefusal(name);
+      return true;
+    }
     wchar_t cwdBased[MAX_PATH * 4] = {};
     const DWORD n = GetFullPathNameW(p.c_str(), static_cast<DWORD>(std::size(cwdBased)), cwdBased, nullptr);
     if (n == 0 || n >= std::size(cwdBased) || f.appDir.empty()) {
@@ -1136,8 +1162,8 @@ void LoadPlugins(PluginPhase phase) {
       g_plugins.size(), run->EnabledCount());
 
   PublishPluginReport(run->TakeReport());
+  g_noticeArmed.store(true);  // a refusal from here on shows the notice itself (RecordLateRefusal), so none falls in a gap
   ShowRefusalNoticeIfDue();  // after the record; once per run, client with graphics only
-  g_noticeArmed.store(true);  // a refusal from here on shows the notice itself (RecordLateRefusal)
 }
 
 void UnloadPlugins() {

@@ -581,6 +581,9 @@ def main():
     # dep.dll is in the directory of no one and is not the system's: a file put there before the load would map unchecked.
     tree("import_absent", "importer.dll", {"importer.dll": ("importer", good)}, "dep.dll", "import", "Unreadable")
     tree("delay_ok", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", good)})
+    # A delay-load of a file that is nowhere (nvapi64.dll on a machine without it): resolved only if it is called, by a
+    # LoadLibrary the late-load filter sees then. The plugin loads.
+    tree("delay_absent", "delayer.dll", {"delayer.dll": ("delayer", good)})
     tree("delay_unsigned", "delayer.dll", {"delayer.dll": ("delayer", good), "dep.dll": ("dep", None)},
          "dep.dll", "delay-load", "Unsigned")
     tree("forwarder_ok", "forwarder.dll", {"forwarder.dll": ("forwarder", good), "dep.dll": ("dep", good)})
