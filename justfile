@@ -631,12 +631,32 @@ test-auth: test-auth-groundtruth test-auth-unit
 _vcpkg-quest-host:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="$("{{ justfile_directory() }}/tools/vcpkg_root.sh")"
+    jd="{{ justfile_directory() }}"
+    manifest="$jd/tools/quest-host-deps/vcpkg.json"
+    lib="$jd/build/quest-host-vcpkg/x64-linux/lib/libyaml-cpp.a"
+    # Idempotent and race-safe. The manifest installs only yaml-cpp, and every consumer
+    # (test-quest-shared/redirect/integration) checks exactly this artifact: when it exists
+    # and is no older than the manifest, there is nothing to install. `just verify` builds
+    # it once, serially, before the parallel block, so those workers hit this fast path and
+    # never run vcpkg concurrently. When the install is needed it is serialized on a lock
+    # file so two concurrent test-quest-* recipes cannot build the shared host install at
+    # once (vcpkg would otherwise contend on its own root lock or race in its buildtrees).
+    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+        exit 0
+    fi
+    mkdir -p "$jd/build"
+    lock="$jd/build/quest-host-vcpkg.install.lock"
+    exec 9>"$lock"
+    flock 9
+    if [[ -f "$lib" && ! "$lib" -ot "$manifest" ]]; then
+        exit 0
+    fi
+    root="$("$jd/tools/vcpkg_root.sh")"
     cd "$root"
     unset VCPKG_ROOT
     ./vcpkg install --triplet=x64-linux --host-triplet=x64-linux \
-        --x-manifest-root="{{ justfile_directory() }}/tools/quest-host-deps" \
-        --x-install-root="{{ justfile_directory() }}/build/quest-host-vcpkg"
+        --x-manifest-root="$jd/tools/quest-host-deps" \
+        --x-install-root="$jd/build/quest-host-vcpkg"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
@@ -1285,14 +1305,24 @@ verify:
     cmake --build --preset {{ preset }}
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
-    just test-auth-unit
-    just test-quest-shared
-    just test-quest-hooks
-    just test-quest-router
-    just test-quest-tls
-    just test-quest-redirect
-    just test-quest-social
-    just test-quest-integration
+    # --- Parallel test block --------------------------------------------------
+    # Eight independent suites run concurrently (capped at nproc) instead of one after
+    # another: each test-quest-* compiles its own host binary in its own out dir and runs
+    # it, so the serial wall clock was ~8 compiles back to back. The shared vcpkg host
+    # prereq (yaml-cpp) is built once, serially, here, so the workers that depend on it hit
+    # the idempotent guard in _vcpkg-quest-host and never run vcpkg concurrently.
+    # tools/verify-parallel.sh fails closed and names the failing suite: any suite failing
+    # fails the whole gate. The suite list below is the gate's full coverage.
+    just _vcpkg-quest-host
+    bash tools/verify-parallel.sh \
+        test-auth-unit \
+        test-quest-shared \
+        test-quest-hooks \
+        test-quest-router \
+        test-quest-tls \
+        test-quest-redirect \
+        test-quest-social \
+        test-quest-integration
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
