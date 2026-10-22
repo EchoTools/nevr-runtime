@@ -322,13 +322,52 @@ class DiagnoseCases:
         self.assertIn("was not running", result.stdout)
         self.assertIn("running after 0 s: no", result.stdout)
 
-    def test_a_crash_marker_and_a_missing_data_step_are_in_the_verdict(self):
+    def test_a_crash_marker_is_in_the_verdict_and_a_missing_data_line_is_not_a_failure(self):
         self.logcat.write_text("10-21 22:00:01.000 100 100 E AndroidRuntime: FATAL EXCEPTION: main\n")
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("crash marker: FATAL EXCEPTION", result.stdout)
-        self.assertIn('no "OBB mounted at" line', result.stdout)
+        self.assertNotIn("data step", result.stdout)
         self.assertIn("none (this build does not log one)", result.stdout)
+
+    # #764: the verdict of the first real-headset run called a healthy launch failed because that build logs no
+    # "OBB mounted at" line. A game still running after the wait is never "failed" for a line that is absent.
+    HEALTHY_WITHOUT_THE_MOUNT_LINE = (
+        "10-22 00:02:31.000  100  100 I NEVR-Sentinel: {\"event\":\"sentinel_ctor\"}\n"
+        "10-22 00:02:33.000  100  100 I RAD: Starting 2 worker threads in the scheduler.\n"
+    )
+
+    def test_a_running_game_whose_build_logs_no_data_mount_line_is_not_called_failed(self):
+        self.logcat.write_text(self.HEALTHY_WITHOUT_THE_MOUNT_LINE)
+        result = self.run_script(FAKE_DIRS=f"{LEGACY}:{LEGACY}/_data:{FILES}")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = result.stdout.split("Privacy:")[0]
+        self.assertNotIn("did not reach its data step", text)
+        self.assertNotIn("NO GAME DATA", text)
+        self.assertIn("running after 0 s: yes", text)
+        self.assertIn("No failure seen: running after 0 s", text)
+        self.assertIn("the data step can't be confirmed from the log", text)
+
+    def test_an_initialization_error_is_a_failure_and_names_the_file_the_game_wanted(self):
+        wanted = "/storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2"
+        self.logcat.write_text(
+            "10-22 00:00:08.581  7717  7717 E RAD: Initialization Error: Unknown error while loading the game.\n"
+            f"10-22 00:00:08.590  7717  7717 E RAD: - 0x2FDA8A8C4D75508F: Failed to find package manifest file {wanted}\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = result.stdout.split("Privacy:")[0]
+        self.assertIn("Initialization Error: Unknown error while loading the game.", text)
+        self.assertIn(f"Failed to find package manifest file {wanted}", text)
+        self.assertNotIn("No failure seen", text)
+        self.assertNotIn("No problem found", text)
+
+    def test_a_game_that_is_not_running_is_the_failure_not_a_missing_data_line(self):
+        self.logcat.write_text(self.HEALTHY_WITHOUT_THE_MOUNT_LINE)
+        result = self.run_script(FAKE_NOT_RUNNING="1")
+        text = result.stdout.split("Privacy:")[0]
+        self.assertIn("was not running", text)
+        self.assertNotIn("data step", text)
+        self.assertNotIn("No failure seen", text)
 
     def test_an_am_start_error_is_in_the_verdict(self):
         result = self.run_script(FAKE_START_OUT="Error: Activity class {x/y} does not exist.")
