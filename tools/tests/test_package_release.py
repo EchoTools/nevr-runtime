@@ -466,6 +466,95 @@ class InstallScriptsTest(unittest.TestCase):
         self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
         self.assertTrue(backups[0].exists(), "the backup is kept")
 
+    # #759: an update must leave uninstall.ps1 able to put the oldest original back. A runtime DLL carries the
+    # NEVR-BUILD identity literal, which install.ps1 uses to tell a runtime from the game's own file.
+    def set_package(self, payload):
+        (self.pkg / "BugSplat64.dll").write_bytes(payload)
+        (self.pkg / "SHA256SUMS").write_text(f"{hashlib.sha256(payload).hexdigest()}  BugSplat64.dll\n")
+
+    @staticmethod
+    def runtime(version):
+        return b"MZ\0NEVR-BUILD " + version.encode() + b" " + b"a" * 40 + b"\0"
+
+    def state(self):
+        return dict(line.split("=", 1) for line in (self.game / "nevr-install.txt").read_text().splitlines())
+
+    def install_a_then_update_to_b(self):
+        self.set_package(self.runtime("5.4.3"))
+        first = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.b = self.runtime("5.4.4")
+        self.set_package(self.b)
+        return self.ps("install.ps1", "-Dir", str(self.game))
+
+    def test_an_update_replaces_the_runtime_keeps_the_oldest_original_and_records_the_new_hash(self):
+        backups = None
+        updated = self.install_a_then_update_to_b()
+        self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.b)
+        backups = list(self.game.glob("BugSplat64.dll.original-*"))
+        self.assertEqual([b.read_bytes() for b in backups], [b"ORIGINAL"], "the runtime is never taken as an original")
+        self.assertEqual(self.state()["installed_sha256"], hashlib.sha256(self.b).hexdigest())
+        self.assertEqual(len(list(self.game.glob("dbgcore.dll.legacy-*"))), 1)
+
+    def test_uninstall_after_an_update_restores_the_oldest_original_and_the_legacy_file(self):
+        self.assertEqual(self.install_a_then_update_to_b().returncode, 0)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+        self.assertEqual((self.game / "dbgcore.dll").read_bytes(), b"LEGACY")
+        self.assertEqual(len(list(self.game.glob("BugSplat64.dll.original-*"))), 1, "the backup is kept")
+
+    def test_a_dll_copied_in_by_hand_is_undone_by_the_package_that_carries_it(self):
+        self.set_package(self.runtime("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        b = self.runtime("5.4.4")
+        (self.game / "BugSplat64.dll").write_bytes(b)
+        self.set_package(b)
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
+    def test_a_dll_no_package_and_no_record_knows_is_refused_and_nothing_changes(self):
+        self.set_package(self.runtime("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        (self.game / "BugSplat64.dll").write_bytes(self.runtime("9.9.9"))
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(undone.returncode, 0)
+        self.assertIn("is not the one install.ps1 put there", undone.stdout + undone.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.runtime("9.9.9"))
+        self.assertTrue((self.game / "nevr-install.txt").exists())
+
+    def test_an_earlier_recorded_build_is_still_known_after_an_update(self):
+        self.assertEqual(self.install_a_then_update_to_b().returncode, 0)
+        a = self.runtime("5.4.3")
+        (self.game / "BugSplat64.dll").write_bytes(a)  # the old build put back by hand
+        undone = self.ps("uninstall.ps1", "-Dir", str(self.game))
+        self.assertEqual(undone.returncode, 0, undone.stdout + undone.stderr)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), b"ORIGINAL")
+
+    def test_an_update_refuses_a_dll_it_did_not_put_there_and_changes_nothing(self):
+        self.set_package(self.runtime("5.4.3"))
+        self.assertEqual(self.ps("install.ps1", "-Dir", str(self.game)).returncode, 0)
+        stranger = self.runtime("9.9.9")
+        (self.game / "BugSplat64.dll").write_bytes(stranger)
+        self.set_package(self.runtime("5.4.4"))
+        updated = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(updated.returncode, 0)
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), stranger)
+        self.assertEqual(len(list(self.game.glob("BugSplat64.dll.original-*"))), 1)
+
+    def test_a_runtime_already_in_place_is_never_backed_up_as_the_original(self):
+        # nevr-install.txt is gone (deleted by hand, or the runtime was copied in without install.ps1).
+        (self.game / "BugSplat64.dll").write_bytes(self.runtime("5.4.3"))
+        self.set_package(self.runtime("5.4.4"))
+        result = self.ps("install.ps1", "-Dir", str(self.game))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nEVR runtime", result.stdout + result.stderr)
+        self.assertEqual(list(self.game.glob("BugSplat64.dll.original-*")), [])
+        self.assertEqual((self.game / "BugSplat64.dll").read_bytes(), self.runtime("5.4.3"))
+        self.assertTrue((self.game / "dbgcore.dll").exists(), "nothing was set aside")
+
     def ps_typed(self, typed, script, *args):
         return subprocess.run(["pwsh", "-NoProfile", "-File", str(self.pkg / script), *args],
                               input=typed, capture_output=True, text=True, timeout=60)

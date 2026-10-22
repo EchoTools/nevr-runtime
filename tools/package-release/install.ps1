@@ -3,6 +3,7 @@
 # Puts this package's BugSplat64.dll into the Echo VR install and sets the old files aside. It never
 # deletes anything: the original BugSplat64.dll is copied to BugSplat64.dll.original-<timestamp>, and a
 # legacy dbgcore.dll is renamed to dbgcore.dll.legacy-<date>. uninstall.ps1 puts both back.
+# Run again from a newer package, it updates the runtime in place and leaves those two set-aside files alone.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Dir <...\ready-at-dawn-echo-arena\bin\win10>] [-Pause | -NoPause]
 # Without -Dir the usual Meta Horizon / Oculus library locations are searched; with more than one
@@ -113,9 +114,49 @@ if (@(Get-Process -Name echovr -ErrorAction SilentlyContinue).Count -gt 0) { thr
 $target = Join-Path $Dir 'BugSplat64.dll'
 if (-not (Test-Path -LiteralPath $target)) { throw "no BugSplat64.dll in $Dir to back up" }
 $state = Join-Path $Dir 'nevr-install.txt'
-if (Test-Path -LiteralPath $state) { throw "already installed (see $state); run uninstall.ps1 first" }
 $originalSha = Get-Sha $target
 if ($originalSha -eq $ours) { throw 'the installed BugSplat64.dll is already this package; nothing to do' }
+
+# #759: already installed means an update. The DLL must be one this folder's install put there (the recorded
+# build or an earlier one); the original backup and the set-aside dbgcore.dll stay as the first install left
+# them, so uninstall.ps1 still restores the oldest original. The new hash is recorded and the old ones kept.
+if (Test-Path -LiteralPath $state) {
+  $values = @{}
+  foreach ($line in Get-Content -LiteralPath $state) {
+    if ($line -match '^([a-z_0-9]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] }
+  }
+  foreach ($key in 'backup', 'legacy', 'installed_sha256') {
+    if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key (see $state)" }
+  }
+  $known = @($values['installed_sha256'])
+  if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
+  if ($known -notcontains $originalSha) {
+    throw "BugSplat64.dll is not one install.ps1 put there (changed since); run uninstall.ps1 first, or restore the game's own file (see $state)"
+  }
+  if (-not (Test-Path -LiteralPath $values['backup'])) { throw "the backup is gone: $($values['backup']); nothing was changed" }
+  if (Test-Path -LiteralPath (Join-Path $Dir 'dbgcore.dll')) { throw 'a dbgcore.dll exists again; run uninstall.ps1 first' }
+  $prior = [System.IO.File]::ReadAllBytes($target)
+  try {
+    Copy-Item -LiteralPath $dll -Destination $target -Force
+    if ((Get-Sha $target) -ne $ours) { throw 'the installed file does not match the package' }
+  } catch {
+    Write-Output ("update failed: " + $_.Exception.Message + '; restoring')
+    [System.IO.File]::WriteAllBytes($target, $prior)
+    throw
+  }
+  $previous = @($known | Select-Object -Unique)
+  Set-Content -LiteralPath $state -Encoding ASCII -Value @("backup=$($values['backup'])", "legacy=$($values['legacy'])", "installed_sha256=$ours", ('previous_sha256=' + ($previous -join ',')))
+  Write-Output "UPDATED BugSplat64.dll sha256=$ours into $Dir (the original backup is unchanged: $($values['backup']))"
+  Write-RunLog ("OK $scriptName UPDATED BugSplat64.dll sha256=$ours Dir=$Dir")
+  Wait-BeforeClose
+  exit 0
+}
+
+# The file about to be backed up as the original must be the game's own. An nEVR runtime carries the
+# NEVR-BUILD identity literal; backing one up would make uninstall.ps1 "restore" a runtime (#759).
+if ([System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($target)).Contains('NEVR-BUILD ')) {
+  throw 'the installed BugSplat64.dll is an nEVR runtime, not the game''s own file, and nevr-install.txt is missing; nothing was changed. Restore the game''s original BugSplat64.dll first (for example, Verify Files in the Meta Horizon app), then run install.ps1 again'
+}
 
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $backup = Join-Path $Dir ('BugSplat64.dll.original-' + $stamp)
