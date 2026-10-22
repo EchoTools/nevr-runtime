@@ -11,7 +11,8 @@
 # files named above are copied. The adb serial, the hardware serial (ro.serialno) and any e-mail address are
 # replaced with <device-serial> and <email> in every text file and in the verdict. NOT masked: the zip holds
 # the runtime's crash dumps as they are and the headset's whole system log, which can show the Wi-Fi name, the
-# BSSID and IP addresses. Send the zip by direct message to sprockee or a sister, never in a public channel.
+# BSSID, IP addresses and numeric user ids. Send the zip by direct message to sprockee (@thesprockee) on the
+# EchoVRCE Discord, never in a public channel.
 #
 # usage:  powershell -NoProfile -ExecutionPolicy Bypass -File quest-diagnose.ps1 [-Adb <path to adb>] [-Pause | -NoPause]
 # adb is searched on the PATH, then in SideQuest's folder (%APPDATA%\SideQuest\platform-tools\adb.exe).
@@ -301,7 +302,7 @@ try {
     $zip.Dispose()
   }
   Write-RunLog ("OK $scriptName wrote $zipPath problems=$($problems.Count)")
-  Write-Host "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses). Send it by direct message to sprockee or a sister, never in a public channel."
+  Write-Host "Privacy: this zip holds crash dumps and the headset's system log (Wi-Fi name, BSSID, IP addresses, numeric user ids). Send it by direct message to sprockee (@thesprockee) on the EchoVRCE Discord, never in a public channel."
 } catch {
   $exitCode = 1
   $message = Protect-Text $_.Exception.Message

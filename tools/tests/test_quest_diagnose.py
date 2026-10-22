@@ -28,6 +28,7 @@ GOOD_DIRS = f"{MEDIA}:{MEDIA}/files:{MEDIA}/files/_data:{MEDIA}/asset_patches:{F
 HWSERIAL = "HWSER0987654"
 WIFI_SERIAL = "192.168.1.5:5555"
 PRIVACY = "never in a public channel"
+CONTACT = "sprockee (@thesprockee) on the EchoVRCE Discord"
 ZIP_FILES = {
     "verdict.txt", "device.txt", "package.txt", "installer_version.txt", "launch.txt", "logcat.txt",
     "logcat_before_launch.txt", "listings/readyatdawn.txt", "listings/readyatdawn_data.txt", "listings/media.txt",
@@ -234,7 +235,7 @@ class DiagnoseCases:
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         last = [line for line in result.stdout.splitlines() if line.strip()][-1]
-        for needle in ("crash dumps", "system log", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY):
+        for needle in ("crash dumps", "system log", "Wi-Fi name", "BSSID", "IP addresses", "numeric user ids", CONTACT, PRIVACY):
             self.assertIn(needle, last)
 
     def test_the_log_of_the_run_the_tester_came_with_is_saved_before_it_is_erased(self):
@@ -397,12 +398,12 @@ class SourceShape(unittest.TestCase):
         for path in (PS1, SH):
             header = " ".join(re.sub(r"^#\s?", "", line) for line in path.read_text().splitlines()[:25] if line.startswith("#"))
             header = re.sub(r"\s+", " ", header)
-            for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY,
+            for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "numeric user ids", CONTACT, PRIVACY,
                            "ro.serialno", "erases the headset's log buffer", "logcat_before_launch.txt"):
                 self.assertIn(needle, header, f"{path.name}: {needle}")
             self.assertNotIn("changes nothing", header)
         flat = re.sub(r"\s+", " ", readme)
-        for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "sprockee or a sister", PRIVACY,
+        for needle in ("crash dumps", "Wi-Fi name", "BSSID", "IP addresses", "numeric user ids", CONTACT, PRIVACY,
                        "serial numbers", "erases the headset's log buffer"):
             self.assertIn(needle, flat, needle)
         self.assertNotIn("changes nothing", flat)
