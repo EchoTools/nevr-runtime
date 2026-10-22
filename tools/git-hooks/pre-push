@@ -61,10 +61,12 @@ def main():
         local_ref, local_sha, remote_ref, _ = parts
         if set(local_sha) == {"0"}:
             continue  # a deletion pushes no commit
+        if remote_ref.startswith("refs/notes/"):
+            continue  # a note's tree names blobs by the annotated object's sha, not by file
         try:
             commit = git("rev-parse", "--verify", "-q", f"{local_sha}^{{commit}}").decode().strip()
         except subprocess.CalledProcessError:
-            continue  # a tag of a tree or a blob carries no scripts
+            continue  # a tag of a blob carries no tree; a tag of a tree is not checked: its blobs are reachable only as that tree
         entries = [e for e in git("ls-tree", "-r", "-z", commit).split(b"\0") if e]
         plain = []
         for entry in entries:
