@@ -98,13 +98,18 @@ build, what to do) is not optional.
   headroom, the same 2.2 GiB figure `tools/quest-install.sh` uses, doubled in the mismatch case where the old `_data` stays. Not
   enough: no download, the floor message names the free and needed MiB.
 - **Download, resume, retry.** Into `<root>/_data.zip.part` (a name our code creates), HTTP `Range` from the part's size, a
-  bounded number of attempts with backoff, then give up to the floor. The whole-file sha256 is verified at the end only (the
+  bounded number of attempts with backoff (2, 4, 8, 16 s, then 30 s between attempts, slept in 250 ms slices that a cancel ends), then give up to the floor. The whole-file sha256 is verified at the end only (the
   pin is one digest of the zip); a mismatch deletes that `.part` and counts as a failed attempt, never a retry on the same bytes.
 - **Extract.** Into `<root>/_data.staging-<sha prefix>/`, every entry path checked to stay inside that directory (a zip entry
-  with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. A crash or kill leaves
-  only the staging directory and the `.part`; the next launch deletes exactly those two names (they carry our prefix) and starts
-  the extract again from the verified zip. `_data` itself exists only when complete: "no partial root left behind" means the game
-  can never see a half-extracted `_data`.
+  with `..` or an absolute path is a failure of the whole fetch), then one `rename` to `<root>/_data`. Every item the step
+  creates in the root (the `.part`, the staging directory, a kept `_data.replaced-<utc stamp>`) has a marker file beside it,
+  `<item>.nevr-owned`, an empty regular file created before the item. A crash or kill leaves the staging directory, its marker
+  and the `.part`. The next launch first runs the recovery step: when `_data` is missing and a marked
+  `_data.replaced-*` directory exists (the crash fell between the two renames), the newest one is renamed back to `_data`.
+  Then it deletes the staging directory that has its marker, and starts the extract again from the verified zip. It never
+  deletes a name that only carries our prefix, the `.part` (it is kept so the download can resume), or a `_data.replaced-*`.
+  `_data` itself exists only when complete: "no partial root left behind" means the game can never see a half-extracted
+  `_data`. The root is synced after each rename.
 - **After success.** Delete the zip we downloaded (about 937 MB), nothing else.
 - **Logging** (repo rule: every path logs, queryable): one structured sentinel event per step, with the path, bytes, free space and
   result: `data_check`, `data_fetch` (start, progress at a coarse interval, retry, verified, failed with the reason),
