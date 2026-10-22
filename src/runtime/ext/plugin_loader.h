@@ -85,4 +85,15 @@ void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn);
 void TestHook_ClearPlugins();
 // #741: whether LoadModule may retry with the default search order after the restricted load failed.
 bool TestHook_RestrictedSearchFallbackAllowed(bool enforcing, unsigned long error);
+// #741: the refusal dialog (replaced by `sink` so a test reads the text), the refusals it names, and the filter on
+// loads a plugin makes after init (registered with DllLoadHook; reset empties its directory so it does nothing).
+void TestHook_SetRefusalDialogSink(void (*sink)(const std::string& text));
+void TestHook_ResetRefusals();
+void TestHook_ShowRefusalNoticeIfDue();
+void TestHook_RecordRefusal(const std::string& file);
+void TestHook_InstallPluginLoadFilter(const std::string& pluginDir);
+void TestHook_ResetPluginLoadFilter();
+void TestHook_ForgetLoadFilterRegistration();  // after nevr_dll_load_hook::Shutdown() cleared the registered filters
+// Called by the filter between resolving a late load's path and opening it (null clears it).
+void TestHook_SetBetweenResolveAndOpen(void (*hook)(const std::wstring& resolved));
 #endif

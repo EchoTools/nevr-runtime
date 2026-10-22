@@ -213,14 +213,23 @@ static void ExtractLowerFilenameW(const wchar_t* path, char* out, size_t out_siz
 }
 
 /* Lowercased wide copy of an ANSI path (ASCII fold, like the other extractors here). */
-static std::wstring LowerWide(const char* path) {
+std::wstring AnsiPathToLowerWide(const char* path) {
     std::wstring out;
-    for (const char* p = path; p && *p; ++p) {
-        char c = *p;
-        out.push_back(static_cast<wchar_t>((c >= 'A' && c <= 'Z') ? c + 32 : c));
+    if (path == nullptr || *path == '\0') return out;
+    /* The ANSI code page decides what a byte above 0x7F is; widening byte by byte turns it into another
+     * character and no later comparison with the real path can match. */
+    const int n = MultiByteToWideChar(CP_ACP, 0, path, -1, nullptr, 0);
+    if (n <= 1) return out;
+    out.resize(static_cast<size_t>(n));
+    if (MultiByteToWideChar(CP_ACP, 0, path, -1, out.data(), n) == 0) return std::wstring();
+    out.resize(static_cast<size_t>(n) - 1);
+    for (wchar_t& c : out) {
+        if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c + 32);
     }
     return out;
 }
+
+static std::wstring LowerWide(const char* path) { return AnsiPathToLowerWide(path); }
 
 static std::wstring LowerWide(const wchar_t* path) {
     std::wstring out;

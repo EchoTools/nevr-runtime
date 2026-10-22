@@ -31,6 +31,7 @@ set(PATCHES_SOURCES
     "ext/plugin_load_plan.cpp"
     "ext/plugin_manifest.cpp"
     "ext/plugin_signature.cpp"
+    "ext/plugin_tree.cpp"
     "ext/plugin_trust.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
@@ -246,7 +247,7 @@ if(NEVR_ALLOW_UNSIGNED_PLUGINS)
   set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
   message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll loads unsigned plugins (plugin developer build, never ship)")
 endif()
-set_source_files_properties(ext/plugin_signature.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -1173,6 +1174,19 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
     gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
 
+    # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
+    # pass the same check, over fixture directories the same generator writes.
+    add_executable(test_plugin_tree
+      tests/test_plugin_tree.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_tree.cpp ext/plugin_tree.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_tree PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_tree PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
     # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
     add_executable(test_plugin_trust
       tests/test_plugin_trust.cpp
@@ -1220,6 +1234,7 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
       ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
@@ -1240,6 +1255,8 @@ if(BUILD_TESTING)
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
       hook/hook_liveness.cpp
+      # #741: plugin_loader registers its load filter with the hook.
+      hook/dll_load_hook.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
       NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
@@ -1262,6 +1279,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
       ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
       ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
@@ -1274,6 +1292,7 @@ if(BUILD_TESTING)
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
+      hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
