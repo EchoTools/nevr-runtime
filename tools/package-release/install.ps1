@@ -131,6 +131,10 @@ if (Test-Path -LiteralPath $state) {
   foreach ($key in 'backup', 'legacy', 'installed_sha256') {
     if (-not $values.ContainsKey($key)) { throw "nevr-install.txt has no $key (see $state)" }
   }
+  # #779: an install made before #762 may have saved a NEVR runtime as the original; never restore or keep one.
+  if ((Test-Path -LiteralPath $values['backup']) -and (Test-NevrRuntime $values['backup'])) {
+    throw "the backup $($values['backup']) is a NEVR runtime, not the game's own file (an earlier install.ps1 saved it); nothing was changed. Restore the game's original BugSplat64.dll (for example, Verify Files in the Meta Horizon app), delete $state, then run install.ps1 again"
+  }
   $known = @($values['installed_sha256'])
   if ($values.ContainsKey('previous_sha256') -and $values['previous_sha256'] -ne '') { $known += $values['previous_sha256'].Split(',') }
   if ($originalSha -eq $ours) {
