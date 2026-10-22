@@ -187,8 +187,8 @@ target_link_libraries(nevr_quest_token_auth PUBLIC nevr_quest_atomic_write nlohm
   nevr_quest_prompt_board)
 target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
 
-# The libcurl Transport the data fetch downloads through; its one trust anchor is data/data_host_roots.h.
-add_library(nevr_quest_data_net STATIC data/curl_transport.cpp)
+# The libcurl Transport the data fetch downloads through; its trust anchors are the roots in data/data_host_roots.h.
+add_library(nevr_quest_data_net STATIC data/curl_transport.cpp data/data_host_roots.cpp)
 target_link_libraries(nevr_quest_data_net PUBLIC nevr_quest_data CURL::libcurl)
 target_compile_options(nevr_quest_data_net PRIVATE -Wall -Wextra -Werror -fno-exceptions)
 

@@ -32,6 +32,12 @@ enum class FetchStatus {
 
 const char* FetchStatusName(FetchStatus status) noexcept;
 
+// The wait before retry `attempt` (2, 3, ...): 2 s, 4 s, 8 s, 16 s, then 30 s, so five attempts wait 30 s in all.
+inline constexpr unsigned kBackoffBaseMs = 2000;
+inline constexpr unsigned kBackoffMaxMs = 30000;
+inline constexpr unsigned kBackoffSliceMs = 250;
+unsigned DefaultBackoffMs(int attempt) noexcept;
+
 struct Event {
   std::string name;  // data_fetch, data_extract or data_swap
   std::vector<std::pair<std::string, std::string>> fields;
@@ -47,9 +53,13 @@ struct FetchConfig {
   int max_attempts = 5;
   ZipLimits zip_limits;
   std::string utc_stamp;  // names the replaced tree, `YYYYMMDDTHHMMSSZ`
-  // Seams. Defaults (a null function) mean: statvfs, a real sleep of the backoff, never cancelled, no events.
+  // Seams. Defaults (a null function) mean: statvfs, the default backoff below, never cancelled, no events.
   std::function<std::uint64_t(const std::string& root)> available_bytes;
-  std::function<void(int attempt)> backoff;           // called before retry `attempt` (2, 3, ...)
+  // Called before retry `attempt` (2, 3, ...). Null: DefaultBackoffMs(attempt) of real sleep, in slices of
+  // kBackoffSliceMs through `sleep_ms`, ending early when `keep_going` says stop.
+  std::function<void(int attempt)> backoff;
+  std::function<void(unsigned ms)> sleep_ms;           // null: nanosleep
+
   std::function<bool()> keep_going;                   // false cancels
   std::function<void(const Event&)> on_event;
   std::function<void(std::uint64_t downloaded, std::uint64_t total)> on_progress;

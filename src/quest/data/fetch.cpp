@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <ctime>
 
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
@@ -65,6 +66,32 @@ std::uint64_t FreeBytes(const FetchConfig& c) {
   return static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
 }
 
+void RealSleepMs(unsigned ms) {
+  struct timespec ts;
+  ts.tv_sec = static_cast<time_t>(ms / 1000);
+  ts.tv_nsec = static_cast<long>(ms % 1000) * 1000000L;
+  while (::nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+  }
+}
+
+// The wait before a retry: the caller's backoff when it set one, else DefaultBackoffMs in slices, so a cancel ends it.
+void WaitBeforeRetry(const FetchConfig& c, int attempt) {
+  if (c.backoff) {
+    c.backoff(attempt);
+    return;
+  }
+  unsigned left = DefaultBackoffMs(attempt);
+  while (left != 0 && !Cancelled(c)) {
+    const unsigned slice = left < kBackoffSliceMs ? left : kBackoffSliceMs;
+    if (c.sleep_ms) {
+      c.sleep_ms(slice);
+    } else {
+      RealSleepMs(slice);
+    }
+    left -= slice;
+  }
+}
+
 bool MakeRoot(const std::string& root) {
   // mkdir -p of the data root. A root that is not a directory after the loop is a failure.
   std::string path;
@@ -91,6 +118,12 @@ Download DownloadOnce(const FetchConfig& c, Transport& transport, const std::str
     have = 0;
   }
   if (have == c.bytes) return Download::kDone;
+  // The part is (re)created here after a discard (a digest mismatch, a longer-than-pin part), so its marker is made
+  // every time: an unmarked part is never ours to resume or delete.
+  if (!MarkOwned(part)) {
+    *why = "mark_part_failed";
+    return Download::kFailed;
+  }
   Fd out(::open(part.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644));
   if (out.get() < 0) {
     *why = "open_part_failed";
@@ -185,6 +218,13 @@ bool HashFile(const std::string& path, std::string* hex) {
 
 }  // namespace
 
+unsigned DefaultBackoffMs(int attempt) noexcept {
+  if (attempt < 2) return 0;
+  unsigned ms = kBackoffBaseMs;
+  for (int n = 2; n < attempt && ms < kBackoffMaxMs; ++n) ms *= 2;
+  return ms < kBackoffMaxMs ? ms : kBackoffMaxMs;
+}
+
 const char* FetchStatusName(FetchStatus status) noexcept {
   switch (status) {
     case FetchStatus::kOk: return "ok";
@@ -243,7 +283,7 @@ FetchResult RunFetch(const FetchConfig& c, Transport& transport) {
   std::string last_why;
   for (int attempt = 1; attempt <= c.max_attempts && !verified; ++attempt) {
     result.attempts = attempt;
-    if (attempt > 1 && c.backoff) c.backoff(attempt);
+    if (attempt > 1) WaitBeforeRetry(c, attempt);
     if (Cancelled(c)) {
       result.status = FetchStatus::kCancelled;
       return result;

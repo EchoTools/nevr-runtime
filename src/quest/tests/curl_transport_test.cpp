@@ -2,8 +2,14 @@
 // against src/quest/tests/range_server.py (just test-quest-data-net).
 //
 //   curl_transport_test write-zip <path>
-//   curl_transport_test <port> <request-log> <trust-pem>
+//   curl_transport_test <port> <request-log> <trust-pem> <tls-dir>
+//
+// <tls-dir> holds <name>.port and <name>.log for the HTTPS servers range_server.py serves (good, expired, wronghost,
+// selfsigned, tls11); the test CA is <trust-pem>.
 
+#include <cstdlib>
+#include <cstring>
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -28,6 +34,8 @@ namespace {
 int g_port = 0;
 std::string g_log_path;
 std::string g_trust_pem;
+std::string g_tls_dir;
+
 
 std::string Url(const std::string& path, const char* scheme = "http") {
   return std::string(scheme) + "://127.0.0.1:" + std::to_string(g_port) + path;
@@ -51,6 +59,24 @@ std::size_t Count(const std::string& hay, const std::string& needle) {
   for (std::size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) ++n;
   return n;
 }
+
+std::string Slurp(const std::string& path) {
+  std::ifstream in(path);
+  std::stringstream ss;
+  ss << in.rdbuf();
+  return ss.str();
+}
+
+// https://127.0.0.1:<port of the named TLS server><path>
+std::string TlsUrl(const std::string& server, const std::string& path) {
+  return "https://127.0.0.1:" + std::to_string(std::atoi(Slurp(g_tls_dir + "/" + server + ".port").c_str())) + path;
+}
+
+std::size_t TlsRequests(const std::string& server, const std::string& path) {
+  return Count(Slurp(g_tls_dir + "/" + server + ".log"), path);
+}
+
+CurlTransport TestCa() { return CurlTransport(g_trust_pem, /*allow_plain_http=*/false, 5, 5); }
 
 struct Got {
   TransportResult result;
@@ -175,28 +201,152 @@ TEST(PlainHttpIsRefusedWhenNotAllowedEvenWithTrustAnchors) {
   CHECK_EQ(Count(RequestLog(), "/blob"), before);
 }
 
-TEST(TheDataHostRootIsTheOneCertificateWeMeasured) {
-  BIO* bio = BIO_new_mem_buf(kDataHostRootsPem, static_cast<int>(sizeof(kDataHostRootsPem) - 1));
-  CHECK(bio != nullptr);
-  X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-  CHECK(cert != nullptr);
-  X509* second = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);  // exactly one certificate
-  CHECK(second == nullptr);
-  unsigned char md[EVP_MAX_MD_SIZE];
-  unsigned int n = 0;
-  CHECK(X509_digest(cert, EVP_sha256(), md, &n) == 1);
-  std::string hex;
-  for (unsigned int i = 0; i < n; ++i) {
-    char b[3];
-    std::snprintf(b, sizeof(b), "%02x", md[i]);
-    hex += b;
+TEST(TheProductionRootTableMatchesItsPins) {
+  const RootsCheck check = CheckDataHostRoots();
+  CHECK(check.ok);
+  CHECK_EQ(check.count, kDataHostRootCount);
+  CHECK(kDataHostRootCount >= 3);
+  std::vector<std::string> seen;
+  for (std::size_t i = 0; i < kDataHostRootCount; ++i) {
+    BIO* bio = BIO_new_mem_buf(kDataHostRoots[i].pem, static_cast<int>(std::strlen(kDataHostRoots[i].pem)));
+    CHECK(bio != nullptr);
+    X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+    CHECK(cert != nullptr);
+    CHECK(PEM_read_bio_X509(bio, nullptr, nullptr, nullptr) == nullptr);  // exactly one certificate each
+    CHECK(X509_cmp_current_time(X509_get0_notAfter(cert)) > 0);           // not expired
+    CHECK(X509_NAME_cmp(X509_get_subject_name(cert), X509_get_issuer_name(cert)) == 0);  // self-signed: a root
+    CHECK(std::strlen(kDataHostRoots[i].why) > 20);                        // each root says why it is there
+    for (const std::string& n : seen) CHECK(n != kDataHostRoots[i].name);
+    seen.push_back(kDataHostRoots[i].name);
+    X509_free(cert);
+    BIO_free(bio);
   }
-  CHECK_EQ(hex, std::string(kDataHostRootSha256));
-  CHECK(X509_cmp_current_time(X509_get0_notAfter(cert)) > 0);  // not expired
-  CHECK(X509_NAME_cmp(X509_get_subject_name(cert), X509_get_issuer_name(cert)) == 0);  // self-signed: a root
-  X509_free(cert);
-  BIO_free(bio);
   ERR_clear_error();
+}
+
+TEST(AMangledRootTableFailsTheSelfCheck) {
+  // One flipped base64 character in a certificate: the pin no longer matches (or the blob no longer parses).
+  std::string pem = kDataHostRoots[0].pem;
+  const std::size_t at = pem.find('\n') + 10;
+  pem[at] = pem[at] == 'A' ? 'B' : 'A';
+  DataHostRoot mangled[] = {{kDataHostRoots[0].name, kDataHostRoots[0].why, kDataHostRoots[0].sha256, pem.c_str()}};
+  const RootsCheck bad = CheckRoots(mangled, 1);
+  CHECK(!bad.ok);
+  CHECK(!bad.detail.empty());
+  DataHostRoot truncated[] = {{"x", "y", kDataHostRoots[0].sha256, "-----BEGIN CERTIFICATE-----\nAAAA\n"}};
+  CHECK(!CheckRoots(truncated, 1).ok);
+  CHECK(!CheckRoots(nullptr, 0).ok);  // an empty table is not a trust store
+}
+
+TEST(ABlobWithTheRightPinThatIsNotACertificateFailsTheSelfCheck) {
+  // Pinned correctly, so only the parse can refuse it: DER that is not a SEQUENCE, and a SEQUENCE whose length is wrong.
+  struct Case {
+    const char* b64;
+    const char bytes[4];
+  };
+  const Case cases[] = {{"MQIAAA==", {0x31, 0x02, 0x00, 0x00}}, {"MAUBAg==", {0x30, 0x05, 0x01, 0x02}}};
+  for (const Case& c : cases) {
+    const std::string pin = Sha256Hex(c.bytes, 4);
+    const std::string pem = std::string("-----BEGIN CERTIFICATE-----\n") + c.b64 + "\n-----END CERTIFICATE-----\n";
+    const DataHostRoot root[] = {{"fake", "a blob that is pinned but is not a certificate", pin.c_str(), pem.c_str()}};
+    const RootsCheck r = CheckRoots(root, 1);
+    CHECK(!r.ok);
+  }
+}
+
+TEST(ARootTableThatFailsItsSelfCheckFailsClosedBeforeAnyRequest) {
+  const std::size_t before = TlsRequests("good", "/blob");
+  CurlTransport t(DataHostRootsPem(), false, 5, 5, [] { return RootsCheck{false, 0, "test_mangled"}; });
+  const Got g = Get(t, TlsUrl("good", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK_EQ(g.result.code, CurlTransport::kRootsUnusable);
+  CHECK_EQ(g.result.detail, std::string("roots_unusable:test_mangled"));
+  CHECK_EQ(TlsRequests("good", "/blob"), before);
+}
+
+TEST(AValidChainOverHttpsIsFetched) {
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("good", "/blob"), 1000);
+  CHECK(g.result.completed);
+  CHECK_EQ(g.result.http_status, 206L);
+  CHECK(g.body == Blob().substr(1000));
+  CHECK_EQ(TlsRequests("good", "/blob range=bytes=1000-"), std::size_t{1});
+}
+
+TEST(AnExpiredCertificateIsRefusedBeforeAnyRequest) {
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("expired", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK(g.result.code != 0);
+  CHECK(g.body.empty());
+  CHECK_EQ(TlsRequests("expired", "/blob"), std::size_t{0});
+}
+
+TEST(ACertificateForAnotherHostIsRefused) {
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("wronghost", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK(g.result.code != 0);
+  CHECK(g.body.empty());
+  CHECK_EQ(TlsRequests("wronghost", "/blob"), std::size_t{0});
+}
+
+TEST(ASelfSignedCertificateNotInTheTrustSetIsRefused) {
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("selfsigned", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK(g.result.code != 0);
+  CHECK(g.body.empty());
+  CHECK_EQ(TlsRequests("selfsigned", "/blob"), std::size_t{0});
+}
+
+TEST(TheProductionRootsDoNotTrustTheTestServer) {
+  CurlTransport t;  // the pinned roots, as the game builds it
+  const Got g = Get(t, TlsUrl("good", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK(g.body.empty());
+  CHECK(g.result.code != 0);
+}
+
+TEST(ARedirectIsNotFollowed) {
+  const std::size_t blobs = TlsRequests("good", "/blob");
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("good", "/redirect"), 0);
+  CHECK_EQ(g.result.http_status, 302L);
+  CHECK(g.body.empty());
+  CHECK_EQ(TlsRequests("good", "/blob"), blobs);  // the Location target was never requested
+  CHECK_EQ(TlsRequests("good", "/redirect"), std::size_t{1});
+}
+
+TEST(AProxyFromTheEnvironmentIsIgnored) {
+  // A proxy that nothing listens on: a client that honoured it could not reach the server.
+  const char* names[] = {"https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"};
+  for (const char* n : names) setenv(n, "http://127.0.0.1:1", 1);
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("good", "/blob"), 0);
+  for (const char* n : names) unsetenv(n);
+  CHECK(g.result.completed);
+  CHECK_EQ(g.result.http_status, 206L);
+  CHECK(g.body == Blob());
+}
+
+TEST(AStalledBodyEndsAsATransportFailureNotAHang) {
+  CurlTransport t(g_trust_pem, false, 5, /*stall_seconds=*/2);
+  const auto start = std::chrono::steady_clock::now();
+  const Got g = Get(t, TlsUrl("good", "/stall"), 0);
+  const auto took = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count();
+  CHECK(!g.result.completed);
+  CHECK(!g.result.interrupted);
+  CHECK_EQ(g.body.size(), std::size_t{100});  // what arrived before the stall is delivered, so the part can resume
+  CHECK(took < 15);                           // the server sleeps 20 s
+}
+
+TEST(ATlsOneOneServerIsRefused) {
+  CurlTransport t = TestCa();
+  const Got g = Get(t, TlsUrl("tls11", "/blob"), 0);
+  CHECK(!g.result.completed);
+  CHECK(g.body.empty());
+  CHECK_EQ(TlsRequests("tls11", "/blob"), std::size_t{0});
 }
 
 TEST(AnUnreachablePortIsATransportFailure) {
@@ -258,12 +408,13 @@ int main(int argc, char** argv) {
     out.write(zip.data(), static_cast<std::streamsize>(zip.size()));
     return out ? 0 : 1;
   }
-  if (argc != 4) {
-    std::fprintf(stderr, "usage: curl_transport_test write-zip <path> | <port> <request-log> <trust-pem>\n");
+  if (argc != 5) {
+    std::fprintf(stderr, "usage: curl_transport_test write-zip <path> | <port> <request-log> <trust-pem> <tls-dir>\n");
     return 2;
   }
   g_port = std::atoi(argv[1]);
   g_log_path = argv[2];
+  g_tls_dir = argv[4];
   {
     std::ifstream pem(argv[3]);
     std::stringstream ss;
