@@ -224,6 +224,56 @@ TEST(TheProductionRootTableMatchesItsPins) {
   ERR_clear_error();
 }
 
+// The exact set, by name and the DER sha256 of each certificate, taken from the CAs' own pages (ISRG:
+// letsencrypt.org/certs, Google: pki.goog/repo/certs, SSL.com: ssl.com/repository), not from this table. The
+// self-check above only proves each pin matches its own PEM; this is what pins WHICH roots are there. Removing GTS
+// Root R4 (the root the data host chains to today) or swapping one for another, or adding one, fails here.
+TEST(TheProductionRootTableIsExactlyTheExpectedSet) {
+  struct Expected {
+    const char* name;
+    const char* sha256;
+  };
+  const Expected want[] = {
+      {"ISRG Root X1", "96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6"},
+      {"ISRG Root X2", "69729b8e15a86efc177a57afb7171dfc64add28c2fca8cf1507e34453ccb1470"},
+      {"ISRG Root YE", "e14ffcad5b0025731006caa43a121a22d8e9700f4fb9cf852f02a708aa5d5666"},
+      {"ISRG Root YR", "e57b7e6f150c419102e8d5c055729ff967b9d1a829bf00cec89ca604ebf4a86f"},
+      {"GTS Root R1", "d947432abde7b7fa90fc2e6b59101b1280e0e1c7e4e40fa3c6887fff57a7f4cf"},
+      {"GTS Root R2", "8d25cd97229dbf70356bda4eb3cc734031e24cf00fafcfd32dc76eb5841c7ea8"},
+      {"GTS Root R3", "34d8a73ee208d9bcdb0d956520934b4e40e69482596e8b6f73c8426b010a6f48"},
+      {"GTS Root R4", "349dfa4058c5e263123b398ae795573c4e1313c83fe68f93556cd5e8031b3c7d"},
+      {"SSL.com TLS ECC Root CA 2022", "c32ffd9f46f936d16c3673990959434b9ad60aafbb9e7cf33654f144cc1ba143"},
+      {"SSL.com TLS RSA Root CA 2022", "8faf7d2e2cb4709bb8e0b33666bf75a5dd45b5de480f8ea8d4bfe6bebc17f2ed"},
+  };
+  const std::size_t n = sizeof(want) / sizeof(want[0]);
+  CHECK_EQ(kDataHostRootCount, n);  // no extra, none missing
+  for (std::size_t i = 0; i < kDataHostRootCount; ++i) {
+    std::size_t found = 0;
+    for (std::size_t j = 0; j < n; ++j) {
+      if (std::string(kDataHostRoots[i].name) == want[j].name) {
+        ++found;
+        CHECK_EQ(std::string(kDataHostRoots[i].sha256), std::string(want[j].sha256));
+      }
+    }
+    CHECK_EQ(found, std::size_t{1});  // named once, and expected
+  }
+  // The pin is the digest of the certificate in the blob, so the blob is the expected certificate (CheckDataHostRoots
+  // proves pin == blob), and the same certificate is not in the table twice under two names.
+  for (std::size_t i = 0; i < kDataHostRootCount; ++i) {
+    for (std::size_t j = i + 1; j < kDataHostRootCount; ++j) CHECK(std::string(kDataHostRoots[i].sha256) != kDataHostRoots[j].sha256);
+  }
+}
+
+TEST(GtsRootR4TheRootTheDataHostChainsToTodayIsInTheTable) {
+  bool present = false;
+  for (std::size_t i = 0; i < kDataHostRootCount; ++i) {
+    present = present || std::string(kDataHostRoots[i].sha256) ==
+                             "349dfa4058c5e263123b398ae795573c4e1313c83fe68f93556cd5e8031b3c7d";
+  }
+  CHECK(present);
+  CHECK(DataHostRootsPem().find(kDataHostRoots[0].pem) != std::string::npos);  // and the blob handed to curl holds the table
+}
+
 TEST(AMangledRootTableFailsTheSelfCheck) {
   // One flipped base64 character in a certificate: the pin no longer matches (or the blob no longer parses).
   std::string pem = kDataHostRoots[0].pem;
@@ -360,6 +410,9 @@ TEST(ATransferUnderTheMinimumRateIsCutEvenWhenItNeverStops) {
   CHECK(g2.result.interrupted);  // only the caller's own stop ended it
 }
 
+// The TLS 1.2 floor (CURLOPT_SSLVERSION in curl_transport.cpp) is not observable here: with this host's curl and
+// OpenSSL the TLS 1.1 refusal below comes from their own defaults, and removing the line leaves this test passing.
+// The line stays as the stated floor; this test checks the refusal, not the line.
 TEST(ATlsOneOneServerIsRefused) {
   CurlTransport t = TestCa();
   const Got g = Get(t, TlsUrl("tls11", "/blob"), 0);
