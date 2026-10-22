@@ -328,15 +328,19 @@ scenario NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml" {{ARGS}}
+
+# The scheduled smoke: one client boot proving the three things every scenario assumes (in game,
+# control endpoint listening, a fire drives the game), with a non-zero record and an alarm on
+# failure. The user timer runs tools/scenario/smoke.sh from its own main-tracking worktree.
+smoke *ARGS:
+    tools/scenario/smoke.sh {{ARGS}}
 
 # ARGS pass to run_all.py: --config <dir>/config.json runs the suite with that directory's config.yaml.
 scenario-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     just preset=mingw-scenario build
-    cmake --build --preset mingw-scenario
     python3 tools/scenario/run_all.py {{ARGS}}
 
 # Run plugin ground truth tests (no game binary needed)
