@@ -3,8 +3,10 @@
  * Scope: the one zip the sentinel fetches, a non-encrypted, single-disk archive of stored and deflated entries with a
  * central directory. Anything else is refused by name and writes nothing: zip64, encrypted or multi-disk archives, other
  * methods, symbolic links, an entry path that could leave the destination, a file that is also a directory, and sizes
- * over the caller's limits. The central directory is the authority for sizes, offsets and CRCs; every local header is
- * checked against it, every deflated entry must end exactly at its recorded size with the recorded CRC-32.
+ * over the caller's limits. The central directory is the authority for sizes, offsets and CRCs. The local header of
+ * every file entry is checked against it: signature, name, method and flags, and (unless the entry uses a data
+ * descriptor) CRC and both sizes. The header of a directory entry is never read. Names that differ only in ASCII case
+ * are refused as duplicates. Every entry must end exactly at its recorded size with the recorded CRC-32.
  *
  * ExtractZip writes only below `dest_dir`, which it creates (it must not exist). It stops at the first failure and
  * leaves what it wrote: the caller owns the directory and deletes it (staging.h).
@@ -70,6 +72,10 @@ bool SafeEntryName(const std::string& name) noexcept;
 // Reads the central directory of the archive at `path`. `detail` (when not null) gets the entry or field at fault.
 ZipStatus ReadZipListing(const std::string& path, const ZipLimits& limits, std::vector<ZipEntry>* entries,
                          std::string* detail);
+
+// mkdir -p below `base` for the relative directory `rel` (no leading or trailing '/'). A component that exists and is
+// not a real directory (a link, a file) fails the call; a link is never followed. Exposed for the tests.
+bool MakeDirsBelow(const std::string& base, const std::string& rel);
 
 // Extracts every entry, with `strip_prefix` (e.g. "_data/") removed from its name, below `dest_dir`. An entry that does not
 // start with the prefix is refused. Returns the sum of the bytes written through `bytes_written` (when not null).

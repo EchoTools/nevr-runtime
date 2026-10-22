@@ -74,12 +74,27 @@ bool WriteAll(int fd, const void* buffer, std::size_t length) {
   return true;
 }
 
+// The detail reaches a log line: a control byte in an entry name (the name is untrusted) becomes '?'.
 void SetDetail(std::string* detail, const std::string& text) {
-  if (detail != nullptr) *detail = text;
+  if (detail == nullptr) return;
+  *detail = text;
+  for (char& c : *detail) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u < 0x20 || u == 0x7f) c = '?';
+  }
 }
 
-// mkdir -p below `base` for the already validated relative directory `rel` (no leading or trailing '/').
-bool MakeDirs(const std::string& base, const std::string& rel) {
+// Names that differ only in ASCII case are the same name on a case-insensitive filesystem.
+std::string FoldCase(std::string name) {
+  for (char& c : name) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  return name;
+}
+
+}  // namespace
+
+bool MakeDirsBelow(const std::string& base, const std::string& rel) {
   std::string path = base;
   std::size_t start = 0;
   while (start <= rel.size() && !rel.empty()) {
@@ -94,6 +109,8 @@ bool MakeDirs(const std::string& base, const std::string& rel) {
   }
   return true;
 }
+
+namespace {
 
 std::string StripSlash(const std::string& name) {
   return (!name.empty() && name.back() == '/') ? name.substr(0, name.size() - 1) : name;
@@ -243,7 +260,7 @@ ZipStatus ReadZipListing(const std::string& path, const ZipLimits& limits, std::
       SetDetail(detail, e.name);
       return ZipStatus::kOffsetOutOfRange;
     }
-    if (!names.insert(StripSlash(e.name)).second) {
+    if (!names.insert(FoldCase(StripSlash(e.name))).second) {
       SetDetail(detail, e.name);
       return ZipStatus::kConflict;
     }
@@ -253,7 +270,7 @@ ZipStatus ReadZipListing(const std::string& path, const ZipLimits& limits, std::
   // A file that is also a directory of another entry.
   for (const ZipEntry& e : *entries) {
     if (e.IsDirectory()) continue;
-    const std::string prefix = e.name + "/";
+    const std::string prefix = FoldCase(e.name) + "/";
     const auto it = names.lower_bound(prefix);
     if (it != names.end() && it->compare(0, prefix.size(), prefix) == 0) {
       SetDetail(detail, e.name);
@@ -264,6 +281,19 @@ ZipStatus ReadZipListing(const std::string& path, const ZipLimits& limits, std::
 }
 
 namespace {
+
+// The local header agrees with the central directory: the same name and method, no encryption flag, and, when the entry
+// has no data descriptor (flag bit 3), the same CRC and sizes.
+bool LocalHeaderMatches(int zip_fd, const ZipEntry& e, const unsigned char* local) {
+  const std::uint16_t flags = Rd16(local + 6), method = Rd16(local + 8), name_len = Rd16(local + 26);
+  if (method != e.method || (flags & (0x1 | 0x40 | 0x2000)) != 0) return false;
+  if ((flags & 0x8) == 0 && (Rd32(local + 14) != e.crc32 || Rd32(local + 18) != e.compressed_size ||
+                             Rd32(local + 22) != e.size)) {
+    return false;
+  }
+  std::string name(name_len, '\0');
+  return PreadAll(zip_fd, name.data(), name.size(), e.local_header_offset + kLocalFixed) && name == e.name;
+}
 
 // Writes one entry's data to `out_fd`: copies a stored entry or inflates a deflated one, enforcing the sizes and CRC the
 // central directory recorded.
@@ -355,14 +385,14 @@ ZipStatus ExtractZip(const std::string& zip_path, const std::string& dest_dir, c
     const std::string rel = StripSlash(e.name.substr(strip_prefix.size()));
     if (rel.empty()) continue;  // the prefix directory itself is dest_dir
     if (e.IsDirectory()) {
-      if (!MakeDirs(dest_dir, rel)) {
+      if (!MakeDirsBelow(dest_dir, rel)) {
         SetDetail(detail, e.name);
         return ZipStatus::kWriteFailed;
       }
       continue;
     }
     const std::size_t slash = rel.rfind('/');
-    if (slash != std::string::npos && !MakeDirs(dest_dir, rel.substr(0, slash))) {
+    if (slash != std::string::npos && !MakeDirsBelow(dest_dir, rel.substr(0, slash))) {
       SetDetail(detail, e.name);
       return ZipStatus::kWriteFailed;
     }
@@ -371,7 +401,7 @@ ZipStatus ExtractZip(const std::string& zip_path, const std::string& dest_dir, c
       SetDetail(detail, e.name);
       return ZipStatus::kBadLocalHeader;
     }
-    if (Rd16(local + 8) != e.method) {
+    if (!LocalHeaderMatches(zip.get(), e, local)) {
       SetDetail(detail, e.name);
       return ZipStatus::kBadLocalHeader;
     }
