@@ -257,23 +257,56 @@ void ABlockProbeIsCapped() {
   QCHECK(std::count(g_log.begin(), g_log.end(), std::string("sleep:1000")) == 900);
 }
 
-void ADeniedGrantRunsNoDataStepAndEndsNonzeroWithTheHowToMessage() {
+// Without the grant the media root (the app's own directory, no permission needed) is still used; the legacy root is not.
+void ADeniedGrantStillUsesDataThatIsInTheMediaRoot() {
   Rig rig;
   const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};  // even with data there, nothing is read
-  rig.options.probe_enabled = true;
-  WriteFile(rig.options.probe_path, "toast must not run\n");
+  g_present = {media, media + "/_data", media + "/" + kManifestRel};
   rig.BootRequest(&DeniedCheck);
   QCHECK(g_requests == 1);  // the game's own call still ran
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+}
+
+void ADeniedGrantFetchesIntoTheMediaRootAndSucceeds() {
+  Rig rig;
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(rig.net.calls == 1);
+  QCHECK(Exists(rig.options.fetch_root_override + "/" + kManifestRel));
+  QCHECK(g_ends == 0);
+  QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kDownloadNotice);  // no Storage message
+}
+
+void ADeniedGrantNeverReadsTheLegacyRoot() {
+  Rig rig;
+  const std::string legacy = nevr_quest::data_root::kLegacyRoot;
+  g_present = {legacy, legacy + "/_data", legacy + "/" + kManifestRel};  // data is in the legacy root only
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(rig.net.calls == 1);  // not "use": the legacy root is skipped, so the media root has none and it fetches
+  // With the grant the same filesystem is used as it stands.
+  Rig granted;
+  g_present = {legacy, legacy + "/_data", legacy + "/" + kManifestRel};
+  granted.BootRequest();
+  QCHECK(granted.net.calls == 0 && g_ends == 0);
+}
+
+void ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero() {
+  Rig rig;
+  WriteFile(rig.scratch.Path("afile"), "x");
+  rig.options.fetch_root_override = rig.scratch.Path("afile/root");  // under a file: the root cannot be made, bad_root
+  rig.BootRequest(&DeniedCheck);
   QCHECK(rig.net.calls == 0);
   QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
-  QCHECK(!g_shown.empty());
-  for (const std::string& m : g_shown) {
-    QCHECK(m == nevr_quest::data::kNeedsStoragePermission);
-    QCHECK(m.find("Storage") != std::string::npos && m.find("Settings") != std::string::npos);
-  }
-  QCHECK(Exists(rig.options.probe_path));  // the probe did not run either
-  QCHECK(!Exists(rig.options.fetch_root_override + "/" + kManifestRel));
+  QCHECK(!g_shown.empty() && g_shown.back() == nevr_quest::data::kNeedsStoragePermission);
+  QCHECK(g_shown.back().find("Storage") != std::string::npos && g_shown.back().find("Settings") != std::string::npos);
+}
+
+void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
+  Rig rig;
+  WriteFile(rig.scratch.Path("afile"), "x");
+  rig.options.fetch_root_override = rig.scratch.Path("afile/root");
+  rig.BootRequest();  // granted
+  QCHECK(g_ends == 1 && g_exit_reason == "data_step_failed");
+  for (const std::string& m : g_shown) QCHECK(m != nevr_quest::data::kNeedsStoragePermission);
 }
 
 void TheProbeIsNotReadInAShippedBuild() {
@@ -287,22 +320,16 @@ void TheProbeIsNotReadInAShippedBuild() {
   QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
 }
 
-void TheGamesDestroyRequestEndsTheDownload() {
-  {
-    Rig rig;
-    g_have_app = true;
-    rig.BootRequest();
-    QCHECK(rig.net.calls == 1 && rig.net.keep_going_seen);  // a live game keeps the download going
-  }
-  {
-    Rig rig;
-    g_have_app = true;
-    SetDestroyRequested(1);  // android_app::destroyRequested
-    rig.BootRequest();
-    QCHECK(rig.net.calls == 0);  // the fetch asks keep_going before every request and does not make one
-    QCHECK(g_ends == 1);
-    QCHECK(!Exists(rig.options.fetch_root_override + "/" + kManifestRel));
-  }
+// The probe reads shared storage's neighbour: it waits for the grant like the legacy root does.
+void TheProbeIsNotReadWithoutTheGrant() {
+  Rig rig;
+  const std::string media = nevr_quest::data_root::kMediaRoot;
+  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  rig.options.probe_enabled = true;
+  WriteFile(rig.options.probe_path, "toast probe text 1\n");
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_shown.empty());
+  QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
 }
 
 void TheRetryWaitUsesTheFetchsDefaultBackoffInSlices() {
@@ -329,9 +356,13 @@ int main() {
   AToastProbeShowsItsTextOnceAndIsConsumed();
   ABlockProbeHoldsTheThreadForItsSeconds();
   ABlockProbeIsCapped();
-  ADeniedGrantRunsNoDataStepAndEndsNonzeroWithTheHowToMessage();
+  ADeniedGrantStillUsesDataThatIsInTheMediaRoot();
+  ADeniedGrantFetchesIntoTheMediaRootAndSucceeds();
+  ADeniedGrantNeverReadsTheLegacyRoot();
+  ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
+  AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheProbeIsNotReadInAShippedBuild();
-  TheGamesDestroyRequestEndsTheDownload();
+  TheProbeIsNotReadWithoutTheGrant();
   TheRetryWaitUsesTheFetchsDefaultBackoffInSlices();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "data_wiring_test: %d check(s) failed\n", quest_test::Failures());

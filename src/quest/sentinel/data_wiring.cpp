@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "android_glue_layout.h"
 #include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
@@ -146,36 +145,19 @@ void HoldMessage(const std::string& message) noexcept {
   Sleep(Opts().hold_ms);
 }
 
-// The player has not allowed Storage: nothing is read, fetched or replaced; the message says how to allow it.
-void StopWithoutGrant(permission_wait::StorageOutcome outcome) noexcept {
-  const char* const why = permission_wait::StorageOutcomeName(outcome);
-  sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
-                      {{"outcome", "no_storage_grant"}, {"storage", why}, {"message", data::kNeedsStoragePermission}});
-  Present(data::kNeedsStoragePermission, "floor");
-  HoldMessage(data::kNeedsStoragePermission);
-  EndFailed("no_storage_grant");
-}
-
-// True while the game has not asked its activity to finish (android_app::destroyRequested).
-bool NotDestroyed() noexcept {
-  void* const app = CurrentApp();
-  return app == nullptr || sentinel::glue::ReadInt(app, sentinel::glue::kAppDestroyRequested) == 0;
-}
-
 }  // namespace
 
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "data_step_start",
                       {{"storage", permission_wait::StorageOutcomeName(outcome)}});
-  // No grant, no data step: nothing below touches shared storage without it.
-  if (!permission_wait::StorageGranted(outcome)) {
-    StopWithoutGrant(outcome);
-    return;
-  }
-  if (Opts().probe_enabled) RunProbe();
+  // The media root (Android/media/<package>) is the app's own directory and needs no permission; the legacy root
+  // does. Without the grant the step still runs, on the media root alone, and says it skipped the legacy root.
+  const bool granted = permission_wait::StorageGranted(outcome);
+  if (granted && Opts().probe_enabled) RunProbe();
 
   data::StepConfig config;
   config.exists = Opts().exists != nullptr ? Opts().exists : &obb_skip::DirectoryExists;
+  config.legacy_root_readable = granted;
   config.build_id = sentinel::pinned::kLibR15BuildId;
   config.fetch_root_override = Opts().fetch_root_override;
   config.recovery_roots = Opts().recovery_roots;
@@ -187,9 +169,9 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
     config.fetch.max_attempts = 2;
   }
   // No caller backoff: the fetch's own default applies (2, 4, 8, 16, then 30 s), slept through Sleep so a test can see
-  // it. A player who leaves the game ends the download (keep_going) and every wait of the backoff.
+  // it. There is no cancel: this thread is android_main's and nothing reads the glue's destroy command while it
+  // blocks here, so a player who quits ends the process (by the system) and the marked part stays for the next launch.
   config.fetch.sleep_ms = [](unsigned ms) { Sleep(ms); };
-  config.fetch.keep_going = [] { return NotDestroyed(); };
   config.fetch.on_event = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   config.on_step = [](const data::Event& e) { LogEventFields(sentinel::LogLevel::kInfo, e); };
   std::string lastMessage;
@@ -218,6 +200,17 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
                        {"status", data::FetchStatusName(result.status)},
                        {"message", result.message.c_str()}});
   if (result.outcome == data::StepOutcome::kFetched) obb_skip::ResolveRoot(config.exists);
+  if (failed && !granted && result.status == data::FetchStatus::kBadRoot) {
+    // The media root cannot be written and there is no permission: the legacy root is the only place the data could
+    // be, so the message says how to allow Storage.
+    sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
+                        {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},
+                         {"message", data::kNeedsStoragePermission}});
+    Present(data::kNeedsStoragePermission, "floor");
+    HoldMessage(data::kNeedsStoragePermission);
+    EndFailed("no_storage_grant");
+    return;
+  }
   if (failed) EndFailed("data_step_failed");
 }
 

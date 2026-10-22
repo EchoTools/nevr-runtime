@@ -45,15 +45,20 @@ std::string BuildFloorMessage(const FloorInfo& info);
 inline constexpr const char* kDownloadNotice =
     "Downloading Echo VR game data, about 900 MB, this can take a few minutes.";
 
-// Shown instead of a data step when the storage permission was not granted: nothing is read, fetched or replaced.
+// Shown when the storage permission was not granted and the media root could not be written either: the legacy root,
+// which needs the permission, is then the only place the data could be.
 inline constexpr const char* kNeedsStoragePermission =
     "Echo VR needs the Storage permission to set up its game data. Open the headset's Settings, find Echo VR under "
     "Apps, allow Storage (Files and media), then start the game again.";
 
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
+  // The legacy root (/storage/emulated/0/readyatdawn) is read only with the storage permission; the media root
+  // (Android/media/<package>, the app's own directory) needs none. False: the legacy root is neither recovered nor
+  // looked at, the decision is made on the media root alone, and one `data_legacy_skipped` event says so.
+  bool legacy_root_readable = true;
   // The roots whose leftovers of an interrupted install are put right before anything is decided (RecoverReplaced,
-  // then CleanLeftovers, on each). Empty: every data-root candidate (data_root.h), the media root and the legacy root.
+  // then CleanLeftovers, on each). Empty: every data-root candidate (data_root.h) the config may read.
   std::vector<std::string> recovery_roots;
   FetchConfig fetch;                      // root and replacing are set by the step
   std::string build_id;
@@ -65,6 +70,10 @@ struct StepConfig {
   std::function<void()> hold;                                // after the message, so it can be read; null: none
   std::function<void(const Event&)> on_step;                // data_check; null: none
 };
+
+// The roots the leftovers are put right on: `recovery_roots`, or every candidate when it is empty, without the legacy
+// root when the config may not read it.
+std::vector<std::string> RecoveryRootsFor(const StepConfig& config);
 
 struct StepResult {
   StepOutcome outcome = StepOutcome::kUsed;

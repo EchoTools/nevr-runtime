@@ -3,19 +3,25 @@
  * The permission-wait hook (permission_wait_hook.h) calls AfterStorage on the game's thread, after the boot request's
  * wait and before RequestPermissions returns to the game, so the data is in place before CncaGame::Initialize reads its
  * manifests. AfterStorage is told how the wait ended (permission_wait.h, StorageOutcome):
- *   - Storage not granted (a denial, a timeout, no check, no storage permission in the request): nothing is read,
- *     fetched or replaced. The message data::kNeedsStoragePermission says how to allow it, is held, a `data_step` Error
- *     line (outcome=no_storage_grant) records it, and the process ends nonzero;
- *   - Storage granted: data::RunDataStep runs over the real data roots with the pinned CurlTransport. First it puts
- *     the leftovers of an interrupted install right on both roots (RecoverReplaced, then CleanLeftovers), then:
- *   - data already there (any of the three data-root outcomes): nothing is fetched, one `data_step` line says so;
+ *   - data::RunDataStep runs over the data roots with the pinned CurlTransport. The media root
+ *     (Android/media/<package>, the app's own directory) needs no storage permission; the legacy root does. With the
+ *     grant both roots are used. Without it (a denial, a timeout, no check, no storage permission in the request) the
+ *     legacy root is neither recovered nor read, the decision is made on the media root alone and one
+ *     `data_legacy_skipped` line says so; a failure to write the media root then ends with the message
+ *     data::kNeedsStoragePermission (how to allow Storage), `data_step outcome=no_storage_grant`, and a nonzero exit.
+ *     First the step puts the leftovers of an interrupted install right on the roots it may use (RecoverReplaced, then
+ *     CleanLeftovers), then:
+ *   - data already there (any of the three data-root outcomes): nothing is fetched, one `data_step` line says so,
+ *     and a whole `_data.zip.part` of ours left beside it is removed;
  *   - data missing or of another build: the fetch runs; on success obb_skip::ResolveRoot picks the root again so the
  *     game is served the new data;
  *   - the fetch fails: the visible message (toast_presenter.h) is shown and held ten seconds, a `data_step` Error line
  *     records it, and the process ends with a nonzero code after the `android_main_returned` line and the before-exit
  *     report (process_end::EndWithExitCode) instead of letting the game fail its own load.
- * The download ends when the game asks its activity to finish (android_app::destroyRequested, read each progress
- * callback and between the backoff's slices), and a transfer under kMinBytesPerSecond for kStallSeconds fails.
+ * There is no cancel. The step blocks android_main's thread, the only thread that reads the glue's destroy command
+ * (android_app::destroyRequested is written by android_main's own looper poll), so nothing can end the download from
+ * inside. A player who quits ends the process by the system; the marked `_data.zip.part` stays, and the next launch
+ * resumes from its size. A transfer under kMinBytesPerSecond for kStallSeconds fails as a network failure.
  * The android_main thread blocks for the whole step. Whether Android tolerates that for the length of a download is
  * ADR 0011 measurement 2; `data_probe` below is how the headset run measures it.
  *
@@ -76,8 +82,8 @@ struct Options {
 // RequestPermissions never reaches it).
 bool Install(const Options& options) noexcept;
 
-// The step itself, for the host test. `outcome` is how the permission wait ended: without a grant the step does
-// nothing but tell the player how to allow Storage, and the process ends with a nonzero code.
+// The step itself, for the host test. `outcome` is how the permission wait ended: without a grant the legacy root is
+// skipped (see above).
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept;
 
 // The download's bounds. A transfer that moves less than kMinBytesPerSecond for kStallSeconds ends as a transport

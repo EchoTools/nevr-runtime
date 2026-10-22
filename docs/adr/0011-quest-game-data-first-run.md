@@ -142,17 +142,28 @@ refreshed).
 
 ## Behaviour of the data step as wired (#807)
 
-- **No grant, no data step.** The step runs after the boot permission wait, and only when the wait ended with Storage granted (or
-  already granted). A denial, a timeout, a missing check, or a request without a storage permission reads, fetches and replaces
-  nothing: the message says Echo VR needs the Storage permission and how to allow it (Settings, Echo VR under Apps, Storage), it
-  is held, and the process ends nonzero with reason `no_storage_grant`.
-- **Leftovers first, on both roots.** Before anything is decided, `RecoverReplaced` and then `CleanLeftovers` run on the media
-  root and on the legacy root, so a replace that crashed between its two renames is put back and its staging leftover removed
-  whichever root the decision then picks.
+- **The media root needs no permission; only the legacy root does.** The step waits (bounded) for the boot permission wait to
+  end. With Storage granted both roots are used. Without it (a denial, a timeout, a missing check, a request without a storage
+  permission) the legacy root (`/storage/emulated/0/readyatdawn`) is neither recovered nor read, one `data_legacy_skipped` line
+  (`reason=no_storage_permission`) says so, and the decision is made on the media root alone
+  (`/sdcard/Android/media/com.readyatdawn.r15/files`): data there is used, none there is fetched there. The "needs Storage"
+  message (Settings, Echo VR under Apps, Storage) is shown only when the media root cannot be written and there is no grant,
+  that is, when the legacy root is the only place the data could be; the message is held and the process ends nonzero with
+  reason `no_storage_grant`.
+- **Leftovers first, on the roots the step may use.** Before anything is decided, `RecoverReplaced` and then `CleanLeftovers`
+  run on the media root and, with the grant, on the legacy root, so a replace that crashed between its two renames is put back
+  and its staging leftover removed whichever root the decision then picks.
+- **A whole `_data.zip.part` of ours beside data in use is removed** when it carries our marker; an unmarked one is left.
 - **The download notice** is shown after the space check, so a step that cannot download never announces one.
-- **Cancel and time.** The download ends when the game asks its activity to finish (`android_app::destroyRequested`), including
-  during the backoff wait. A transfer under 16 KiB/s for 120 s fails as a network failure and is retried from the part's size with
-  the fetch's default backoff.
+- **Cancel is the end of the process.** The step runs on android_main's thread, the only thread that reads the glue's destroy
+  command (`android_app::destroyRequested`, +0x64, written by android_main's own looper poll), so nothing can see it while the
+  step blocks. A player who quits mid-download has the process ended by the system; the marked `_data.zip.part` stays and the
+  next launch resumes from its size (measurement 5 measures it). A transfer under 16 KiB/s for 120 s fails as a network failure
+  and is retried from the part's size with the fetch's default backoff.
+- **Plan, decided by measurements 1 and 2 (not built).** If a headset shows that blocking android_main shows no toast, or ends in
+  "not responding", the step moves to a worker thread while android_main pumps its looper (polls the glue's source and sleeps
+  on it). That gives the toast a running looper, avoids the ANR, and lets `destroyRequested` be read, so a real cancel becomes
+  possible. Until the measurements say so, nothing of it is built.
 - **A failure ends the process nonzero** (exit code 1) after the `android_main_returned` line and the before-exit report; the
   floor message is held ten seconds (two holds of five, with the message shown again between).
 - **The probe** (`nevr-data-probe`) is read only in a development build (`-dev.` in the version).

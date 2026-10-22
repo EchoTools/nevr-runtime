@@ -67,11 +67,7 @@ namespace {
 // whether `_data` is there, so these are put right first, on every root the decision could pick (staging.h: run
 // RecoverReplaced before CleanLeftovers and before the data decision).
 void PutLeftoversRight(const StepConfig& config) {
-  std::vector<std::string> roots = config.recovery_roots;
-  if (roots.empty()) {
-    for (const data_root::Candidate& c : data_root::kCandidates) roots.push_back(c.root);
-  }
-  for (const std::string& root : roots) {
+  for (const std::string& root : RecoveryRootsFor(config)) {
     std::string restored_from;
     const bool recovered = RecoverReplaced(root, &restored_from);
     int failed = 0;
@@ -86,12 +82,46 @@ void PutLeftoversRight(const StepConfig& config) {
   }
 }
 
+// The media root alone: where Resolve lands when the legacy root may not be read.
+data_root::Resolution ResolveMediaOnly(data_root::ExistsFn exists) noexcept {
+  if (data_root::HoldsData(data_root::kMediaRoot, exists)) return {data_root::kMediaRoot, "android_media", true};
+  if (exists(data_root::kMediaRoot)) return {data_root::kMediaRoot, "android_media_unmarked", true};
+  return {data_root::kMediaRoot, "none", false};
+}
+
+// A whole download left beside data that is in use is ours to remove, when it carries our marker: nothing will resume it.
+void RemoveUsedPart(const StepConfig& config, const std::string& root) {
+  const std::string part = root + "/" + kPartName;
+  if (!IsOwned(part)) return;
+  const bool removed = RemoveTree(part) && RemoveTree(OwnerMarkerPath(part));
+  if (config.on_step) config.on_step({"data_cleanup", {{"part", part}, {"removed", removed ? "true" : "false"}}});
+}
+
 }  // namespace
+
+std::vector<std::string> RecoveryRootsFor(const StepConfig& config) {
+  std::vector<std::string> roots = config.recovery_roots;
+  if (roots.empty()) {
+    for (const data_root::Candidate& c : data_root::kCandidates) roots.push_back(c.root);
+  }
+  if (!config.legacy_root_readable) {
+    std::vector<std::string> allowed;
+    for (const std::string& root : roots) {
+      if (root != data_root::kLegacyRoot) allowed.push_back(root);
+    }
+    roots.swap(allowed);
+  }
+  return roots;
+}
 
 StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   StepResult result;
+  if (!config.legacy_root_readable && config.on_step) {
+    config.on_step({"data_legacy_skipped", {{"root", data_root::kLegacyRoot}, {"reason", "no_storage_permission"}}});
+  }
   PutLeftoversRight(config);
-  const data_root::Resolution resolution = data_root::Resolve(config.exists);
+  const data_root::Resolution resolution =
+      config.legacy_root_readable ? data_root::Resolve(config.exists) : ResolveMediaOnly(config.exists);
   const Decision decision = Decide(resolution, config.exists);
   result.action = decision.action;
   result.root = decision.root;
@@ -100,6 +130,7 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
                     {{"action", ActionName(decision.action)}, {"source", decision.source}, {"root", decision.root}}});
   }
   if (decision.action == DataAction::kUse) {
+    RemoveUsedPart(config, config.fetch_root_override.empty() ? std::string(decision.root) : config.fetch_root_override);
     result.outcome = StepOutcome::kUsed;
     return result;
   }

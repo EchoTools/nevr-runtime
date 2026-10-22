@@ -210,6 +210,7 @@ TEST(NoSpaceNamesTheFreeAndNeededMiB) {
   CHECK_EQ(net.calls, 0);
   CHECK(Contains(r.message, "300 MiB free"));
   CHECK(Contains(r.message, "601 MiB needed"));  // (zip + 1000 bytes) rounded up
+  CHECK(Contains(r.message, rig.Root() + "/_data"));  // the path, as in every other failure
   // The download notice comes after the space check, so a step that cannot download never announces one.
   CHECK(std::find(rig.order.begin(), rig.order.end(), std::string("announce")) == rig.order.end());
 }
@@ -224,6 +225,7 @@ TEST(ATamperedZipIsRefusedAndNothingIsPlaced) {
   CHECK_EQ(r.status, FetchStatus::kRetriesExhausted);
   CHECK(!Exists(rig.Root() + "/_data"));
   CHECK(Contains(r.message, "The download failed"));
+  CHECK(Contains(r.message, rig.Root() + "/_data"));
   CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
 }
 
@@ -326,6 +328,106 @@ TEST(AMediaReplaceThatCrashedIsRecoveredWhileTheLegacyRootHoldsData) {
   bool recovered_event = false;
   for (const std::string& e : rig.events) recovered_event = recovered_event || e.rfind("data_recover ", 0) == 0;
   CHECK(recovered_event);
+}
+
+// ---- the legacy root is read only with the storage permission ----
+
+TEST(WithoutTheGrantTheLegacyRootIsNotReadAndTheMediaRootDecides) {
+  Rig rig;
+  g_media_dir = rig.scratch.Path("media");
+  g_legacy_dir = rig.scratch.Path("legacy");
+  ::mkdir(g_media_dir.c_str(), 0755);
+  ::mkdir(g_legacy_dir.c_str(), 0755);
+  ::mkdir((g_legacy_dir + "/_data").c_str(), 0755);
+  MakeTree(g_legacy_dir, kManifestRel, "manifest");  // this build's data, in the legacy root only
+  rig.config.exists = &MappedExists;
+  rig.config.recovery_roots = {g_media_dir};
+  {
+    rig.config.legacy_root_readable = true;
+    OneShotTransport net(rig.zip, true);
+    const StepResult r = RunDataStep(rig.config, net);
+    CHECK_EQ(r.outcome, StepOutcome::kUsed);  // with the grant: used
+    CHECK_EQ(net.calls, 0);
+  }
+  Rig denied;
+  g_media_dir = denied.scratch.Path("media");
+  g_legacy_dir = denied.scratch.Path("legacy");
+  ::mkdir(g_media_dir.c_str(), 0755);
+  ::mkdir(g_legacy_dir.c_str(), 0755);
+  ::mkdir((g_legacy_dir + "/_data").c_str(), 0755);
+  MakeTree(g_legacy_dir, kManifestRel, "manifest");
+  denied.config.exists = &MappedExists;
+  denied.config.recovery_roots = {g_media_dir};
+  denied.config.legacy_root_readable = false;
+  OneShotTransport net(denied.zip, true);
+  const StepResult r = RunDataStep(denied.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kFetched);  // without it: the legacy data is not seen, the media root fetches
+  bool skipped = false;
+  for (const std::string& e : denied.events) skipped = skipped || e.rfind("data_legacy_skipped ", 0) == 0;
+  CHECK(skipped);
+}
+
+TEST(WithoutTheGrantDataInTheMediaRootIsUsed) {
+  Rig rig;
+  const std::string media_data = Media("_data");
+  rig.present = {Media(), media_data, Media(kManifestRel)};
+  rig.config.legacy_root_readable = false;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK_EQ(net.calls, 0);
+  CHECK(std::string(r.root) == nevr_quest::data_root::kMediaRoot);
+}
+
+TEST(WithTheGrantTheLegacyRootIsStillRead) {
+  Rig rig;
+  rig.present = {Legacy(), Legacy("_data"), Legacy(kManifestRel)};
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK(std::string(r.root) == nevr_quest::data_root::kLegacyRoot);
+}
+
+// The production default: with no list, every candidate the config may read; Y1 (skipping the default) fails here.
+TEST(TheRecoveryRootsDefaultToTheCandidatesTheConfigMayRead) {
+  StepConfig config;
+  std::vector<std::string> roots = RecoveryRootsFor(config);
+  CHECK_EQ(roots.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(roots[0], std::string(nevr_quest::data_root::kMediaRoot));
+  CHECK_EQ(roots[1], std::string(nevr_quest::data_root::kLegacyRoot));
+  config.legacy_root_readable = false;
+  roots = RecoveryRootsFor(config);
+  CHECK_EQ(roots.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(roots[0], std::string(nevr_quest::data_root::kMediaRoot));
+  config.recovery_roots = {nevr_quest::data_root::kLegacyRoot, "/b"};
+  CHECK_EQ(RecoveryRootsFor(config).size(), static_cast<std::size_t>(1));  // a caller's list is filtered too
+  config.legacy_root_readable = true;
+  CHECK_EQ(RecoveryRootsFor(config).size(), static_cast<std::size_t>(2));
+}
+
+// ---- a whole download left beside data in use ----
+
+TEST(AMarkedPartBesideDataInUseIsRemovedAndAnUnmarkedOneIsLeft) {
+  Rig rig;
+  rig.present = {Media(), Media("_data"), Media(kManifestRel)};
+  rig.config.fetch_root_override = rig.scratch.Path("root");
+  ::mkdir(rig.Root().c_str(), 0755);
+  const std::string part = rig.Root() + "/_data.zip.part";
+  WriteFile(part, "whole zip");
+  CHECK(MarkOwned(part));
+  OneShotTransport net(rig.zip, true);
+  RunDataStep(rig.config, net);
+  CHECK(!Exists(part));
+  CHECK(!Exists(part + ".nevr-owned"));
+
+  Rig other;
+  other.present = {Media(), Media("_data"), Media(kManifestRel)};
+  ::mkdir(other.Root().c_str(), 0755);
+  const std::string theirs = other.Root() + "/_data.zip.part";
+  WriteFile(theirs, "a player's file with our name");
+  OneShotTransport net2(other.zip, true);
+  RunDataStep(other.config, net2);
+  CHECK_EQ(ReadFile(theirs), std::string("a player's file with our name"));
 }
 
 TEST(TheDownloadNoticeIsGivenOnceAndAfterTheSpaceCheck) {

@@ -70,30 +70,31 @@ class TheStepOrder(unittest.TestCase):
         )
         self.assertNotIn("_exit(0)", end)
 
-    def test_no_grant_means_no_data_step_and_no_probe(self):
+    def test_no_grant_skips_the_legacy_root_and_the_probe_but_not_the_data_step(self):
         body = self.body()
-        gate = body.index("if (!permission_wait::StorageGranted(outcome))")
-        self.assertIn("StopWithoutGrant(outcome)", body[gate:])
-        self.assertLess(gate, body.index("RunProbe()"))
-        self.assertLess(gate, body.index("RunDataStep"))
-        stop = extract_braced_function(
-            read("data_wiring.cpp"), "void StopWithoutGrant(permission_wait::StorageOutcome outcome) noexcept {"
-        )
-        self.assertIn("kNeedsStoragePermission", stop)
-        self.assertIn('EndFailed("no_storage_grant")', stop)
+        self.assertIn("const bool granted = permission_wait::StorageGranted(outcome);", body)
+        self.assertIn("if (granted && Opts().probe_enabled) RunProbe();", body)
+        self.assertIn("config.legacy_root_readable = granted;", body)
+        self.assertLess(body.index("config.legacy_root_readable = granted;"), body.index("RunDataStep"))
+        # the how-to-allow-Storage message only when the media root could not be written and there is no grant
+        self.assertRegex(body, r"failed && !granted && result\.status == data::FetchStatus::kBadRoot")
+        gate = body.index("failed && !granted")
+        self.assertIn("kNeedsStoragePermission", body[gate:])
+        self.assertIn('EndFailed("no_storage_grant")', body[gate:])
+        self.assertNotIn("StopWithoutGrant", re.sub(r"//[^\n]*", "", read("data_wiring.cpp")))
 
     def test_the_probe_runs_only_in_a_development_build_and_after_the_gate(self):
         body = self.body()
-        self.assertRegex(body, r"if \(Opts\(\)\.probe_enabled\) RunProbe\(\);")
+        self.assertRegex(body, r"if \(granted && Opts\(\)\.probe_enabled\) RunProbe\(\);")
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
         self.assertIn("options.probe_enabled = nevr_build::kIsDev;", entry)
 
-    def test_the_download_ends_when_the_game_asks_its_activity_to_finish(self):
-        body = self.body()
-        self.assertIn("config.fetch.keep_going = [] { return NotDestroyed(); };", body)
-        self.assertNotIn("config.fetch.backoff", body)  # the fetch's default backoff applies
-        nd = extract_braced_function(read("data_wiring.cpp"), "bool NotDestroyed() noexcept {")
-        self.assertIn("sentinel::glue::kAppDestroyRequested", nd)
+    def test_there_is_no_cancel_while_the_step_blocks_android_main(self):
+        code = re.sub(r"//[^\n]*", "", read("data_wiring.cpp"))
+        self.assertNotIn("keep_going", code)
+        self.assertNotIn("NotDestroyed", code)
+        self.assertNotIn("kAppDestroyRequested", code)
+        self.assertNotIn("config.fetch.backoff", code)  # the fetch's default backoff applies
 
     def test_the_download_bounds(self):
         header = read("data_wiring.h")
@@ -128,7 +129,10 @@ class TheLeftoversArePutRightBeforeTheDecision(unittest.TestCase):
         text = data.read_text()
         put = extract_braced_function(text, "void PutLeftoversRight(const StepConfig& config) {")
         self.assertLess(put.index("RecoverReplaced("), put.index("CleanLeftovers("))
-        self.assertIn("data_root::kCandidates", put)
+        self.assertIn("RecoveryRootsFor(config)", put)
+        roots = extract_braced_function(text, "std::vector<std::string> RecoveryRootsFor(const StepConfig& config) {")
+        self.assertIn("data_root::kCandidates", roots)
+        self.assertIn("data_root::kLegacyRoot", roots)  # dropped without the grant
         run = extract_braced_function(text, "StepResult RunDataStep(const StepConfig& config, Transport& transport) {")
         self.assertLess(run.index("PutLeftoversRight(config)"), run.index("data_root::Resolve("))
 
