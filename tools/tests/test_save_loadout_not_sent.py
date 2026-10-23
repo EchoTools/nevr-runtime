@@ -8,7 +8,8 @@ GTest can drive it; these are source pins over its comment-stripped body, the wa
 
   - the handler builds no `game_server_save_loadout` envelope and calls no send;
   - nothing else in src/runtime builds one either;
-  - every save request logs one Info line saying it was not sent.
+  - every save request logs one Info line saying it was not sent;
+  - the smoke scorer's C12 row looks for that line, and for nothing the runtime no longer logs.
 """
 
 import re
@@ -60,6 +61,16 @@ class SaveLoadoutIsNotSent(unittest.TestCase):
         skip = body.index(SKIP_LINE)
         self.assertGreater(skip, body.index("slot.slot >= MAX_PLAYER_SLOTS"))
         self.assertLess(skip, body.index("g_GameBaseAddress"))
+
+    def test_the_smoke_scorer_c12_row_expects_the_skip_line_and_not_the_removed_warning(self):
+        table = (ROOT / "tests/smoke/score-log.sh").read_text()
+        rows = [line for line in table.splitlines() if line.startswith("C12@@")]
+        self.assertEqual(len(rows), 1)
+        fields = rows[0].split("@@")
+        self.assertIn("not sent: the game service does not accept this message yet", fields[3])
+        self.assertNotIn("Not in active session", rows[0])
+        self.assertNotIn("SAVE_SUCCESS", fields[3])
+        self.assertIn(fields[3].replace("\\[", "[").replace("\\]", "]"), SKIP_LINE.replace(" (#772) slot=%u", ""))
 
 
 if __name__ == "__main__":
