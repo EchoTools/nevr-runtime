@@ -558,6 +558,66 @@ class ReleaseStagesTest(PackageFixture):
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
 
+    # --- the Quest library's version and commit (#831) -----------------------------------------------
+
+    def quest_library(self, *strings):
+        """A fake Quest library: NUL-bounded strings, as the compiler lays out kVersion and kCommit."""
+        path = self.out.parent / "libovrplatformloader.so"
+        path.write_bytes(b"\x7fELF\0" + b"\0".join(strings) + b"\0")
+        return path
+
+    def quest_check(self, library, version=RELEASE, commit=COMMIT):
+        return self.run_stage("quest-library", "--lib", str(library), "--version", version, "--commit", commit)
+
+    def test_quest_library_check_accepts_the_exact_version_and_the_commit_prefix(self):
+        library = self.quest_library(b"token_auth_state", RELEASE.encode(), COMMIT[:8].encode(), COMMIT.encode(), b"port")
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"quest library: version {RELEASE} commit {COMMIT[:8]}", result.stdout)
+        # git's short hash is 7 digits or more
+        for short in (COMMIT[:7], COMMIT[:12], COMMIT[:39]):
+            library = self.quest_library(RELEASE.encode(), short.encode(), COMMIT.encode())
+            self.assertEqual(self.quest_check(library).returncode, 0, short)
+
+    def test_quest_library_check_refuses_a_dev_version_that_only_starts_with_the_release_version(self):
+        library = self.quest_library(b"5.0.0-dev.4", COMMIT[:8].encode(), COMMIT.encode())
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"no string equal to the version '{RELEASE}'", result.stderr)
+
+    def test_quest_library_check_refuses_a_version_that_is_only_inside_another_string(self):
+        library = self.quest_library(b"v5.0.0", b"agent/5.0.0 (x)", COMMIT[:8].encode(), COMMIT.encode())
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"no string equal to the version '{RELEASE}'", result.stderr)
+
+    def test_quest_library_check_refuses_a_commit_that_is_missing_wrong_or_only_inside_another_string(self):
+        full, short, version = COMMIT.encode(), COMMIT[:8].encode(), RELEASE.encode()
+        for strings in ((version,),
+                        (version, b"d" * 8, b"d" * 40),
+                        (version, b"x" + short, b"x" + full),
+                        (version, short + b"zz", full + b"zz"),
+                        (version, COMMIT[:6].encode(), full),
+                        (version, COMMIT[:7].encode() + b"0", full),  # the same first 7 digits, a different 8th
+                        (version, short.upper(), full.upper()),
+                        (version, full),  # the full commit alone is not kCommit
+                        (version, short)):  # kCommit alone, without the build record's commit
+            result = self.quest_check(self.quest_library(*strings))
+            self.assertEqual(result.returncode, 1, strings)
+            self.assertRegex(result.stderr, "no string (of 7 to 39 hex digits that is a prefix of|equal to) the commit")
+
+    def test_quest_library_check_refuses_a_version_argument_that_is_not_x_y_z_and_a_commit_that_is_not_40_hex(self):
+        library = self.quest_library(RELEASE.encode(), COMMIT[:8].encode())
+        self.assertIn("is not X.Y.Z", self.quest_check(library, version="5.0.0-dev.1").stderr)
+        self.assertIn("is not 40 hex", self.quest_check(library, commit=COMMIT[:7]).stderr)
+
+    def test_the_release_workflow_checks_the_quest_library_with_that_command_and_no_bare_grep(self):
+        workflow = (REPO / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        step = workflow.split("- name: Name and check the release asset", 1)[1].split("\n    - ", 1)[0]
+        self.assertIn('python3 tools/package_release.py quest-library --lib "$so" --version "$version" '
+                      '--commit "$GITHUB_SHA"', step)
+        self.assertNotRegex(step, r"\bgrep\b")
+
     # --- the plugin signature gate (ADR 0010, #741) --------------------------------------------------
 
     def test_a_binary_that_loads_unsigned_plugins_is_never_stamped_or_packaged(self):

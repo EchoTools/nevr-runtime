@@ -16,6 +16,10 @@ file depends on that flag, so promoting a release changes no byte: this tool has
       library) as they are in DIR, written after signing, from the final bytes
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert the DLL's one identity literal agrees with what the workflow computed
+  package_release.py quest-library --lib libovrplatformloader.so --version X.Y.Z --commit <sha40>
+      CI: assert the Quest library carries exactly this version and this commit. It has no identity literal:
+      kVersion and the short kCommit (cmake/nevr_build_info.h.in) and the full commit of the sentinel's build
+      record are separate NUL-bounded strings, so each is matched whole.
   package_release.py --commit <sha40> --out DIR --dll ... --server-exe ... --apk ... --pc-header ...
                      --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
@@ -210,6 +214,24 @@ def gate(args, work: Path) -> dict:
     return info
 
 
+def quest_library_problems(blob: bytes, version: str, commit: str) -> list:
+    """The Quest library has no identity literal. It carries kVersion, the short kCommit (cmake/nevr_build_info.h.in)
+    and the sentinel's full build-record commit as separate NUL-bounded strings. A bare substring match passes
+    `5.5.0-dev.4` for `5.5.0` and any string that contains the version, so each is matched whole: a string equal to
+    the version, a string of 7 to 39 hex digits that is a prefix of the commit, and a string equal to the commit.
+    A second NUL-bounded string equal to the version (a dependency's version) would still satisfy the first."""
+    problems = []
+    if b"\x00" + version.encode() + b"\x00" not in blob:
+        problems.append(f"quest library: no string equal to the version '{version}'")
+    hex_strings = [found.decode("ascii") for found in re.findall(rb"(?<=\x00)([0-9a-f]{7,40})(?=\x00)", blob)]
+    if not any(len(found) < 40 and commit.startswith(found) for found in hex_strings):
+        problems.append(f"quest library: no string of 7 to 39 hex digits that is a prefix of the commit {commit[:8]} "
+                        f"(found {len(hex_strings)} hex string(s) of 7 to 40 digits)")
+    if commit not in hex_strings:
+        problems.append(f"quest library: no string equal to the commit {commit}")
+    return problems
+
+
 def stamp_check(dll: Path, version, commit: str = "") -> str:
     """The CI assertion after the build. `version` set: the identity literal must be exactly that release
     version; unset: it must be a development version. `commit` (when given): the checked-out commit."""
@@ -375,7 +397,7 @@ def run_all(args) -> list:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp", "notes") else "all"
+    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp", "notes", "quest-library") else "all"
     parser = argparse.ArgumentParser(prog=f"package_release.py {mode}".strip())
     if mode == "seal":
         parser.add_argument("--tree", required=True, type=Path)
@@ -384,6 +406,10 @@ def main(argv=None) -> int:
     elif mode == "notes":
         parser.add_argument("--assets", required=True, type=Path)
         parser.add_argument("--out", required=True, type=Path)
+    elif mode == "quest-library":
+        parser.add_argument("--lib", required=True, type=Path)
+        parser.add_argument("--version", required=True)
+        parser.add_argument("--commit", required=True)
     elif mode == "stamp":
         parser.add_argument("--dll", required=True, type=Path)
         parser.add_argument("--version", default="")
@@ -405,6 +431,16 @@ def main(argv=None) -> int:
     if mode == "all":
         args.version = None
     try:
+        if mode == "quest-library":
+            if not RELEASE_VERSION.match(args.version):
+                raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
+            if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+                raise GateFailure(f"--commit '{args.commit}' is not 40 hex digits")
+            problems = quest_library_problems(args.lib.read_bytes(), args.version, args.commit)
+            if problems:
+                raise GateFailure("\n".join(problems))
+            print(f"quest library: version {args.version} commit {args.commit[:8]}")
+            return 0
         if mode == "stamp":
             if args.version and not RELEASE_VERSION.match(args.version):
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
