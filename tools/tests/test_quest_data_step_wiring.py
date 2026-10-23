@@ -152,6 +152,26 @@ class TheStepOrder(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bhold_ms\b", entry)), 1, entry)
         self.assertEqual(len(re.findall(r"if \(!nevr_build::kIsDev\) options\.hold_ms = 0;", entry)), 1, entry)
 
+    def test_each_kisdev_guarded_option_is_assigned_once_and_before_install(self):
+        # allow_fetch and probe_enabled carry the same count-based pin as hold_ms: an extra `options.allow_fetch = true;`
+        # after the guarded line makes a release build download, and an extra `options.probe_enabled = true;` makes it
+        # read the probe file. Each guarded line must also come before Install(options), which copies the options
+        # (`Opts() = options;`): a line moved after it sets a local the step never sees, and the release build then
+        # keeps the Options defaults (hold_ms 5000: a release build that holds ten seconds).
+        entry = re.sub(
+            r"//[^\n]*", "",
+            extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {"),
+        )
+        install = entry.index("nevr_quest::data_wiring::Install(options);")
+        for name, line in (
+            ("allow_fetch", "options.allow_fetch = nevr_build::kIsDev;"),
+            ("probe_enabled", "options.probe_enabled = nevr_build::kIsDev;"),
+            ("hold_ms", "if (!nevr_build::kIsDev) options.hold_ms = 0;"),
+        ):
+            self.assertEqual(len(re.findall(r"\b%s\b" % name, entry)), 1, (name, entry))
+            self.assertEqual(entry.count(line), 1, (name, entry))
+            self.assertLess(entry.index(line), install, (name, entry))
+
     def test_the_log_never_says_shown_for_a_toast_that_was_only_requested(self):
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp") + read("toast_presenter.cpp"))
         self.assertIn('"requested"', text)
