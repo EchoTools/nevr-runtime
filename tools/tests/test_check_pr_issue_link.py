@@ -97,6 +97,8 @@ class RefusedFormsTest(unittest.TestCase):
     def test_a_reference_inside_an_html_comment(self):
         self.assertRefuses("<!-- Closes #12 -->\n")
         self.assertRefuses("<!--\nOne line per issue: Closes #12\n-->\n")
+        self.assertRefuses("<!--\nCloses #12\n-->\n")
+        self.assertRefuses("What and why\n\n<!--\nRefs #12\nCloses #13\n-->\n")
 
     def test_a_reference_inside_code(self):
         self.assertRefuses("`Closes #12`\n")

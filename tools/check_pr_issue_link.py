@@ -9,8 +9,8 @@ A reference is a line that starts with a keyword and then an issue number:
     Closes #N | Fixes #N | Resolves #N     the PR resolves the issue (GitHub closes it on merge)
     Refs #N | Part of #N | Completes #N    the PR advances it; the body says what is still open
 
-`owner/repo#N` names an issue in another repository. A reference inside an HTML comment, a code span
-or a fenced block does not count, so the PR template's placeholder and its instructions never satisfy
+`owner/repo#N` names an issue in another repository. A reference inside an HTML comment or a fenced
+code block does not count, and neither does one that does not start its line, so the PR template's placeholder and its instructions never satisfy
 the check. The check cannot tell whether the diff really resolves the issue; the review does.
 
 Standard library only.
@@ -37,7 +37,6 @@ REFERENCE = re.compile(
 )
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 FENCE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.DOTALL | re.MULTILINE)
-CODE_SPAN = re.compile(r"`[^`\n]*`")
 
 
 class Failure(Exception):
@@ -49,7 +48,6 @@ def references(body: str) -> list[str]:
     text = body.replace("\r\n", "\n").replace("\r", "\n")
     text = HTML_COMMENT.sub("", text)
     text = FENCE.sub("", text)
-    text = CODE_SPAN.sub("", text)
     return [f"{m.group('word')} {m.group('repo') or ''}#{m.group('number')}" for m in REFERENCE.finditer(text)]
 
 
