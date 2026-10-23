@@ -142,6 +142,8 @@ your PR does:
 - **The PR body ends with `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge").
   `.github/workflows/pr-read-check.yml` fails the PR without it. On a PR from a fork, a maintainer has to approve the
   workflow run before it runs.
+- **The PR body names the issue it resolves or advances** (`Closes #N` or `Refs #N`; see "Review, verification and
+  merge"). `.github/workflows/pr-issue-link-check.yml` fails the PR without it. The same fork rule applies.
 - **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). No check
   enforces this: the scripts still default to the checkout's `echovr/`, so point every writer at the copy yourself.
 
@@ -791,6 +793,15 @@ your seat name, for example `claude-main` or `codex`.
   source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **A PR is opened only for an existing issue, and its body names it.** The issue states the problem and its done-bar;
+  a PR without one has nothing to be checked against and nothing to close. The body carries one line for each
+  issue it resolves: `Closes #N` (or `Fixes #N`, `Resolves #N`). A PR that leaves part of an issue open, such as a
+  live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says in the body what is still open. A fix
+  that has no issue gets an issue first. There is no "no issue" form.
+  `.github/workflows/pr-issue-link-check.yml` runs `tools/check_pr_issue_link.py` on every open, edit and push and fails
+  a body that names none; it cannot tell whether the diff really resolves the issue, so the review (the first bullet
+  above) confirms that each linked issue is resolved by the diff. The merged PR's issue is then closed with the PR
+  linked (`docs/standards/planning.md`, "Hygiene rules"); an issue a merged PR fixed is never left open.
 - **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
   `<sha>` is the PR's base commit: `git merge-base HEAD origin/<target>`, where `<target>` is the
   branch the PR targets (usually `main`), the commit whose AGENTS.md you branched from (7 to 40 hex
