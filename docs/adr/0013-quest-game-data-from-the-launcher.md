@@ -19,7 +19,7 @@ OBB file exists:
 
 - With an OBB file, `CSysFile::Init` mounts it and the game records the mounted path; the sentinel's OBB skip answers that
   mount with the first root that holds the game's `_data`: the installer app's `Android/media` directory, then the legacy
-  root (`/storage/emulated/0/readyatdawn`) (`ResolveRoot`, `src/quest/sentinel/data_root.h`; `src/quest/sentinel/obb_skip_hook.h`).
+  root (`/storage/emulated/0/readyatdawn`) (`obb_skip::ResolveRoot` in `src/quest/sentinel/obb_skip_hook.h`; the candidate order is in `src/quest/sentinel/data_root.h`).
 - Without one, `CSysFile::Init` returns at `OBB not found` (the `access()` call at `0xf853b8`, ADR 0007, Context, step 1),
   before `AStorageManager_mountObb`. The OBB skip hooks are on `mountObb` and `getMountedObbPath`, so they never run, `gOBBPath`
   stays empty, and `CSysInfo::GetDataRootDir` (`0xf87250`) answers its literal fallback, `/storage/emulated/0/readyatdawn`
