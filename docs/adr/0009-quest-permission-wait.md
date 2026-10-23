@@ -44,7 +44,7 @@ Install line at start: `{"event":"permission_wait_install","result":"installed"}
 - `permission_wait` lines for a second request (a script node) means the one-shot did not hold.
 
 **Server change needed:** none.
-**Not established:** that the grant is visible to `checkSelfPermission` while the app thread is blocked; whether the glue's onPause waits on this thread; how `requestCode` is filled inside `CallVoidMethod`; whether `FileExists` fails for the permission rather than for another reason; the case where RECORD_AUDIO is granted and storage is not (no request is made at all; not handled). A headset run on a fresh install (uninstall, install, first launch) decides it.
+**Not established:** that the grant is visible to `checkSelfPermission` while the app thread is blocked; whether the glue's onPause waits on this thread; how `requestCode` is filled inside `CallVoidMethod`; whether `FileExists` fails for the permission rather than for another reason; the case where RECORD_AUDIO is granted and storage is not (no request is made at all; handled by the `CheckPermission` hook, ADR 0013). A headset run on a fresh install (uninstall, install, first launch) decides it.
 
 ## Not claimed
 
