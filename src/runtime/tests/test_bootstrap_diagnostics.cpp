@@ -1040,3 +1040,292 @@ TEST(BootstrapDiagnostics, AnEntryThatIsReservedButNotWrittenIsNotEmittedUntilIt
   EXPECT_EQ(records[1].at("mh_status"), 1001);
   EXPECT_EQ(records[1].at("stage"), "create");
 }
+
+namespace {
+
+// A sink that holds the flushing thread before its first record is stored, the way a thread killed mid-write
+// leaves the entries it claimed unwritten.
+std::mutex g_kill_lock;
+std::vector<nlohmann::json>* g_kill_records = nullptr;
+DWORD g_kill_thread = 0;
+HANDLE g_kill_held_event = nullptr;
+HANDLE g_kill_release_event = nullptr;
+bool g_kill_held_once = false;
+
+void KilledFlushSink(const nlohmann::json& record) {
+  if (GetCurrentThreadId() == g_kill_thread && !g_kill_held_once) {
+    g_kill_held_once = true;
+    SetEvent(g_kill_held_event);
+    WaitForSingleObject(g_kill_release_event, 10000);
+  }
+  std::lock_guard<std::mutex> guard(g_kill_lock);
+  if (g_kill_records != nullptr) g_kill_records->push_back(record);
+}
+
+DWORD WINAPI FlushOnceOnAThread(void* raw) {
+  static_cast<BootstrapDiagnostics*>(raw)->FlushAttachJournal();
+  return 0;
+}
+
+}  // namespace
+
+// The flush thread of a failed attach is killed when the process ends at once, after it claimed the entries and
+// before it wrote them. The last flush writes them, the failing step first.
+TEST(BootstrapDiagnostics, TheLastFlushWritesWhatAKilledFlushClaimedAndTheFailingStepFirst) {
+  std::vector<nlohmann::json> records;
+  g_kill_records = &records;
+  g_kill_held_once = false;
+  g_kill_held_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  g_kill_release_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  BootstrapDiagnostics::SetEmitSinkForTest(&KilledFlushSink);
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+
+  HANDLE flusher = CreateThread(nullptr, 0, &FlushOnceOnAThread, &diagnostics, 0, &g_kill_thread);
+  ASSERT_NE(flusher, nullptr);
+  ASSERT_EQ(WaitForSingleObject(g_kill_held_event, 10000), WAIT_OBJECT_0);
+  EXPECT_EQ(diagnostics.JournalFlushed(), 3u);  // all three claimed, none written
+  EXPECT_TRUE(records.empty());
+
+  diagnostics.FlushAttachJournalAtExit();  // the flusher is still held: it stands for the killed thread
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");  // the failing steps first, in journal order
+  EXPECT_EQ(records[1].at("step"), "hook_install");
+  EXPECT_EQ(records[2].at("step"), "image_check");
+
+  SetEvent(g_kill_release_event);
+  WaitForSingleObject(flusher, 10000);
+  CloseHandle(flusher);
+  BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
+  g_kill_records = nullptr;
+  CloseHandle(g_kill_held_event);
+  CloseHandle(g_kill_release_event);
+}
+
+TEST(BootstrapDiagnostics, TheLastFlushWritesNothingTwiceAndNothingWhenEverythingIsWritten) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.FlushAttachJournal();
+  ASSERT_EQ(records.size(), 2u);
+  diagnostics.FlushAttachJournalAtExit();
+  diagnostics.FlushAttachJournalAtExit();
+  EXPECT_EQ(records.size(), 2u);
+
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);  // recorded after the last flush
+  diagnostics.FlushAttachJournalAtExit();
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[2].at("step"), "hook_install");
+}
+
+// A flush thread killed after its record reached the file and before it marked the entry leaves the entry
+// "claimed": the last flush finds the record by (run, seq) and does not write it again. A claimed entry that is not
+// in the file is written.
+TEST(BootstrapDiagnostics, TheLastFlushDoesNotRepeatAClaimedStepThatIsAlreadyInTheLogAndWritesOneThatIsNot) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+  diagnostics.FlushAttachJournal();
+  ASSERT_EQ(ReadRecords(local + kLogsFile).size(), 3u);
+
+  diagnostics.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // written, not marked
+  diagnostics.FlushAttachJournalAtExit();
+  std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  EXPECT_EQ(records.size(), 3u);
+
+  const std::wstring other = MakeTempDir(L"local");
+  BootstrapDiagnostics lost;
+  lost.PrepareForTest(other.c_str(), nullptr, nullptr);
+  lost.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  lost.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  lost.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);  // claimed, never written
+  lost.FlushAttachJournalAtExit();
+  records = ReadRecords(other + kLogsFile);
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");
+  EXPECT_EQ(records[1].at("step"), "image_check");
+}
+
+// Every journal record carries its journal index as `seq`; with the record's `run` it is a key no step shares.
+TEST(BootstrapDiagnostics, EachJournalRecordCarriesItsSeqAndNoPidSeqPairRepeats) {
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  for (int at = 0; at < 5; ++at) diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.FlushAttachJournal();
+  diagnostics.FlushAttachJournalAtExit();
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 5u);
+  std::set<std::pair<std::string, unsigned long long>> keys;
+  for (std::size_t at = 0; at < records.size(); ++at) {
+    EXPECT_EQ(records[at].at("seq").get<std::size_t>(), at);
+    keys.insert({records[at].at("run").get<std::string>(), records[at].at("seq").get<unsigned long long>()});
+    EXPECT_EQ(records[at].at("run").get<std::string>().size(), 16u);
+  }
+  EXPECT_EQ(keys.size(), 5u);
+}
+
+// Wine reuses pids: the game is pid 32 on every launch. An older process with the same pid wrote seq 0 and 1 to this
+// log; the new process claimed its entry 1 (its decisive step) and was killed before the write. The last flush must
+// still write it: the older process's (pid, seq 1) line is not this process's.
+TEST(BootstrapDiagnostics, ThePidOfAnOlderProcessDoesNotHideAClaimedStepOfThisOne) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::uint64_t mine = BootstrapDiagnostics::RunTokenForTest();
+
+  // The older process: same pid, another run token.
+  BootstrapDiagnostics::SetRunTokenForTest(mine ^ 0x5A5A5A5A5A5A5A5Aull);
+  BootstrapDiagnostics older;
+  older.PrepareForTest(local.c_str(), nullptr, nullptr);
+  older.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  older.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted);
+  older.FlushAttachJournal();
+  ASSERT_EQ(ReadRecords(local + kLogsFile).size(), 2u);
+
+  // This process: its entry 1 is claimed and never written.
+  BootstrapDiagnostics::SetRunTokenForTest(mine);
+  BootstrapDiagnostics now;
+  now.PrepareForTest(local.c_str(), nullptr, nullptr);
+  now.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  now.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  now.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);
+  now.SetEntryStateForTest(0, BootstrapDiagnostics::kEntryWritten);
+  now.FlushAttachJournalAtExit();
+
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 3u);  // the decisive record landed
+  EXPECT_EQ(records[2].at("step"), "prologue_check");
+  EXPECT_EQ(records[2].at("outcome"), "mismatch");
+  EXPECT_NE(records[2].at("run"), records[1].at("run"));  // another run, the same pid
+  EXPECT_EQ(records[2].at("pid"), records[1].at("pid"));
+  BootstrapDiagnostics::SetRunTokenForTest(0);
+}
+
+// The same run is found: a record this process wrote (claimed, not marked) is not written again even when an older
+// process's lines with the same pid and seq stand later in the file.
+TEST(BootstrapDiagnostics, ARecordOfThisRunIsFoundAmongOlderLinesWithTheSamePid) {
+  const std::wstring local = MakeTempDir(L"local");
+  const std::uint64_t mine = BootstrapDiagnostics::RunTokenForTest();
+  BootstrapDiagnostics now;
+  now.PrepareForTest(local.c_str(), nullptr, nullptr);
+  now.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  now.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  now.FlushAttachJournal();
+
+  BootstrapDiagnostics::SetRunTokenForTest(mine ^ 0x00FF00FF00FF00FFull);
+  BootstrapDiagnostics older;
+  older.PrepareForTest(local.c_str(), nullptr, nullptr);
+  older.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  older.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kAccepted);
+  older.FlushAttachJournal();
+  BootstrapDiagnostics::SetRunTokenForTest(mine);
+
+  now.SetEntryStateForTest(1, BootstrapDiagnostics::kEntryClaimed);
+  now.FlushAttachJournalAtExit();
+  EXPECT_EQ(ReadRecords(local + kLogsFile).size(), 4u);  // nothing added
+  BootstrapDiagnostics::SetRunTokenForTest(0);
+}
+
+// The claim is stored before the write, so a flush thread killed anywhere inside the write leaves the entry claimed.
+namespace {
+BootstrapDiagnostics* g_order_diagnostics = nullptr;
+std::vector<std::uint32_t>* g_order_states = nullptr;
+void StateAtWriteSink(const nlohmann::json& record) {
+  if (g_order_diagnostics != nullptr && g_order_states != nullptr && record.contains("seq")) {
+    g_order_states->push_back(g_order_diagnostics->EntryStateForTest(record.at("seq").get<std::size_t>()));
+  }
+}
+}  // namespace
+
+TEST(BootstrapDiagnostics, AnEntryIsClaimedBeforeItsRecordIsWrittenByEitherFlush) {
+  std::vector<std::uint32_t> states;
+  BootstrapDiagnostics diagnostics;
+  g_order_diagnostics = &diagnostics;
+  g_order_states = &states;
+  BootstrapDiagnostics::SetEmitSinkForTest(&StateAtWriteSink);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.FlushAttachJournal();
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+  diagnostics.FlushAttachJournalAtExit();
+  BootstrapDiagnostics::SetEmitSinkForTest(nullptr);
+  g_order_diagnostics = nullptr;
+  g_order_states = nullptr;
+  ASSERT_EQ(states.size(), 3u);
+  for (const std::uint32_t state : states) EXPECT_EQ(state, BootstrapDiagnostics::kEntryClaimed);
+}
+
+// The log mutex is named and shared by every process on the prefix: a live process can hold it. The last flush waits
+// at most kBootstrapExitLogLockWaitMs and then writes nothing (an unlocked line could interleave with the holder's);
+// a holder that never lets go must not hold the exiting process.
+TEST(BootstrapDiagnostics, TheLastFlushIsNotHeldForeverByAnotherThreadHoldingTheLogLockAndWritesNothingUnlocked) {
+  ScopedLogMutexName scoped(UniqueMutexName(L"exitheld"));
+  const std::wstring local = MakeTempDir(L"local");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  diagnostics.RecordAttach(AttachStep::kPrologueCheck, AttachOutcome::kRejected);
+  diagnostics.RecordAttach(AttachStep::kHookInstall, AttachOutcome::kFailed);
+  HANDLE handles[2] = {CreateEventW(nullptr, TRUE, FALSE, nullptr), CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  HANDLE holder = CreateThread(nullptr, 0, &HoldLogLock, handles, 0, nullptr);
+  ASSERT_NE(holder, nullptr);
+  ASSERT_EQ(WaitForSingleObject(handles[0], 5000), WAIT_OBJECT_0);
+
+  const auto start = std::chrono::steady_clock::now();
+  diagnostics.FlushAttachJournalAtExit();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  EXPECT_LT(elapsed.count(), 1500);  // one bounded wait, not one per record and not the holder's 10 s
+  EXPECT_GE(elapsed.count(), 200);   // it did wait for the lock first
+  EXPECT_EQ(BootstrapDiagnostics::ExitFlushSkippedForTest(), 1u);
+  EXPECT_TRUE(ReadAll(local + kLogsFile).empty());  // nothing was written without the lock
+
+  SetEvent(handles[1]);
+  WaitForSingleObject(holder, 10000);
+  CloseHandle(holder);
+  CloseHandle(handles[0]);
+  CloseHandle(handles[1]);
+
+  diagnostics.FlushAttachJournalAtExit();  // the lock is free now: everything that was skipped is written, once
+  const std::vector<nlohmann::json> records = ReadRecords(local + kLogsFile);
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_EQ(records[0].at("step"), "prologue_check");
+}
+
+// The last flush reports entries the journal had no room for, once.
+TEST(BootstrapDiagnostics, TheLastFlushReportsTheDroppedEntriesOnce) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  for (std::size_t at = 0; at < BootstrapDiagnostics::kJournalCapacity + 2; ++at) {
+    diagnostics.RecordAttach(AttachStep::kImageCheck, AttachOutcome::kAccepted);
+  }
+  diagnostics.FlushAttachJournalAtExit();
+  diagnostics.FlushAttachJournalAtExit();
+  std::size_t overflow = 0;
+  for (const nlohmann::json& record : records) overflow += record.value("step", "") == "journal" ? 1u : 0u;
+  EXPECT_EQ(overflow, 1u);
+}
+
+// A flush on the thread inside DllMain attach is counted, so the attach path cannot write the journal itself.
+TEST(BootstrapDiagnostics, AFlushOnTheAttachThreadIsCounted) {
+  std::vector<nlohmann::json> records;
+  ScopedSink sink(&records);
+  BootstrapDiagnostics diagnostics;
+  const std::size_t before = BootstrapDiagnostics::FlushesOnAttachThread();
+  diagnostics.FlushAttachJournal();  // no attach thread named: not counted
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before);
+  BootstrapDiagnostics::MarkAttachThread(GetCurrentThreadId());
+  diagnostics.FlushAttachJournal();
+  diagnostics.FlushAttachJournalAtExit();
+  BootstrapDiagnostics::MarkAttachThread(0);
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before + 2);
+  diagnostics.FlushAttachJournal();
+  EXPECT_EQ(BootstrapDiagnostics::FlushesOnAttachThread(), before + 2);
+}

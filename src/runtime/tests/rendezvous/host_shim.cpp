@@ -53,6 +53,12 @@ extern "C" __declspec(dllexport) void nevr_host_test_FlushDeferred() {
   nevr_host::OnCrashReporterConstructed();
 }
 
+// Test seam: waits for the thread an unhooked attach starts to write the attach journal. It flushes nothing
+// itself: the record must reach the disk by the attach's own doing.
+extern "C" __declspec(dllexport) int nevr_host_test_WaitFailureFlush() {
+  return nevr_host::WaitForAttachFailureFlush(10000) ? 1 : 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (reason != DLL_PROCESS_ATTACH) return TRUE;
   HMODULE exe = GetModuleHandleW(nullptr);
@@ -66,6 +72,12 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
   if (!launcher && exe != nullptr) {
     const auto image = reinterpret_cast<GameImageFn>(GetProcAddress(exe, kGameImageExport));
     if (image != nullptr) game = image();
+  }
+  const auto fail_create = exe == nullptr
+                               ? nullptr
+                               : reinterpret_cast<FailHookCreateFn>(GetProcAddress(exe, kFailHookCreateExport));
+  if (fail_create != nullptr && fail_create() != 0) {
+    nevr_host::RuntimeRendezvous::Seams().fail_hook_create = true;
   }
   nevr_host::OnProcessAttach(module, game, launcher);
 

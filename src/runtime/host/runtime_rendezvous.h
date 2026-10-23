@@ -36,7 +36,10 @@ class RuntimeRendezvous {
   // no I/O, no allocation: safe under the loader lock. `diagnostics` must outlive
   // this object; the attach steps are recorded in it, and the load diagnostic is
   // written through it on the first call, after attach returns.
-  void Prepare(HMODULE host_module, HMODULE game_module, BootstrapDiagnostics& diagnostics);
+  // `in_process_runtime`, when set, is the descriptor entry point of a runtime compiled into the
+  // host's own image: nothing is loaded from disk and the record's source is `in_process`.
+  void Prepare(HMODULE host_module, HMODULE game_module, BootstrapDiagnostics& diagnostics,
+               NevrGetRuntimeApiFn in_process_runtime = nullptr);
 
   // Validate the pinned prologue at `target` and install the GameMainWrapper
   // detour, recording each decision in the diagnostics journal (prologue accepted
@@ -78,6 +81,7 @@ class RuntimeRendezvous {
   struct TestSeams {
     bool fail_event_create = false;     // CreateEventW "fails": no install event
     bool fail_hook_bytes_read = false;  // the read of the hook's first bytes "fails"
+    bool fail_hook_create = false;      // MH_CreateHook "fails" (the hook it made is removed)
     DWORD install_wait_ms = 5000;       // how long AwaitInstall waits (kInstallWaitMs in production)
   };
   static TestSeams& Seams();
