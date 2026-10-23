@@ -27,11 +27,17 @@ OBB file exists:
 So on a sideloaded headset with no OBB the engine reads the legacy root, and only the legacy root. Reading that root needs the
 storage permission (ADR 0009).
 
+**Premise B (the engine never reads `Android/media` with no OBB): established by code reading, plus one headset observation.**
+The code reading is ADR 0007's Context (the `OBB not found` return at `0xf853b8` and the `GetDataRootDir` fallback at
+`0xf87250`). The observation is the Quest 2 run on #758 with `_data` hidden: the game's failure line named the manifest path
+under `/storage/emulated/0/readyatdawn`. Not observed: a launch with the data present only under `Android/media`.
+
 ## Design
 
 The chain, each step following from the one before it:
 
-1. **Premise (stated, not measured in this repository):** a player installs the production build once through Echo Launcher,
+1. **Premise A (stated as the release requirement; not measured in this repository, and no Echo Launcher source or run was
+   read for this record):** a player installs the production build once through Echo Launcher,
    and that is what puts `_data` on the headset.
 2. **So the runtime does not need to fetch data for players.** Keeping the download out of the runtime keeps the release small
    and avoids a second installer inside the first. This is also the position recorded on #538 before ADR 0011 changed it: no

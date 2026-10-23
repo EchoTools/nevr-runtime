@@ -3,7 +3,7 @@
 Status: superseded by ADR 0013 (#758) for who fetches the game data and for whom. The fetch design, the toast fallback plan and the
 measurement list below still describe the development-build step and the open measurements.
 
-The goal, in the owner's words (#nevr-runtime-testing): "i'm literally going for 0 jank". A player who sideloads the APK on the
+The goal is zero jank. A player who sideloads the APK on the
 headset alone (no PC, no installer) must end with a game that starts, or with a message they can read in the headset that says
 what to do. Today they get neither: the game returns to Home with nothing shown.
 
@@ -18,10 +18,9 @@ returns the legacy root with `found=false`, and `ResolveRoot` logs one error eve
 `Install` (`obb_skip_hook.cpp`) arms the hooks either way.
 
 **Why the OBB is not a source.** Horizon OS refuses keyed OBB mounts (ADR 0007, Context), so the store OBB under
-`/sdcard/Android/obb/com.readyatdawn.r15/` cannot be mounted. The owner's statement of the consequence: `/sdcard/readyatdawn/_data`
-has had to exist since Meta removed encrypted OBB mounting (#nevr-runtime-testing, 00:09:12, message id
-1562694291527049251). Reading the OBB's bytes without mounting it was not measured and is not planned: the OBB is keyed, and the
-owner has dropped the option. Whether the OBB survives uninstalling the store app was therefore not measured; it does not matter
+`/sdcard/Android/obb/com.readyatdawn.r15/` cannot be mounted. The consequence is that `/sdcard/readyatdawn/_data` has had to exist since the platform removed encrypted OBB
+mounting (ADR 0007, Context). Reading the OBB's bytes without mounting it was not measured and is not planned: the OBB is
+keyed, so it is not a source. Whether the OBB survives uninstalling the store app was therefore not measured; it does not matter
 to this design.
 
 **The failure, confirmed once.** On a Quest 2 with `_data` hidden (the t5-no-game-data run, #758), every launch logged, in order,
@@ -60,17 +59,17 @@ run time is **not established**. The check must take them from the game's own pa
 | B. Installer step | Keep `just quest-install` / `tools/quest-install.{sh,ps1}` (adb pushes and extracts the data). | No runtime code. Needs a PC and USB debugging, so it does not serve the headset-only route that fails. |
 | C. Data inside the APK | The APK carries `_data.zip` as an asset; the runtime extracts it on first launch. | No network at first launch. The APK grows by about 937 MB (the dev APK is 161385468 bytes today), every release re-uploads it, and data and runtime versions are tied together. Still needs the extraction, the space check, and visible progress. |
 | D. A companion app | A separate APK with its own screen downloads the data. | A second install and a second signing identity; the player must be told to run it first, which is jank. |
-| E. OBB as a source | Dropped by the owner (see Context). | n/a |
+| E. OBB as a source | Dropped (see Context). | n/a |
 
-**Pick: A (owner, 2026-10-22), with the visible message below as the floor.** It is the only option that serves a headset-only
+**Pick: A (2026-10-22; replaced by ADR 0013), with the visible message below as the floor.** It is the only option that serves a headset-only
 install with no second artifact and no PC. B stays for testers with a PC. The pick stands only if measurement 1 finds a way to
 show the player progress; without that, A is a long blank screen, which is the jank the goal rules out.
 
-**Relation to earlier rulings.** The owner's 2026-10-15 ruling on #538 was "no player-facing data downloader". His 2026-10-22
-answer on #758 replaces it for the Quest sentinel: the game data is fetched for every player, with no switch. Both are cited here
-so a reader of #538 finds the change. The source is the file `just quest-install` already uses, `https://mia.cdn.echo.taxi/_data.zip`
-(sha256 `fc2eedea...543c`), which is in the owner's own Cloudflare R2; no new path is introduced. The sha256 baked into the signed
-runtime is the trust: the owner judged it enough (his answer to decision 2), so the zip carries no separate signature.
+**Relation to earlier positions.** The position recorded on #538 on 2026-10-15 was no player-facing data downloader. This pick
+replaced it for the Quest sentinel (the game data fetched for every player, with no switch), and ADR 0013 restores it for
+release builds. The source is the file `just quest-install` already uses, `https://mia.cdn.echo.taxi/_data.zip`
+(sha256 `fc2eedea...543c`), which is in the project's own Cloudflare R2; no new path is introduced. The sha256 baked into the
+signed runtime is the trust, so the zip carries no separate signature.
 
 ## The order of fallbacks
 
@@ -135,7 +134,7 @@ them measured in a headset:
 4. A separate Java activity in the APK: needs a manifest and dex change to the repacked store APK (the repack tooling was not
    read for this ADR).
 
-**Decision for the owner, needed before building:** the mechanism is chosen by measurement 1, in this order of preference: 2, 1, 4,
+**Open question, to settle before building:** the mechanism is chosen by measurement 1, in this order of preference: 2, 1, 4,
 3 (cheapest first). The plan does not name one as settled, because every one is unmeasured. The floor message needs only one
 mechanism that renders in the headset; the progress display of option A needs one that updates (3, or 2 if a toast can be
 refreshed).
@@ -208,7 +207,7 @@ game's own frames. Nothing of this is built until the measurement says it is nee
 - `quest-diagnose` (#750) must not call a running game failed because a log line is absent: a separate issue, since its verdict
   says "the game did not reach its data step" when the build does not log `OBB mounted at`.
 
-## Decisions (owner, 2026-10-22)
+## Decisions (2026-10-22; replaced by ADR 0013)
 
 1. The fetch is for every player. There is no tester switch and no second code path.
 2. The sha256 pin baked into the signed runtime is enough; the zip needs no signature of its own. (Trust-on-first-use is the
