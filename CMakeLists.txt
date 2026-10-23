@@ -310,8 +310,9 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the one release package, nevr-runtime-v<ver>-windows-server (the server package; the player package is
-# nevr-runtime-v<ver>-windows-player, made by tools/package_release.py): binaries run through strip --strip-all.
+# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: the BugSplat64.dll and
+# echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
+# and the source of the .tar.zst workflow artifact: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
 # function names through the .dbg's COFF symbol table. The release preset has no -g, so there are no source

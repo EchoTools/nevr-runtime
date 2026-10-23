@@ -329,13 +329,13 @@ hand on the tag ref). The steps, in order, from a clone of origin:
 just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
 git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's tip and push the tag
 just release-preflight && gh release create v<x.y.z> --title v<x.y.z> --draft --prerelease --verify-tag   # 3. once more, then a draft for the pushed tag
-gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attaches the five files to the draft; it stays a draft
+gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attaches the two files to the draft; it stays a draft
 gh release edit v<x.y.z> --draft=false            # 5. publish, only after the draft's files are checked and signed (RELEASING.md)
 ```
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
 stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
-packaging path (the sealed zips, `SHA256SUMS`, `RELEASE-NOTES.md`, all attested; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
+packaging path (the sealed Windows zip, attested, and the Quest library; the notes and a SHA-256 table of both are the release body, written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
 The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
@@ -343,13 +343,13 @@ stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `bui
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
 
-`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and none of the five names on the draft is
-built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
-five names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
+`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and neither of the two names on the draft is
+built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries either of the
+two names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
 which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
 (a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
 `guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while
-a dispatch is running makes that run upload to the published release. The signed Windows zips live on the GitHub release; the Quest APKs and dry
+a dispatch is running makes that run upload to the published release. The signed Windows zip lives on the GitHub release; the Quest APKs and dry
 runs are published outside GitHub.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before

@@ -258,8 +258,10 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("windows-latest", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
-        self.assertIn("          dist/*.zip", workflow)
-        # Zips only are release assets; the .tar.zst archives are kept as a workflow artifact.
+        # The one release zip is the sealed Windows tree's; the dist zip is not a release asset.
+        self.assertIn("          release-assets/*.zip", workflow)
+        self.assertNotIn("          dist/*.zip", workflow)
+        # The .tar.zst archives are kept as a workflow artifact.
         self.assertNotIn("          dist/*.tar.zst", workflow)
         self.assertIn("name: dist-tar-zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
@@ -310,7 +312,7 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("CMake 4.0+", readme)
         self.assertIn("CMake 4.0+", agents)
         self.assertIn("echovr_server.exe", readme)
-        self.assertRegex(readme, r"server zip \(`nevr-runtime-v<ver>-windows-server\.zip`\)\s+has no entry for\s+it")
+        self.assertRegex(readme, r"Windows zip \(`nevr-runtime-v<ver>-windows\.zip`\)\s+has no entry for\s+it")
         self.assertNotIn("the release zip has no entry", readme)
         justfile = (REPO / "justfile").read_text()
         self.assertIn("is published outside GitHub, never attached to a release", justfile)

@@ -20,8 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0-windows-server.zip",
-        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; FOUR predates the Quest library
+TWO = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the release's two assets
 
 
 def load():
@@ -138,7 +137,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
         # A name written inline in build.yml can drift from tools/release_asset_names.sh, and then the guard
-        # never sees all five names and a published, signed release is rebuilt over. The quest job must take
+        # never sees both names and a published, signed release is rebuilt over. The quest job must take
         # its output name from release_quest_asset_name, and that name must be one the list yields.
         jobs = load()[0]["jobs"]
         naming = [s for s in jobs["quest"]["steps"] if s.get("id") == "asset"]
@@ -214,8 +213,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
         self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
                          ["actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
-                          "actions/download-artifact", "actions/attest", "softprops/action-gh-release",
-                          "softprops/action-gh-release"])
+                          "actions/attest", "softprops/action-gh-release"])
         text = steps_text(publish)
         for word in ("pip", "apt-get", "cmake", "tools/"):
             self.assertNotIn(word, text, word)
@@ -223,7 +221,7 @@ class WorkflowStructureTest(unittest.TestCase):
         for word in ("pip install cmake==", "tools/build_distribution.py", "cmake/VerifyDistribution.cmake"):
             self.assertIn(word, repack_text, word)
         self.assertEqual([s["with"]["name"] for s in repack["steps"] if "with" in s and "path" in s["with"]
-                          and s["with"]["path"].startswith("dist/")], ["dist-tar-zst", "dist-zips"])
+                          and s["with"]["path"].startswith("dist/")], ["dist-tar-zst"])
 
     def test_the_release_files_get_a_provenance_attestation_in_the_publish_job_only(self):
         data, _ = load()
@@ -251,7 +249,7 @@ class WorkflowStructureTest(unittest.TestCase):
         attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest@")]
         uploads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
         self.assertEqual(len(attest), 1)
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 1)
         subjects = lines(steps[attest[0]]["with"]["subject-path"])
         uploaded = []
         for i in uploads:
@@ -260,14 +258,14 @@ class WorkflowStructureTest(unittest.TestCase):
         # The symbol files are attested to the same commit but are a workflow artifact, never a release asset.
         self.assertEqual(sorted(s for s in subjects if not s.startswith("symbols/")), sorted(uploaded))
         self.assertEqual(sorted(subjects), sorted([
-            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md",
-            "quest-asset/*.so", "symbols/*/*.dbg"]))
+            "release-assets/*.zip", "quest-asset/*.so", "symbols/*/*.dbg"]))
         self.assertNotIn("symbols", " ".join(uploaded), "the symbol files are not release assets")
         self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
         repack_steps = load()[0]["jobs"]["repack"]["steps"]
         tar_steps = [s for s in repack_steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
         self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
-        self.assertEqual([s["with"]["name"] for s in steps if s.get("with", {}).get("path") == "dist"], ["dist-zips"])
+        self.assertEqual([s for s in steps if s.get("with", {}).get("path") == "dist"], [],
+                         "no dist zip is downloaded for the release: the release zip is the sealed one")
 
     def test_the_build_job_checks_and_keeps_the_symbol_files_of_the_stripped_binaries(self):
         steps = load()[0]["jobs"]["build"]["steps"]
@@ -280,6 +278,8 @@ class WorkflowStructureTest(unittest.TestCase):
         tree = [s for s in steps if s.get("name") == "Gate and assemble the release tree"]
         self.assertEqual(len(tree), 1)
         self.assertIn('--dll "$pkg/BugSplat64.dll"', tree[0]["run"])
+        self.assertIn('--server-exe "$pkg/echovr_server.exe"', tree[0]["run"])
+        self.assertNotIn("--server-exe build/mingw-release", tree[0]["run"])
         self.assertNotIn("--dll build/mingw-release", tree[0]["run"])
         self.assertLess(steps.index(verify[0]), steps.index(tree[0]))
         windows = [s for s in steps if s.get("name") == "Verify the Windows tree ships only stripped binaries"]
@@ -303,7 +303,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertNotIn("prerelease", steps_text(job).lower(), name)
         steps = data["jobs"]["publish"]["steps"]
         uploads = [s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 1)
         for step in uploads:
             self.assertNotIn("prerelease", step["with"])
             # The one argued exception: softprops/action-gh-release PUBLISHES a reused draft after uploading
@@ -386,7 +386,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     # --- the guard: a release that already carries its assets is not rebuilt --------------------------
 
-    def guard(self, event="release", tag="v5.0.0", assets=FOUR, view_rc=0):
+    def guard(self, event="release", tag="v5.0.0", assets=TWO, view_rc=0):
         with tempfile.TemporaryDirectory(prefix="guard-") as tmp:
             bindir = Path(tmp) / "bin"
             bindir.mkdir()
@@ -400,23 +400,23 @@ class WorkflowStructureTest(unittest.TestCase):
                                                  EVENT=event, TAG=tag, **env)
             return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
 
-    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
+    def test_a_release_with_both_assets_is_not_rebuilt(self):
         rc, built, calls = self.guard()
         self.assertEqual((rc, built), (0, "true"))
         self.assertEqual(len(calls), 1)
         self.assertIn("release view v5.0.0", calls[0])
 
     def test_a_release_missing_any_one_asset_is_built(self):
-        for missing in FOUR:
+        for missing in TWO:
             with self.subTest(missing=missing):
-                rc, built, _ = self.guard(assets=[a for a in FOUR if a != missing])
+                rc, built, _ = self.guard(assets=[a for a in TWO if a != missing])
                 self.assertEqual((rc, built), (0, "false"))
 
     def test_a_release_with_no_assets_is_built(self):
         self.assertEqual(self.guard(assets=[])[:2], (0, "false"))
 
     def test_other_versions_assets_do_not_count(self):
-        other = [a.replace("5.0.0", "4.9.9") for a in FOUR]
+        other = [a.replace("5.0.0", "4.9.9") for a in TWO]
         self.assertEqual(self.guard(assets=other)[:2], (0, "false"))
 
     def test_a_failing_listing_fails_the_job_it_does_not_mean_rebuild(self):
@@ -459,7 +459,9 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertIn("sha256sum -c SHA256SUMS", seal)
         self.assertIn("packages-unsigned", seal)
         self.assertIn("release-unsigned", seal)
-        self.assertIn("staged/release/nevr-runtime-v*-windows-player", seal)
+        self.assertIn("staged/release/nevr-runtime-v*-windows)", seal)
+        self.assertIn("unzip -q", seal)
+        self.assertNotIn("release-assets && sha256sum", seal, "no top-level SHA256SUMS is checked: none is written")
         self.assertFalse((REPO / "tools" / "rc_release_apk.sh").exists())
 
     def test_the_build_writes_the_public_defaults_before_it_configures(self):
