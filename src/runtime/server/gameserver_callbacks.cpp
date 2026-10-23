@@ -502,10 +502,17 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
             auto sessionState = self->GetContext().GetSessionState();
             saveLoadout->set_lobby_session_id(sessionState.lobbySessionId);
 
-            // Set entrant ID (account ID as string)
-            if (entrant) {
-              saveLoadout->set_entrant_id(std::to_string(entrant->userId.accountId));
+            // entrant_id is the entrant's client session UUID, the same GUID
+            // AcceptPlayerSessions reports and nakama holds in its entrant
+            // streams. It is not the account id: the save is gated by the
+            // sender's match and that session's presence.
+            GUID entrantSessionGuid{};
+            if (!self->GetContext().TryGetEntrantSessionGuid(playerSlot, &entrantSessionGuid)) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.GAMESERVER] [SAVE_LOADOUT] No accepted client session for slot=%u; not sending", playerSlot);
+              return;
             }
+            saveLoadout->set_entrant_id(GuidToUuidString(entrantSessionGuid));
 
             saveLoadout->set_loadout_slot(static_cast<int32_t>(playerSlot));
             saveLoadout->set_jersey_number(static_cast<int32_t>(jerseyNumber));

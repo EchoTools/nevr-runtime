@@ -314,3 +314,236 @@ TEST(ServerContextSmite, AbsentSessionArrayIsNotFound) {
   uint64_t slot = 0;
   EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(1), slot));
 }
+
+TEST(ServerContextEntrants, EntrantSessionGuidIsTheAcceptedSlotsClientGuid) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(22)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[2]{};
+  sessions[1].guid.Data1 = 0x11223344;
+  sessions[1].guid.Data2 = 0x5566;
+  sessions[1].guid.Data3 = 0x7788;
+  sessions[1].guid.Data4[0] = 0x99;
+  sessions[1].joinState = 4;
+  sessions[0].joinState = 4;
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 2;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  const GUID slotOne = context.GetEntrantSessionGuid(1);
+  EXPECT_EQ(slotOne.Data1, 0x11223344U);
+  EXPECT_EQ(slotOne.Data2, 0x5566U);
+  EXPECT_EQ(slotOne.Data3, 0x7788U);
+  EXPECT_EQ(slotOne.Data4[0], 0x99U);
+
+  const GUID slotZero = context.GetEntrantSessionGuid(0);
+  EXPECT_EQ(slotZero.Data1, 0U);
+  EXPECT_EQ(slotZero.Data2, 0U);
+  EXPECT_EQ(slotZero.Data3, 0U);
+}
+
+TEST(ServerContextEntrants, EntrantSessionGuidIgnoresUnacceptedAndOutOfRangeSlots) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0xDEADBEEF;
+  sessions[0].joinState = 3;  // pending, not accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
+  EXPECT_EQ(context.GetEntrantSessionGuid(1).Data1, 0U);
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidReturnsTheAcceptedSlotsGuid) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11)};
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0x11223344;
+  sessions[0].joinState = 4;  // accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  GUID out{};
+  ASSERT_TRUE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0x11223344U);
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidDropsAnUnacceptedSlotWithoutAccountFallback) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(42)};  // account id 42 must never be sent
+  Attach(lobby, entrants);
+
+  EchoVR::Lobby::PlayerSessionSlot sessions[1]{};
+  sessions[0].guid.Data1 = 0xDEADBEEF;
+  sessions[0].joinState = 3;  // pending, not accepted
+  lobby.playerSessions = sessions;
+  lobby.playerSessionCount = 1;
+
+  nevr_game_server::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  GUID out{};
+  out.Data1 = 0xAA;
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0xAAU) << "a rejected slot must leave the caller's GUID untouched";
+  EXPECT_NE(out.Data1, 42U) << "the account id must never stand in for the session UUID";
+}
+
+// #772: cases that pin each guard in GetEntrantSessionGuid and each field of the zero-GUID test in
+// TryGetEntrantSessionGuid; every one is killed by a single-line mutant of that function (see the PR body).
+namespace {
+
+// A lobby with `entrantCount` entrants, `sessionCount` reported player sessions over an array of
+// `arraySize` slots, every slot accepted with a distinct non-zero GUID (Data1 = slot index + 1).
+struct SessionLobby {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants;
+  std::vector<EchoVR::Lobby::PlayerSessionSlot> sessions;
+
+  SessionLobby(size_t entrantCount, size_t sessionCount, size_t arraySize) {
+    for (size_t i = 0; i < entrantCount; ++i) {
+      entrants.push_back(MakeEntrant(100 + i));
+    }
+    sessions.resize(arraySize);
+    for (size_t i = 0; i < arraySize; ++i) {
+      sessions[i].guid.Data1 = static_cast<unsigned long>(i + 1);
+      sessions[i].joinState = 4;
+    }
+    Attach(lobby, entrants);
+    lobby.playerSessions = sessions.data();
+    lobby.playerSessionCount = sessionCount;
+  }
+};
+
+}  // namespace
+
+TEST(ServerContextEntrants, EntrantSessionGuidIsEmptyBeforeInitializeAndAfterTerminate) {
+  SessionLobby fixture(1, 1, 1);
+  nevr_game_server::ServerContext context;
+
+  GUID out{};
+  out.Data1 = 0xAA;
+  EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+
+  context.Initialize(&fixture.lobby, nullptr);
+  context.FinalizeInitialization();
+  ASSERT_TRUE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 1U);
+
+  context.Terminate();
+  out.Data1 = 0xAA;
+  EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0xAAU);
+}
+
+TEST(ServerContextEntrants, EntrantSessionGuidIsEmptyWithoutALobbyOrItsArrays) {
+  nevr_game_server::ServerContext noLobby;
+  noLobby.Initialize(nullptr, nullptr);
+  noLobby.FinalizeInitialization();
+  EXPECT_EQ(noLobby.GetEntrantSessionGuid(0).Data1, 0U);
+
+  SessionLobby noSessions(1, 1, 1);
+  noSessions.lobby.playerSessions = nullptr;
+  nevr_game_server::ServerContext withoutSessions;
+  withoutSessions.Initialize(&noSessions.lobby, nullptr);
+  withoutSessions.FinalizeInitialization();
+  EXPECT_EQ(withoutSessions.GetEntrantSessionGuid(0).Data1, 0U);
+
+  SessionLobby noEntrants(1, 1, 1);
+  noEntrants.lobby.entrantData.items = nullptr;  // count stays 1: the array is absent, not empty
+  nevr_game_server::ServerContext withoutEntrants;
+  withoutEntrants.Initialize(&noEntrants.lobby, nullptr);
+  withoutEntrants.FinalizeInitialization();
+  EXPECT_EQ(withoutEntrants.GetEntrantSessionGuid(0).Data1, 0U);
+}
+
+TEST(ServerContextEntrants, EntrantSessionGuidStopsAtTheSmallerOfSessionAndEntrantCounts) {
+  // Two accepted slots in the array, but the lobby reports one session: slot 1 is past the end.
+  SessionLobby fewerSessions(2, 1, 2);
+  nevr_game_server::ServerContext a;
+  a.Initialize(&fewerSessions.lobby, nullptr);
+  a.FinalizeInitialization();
+  EXPECT_EQ(a.GetEntrantSessionGuid(0).Data1, 1U);
+  EXPECT_EQ(a.GetEntrantSessionGuid(1).Data1, 0U) << "slot 1 is past playerSessionCount";
+
+  // Two sessions reported, one entrant: slot 1 has no entrant.
+  SessionLobby fewerEntrants(1, 2, 2);
+  nevr_game_server::ServerContext b;
+  b.Initialize(&fewerEntrants.lobby, nullptr);
+  b.FinalizeInitialization();
+  EXPECT_EQ(b.GetEntrantSessionGuid(0).Data1, 1U);
+  EXPECT_EQ(b.GetEntrantSessionGuid(1).Data1, 0U) << "slot 1 is past the entrant count";
+
+  // The first slot past both counts, in an array that holds it.
+  SessionLobby exact(2, 2, 3);
+  nevr_game_server::ServerContext c;
+  c.Initialize(&exact.lobby, nullptr);
+  c.FinalizeInitialization();
+  EXPECT_EQ(c.GetEntrantSessionGuid(1).Data1, 2U);
+  EXPECT_EQ(c.GetEntrantSessionGuid(2).Data1, 0U) << "slot 2 equals the limit";
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidRefusesANullDestination) {
+  SessionLobby fixture(1, 1, 1);
+  nevr_game_server::ServerContext context;
+  context.Initialize(&fixture.lobby, nullptr);
+  context.FinalizeInitialization();
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, nullptr));
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidAcceptsAGuidWhoseOnlyNonZeroFieldIsAnyOne) {
+  // 11 fields: Data1, Data2, Data3 and Data4[0..7]. Each alone must make an accepted slot's GUID count.
+  for (size_t field = 0; field < 11; ++field) {
+    SessionLobby fixture(1, 1, 1);
+    GUID& guid = fixture.sessions[0].guid;
+    guid = GUID{};
+    if (field == 0) {
+      guid.Data1 = 1;
+    } else if (field == 1) {
+      guid.Data2 = 1;
+    } else if (field == 2) {
+      guid.Data3 = 1;
+    } else {
+      guid.Data4[field - 3] = 1;
+    }
+    nevr_game_server::ServerContext context;
+    context.Initialize(&fixture.lobby, nullptr);
+    context.FinalizeInitialization();
+
+    GUID out{};
+    EXPECT_TRUE(context.TryGetEntrantSessionGuid(0, &out)) << "field " << field << " alone was treated as a zero GUID";
+  }
+}
+
+TEST(ServerContextEntrants, TryGetEntrantSessionGuidRefusesAnAcceptedSlotWithAZeroGuid) {
+  SessionLobby fixture(1, 1, 1);
+  fixture.sessions[0].guid = GUID{};
+  nevr_game_server::ServerContext context;
+  context.Initialize(&fixture.lobby, nullptr);
+  context.FinalizeInitialization();
+
+  GUID out{};
+  out.Data1 = 0xAA;
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0xAAU);
+}
