@@ -54,9 +54,32 @@ class TheStepOrder(unittest.TestCase):
             read("data_wiring.cpp"), "void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {"
         )
 
-    def test_the_root_is_resolved_again_only_after_a_fetch_and_before_the_game_continues(self):
+    def test_the_step_looks_at_the_root_the_engine_reads_and_never_resolves_it_again(self):
         body = self.body()
-        self.assertRegex(body, r"kFetched\)\s*obb_skip::ResolveRoot\(config\.exists\)")
+        self.assertIn("const std::string engineRoot = EngineRoot();", body)
+        self.assertIn("config.engine_root = engineRoot;", body)
+        self.assertNotIn("ResolveRoot", body)
+        root = extract_braced_function(read("data_wiring.cpp"), "std::string EngineRoot() {")
+        self.assertIn("obb_skip::CurrentCounts().mountSkipped > 0", root)
+        self.assertIn("std::string(obb_skip::CurrentRoot())", root)
+        self.assertIn("std::string(data_root::kLegacyRoot)", root)
+
+    def test_a_release_build_never_fetches_and_a_missing_install_ends_the_process_with_its_reason(self):
+        body = self.body()
+        self.assertIn("config.allow_fetch = Opts().allow_fetch;", body)
+        self.assertRegex(body, r"if \(missing\) \{\s*EndFailed\(\"game_data_missing\"\);")
+        self.assertLess(body.index("RunDataStep"), body.index('EndFailed("game_data_missing")'))
+        header = read("data_wiring.h")
+        self.assertRegex(header, r"bool allow_fetch = false;")
+        entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
+        self.assertIn("options.allow_fetch = nevr_build::kIsDev;", entry)
+
+    def test_no_storage_grant_with_the_legacy_root_writes_nothing_and_ends_the_process(self):
+        body = self.body()
+        self.assertRegex(body, r"if \(!granted && engineRoot == data_root::kLegacyRoot\) \{")
+        gate = body.index("!granted && engineRoot == data_root::kLegacyRoot")
+        self.assertLess(gate, body.index("RunDataStep"))
+        self.assertIn('EndFailed("no_storage_grant")', body[gate:body.index("RunDataStep")])
 
     def test_a_failed_step_ends_nonzero_through_the_end_with_its_reason(self):
         body = self.body()
