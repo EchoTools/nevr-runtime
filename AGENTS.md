@@ -347,8 +347,8 @@ five names fails the run red, so a second dispatch never overwrites signed files
 which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
 (a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
 `guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while
-a dispatch is running makes that run upload to the published release. The signed Windows zips live on the GitHub release; echo.taxi
-holds Quest APKs and dry runs only.
+a dispatch is running makes that run upload to the published release. The signed Windows zips live on the GitHub release; the Quest APKs and dry
+runs are published outside GitHub.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
 `gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`

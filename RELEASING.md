@@ -28,12 +28,12 @@ all read or check that one list, so the names below cannot drift from the build.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
-**Signed Windows zips live on the GitHub release.** echo.taxi holds Quest APKs and dry runs only.
+**Signed Windows zips live on the GitHub release.** Quest APKs and dry runs are published outside GitHub.
 
-**Quest APKs never go on GitHub.** They are hosted on echo.taxi, `https://echo.taxi/nevr-runtime/quest/<file>` with a
-`<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the host without
-overwriting a name, and verify it from outside by hash. Never request the URL before the file is installed: the CDN
-caches the 200 HTML answer for that exact URL. A changed file gets a new name (the version is in it).
+**Quest APKs never go on GitHub.** They are published outside GitHub, under `nevr-runtime/quest/<file>` with a
+`<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the publishing host
+without overwriting a name, and verify it from outside by hash. Never request the published address before the file is
+installed: the CDN caches the 200 HTML answer for that exact address. A changed file gets a new name (the version is in it).
 
 ## Before the tag
 

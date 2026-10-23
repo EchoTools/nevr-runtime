@@ -82,7 +82,8 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertIn("-windows-server) and its symbol files", (REPO / "justfile").read_text(encoding="utf-8"))
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("the SHA-256 of the Windows player zip", releasing)
-        self.assertIn("echo.taxi holds Quest APKs and dry runs only", releasing)
+        self.assertIn("Quest APKs and dry runs are published outside GitHub", releasing)
+        self.assertNotIn("echo.taxi", releasing)
 
 
 if __name__ == "__main__":
