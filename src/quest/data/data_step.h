@@ -24,6 +24,7 @@ enum class StepOutcome {
   kUsed,     // the data was there
   kFetched,  // the data was fetched and is in place
   kFailed,   // the data could not be had; the floor message was presented
+  kMissing,  // the data is not there and this build does not fetch (allow_fetch false); kGameDataMissing was presented
 };
 
 const char* StepOutcomeName(StepOutcome outcome) noexcept;
@@ -51,6 +52,11 @@ inline constexpr const char* kNeedsStoragePermission =
     "Echo VR needs the Storage permission to set up its game data. Open the headset's Settings, find Echo VR under "
     "Apps, allow Storage (Files and media), then start the game again.";
 
+// Shown when the game data is not on the headset and this build does not download it: a player installs the
+// production build through Echo Launcher once, which puts the data there (docs/adr/0013-quest-game-data-from-the-launcher.md).
+inline constexpr const char* kGameDataMissing =
+    "Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again.";
+
 struct StepConfig {
   data_root::ExistsFn exists = nullptr;  // the filesystem, for Resolve and Decide
   // The legacy root (/storage/emulated/0/readyatdawn) is read only with the storage permission; the media root
@@ -64,6 +70,12 @@ struct StepConfig {
   // then CleanLeftovers, on each). Empty: every data-root candidate (data_root.h) the config may read.
   std::vector<std::string> recovery_roots;
   FetchConfig fetch;                      // root and replacing are set by the step
+  // False in a release build: the step only looks. Nothing is fetched, recovered or cleaned (no write at all); when the
+  // data is not there it presents kGameDataMissing and ends as kMissing.
+  bool allow_fetch = true;
+  // The one root the engine reads this launch (the legacy root without an OBB; the root the OBB skip serves with one).
+  // Not empty: only this root counts, as data and as the target of a fetch. Empty: the two data-root candidates.
+  std::string engine_root;
   std::string build_id;
   // Test seam: where a fetch writes when it is not empty. Production leaves it empty and the fetch goes where Decide
   // says (the media root, or the root that holds a `_data` of another build).

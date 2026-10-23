@@ -1,20 +1,24 @@
-/* The first-run data step, wired into the game's start (#807, docs/adr/0011-quest-game-data-first-run.md).
+/* The first-run data step, wired into the game's start (#807, #758, docs/adr/0013-quest-game-data-from-the-launcher.md).
  *
- * The permission-wait hook (permission_wait_hook.h) calls AfterStorage on the game's thread, after the boot request's
- * wait and before RequestPermissions returns to the game, so the data is in place before CncaGame::Initialize reads its
- * manifests. AfterStorage is told how the wait ended (permission_wait.h, StorageOutcome):
- *   - data::RunDataStep runs over the data roots with the pinned CurlTransport. The media root
- *     (Android/media/<package>, the app's own directory) needs no storage permission; the legacy root does. With the
- *     grant both roots are used. Without it (a denial, a timeout, no check, no storage permission in the request) the
- *     legacy root is neither recovered nor read, the decision is made on the media root alone and one
- *     `data_legacy_skipped` line says so; a failure to write the media root then ends with the message
- *     data::kNeedsStoragePermission (how to allow Storage), `data_step outcome=no_storage_grant`, and a nonzero exit.
- *     First the step puts the leftovers of an interrupted install right on the roots it may use (RecoverReplaced, then
- *     CleanLeftovers), then:
- *   - data already there (any of the three data-root outcomes): nothing is fetched, one `data_step` line says so,
- *     and a whole `_data.zip.part` of ours left beside it is removed;
- *   - data missing or of another build: the fetch runs; on success obb_skip::ResolveRoot picks the root again so the
- *     game is served the new data;
+ * The permission-wait hook (permission_wait_hook.h) calls AfterStorage on the game's thread, once, before the game's
+ * manifest read: from the CheckPermission hook when the microphone permission is already granted (no request follows),
+ * otherwise after the boot request's wait, before RequestPermissions returns. AfterStorage is told what the storage
+ * permissions are (permission_wait.h, StorageOutcome).
+ *
+ * The one root that counts is the root the engine reads this launch. With an OBB file the OBB skip ran before this
+ * (CSysFile::Init mounts in android_main, ahead of the game's Initialize) and the game recorded the root it served
+ * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found", the skip never ran, and
+ * CSysInfo::GetDataRootDir answers the legacy root. So:
+ *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
+ *     written; the player is shown data::kNeedsStoragePermission, it is held ten seconds, and the process ends nonzero
+ *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is.
+ *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
+ *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
+ *   - data already there: nothing is fetched and one `data_check action=use` line says so;
+ *   - data missing or of another build, in a development build (Options::allow_fetch): the fetch runs into that root;
+ *   - data missing or of another build, in a release build: nothing is fetched or written; the player is shown
+ *     data::kGameDataMissing (install with Echo Launcher), it is held ten seconds, a `data_step outcome=missing`
+ *     Error line records it, and the process ends nonzero (reason `game_data_missing`);
  *   - the fetch fails: the visible message (toast_presenter.h) is shown and held ten seconds, a `data_step` Error line
  *     records it, and the process ends with a nonzero code after the `android_main_returned` line and the before-exit
  *     report (process_end::EndWithExitCode) instead of letting the game fail its own load.
@@ -69,6 +73,7 @@ struct Options {
   std::string fetch_root_override;             // empty: where the data step decides (test seam)
   unsigned hold_ms = 5000;                     // the message is held twice this long (ten seconds), shown again between
   bool probe_enabled = false;                  // read the measurement probe file (dev builds only; entry.cpp sets it)
+  bool allow_fetch = false;                    // download missing data (dev builds only; entry.cpp sets it); false: only look
   std::vector<std::string> recovery_roots;     // empty: both data roots (test seam)
   // Test seams for the pinned zip: when `zip_sha256` is not empty the fetch uses these instead of the pins in
   // data/plan.h, with two attempts and no real backoff.

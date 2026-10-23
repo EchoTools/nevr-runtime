@@ -1,8 +1,10 @@
 // Host test for the first-run data step as the game reaches it (src/quest/sentinel/data_wiring.cpp): through the real
-// permission-wait handler and its thunk entry, with stand-ins for the game's RequestPermissions, the toast, the
-// process end and the network. Covers: data already there is not fetched, a fetch serves the new root to the game, a
-// failed fetch shows the floor message and ends the process after holding it, the probe file acts once, and nothing
-// runs on a request that is not the boot request.
+// permission-wait handlers and their thunk entries (RequestPermissions and CheckPermission), with stand-ins for the
+// game's functions, the toast, the process end and the network. Covers: data already there is not fetched; a
+// development build fetches into the root the engine reads (the legacy root without an OBB file); a release build
+// never fetches and shows the missing-data message; Storage not granted writes nothing and shows the Storage message,
+// on both the request path and the microphone-granted path; the step runs once across both paths; a failed fetch shows
+// the floor message and ends the process after holding it; the probe file acts once.
 //
 // Built and run by `just test-quest-data-net`.
 
@@ -17,6 +19,7 @@
 #include <vector>
 
 #include "data_wiring.h"
+#include "hook_log.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
@@ -35,14 +38,15 @@ constexpr const char* kBuild = "b243509c08ce677aeb95fa348016949b3fc45230";
 constexpr const char* kManifestRel = "_data/5932408047/rad15/android/manifests/48037dc70b0ecab2";
 
 std::set<std::string> g_present;
+std::string g_served_root = nevr_quest::data_root::kLegacyRoot;  // where the fetch's tree "is" once served
 bool g_serving_done = false;  // the transport has served the last byte: the fetch's tree is "there"
 
 bool FakeExists(const char* path) noexcept {
   if (g_present.count(path) != 0) return true;
   if (g_serving_done) {
-    const std::string media = nevr_quest::data_root::kMediaRoot;
-    return std::string(path) == media || std::string(path) == media + "/_data" ||
-           std::string(path) == media + "/" + kManifestRel;
+    const std::string root = g_served_root;
+    return std::string(path) == root || std::string(path) == root + "/_data" ||
+           std::string(path) == root + "/" + kManifestRel;
   }
   return false;
 }
@@ -72,6 +76,19 @@ unsigned char g_app[0x100];
 bool g_have_app = false;
 void* FakeApp() noexcept { return g_have_app ? static_cast<void*>(g_app) : nullptr; }
 void SetDestroyRequested(int value) { std::memcpy(g_app + 0x64, &value, sizeof(value)); }
+
+std::vector<std::string> g_lines;  // the sentinel log lines of the run
+void CaptureSink(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+
+// The first captured line of `event` (empty when none).
+std::string LineOf(const char* event) {
+  const std::string key = std::string("\"event\":\"") + event + "\"";
+  for (const std::string& l : g_lines) {
+    if (l.find(key) != std::string::npos) return l;
+  }
+  return "";
+}
+bool Has(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
 
 void RealRequestPermissions(const char* const*, std::uint64_t) { ++g_requests; }
 bool GrantedCheck(const char*) noexcept { return true; }
@@ -120,8 +137,37 @@ std::string GoodZip() {
                    {"_data/5932408047/rad15/android/manifests/48037dc70b0ecab2", Pattern(20000), 8}});
 }
 
+namespace obb = nevr_quest::obb_skip;
+
+void RealMount(void*, const char*, const char*, void (*)(const char*, int, void*), void*) {}
+void NoCallback(const char*, std::int32_t, void*) {}
+
+// The game found an OBB file and mounted through the OBB skip: its callback is answered and the root it serves is
+// `root` (a directory that exists; the skip serves the media directory when it exists). Without this call the skip never
+// ran (CSysFile::Init returned at "OBB not found"): the engine's root is the legacy literal. Call it after the Rig is
+// made and before the boot request, as the game's mount precedes CR15Game::Initialize.
+void ObbSkipsTheMountServing(const char* root) {
+  obb::ArmForTest();
+  *obb::MountThunk::OriginalOut() = reinterpret_cast<void*>(&RealMount);
+  using MountFn = obb::MountThunk::Fn;
+  reinterpret_cast<MountFn>(obb::MountThunk::EntryAddress())(nullptr, "x.obb", "k", &NoCallback, nullptr);
+  g_present.insert(root);
+  obb::ResolveRoot(&FakeExists);
+}
+
 pw::RequestThunk::Fn RequestEntry() {
   return reinterpret_cast<pw::RequestThunk::Fn>(pw::RequestThunk::EntryAddress());
+}
+pw::CheckThunk::Fn CheckEntry() {
+  return reinterpret_cast<pw::CheckThunk::Fn>(pw::CheckThunk::EntryAddress());
+}
+
+// The game's CheckPermission: the microphone and each storage permission answer as the test sets them.
+bool g_micGranted = true;
+bool g_storageGranted = true;
+bool GameCheck(const char* permission) noexcept {
+  if (std::strcmp(permission, "android.permission.RECORD_AUDIO") == 0) return g_micGranted;
+  return g_storageGranted;
 }
 
 struct Rig {
@@ -131,6 +177,7 @@ struct Rig {
   dw::Options options;
   explicit Rig(bool network = true) : net(zip, network) {
     g_present.clear();
+    g_served_root = nevr_quest::data_root::kLegacyRoot;
     g_serving_done = false;
     g_shown.clear();
     g_log.clear();
@@ -139,10 +186,15 @@ struct Rig {
     g_exit_code = 0;
     g_exit_reason.clear();
     g_have_app = false;
+    g_lines.clear();
+    g_micGranted = true;
+    g_storageGranted = true;
+    sentinel::SetLogSink(&CaptureSink);
     SetDestroyRequested(0);
     nevr_quest::obb_skip::ResetForTest();
     pw::ResetForTest();
     pw::RequestThunk::Reset();
+    pw::CheckThunk::Reset();
     *pw::RequestThunk::OriginalOut() = reinterpret_cast<void*>(&RealRequestPermissions);
     options.show = &FakeShow;
     options.app = &FakeApp;
@@ -153,10 +205,12 @@ struct Rig {
     options.probe_path = scratch.Path("nevr-data-probe");
     options.fetch_root_override = scratch.Path("root");
     options.hold_ms = 7;
+    options.allow_fetch = true;  // a development build; the release cases clear it
     options.zip_sha256 = nevr_quest::data::Sha256Hex(zip.data(), zip.size());
     options.zip_bytes = zip.size();
     options.extracted_bytes = 1000;
   }
+  ~Rig() { sentinel::SetLogSink(nullptr); }
   // The game's boot request, through the real hook.
   void BootRequest(bool (*check)(const char*) noexcept = &GrantedCheck) {
     dw::Install(options);
@@ -165,29 +219,70 @@ struct Rig {
                                          "android.permission.WRITE_EXTERNAL_STORAGE"};
     RequestEntry()(names, 2);
   }
+  // The game's first CheckPermission (the microphone), through the real hook, on a headset that already holds the
+  // microphone permission: no request follows.
+  bool MicCheck() {
+    dw::Install(options);
+    pw::ArmForTest(&GameCheck, 5, 100);
+    *pw::CheckThunk::OriginalOut() = reinterpret_cast<void*>(&GameCheck);
+    return CheckEntry()("android.permission.RECORD_AUDIO");
+  }
+  void LaterBootRequest() {
+    static const char* const names[3] = {"android.permission.RECORD_AUDIO", "android.permission.READ_EXTERNAL_STORAGE",
+                                         "android.permission.WRITE_EXTERNAL_STORAGE"};
+    RequestEntry()(names, 3);
+  }
 };
+
+std::string Legacy(const char* rel = "") {
+  return std::string(nevr_quest::data_root::kLegacyRoot) + (*rel != '\0' ? std::string("/") + rel : std::string());
+}
+std::string Media(const char* rel = "") {
+  return std::string(nevr_quest::data_root::kMediaRoot) + (*rel != '\0' ? std::string("/") + rel : std::string());
+}
+void DataIn(const std::string& root) { g_present.insert({root, root + "/_data", root + "/" + kManifestRel}); }
 
 void DataAlreadyThereIsNotFetchedAndTheProcessContinues() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());  // no OBB file: the engine reads the legacy root
   rig.BootRequest();
   QCHECK(g_requests == 1);        // the game's own call ran
   QCHECK(rig.net.calls == 0);
   QCHECK(g_ends == 0);
   QCHECK(g_shown.empty());
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
 }
 
-void AFetchPlacesTheDataAndTheGameIsServedTheRoot() {
+void AFetchPlacesTheDataInTheRootTheEngineReads() {
   Rig rig;
-  QCHECK(std::strcmp(nevr_quest::obb_skip::CurrentRoot(), nevr_quest::data_root::kLegacyRoot) == 0);  // none yet
   rig.BootRequest();
   QCHECK(rig.net.calls == 1);
   QCHECK(Exists(rig.options.fetch_root_override + "/" + kManifestRel));
   QCHECK(g_ends == 0);
   // The download notice is shown once, before the download starts: nothing else.
   QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kDownloadNotice);
-  QCHECK(std::strcmp(nevr_quest::obb_skip::CurrentRoot(), nevr_quest::data_root::kMediaRoot) == 0);
+  // A sideloaded headset has no OBB file, the skip never ran, and the engine reads the legacy root: that is the target.
+  const std::string check = LineOf("data_check");
+  QCHECK(Has(check, "\"action\":\"fetch\"") && Has(check, "\"root\":\"" + Legacy() + "\""));
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"fetched\""));
+}
+
+void AFetchWithAnObbServingTheMediaRootTargetsTheMediaRoot() {
+  Rig rig;
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);  // the game recorded the media root
+  g_served_root = nevr_quest::data_root::kMediaRoot;
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 1 && g_ends == 0);
+  const std::string check = LineOf("data_check");
+  QCHECK(Has(check, "\"action\":\"fetch\"") && Has(check, "\"root\":\"" + Media() + "\""));
+}
+
+void DataInTheMediaRootDoesNotCountWhenTheEngineReadsTheLegacyRoot() {
+  Rig rig;
+  DataIn(Media());  // this build's data, in a root nothing reads
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 1);  // the engine's root has none: it is fetched
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"fetch\""));
 }
 
 void AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess() {
@@ -225,8 +320,7 @@ void ARequestThatIsNotTheBootRequestRunsNothing() {
 
 void AToastProbeShowsItsTextOnceAndIsConsumed() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());
   rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "toast probe text 1\nignored line\n");
   rig.BootRequest();
@@ -239,8 +333,7 @@ void AToastProbeShowsItsTextOnceAndIsConsumed() {
 
 void ABlockProbeHoldsTheThreadForItsSeconds() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());
   rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "block 3\n");
   rig.BootRequest();
@@ -250,26 +343,62 @@ void ABlockProbeHoldsTheThreadForItsSeconds() {
 
 void ABlockProbeIsCapped() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());
   rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "block 99999\n");
   rig.BootRequest();
   QCHECK(std::count(g_log.begin(), g_log.end(), std::string("sleep:1000")) == 900);
 }
 
-// Without the grant the media root (the app's own directory, no permission needed) is still used; the legacy root is not.
-void ADeniedGrantStillUsesDataThatIsInTheMediaRoot() {
+// ---- Storage not granted ----
+
+// Without the grant the legacy root cannot be read, so with no OBB file (the engine reads the legacy root) nothing is
+// looked at, fetched or written: the player is told how to allow Storage and the process ends.
+void StorageNotGrantedWithoutAnObbShowsTheStorageMessageAndWritesNothing() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());  // present or not, it cannot be read
   rig.BootRequest(&DeniedCheck);
   QCHECK(g_requests == 1);  // the game's own call still ran
-  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(rig.net.calls == 0);
+  QCHECK(!Exists(rig.options.fetch_root_override));  // nothing was created
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
+  QCHECK(g_shown.size() == 2);  // the message, and again after the first hold
+  QCHECK(g_shown[0] == nevr_quest::data::kNeedsStoragePermission && g_shown[1] == g_shown[0]);
+  QCHECK(g_shown[0].find("Storage") != std::string::npos && g_shown[0].find("Settings") != std::string::npos);
+  int holds = 0;
+  for (const std::string& e : g_log) holds += e == "sleep:7" ? 1 : 0;
+  QCHECK(holds == 2);
+  QCHECK(LineOf("data_check").empty());  // the step never looked
 }
 
-void ADeniedGrantFetchesIntoTheMediaRootAndSucceeds() {
+void StorageNotGrantedOnTheMicGrantedPathShowsTheStorageMessageAndWritesNothing() {
   Rig rig;
+  g_storageGranted = false;  // the microphone is granted, so the game never asks for Storage
+  const bool answer = rig.MicCheck();
+  QCHECK(answer);  // the game's own answer comes back untouched
+  QCHECK(g_requests == 0);
+  QCHECK(rig.net.calls == 0);
+  QCHECK(!Exists(rig.options.fetch_root_override));
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
+  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);
+  QCHECK(Has(LineOf("data_step_start"), "\"storage\":\"denied_not_requested\""));
+}
+
+// With an OBB file the game recorded the root the skip served; the media root needs no permission.
+void StorageNotGrantedWithAnObbServingTheMediaRootStillUsesItsData() {
+  Rig rig;
+  DataIn(Media());
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(g_requests == 1);
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
+}
+
+void StorageNotGrantedWithAnObbServingTheMediaRootFetchesIntoItAndSucceeds() {
+  Rig rig;
+  g_served_root = nevr_quest::data_root::kMediaRoot;
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);
   rig.BootRequest(&DeniedCheck);
   QCHECK(rig.net.calls == 1);
   QCHECK(Exists(rig.options.fetch_root_override + "/" + kManifestRel));
@@ -277,28 +406,15 @@ void ADeniedGrantFetchesIntoTheMediaRootAndSucceeds() {
   QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kDownloadNotice);  // no Storage message
 }
 
-void ADeniedGrantNeverReadsTheLegacyRoot() {
+void StorageNotGrantedWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero() {
   Rig rig;
-  const std::string legacy = nevr_quest::data_root::kLegacyRoot;
-  g_present = {legacy, legacy + "/_data", legacy + "/" + kManifestRel};  // data is in the legacy root only
-  rig.BootRequest(&DeniedCheck);
-  QCHECK(rig.net.calls == 1);  // not "use": the legacy root is skipped, so the media root has none and it fetches
-  // With the grant the same filesystem is used as it stands.
-  Rig granted;
-  g_present = {legacy, legacy + "/_data", legacy + "/" + kManifestRel};
-  granted.BootRequest();
-  QCHECK(granted.net.calls == 0 && g_ends == 0);
-}
-
-void ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero() {
-  Rig rig;
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);
   WriteFile(rig.scratch.Path("afile"), "x");
   rig.options.fetch_root_override = rig.scratch.Path("afile/root");  // under a file: the root cannot be made, bad_root
   rig.BootRequest(&DeniedCheck);
   QCHECK(rig.net.calls == 0);
   QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
   QCHECK(!g_shown.empty() && g_shown.back() == nevr_quest::data::kNeedsStoragePermission);
-  QCHECK(g_shown.back().find("Storage") != std::string::npos && g_shown.back().find("Settings") != std::string::npos);
   // One message, held once (shown, then again after the first hold): not the step's own and then this one.
   int storage = 0;
   for (const std::string& m : g_shown) {
@@ -320,17 +436,98 @@ void AGrantedUnwritableRootEndsWithTheStepsOwnReason() {
   for (const std::string& m : g_shown) QCHECK(m != nevr_quest::data::kNeedsStoragePermission);
 }
 
+// ---- the step runs once across both paths ----
+
+// Mic denied: the game checks, sees "denied", asks (RequestPermissions) and the step runs there. A later CheckPermission
+// for the microphone must not run it again.
+void TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows() {
+  Rig rig;
+  dw::Install(rig.options);
+  pw::ArmForTest(&GrantedCheck, 5, 100);
+  *pw::CheckThunk::OriginalOut() = reinterpret_cast<void*>(&GameCheck);
+  g_micGranted = false;
+  QCHECK(!CheckEntry()("android.permission.RECORD_AUDIO"));  // denied: the request path will run the step
+  QCHECK(rig.net.calls == 0 && g_shown.empty());
+  rig.LaterBootRequest();                                    // the game's request: the step runs here
+  QCHECK(rig.net.calls == 1 && g_shown.size() == 1);
+  g_micGranted = true;
+  QCHECK(CheckEntry()("android.permission.RECORD_AUDIO"));   // a later microphone check
+  rig.LaterBootRequest();                                    // and a later request
+  QCHECK(rig.net.calls == 1 && g_shown.size() == 1 && g_ends == 0);
+  QCHECK(g_requests == 2);
+}
+
+// Mic granted: the step runs at the check. A request that follows anyway (a script node) must not run it again.
+void TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows() {
+  Rig rig;
+  QCHECK(rig.MicCheck());
+  QCHECK(rig.net.calls == 1 && g_shown.size() == 1);
+  rig.LaterBootRequest();
+  QCHECK(rig.net.calls == 1 && g_shown.size() == 1 && g_ends == 0);
+}
+
+// ---- a release build never fetches ----
+
+void AReleaseBuildWithoutDataShowsTheMissingMessageHoldsItAndEndsNonzero() {
+  Rig rig;
+  rig.options.allow_fetch = false;
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0);                       // no network at all
+  QCHECK(!Exists(rig.options.fetch_root_override));  // and nothing written
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "game_data_missing");
+  QCHECK(g_shown.size() == 2);
+  QCHECK(g_shown[0] == nevr_quest::data::kGameDataMissing && g_shown[1] == g_shown[0]);
+  // shown, held, shown again, held, then the process ends: the player has had ten seconds in production (two holds).
+  const std::vector<std::string> want = {"show", "sleep:7", "show", "sleep:7", "end"};
+  std::vector<std::string> got;
+  for (const std::string& e : g_log) {
+    if (e == "sleep:7" || e == "show" || e == "end") got.push_back(e);
+  }
+  QCHECK(got == want);
+  QCHECK(Has(LineOf("data_step"), "\"outcome\":\"missing\""));
+  QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Legacy() + "\""));
+}
+
+void AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath() {
+  Rig rig;
+  rig.options.allow_fetch = false;
+  QCHECK(rig.MicCheck());
+  QCHECK(rig.net.calls == 0 && g_requests == 0);
+  QCHECK(g_ends == 1 && g_exit_reason == "game_data_missing");
+  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kGameDataMissing);
+}
+
+void AReleaseBuildWithDataUsesItAndSaysNothing() {
+  Rig rig;
+  rig.options.allow_fetch = false;
+  DataIn(Legacy());
+  rig.BootRequest();
+  QCHECK(rig.net.calls == 0 && g_ends == 0 && g_shown.empty());
+  QCHECK(g_requests == 1);
+  QCHECK(Has(LineOf("data_check"), "\"action\":\"use\""));
+}
+
+void AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing() {
+  Rig rig;
+  rig.options.allow_fetch = false;
+  ObbSkipsTheMountServing(nevr_quest::data_root::kMediaRoot);
+  rig.BootRequest(&DeniedCheck);  // the media root needs no Storage permission
+  QCHECK(rig.net.calls == 0 && !Exists(rig.options.fetch_root_override));
+  QCHECK(g_ends == 1 && g_exit_reason == "game_data_missing");
+  QCHECK(Has(LineOf("data_check"), "\"root\":\"" + Media() + "\""));
+}
+
 // ---- the production exists check (obb_skip::PathExists), over two launches ----
 
-std::string g_map_root;  // where the media root lives in this test
+std::string g_map_root;  // where the legacy root (the engine's root without an OBB file) lives in this test
 
-// The data roots are fixed absolute paths: this rewrites the media root's prefix to a scratch directory and then asks
+// The data roots are fixed absolute paths: this rewrites the legacy root's prefix to a scratch directory and then asks
 // the production check about the real file. Nothing else is stood in for.
 bool MappedPathExists(const char* path) noexcept {
-  const std::string media = nevr_quest::data_root::kMediaRoot;
+  const std::string legacy = nevr_quest::data_root::kLegacyRoot;
   const std::string p = path;
-  if (p.compare(0, media.size(), media) != 0) return false;  // the legacy root: nothing there
-  return nevr_quest::obb_skip::PathExists((g_map_root + p.substr(media.size())).c_str());
+  if (p.compare(0, legacy.size(), legacy) != 0) return false;  // the media root: nothing there
+  return nevr_quest::obb_skip::PathExists((g_map_root + p.substr(legacy.size())).c_str());
 }
 
 void ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly() {
@@ -364,7 +561,7 @@ void ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain() {
     QCHECK(again.net.calls == 0);
     QCHECK(g_ends == 0 && g_shown.empty());
   }
-  // Nothing was set aside: the media root holds `_data` and no `_data.replaced-*`.
+  // Nothing was set aside: the root holds `_data` and no `_data.replaced-*`.
   QCHECK(Exists(g_map_root + "/_data"));
   int aside = 0;
   if (DIR* d = ::opendir(g_map_root.c_str())) {
@@ -376,8 +573,7 @@ void ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain() {
 
 void TheProbeIsNotReadInAShippedBuild() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());
   rig.options.probe_enabled = false;
   WriteFile(rig.options.probe_path, "toast probe text 1\n");
   rig.BootRequest();
@@ -388,12 +584,11 @@ void TheProbeIsNotReadInAShippedBuild() {
 // The probe reads shared storage's neighbour: it waits for the grant like the legacy root does.
 void TheProbeIsNotReadWithoutTheGrant() {
   Rig rig;
-  const std::string media = nevr_quest::data_root::kMediaRoot;
-  g_present = {media, media + "/_data", media + "/" + kManifestRel};
+  DataIn(Legacy());
   rig.options.probe_enabled = true;
   WriteFile(rig.options.probe_path, "toast probe text 1\n");
   rig.BootRequest(&DeniedCheck);
-  QCHECK(g_shown.empty());
+  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);  // the Storage message only
   QCHECK(Exists(rig.options.probe_path) && !Exists(rig.options.probe_path + ".done"));
 }
 
@@ -415,17 +610,26 @@ void TheRetryWaitUsesTheFetchsDefaultBackoffInSlices() {
 
 int main() {
   DataAlreadyThereIsNotFetchedAndTheProcessContinues();
-  AFetchPlacesTheDataAndTheGameIsServedTheRoot();
+  AFetchPlacesTheDataInTheRootTheEngineReads();
+  AFetchWithAnObbServingTheMediaRootTargetsTheMediaRoot();
+  DataInTheMediaRootDoesNotCountWhenTheEngineReadsTheLegacyRoot();
   AFailedFetchShowsTheMessageHoldsItAndEndsTheProcess();
   ARequestThatIsNotTheBootRequestRunsNothing();
   AToastProbeShowsItsTextOnceAndIsConsumed();
   ABlockProbeHoldsTheThreadForItsSeconds();
   ABlockProbeIsCapped();
-  ADeniedGrantStillUsesDataThatIsInTheMediaRoot();
-  ADeniedGrantFetchesIntoTheMediaRootAndSucceeds();
-  ADeniedGrantNeverReadsTheLegacyRoot();
-  ADeniedGrantWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
+  StorageNotGrantedWithoutAnObbShowsTheStorageMessageAndWritesNothing();
+  StorageNotGrantedOnTheMicGrantedPathShowsTheStorageMessageAndWritesNothing();
+  StorageNotGrantedWithAnObbServingTheMediaRootStillUsesItsData();
+  StorageNotGrantedWithAnObbServingTheMediaRootFetchesIntoItAndSucceeds();
+  StorageNotGrantedWithAnUnwritableMediaRootSaysHowToAllowStorageAndEndsNonzero();
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
+  TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
+  TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();
+  AReleaseBuildWithoutDataShowsTheMissingMessageHoldsItAndEndsNonzero();
+  AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath();
+  AReleaseBuildWithDataUsesItAndSaysNothing();
+  AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing();
   ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
   ADefaultExistsSeesTheFetchedDataOnTheNextLaunchAndFetchesNothingAgain();
   TheProbeIsNotReadInAShippedBuild();

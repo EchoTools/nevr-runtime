@@ -97,6 +97,7 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::Show;
+    options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
     nevr_quest::data_wiring::Install(options);
     return nevr_quest::permission_wait::Install();

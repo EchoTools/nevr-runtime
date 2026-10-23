@@ -147,17 +147,37 @@ void HoldMessage(const std::string& message) noexcept {
 
 }  // namespace
 
+// The one root the engine reads this launch. With an OBB file the game's OBB callback records what the OBB skip served
+// (obb_skip::CurrentRoot, after a skipped mount); without one CSysFile::Init returns before the mount, the skip never
+// runs, and GetDataRootDir answers the legacy root (docs/adr/0007, 0013).
+std::string EngineRoot() {
+  return obb_skip::CurrentCounts().mountSkipped > 0 ? std::string(obb_skip::CurrentRoot())
+                                                    : std::string(data_root::kLegacyRoot);
+}
+
 void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   sentinel::LogFields(sentinel::LogLevel::kInfo, "data_step_start",
                       {{"storage", permission_wait::StorageOutcomeName(outcome)}});
-  // The media root (Android/media/<package>) is the app's own directory and needs no permission; the legacy root
-  // does. Without the grant the step still runs, on the media root alone, and says it skipped the legacy root.
+  // The legacy root is shared storage: reading it needs the grant. Without it nothing is looked at, fetched or
+  // written, the player is told how to allow Storage, and the process ends.
   const bool granted = permission_wait::StorageGranted(outcome);
+  const std::string engineRoot = EngineRoot();
+  if (!granted && engineRoot == data_root::kLegacyRoot) {
+    sentinel::LogFields(sentinel::LogLevel::kError, "data_step",
+                        {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},
+                         {"root", engineRoot.c_str()}, {"message", data::kNeedsStoragePermission}});
+    Present(data::kNeedsStoragePermission, "floor");
+    HoldMessage(data::kNeedsStoragePermission);
+    EndFailed("no_storage_grant");
+    return;
+  }
   if (granted && Opts().probe_enabled) RunProbe();
 
   data::StepConfig config;
   config.exists = Opts().exists != nullptr ? Opts().exists : &obb_skip::PathExists;
   config.legacy_root_readable = granted;
+  config.allow_fetch = Opts().allow_fetch;
+  config.engine_root = engineRoot;
   // Without the grant an unwritable media root is reported once, with the Storage advice, not twice.
   if (!granted) config.bad_root_message = data::kNeedsStoragePermission;
   config.build_id = sentinel::pinned::kLibR15BuildId;
@@ -196,12 +216,12 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
   const data::StepResult result = data::RunDataStep(config, *transport);
 
   const bool failed = result.outcome == data::StepOutcome::kFailed;
-  sentinel::LogFields(failed ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "data_step",
+  const bool missing = result.outcome == data::StepOutcome::kMissing;
+  sentinel::LogFields(failed || missing ? sentinel::LogLevel::kError : sentinel::LogLevel::kInfo, "data_step",
                       {{"outcome", data::StepOutcomeName(result.outcome)},
                        {"root", result.root.c_str()},
                        {"status", data::FetchStatusName(result.status)},
                        {"message", result.message.c_str()}});
-  if (result.outcome == data::StepOutcome::kFetched) obb_skip::ResolveRoot(config.exists);
   if (failed && !granted && result.status == data::FetchStatus::kBadRoot) {
     // The media root cannot be written and there is no permission: the step already showed and held the Storage
     // message (bad_root_message), so this only records why the process ends.
@@ -209,6 +229,10 @@ void AfterStorage(permission_wait::StorageOutcome outcome) noexcept {
                         {{"outcome", "no_storage_grant"}, {"storage", permission_wait::StorageOutcomeName(outcome)},
                          {"message", data::kNeedsStoragePermission}});
     EndFailed("no_storage_grant");
+    return;
+  }
+  if (missing) {
+    EndFailed("game_data_missing");
     return;
   }
   if (failed) EndFailed("data_step_failed");
