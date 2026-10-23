@@ -120,6 +120,8 @@ your PR does:
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
+  Revert a mutant from a saved copy of the file or a stash, or commit first; never `git checkout` a file that has
+  uncommitted work in it.
 
   ```
   ## Mutants
