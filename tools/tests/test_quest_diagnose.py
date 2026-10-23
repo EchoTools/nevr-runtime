@@ -346,7 +346,7 @@ class DiagnoseCases:
         self.assertNotIn("NO GAME DATA", text)
         self.assertIn("running after 0 s: yes", text)
         self.assertIn("No failure seen: running after 0 s", text)
-        self.assertIn("the data step can't be confirmed from the log", text)
+        self.assertIn("this build logged no data-mount line, so the data step can't be confirmed from the log", text)
 
     def test_a_runtime_data_root_line_confirms_the_data_step_without_an_obb_line(self):
         self.logcat.write_text(
@@ -365,10 +365,28 @@ class DiagnoseCases:
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         text = result.stdout.split("Privacy:")[0]
-        self.assertIn("Initialization Error: Unknown error while loading the game.", text)
+        self.assertIn("The game logged: Initialization Error: Unknown error while loading the game.", text)
         self.assertIn(f"Failed to find package manifest file {wanted}", text)
         self.assertNotIn("No failure seen", text)
         self.assertNotIn("No problem found", text)
+
+    def test_an_initialization_error_from_a_windows_adb_keeps_no_carriage_return(self):
+        self.logcat.write_bytes(
+            b"10-22 00:00:08.581  7717  7717 E RAD: Initialization Error: Unknown error while loading the game.\r\n"
+            b"10-22 00:00:08.590  7717  7717 E RAD: - 0x2FDA8A8C4D75508F: Failed to find package manifest file /x/y\r\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        verdict = self.members()[0]["verdict.txt"]
+        self.assertIn(b"The game logged: Initialization Error: Unknown error while loading the game. (", verdict)
+        self.assertNotIn(b"\r", verdict)
+
+    def test_an_obb_mounted_line_alone_confirms_the_data_step(self):
+        self.logcat.write_text(f"10-21 22:00:03.100  100  100 I EchoVR : OBB mounted at '{MEDIA}/files'\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = result.stdout.split("Privacy:")[0]
+        self.assertIn("No problem found in these facts", text)
+        self.assertNotIn("can't be confirmed", text)
 
     def test_a_game_that_is_not_running_is_the_failure_not_a_missing_data_line(self):
         self.logcat.write_text(self.HEALTHY_WITHOUT_THE_MOUNT_LINE)
