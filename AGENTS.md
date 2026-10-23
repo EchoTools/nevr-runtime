@@ -839,6 +839,12 @@ your seat name, for example `claude-main` or `codex`.
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
+- **Public prose carries no hosting URLs, no chat quotes and no local paths.** A PR body, issue body, comment, review
+  and commit message is public. It MUST NOT contain a URL or host name that hands out builds or data (a download host,
+  a CDN, a storage bucket), the words of a person from chat or a message (quoted, or paraphrased as the reason for a
+  change), or a local path (`/home/...`, `/var/tmp/...`, `/mnt/...`). Name a design decision by its reasoning, an issue
+  or an ADR, never by "the owner said" or "decided by <name>". Code and configuration that must name the host they
+  fetch from are not prose and are exempt.
 - **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
   current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
   retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
