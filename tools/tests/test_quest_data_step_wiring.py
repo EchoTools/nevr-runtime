@@ -147,7 +147,10 @@ class TheStepOrder(unittest.TestCase):
         self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Sleep(Opts().hold_ms)"))
         self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Present("))
         entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
-        self.assertRegex(entry, r"if \(!nevr_build::kIsDev\) options\.hold_ms = 0;")
+        # Exactly one mention of hold_ms in the body, and it is the guarded assignment: a second assignment (always
+        # zero, or a later non-zero value that undoes the guard) or an unguarded one leaves the release build wrong.
+        self.assertEqual(len(re.findall(r"\bhold_ms\b", entry)), 1, entry)
+        self.assertEqual(len(re.findall(r"if \(!nevr_build::kIsDev\) options\.hold_ms = 0;", entry)), 1, entry)
 
     def test_the_log_never_says_shown_for_a_toast_that_was_only_requested(self):
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp") + read("toast_presenter.cpp"))
