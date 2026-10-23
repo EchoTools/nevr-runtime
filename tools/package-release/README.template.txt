@@ -2,8 +2,9 @@ nEVR runtime @VERSION@  (commit @COMMIT@)
 
 What this is
   The nEVR runtime for Echo VR on Windows: one file, BugSplat64.dll, that replaces the game's
-  BugSplat64.dll. It needs no config file of any kind: the service endpoints and the public keys are
-  built in.
+  BugSplat64.dll. A player's game needs no config file of any kind: the service endpoints and the public keys
+  are built in. A dedicated server does need one (see Running a dedicated server), and echovr_server.exe,
+  the server's launcher, is in this package too.
 
 Install
   1. Close Echo VR.
@@ -18,6 +19,33 @@ Install
   BugSplat64.dll.original-<timestamp> next to it, renames a legacy dbgcore.dll to
   dbgcore.dll.legacy-<date> (the runtime refuses to start beside one), and installs the new file.
   It deletes nothing.
+
+Running a dedicated server
+  echovr_server.exe in this package starts a dedicated server. install.ps1 does not copy it. Install
+  BugSplat64.dll as above, then copy echovr_server.exe into the same folder as echovr.exe
+  (...\ready-at-dawn-echo-arena\bin\win10) and run it from a console there:
+       .\echovr_server.exe
+  It starts echovr.exe -server -headless -no-console from its own folder and passes any arguments on. A server
+  has no built-in service settings yet (issue #843), so it needs a config file that sets services.socket_uri,
+  and without one it exits.
+  Create ...\ready-at-dawn-echo-arena\_local\config.yaml. The smallest one that works:
+
+       services:
+         socket_uri: "wss://<the game service's websocket address>"
+       auth:
+         http_uri: "https://<the game service's http address>"
+         http_key: "<the service's public API key>"
+         password: "<the password of your server account>"
+       identity:
+         discord_id: "<the Discord id of your server account>"
+
+  The two addresses and the public API key are the ones every client has built in; ask the service operator
+  for them. A server does not read auth.server_key. The password goes in auth.password, never in the
+  socket_uri. A server signs in with the account's refresh token when it has one, and with auth.password
+  otherwise. The server logs in, registers with the game service and logs "registration successful"; every
+  step is in the log (see Logs). Stop it with Ctrl+C in its console: the log then says "Graceful shutdown
+  initiated". services.allow_offline_server: true starts a server with no service at all (it never
+  registers); docs/reference/example-config.yaml in the source repository lists every key.
 
 Update
   Unzip the newer package and run its install.ps1 the same way. When the BugSplat64.dll in the folder is

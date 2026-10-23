@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Assemble and gate a Windows release package: the sealed zip, SHA256SUMS and RELEASE-NOTES.md.
+"""Assemble and gate the Windows release package: the sealed zip, and the release body that describes it.
 
 A release is a version (plain semver, taken from the tag) plus GitHub's pre-release flag. Nothing in a
 file depends on that flag, so promoting a release changes no byte: this tool has no flag input.
 
-  package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --pc-header H
+  package_release.py tree  --version X.Y.Z --commit <sha40> --out DIR --dll BugSplat64.dll --server-exe echovr_server.exe
+                           --pc-header H
       CI: gate the DLL and write the package tree (what the signing step signs) + release.json
   package_release.py seal  --tree DIR --out DIR [--require-signed]
-      CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now,
-      write the top-level SHA256SUMS and RELEASE-NOTES.md. The release carries no Quest APK.
+      CI: zip the (signed or unsigned) tree with a SHA256SUMS regenerated from the files as they are now.
+      The release is that one zip (the Quest library is built by its own job); it carries no Quest APK, and
+      no top-level SHA256SUMS or RELEASE-NOTES.md.
+  package_release.py notes --assets DIR --out FILE
+      the release body: the notes plus a SHA-256 table of the release's two assets (the zip and the Quest
+      library) as they are in DIR, written after signing, from the final bytes
   package_release.py stamp --dll BugSplat64.dll [--version X.Y.Z] [--commit <sha40>]
       CI: assert the DLL's one identity literal agrees with what the workflow computed
-  package_release.py --commit <sha40> --out DIR --dll ... --apk ... --pc-header ... --quest-header ...
-                     --quest-build-info ...        (`just package-dev`, a LOCAL build)
+  package_release.py --commit <sha40> --out DIR --dll ... --server-exe ... --apk ... --pc-header ...
+                     --quest-header ... --quest-build-info ...        (`just package-dev`, a LOCAL build)
       the full gate for a local development build (its version is X.Y.(Z+1)-dev.N+sha, never a release),
-      then the same tree + seal, with the tester Quest APK. Never attached to a release.
+      then the same tree + seal, with the tester Quest APK, its SHA256SUMS and notes. Never attached to a
+      release.
 
 The identity literal (src/core/build_identity.cpp) is the one string binding version and commit:
     NEVR-BUILD <version> <commit40>        (NUL-bounded, exactly one per DLL)
@@ -39,6 +45,8 @@ import check_embedded_defaults as defaults_check  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
+# The dedicated-server launcher that rides in the Windows zip next to BugSplat64.dll.
+SERVER_EXE = "echovr_server.exe"
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
@@ -163,6 +171,9 @@ def windows_problems(args, dll: Path) -> list:
     """The Windows half of the gate: embedded defaults, then the identity literal (version and commit)."""
     problems = [f"windows: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.pc_header), [dll])]
     problems += expected_identity_problems("windows", dll.read_bytes(), args.version, args.commit)
+    server = Path(args.server_exe)
+    if not server.is_file() or server.read_bytes()[:2] != b"MZ":
+        problems.append(f"windows: {SERVER_EXE} is missing or not a PE file: {server}")
     return problems
 
 
@@ -222,13 +233,14 @@ def check_apk_version(apk: Path, version: str, commit: str) -> None:
 def write_tree(args, out: Path, version: str) -> Path:
     """The package tree: what the signing step signs. SHA256SUMS is written after, by seal()."""
     base = package_base(version, args.commit)
-    tree = out / f"{base}-windows-player"
+    tree = out / f"{base}-windows"
     if tree.exists():
         raise GateFailure(f"{tree} exists; not overwritten")
     tree.mkdir(parents=True)
     values = {"VERSION": version, "COMMIT": args.commit,
-              "ZIP": f"{base}-windows-player.zip", "APK": f"{base}-quest.apk"}
+              "ZIP": f"{base}-windows.zip", "APK": f"{base}-quest.apk"}
     shutil.copyfile(args.dll, tree / "BugSplat64.dll")
+    shutil.copyfile(args.server_exe, tree / SERVER_EXE)
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
     shutil.copyfile(PACKAGE_DIR / "quest-diagnose.ps1", tree / "quest-diagnose.ps1")
@@ -242,12 +254,13 @@ def write_tree(args, out: Path, version: str) -> Path:
 # which state this copy is in, so a signer replacing the signed entries never has to edit it.
 SIGNING_TEXT = """Signing
 
-The build itself signs nothing. A separate signing step may sign BugSplat64.dll, install.ps1,
-uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This text is the same either way: it
-says how to check, not which state your copy is in.
+The build itself signs nothing. A separate signing step may sign BugSplat64.dll, echovr_server.exe,
+install.ps1, uninstall.ps1 and quest-diagnose.ps1 afterwards and replace this zip under the same name. This
+text is the same either way: it says how to check, not which state your copy is in.
 
 A file is signed when it carries a signature:
-  BugSplat64.dll              an Authenticode signature
+  BugSplat64.dll, echovr_server.exe
+                              an Authenticode signature
                               (PowerShell: Get-AuthenticodeSignature .\\BugSplat64.dll)
   install.ps1, uninstall.ps1, quest-diagnose.ps1
                               an Authenticode signature block at the end of the script
@@ -260,16 +273,18 @@ warn about a file that is not signed.
 
 
 def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) -> list:
-    """Zip `tree` with a SHA256SUMS regenerated from the files as they are NOW, copy the APK if there is one
-    (a local tester package only), write the top-level SHA256SUMS and the release notes. Writes only into
-    `out`. The output depends on the tree and its release.json alone: no release flag exists here."""
+    """Zip `tree` with a SHA256SUMS regenerated from the files as they are NOW. A release is that zip alone.
+    With an APK (a local tester package only) the APK is copied too, and a top-level SHA256SUMS and the
+    tester notes are written. Writes only into `out`. The output depends on the tree and its release.json
+    alone: no release flag exists here."""
     info = json.loads((tree.parent / "release.json").read_text(encoding="utf-8"))
     commit, version = info["commit"], info["version"]
     if apk is not None:  # before anything is written: a foreign APK never rides a package
         check_apk_version(apk, version, commit)
     files = sorted(p for p in tree.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    if "BugSplat64.dll" not in {p.name for p in files}:
-        raise GateFailure(f"{tree} has no BugSplat64.dll")
+    for required in ("BugSplat64.dll", SERVER_EXE):
+        if required not in {p.name for p in files}:
+            raise GateFailure(f"{tree} has no {required}")
     if require_signed:
         unsigned = [p.name for p in files if p.suffix.lower() in (".dll", ".exe") and not pe_has_certificate_table(p)]
         if unsigned:
@@ -279,11 +294,11 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
             raise GateFailure("not signed (no signature block): " + ", ".join(unsigned_scripts))
     out.mkdir(parents=True, exist_ok=True)
     base = package_base(version, commit)
-    zip_path = out / f"{base}-windows-player.zip"
+    zip_path = out / f"{base}-windows.zip"
     apk_path = out / f"{base}-quest.apk"
     notes_path = out / "RELEASE-NOTES.md"
     sums_path = out / "SHA256SUMS"
-    for target in (zip_path, apk_path if apk else None, notes_path, sums_path):
+    for target in (zip_path, apk_path if apk else None, notes_path if apk else None, sums_path if apk else None):
         if target is not None and target.exists():
             raise GateFailure(f"{target} exists; not overwritten")
     signing_text = SIGNING_TEXT.encode("utf-8")
@@ -299,17 +314,49 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
         entry.compress_type = zipfile.ZIP_DEFLATED
         entry.external_attr = 0o644 << 16
         z.writestr(entry, inner.encode("ascii"))
-    lines = [f"{sha256(zip_path)}  {zip_path.name}\n"]
-    written = [zip_path]
-    if apk is not None:
-        shutil.copyfile(apk, apk_path)
-        lines.append(f"{sha256(apk_path)}  {apk_path.name}\n")
-        written.append(apk_path)
-    sums_path.write_text("".join(lines), encoding="ascii")
+    if apk is None:
+        return [zip_path]
+    shutil.copyfile(apk, apk_path)
+    sums_path.write_text(f"{sha256(zip_path)}  {zip_path.name}\n{sha256(apk_path)}  {apk_path.name}\n", encoding="ascii")
     values = {"VERSION": version, "COMMIT": commit, "ZIP": zip_path.name, "APK": apk_path.name}
-    notes_path.write_text(render(PACKAGE_DIR / "RELEASE-NOTES.template.md", values, apk=apk is not None),
-                          encoding="utf-8")
-    return written + [sums_path, notes_path]
+    notes_path.write_text(render(PACKAGE_DIR / "RELEASE-NOTES.template.md", values, apk=True), encoding="utf-8")
+    return [zip_path, apk_path, sums_path, notes_path]
+
+
+def quest_asset_name(version: str) -> str:
+    """The Quest library's release name; tools/release_asset_names.sh `release_quest_asset_name` is the source."""
+    return f"nevr-runtime-v{version}-quest-libovrplatformloader.so"
+
+
+def release_notes(assets: Path) -> str:
+    """The release body: the notes plus a SHA-256 table of the release's two assets as they are in `assets`.
+    The version and commit are the ones the zip's own BugSplat64.dll carries (its identity literal), so the
+    table cannot describe a zip that is not this release's."""
+    zips = sorted(assets.glob("nevr-runtime-v*-windows.zip"))
+    if len(zips) != 1:
+        raise GateFailure(f"{assets}: expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found {len(zips)}")
+    zip_path = zips[0]
+    match = re.fullmatch(rf"nevr-runtime-v({_NUM}\.{_NUM}\.{_NUM})-windows\.zip", zip_path.name)
+    if not match:
+        raise GateFailure(f"{zip_path.name}: not a release zip name (nevr-runtime-vX.Y.Z-windows.zip)")
+    version = match.group(1)
+    with zipfile.ZipFile(zip_path) as z:
+        try:
+            dll = z.read("BugSplat64.dll")
+        except KeyError:
+            raise GateFailure(f"{zip_path.name} has no BugSplat64.dll")
+    found_version, commit = identity_in(dll, f"{zip_path.name}:BugSplat64.dll")
+    if found_version != version:
+        raise GateFailure(f"{zip_path.name}: its BugSplat64.dll carries version '{found_version}', not '{version}'")
+    quest = assets / quest_asset_name(version)
+    if not quest.is_file():
+        raise GateFailure(f"{assets}: no {quest.name}")
+    extra = sorted(p.name for p in assets.iterdir() if p.name not in (zip_path.name, quest.name))
+    if extra:
+        raise GateFailure(f"{assets}: files that are not release assets: {', '.join(extra)}")
+    values = {"VERSION": version, "COMMIT": commit, "ZIP": zip_path.name, "QUEST": quest.name,
+              "SHA_ZIP": sha256(zip_path), "SHA_QUEST": sha256(quest)}
+    return render(PACKAGE_DIR / "RELEASE-NOTES.template.md", values, apk=False)
 
 
 def run_all(args) -> list:
@@ -325,12 +372,15 @@ def run_all(args) -> list:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp") else "all"
+    mode = argv.pop(0) if argv and argv[0] in ("tree", "seal", "stamp", "notes") else "all"
     parser = argparse.ArgumentParser(prog=f"package_release.py {mode}".strip())
     if mode == "seal":
         parser.add_argument("--tree", required=True, type=Path)
         parser.add_argument("--out", required=True, type=Path)
         parser.add_argument("--require-signed", action="store_true")
+    elif mode == "notes":
+        parser.add_argument("--assets", required=True, type=Path)
+        parser.add_argument("--out", required=True, type=Path)
     elif mode == "stamp":
         parser.add_argument("--dll", required=True, type=Path)
         parser.add_argument("--version", default="")
@@ -341,6 +391,7 @@ def main(argv=None) -> int:
         parser.add_argument("--commit", required=True)
         parser.add_argument("--out", required=True)
         parser.add_argument("--dll", required=True)
+        parser.add_argument("--server-exe", required=True)
         parser.add_argument("--pc-header", required=True)
         parser.add_argument("--defaults", default=str(REPO / "config" / "public-defaults.env"))
         if mode == "all":
@@ -356,7 +407,13 @@ def main(argv=None) -> int:
                 raise GateFailure(f"--version '{args.version}' is not X.Y.Z")
             print(f"stamped identity: {stamp_check(args.dll, args.version or None, args.commit)}")
             return 0
-        if mode == "seal":
+        if mode == "notes":
+            if args.out.exists():
+                raise GateFailure(f"{args.out} exists; not overwritten")
+            body = release_notes(args.assets)
+            args.out.write_text(body, encoding="utf-8")
+            written = [args.out]
+        elif mode == "seal":
             written = seal(args.tree, args.out, require_signed=args.require_signed)
         elif mode == "tree":
             if not RELEASE_VERSION.match(args.version):

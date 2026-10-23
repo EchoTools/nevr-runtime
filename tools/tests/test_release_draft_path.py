@@ -1,4 +1,4 @@
-"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's five files,
+"""build.yml's draft path: a workflow_dispatch started on a vX.Y.Z tag ref builds the release's two files,
 attests them and attaches them to that tag's DRAFT release (kept a draft), so a signer can replace the draft's
 assets before anything is public; a release event and a dispatch with no draft behave as before.
 
@@ -27,8 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 BUILT = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0-windows-server.zip",
-        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
+TWO = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the build's two files
 
 DRAFT = "needs.build.outputs.draft == 'true'"
 
@@ -276,10 +275,10 @@ class ReleaseDraftPathTest(unittest.TestCase):
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})
 
-    def test_both_uploads_keep_a_draft_a_draft_and_never_set_the_prerelease_flag(self):
+    def test_the_upload_keeps_a_draft_a_draft_and_never_sets_the_prerelease_flag(self):
         steps = load()["jobs"]["publish"]["steps"]
         uploads = [s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 1)
         for upload in uploads:
             # true for a dispatch (the action would otherwise PUBLISH the reused draft), false for a release event
             self.assertEqual(upload["with"]["draft"], "${{ github.event_name == 'workflow_dispatch' }}")
@@ -304,7 +303,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
             self.assertNotRegex(text.split("source ", 1)[1], r'nevr-runtime-v\$version[-.]', script)
         names = (REPO / "tools" / "release_asset_names.sh").read_text(encoding="utf-8")
         self.assertNotIn("tar.zst\"", names, "the .tar.zst archives are a workflow artifact, not a release asset")
-        self.assertEqual(names.count('"nevr-runtime-v$version'), 3)
+        self.assertEqual(names.count('"nevr-runtime-v$version'), 2)
 
     # ---- the published guard (tools/release_already_built.sh) meets the draft this path fills -------------
     def built(self, assets):
@@ -316,13 +315,13 @@ class ReleaseDraftPathTest(unittest.TestCase):
         env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}", FAKE_ASSETS=" ".join(assets))
         return subprocess.run([str(BUILT), "v5.0.0", "EchoTools/nevr-runtime"], env=env, capture_output=True, text=True)
 
-    def test_publishing_a_draft_this_path_filled_with_the_four_files_rebuilds_nothing(self):
-        result = self.built(FOUR)
+    def test_publishing_a_draft_this_path_filled_with_the_two_files_rebuilds_nothing(self):
+        result = self.built(TWO)
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "true"), result.stderr)
 
-    def test_a_draft_missing_one_of_the_four_is_built_by_the_published_run(self):
-        for missing in FOUR:
-            result = self.built([n for n in FOUR if n != missing])
+    def test_a_draft_missing_one_of_the_two_is_built_by_the_published_run(self):
+        for missing in TWO:
+            result = self.built([n for n in TWO if n != missing])
             self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"), missing)
 
 

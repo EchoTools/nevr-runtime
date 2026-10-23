@@ -1,4 +1,4 @@
-"""One release asset per audience, named for it (#823): the list, the build, and RELEASING.md agree."""
+"""A release is one Windows zip and the Quest library: the list, the build, and RELEASING.md agree."""
 import pathlib
 import re
 import subprocess
@@ -6,7 +6,7 @@ import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 NAMES = REPO / "tools" / "release_asset_names.sh"
-AUDIENCE = ("windows-player", "windows-server", "quest")
+AUDIENCE = ("windows", "quest")
 
 
 def listed(version="5.5.0"):
@@ -16,29 +16,36 @@ def listed(version="5.5.0"):
 
 
 class ReleaseAssetsTest(unittest.TestCase):
-    def test_the_release_lists_exactly_these_five_names(self):
-        self.assertEqual(listed(), [
-            "nevr-runtime-v5.5.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md",
-            "nevr-runtime-v5.5.0-windows-server.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so"])
+    def test_the_release_lists_exactly_these_two_names(self):
+        self.assertEqual(listed(), ["nevr-runtime-v5.5.0-windows.zip", "nevr-runtime-v5.5.0-quest-libovrplatformloader.so"])
 
-    def test_every_per_audience_file_carries_its_audience_and_the_bare_zip_is_gone(self):
-        for name in listed():
-            if name in ("SHA256SUMS", "RELEASE-NOTES.md"):
-                continue
+    def test_no_checksum_or_notes_file_and_no_second_windows_zip_is_a_release_asset(self):
+        names = listed()
+        for gone in ("SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.5.0-windows-player.zip",
+                     "nevr-runtime-v5.5.0-windows-server.zip", "nevr-runtime-v5.5.0.zip"):
+            self.assertNotIn(gone, names)
+        for name in names:
             self.assertTrue(any(f"-{a}" in name for a in AUDIENCE), f"{name} names no audience")
-        self.assertNotIn("nevr-runtime-v5.5.0.zip", listed())
 
-    def test_the_packager_and_the_dist_target_make_the_listed_zips(self):
+    def test_the_packager_makes_the_listed_zip_and_the_dist_target_is_not_a_release_asset(self):
         packager = (REPO / "tools" / "package_release.py").read_text()
-        self.assertIn('f"{base}-windows-player.zip"', packager)
-        self.assertNotIn('-windows.zip', packager)
+        self.assertIn('f"{base}-windows.zip"', packager)
+        self.assertNotIn("-windows-player", packager)
         cmake = (REPO / "CMakeLists.txt").read_text()
         self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
+        self.assertNotIn("windows-player", cmake)
 
-    def test_the_workflow_globs_name_the_player_tree(self):
+    def test_the_workflow_globs_name_the_one_windows_tree_and_ship_no_dist_zip(self):
         build = (REPO / ".github/workflows/build.yml").read_text()
-        self.assertEqual(len(re.findall(r"nevr-runtime-v\*-windows-player", build)), 2)
-        self.assertIsNone(re.search(r"nevr-runtime-v\*-windows(?!-)", build))
+        self.assertEqual(len(re.findall(r"nevr-runtime-v\*-windows(?!-)", build)), 2)
+        self.assertNotIn("windows-player", build)
+        self.assertNotIn("dist-zips", build)
+        subjects = build.split("subject-path: |", 1)[1].split("\n\n", 1)[0].split()
+        self.assertEqual(subjects, ["release-assets/*.zip", "quest-asset/*.so", "symbols/*/*.dbg"])
+        files = build.split("fail_on_unmatched_files: true\n        files: |", 1)[1].split("env:", 1)[0].split()
+        self.assertEqual(files, ["release-assets/*.zip", "quest-asset/*.so"])
+        self.assertNotIn("release-assets/SHA256SUMS", build)
+        self.assertNotIn("release-assets/RELEASE-NOTES.md", build)
 
     def test_releasing_md_lists_each_asset_and_agents_md_points_at_it(self):
         text = (REPO / "RELEASING.md").read_text()
@@ -97,22 +104,29 @@ class ReleaseAssetsTest(unittest.TestCase):
                     self.assertIn(flag, line, f"{path.name}: {line.strip()}")
         self.assertGreaterEqual(found, 1)
 
-    def test_releasing_md_covers_the_failed_draft_and_both_checksum_files_after_signing(self):
+    def test_releasing_md_covers_the_failed_draft_the_zips_own_sums_and_the_release_body_after_signing(self):
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("A draft that fails its checks is deleted and cut again", releasing)
         self.assertIn("gh release delete vX.Y.Z", releasing)
-        self.assertIn("The signer rewrites **both** checksum files", releasing)
+        self.assertIn("The signer replaces the zip. The `SHA256SUMS` inside it", releasing)
         self.assertIn("covers the unsigned build output CI attested", releasing)
+        body = releasing.split("## Write the release body", 1)[1].split("## Publish", 1)[0]
+        self.assertIn("python3 tools/package_release.py notes --assets", body)
+        self.assertIn("gh release edit vX.Y.Z --notes-file", body)
+        self.assertIn("after the last signing pass", body)
+        self.assertNotIn("top-level `SHA256SUMS` gets", releasing)
 
-    def test_readme_issue_template_and_justfile_carry_the_audience_names_and_sums_scope(self):
-        self.assertIn("-windows-player.zip", (REPO / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("-windows-player.zip", (REPO / ".github/ISSUE_TEMPLATE/beta-bug.yml").read_text(encoding="utf-8"))
+    def test_readme_issue_template_and_justfile_carry_the_asset_names_and_the_body_holds_the_sums(self):
+        self.assertIn("-windows.zip", (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("-windows.zip", (REPO / ".github/ISSUE_TEMPLATE/beta-bug.yml").read_text(encoding="utf-8"))
+        self.assertNotIn("windows-player", (REPO / "README.md").read_text(encoding="utf-8"))
         self.assertIn("-windows-server) and its symbol files", (REPO / "justfile").read_text(encoding="utf-8"))
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
-        self.assertIn("the SHA-256 of the Windows player zip", releasing)
+        self.assertIn("There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset", releasing)
+        self.assertIn("a table\nof the SHA-256 of each of the two assets", releasing)
         self.assertIn("Quest APKs and dry runs are published outside GitHub", releasing)
         self.assertNotIn("echo.taxi", releasing)
-        self.assertIn("the zip has no `plugins/` entry", releasing)
+        self.assertIn("The zip has no `plugins/` entry", releasing)
         self.assertNotIn("an empty `plugins/`", releasing)
 
 
