@@ -437,4 +437,104 @@ TEST(TheDownloadNoticeIsGivenOnceAndAfterTheSpaceCheck) {
   CHECK_EQ(std::count(rig.order.begin(), rig.order.end(), std::string("announce")), 1);
 }
 
+// ---- the engine root: the one root the game reads this launch ----
+
+TEST(OnlyTheEngineRootCountsAsData) {
+  // This build's data is in the media root, and the engine reads the legacy root: the media data is not the game's.
+  Rig rig;
+  rig.present = {Media(), Media("_data"), Media(kManifestRel)};
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kFetched);
+  CHECK_EQ(r.action, DataAction::kFetch);
+  CHECK_EQ(r.root, Legacy());  // the fetch is for the root the engine reads
+  CHECK(Contains(rig.events[0], "action=fetch source=none root=" + Legacy()));
+}
+
+TEST(DataInTheEngineRootIsUsedWhateverElseIsThere) {
+  Rig rig;
+  rig.present = {Legacy("_data"), Legacy(kManifestRel)};
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK_EQ(r.root, Legacy());
+  CHECK_EQ(net.calls, 0);
+}
+
+// ---- allow_fetch false (a release build): look, tell the player, write nothing ----
+
+TEST(WithoutAllowFetchMissingDataIsPresentedHeldAndNotFetched) {
+  Rig rig;
+  rig.config.allow_fetch = false;
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kMissing);
+  CHECK_EQ(net.calls, 0);  // no network at all
+  CHECK_EQ(r.message, std::string(kGameDataMissing));
+  CHECK_EQ(rig.shown.size(), static_cast<std::size_t>(1));
+  CHECK_EQ(rig.shown[0], std::string(kGameDataMissing));
+  CHECK_EQ(rig.order.size(), static_cast<std::size_t>(2));  // present, hold: no download notice
+  CHECK_EQ(rig.order[0], std::string("present"));
+  CHECK_EQ(rig.order[1], std::string("hold"));
+  CHECK(!Exists(rig.Root()));  // nothing was created
+  CHECK(Contains(rig.events[0], "action=fetch source=none"));
+  CHECK(Contains(kGameDataMissing, "Echo Launcher"));
+}
+
+TEST(WithoutAllowFetchDataOfAnotherBuildIsMissingAndLeftAlone) {
+  Rig rig;
+  rig.present = {Legacy(), Legacy("_data")};  // `_data` there, the pinned manifest is not
+  rig.config.allow_fetch = false;
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  rig.PutOldData();
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kMissing);
+  CHECK_EQ(r.action, DataAction::kReplace);
+  CHECK_EQ(net.calls, 0);
+  CHECK_EQ(ReadFile(rig.Root() + "/_data/old"), std::string("old"));
+  CHECK(!Exists(rig.Root() + "/_data.replaced-20261022T000000Z"));
+}
+
+TEST(WithoutAllowFetchDataThatIsThereIsUsedAndNothingIsRemoved) {
+  Rig rig;
+  rig.present = {Legacy("_data"), Legacy(kManifestRel)};
+  rig.config.allow_fetch = false;
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  ::mkdir(rig.Root().c_str(), 0755);
+  const std::string part = rig.Root() + "/_data.zip.part";
+  WriteFile(part, "whole zip");
+  CHECK(MarkOwned(part));
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kUsed);
+  CHECK(rig.shown.empty() && rig.order.empty());
+  CHECK(Exists(part));  // a build that does not fetch does not clean up after a fetch
+  CHECK(Exists(part + ".nevr-owned"));
+}
+
+TEST(WithoutAllowFetchAnInterruptedInstallIsNotRecovered) {
+  Rig rig;
+  g_media_dir = rig.scratch.Path("media");
+  g_legacy_dir = rig.scratch.Path("legacy");
+  CrashedReplace(g_legacy_dir);
+  rig.config.exists = &MappedExists;
+  rig.config.recovery_roots = {g_media_dir, g_legacy_dir};
+  rig.config.allow_fetch = false;
+  rig.config.engine_root = nevr_quest::data_root::kLegacyRoot;
+  OneShotTransport net(rig.zip, true);
+  const StepResult r = RunDataStep(rig.config, net);
+  CHECK_EQ(r.outcome, StepOutcome::kMissing);
+  CHECK(Exists(g_legacy_dir + "/_data.replaced-20261020T000000Z"));  // left exactly as it was
+  CHECK(Exists(g_legacy_dir + "/_data.staging-0123456789ab"));
+  CHECK(!Exists(g_legacy_dir + "/_data"));
+}
+
+TEST(TheMissingOutcomeHasAName) {
+  CHECK_EQ(std::string(StepOutcomeName(StepOutcome::kMissing)), std::string("missing"));
+}
+
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
