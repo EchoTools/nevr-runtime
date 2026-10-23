@@ -6,6 +6,6 @@ namespace nevr_build {
 
 inline constexpr const char* kVersion = "@NEVR_BUILD_VERSION@";
 inline constexpr const char* kCommit = "@NEVR_BUILD_COMMIT@";
-inline constexpr bool kIsDev = @NEVR_BUILD_IS_DEV@;  // a development version (X.Y.Z-dev.N+sha), never a release
+inline constexpr bool kIsDev = @NEVR_BUILD_IS_DEV@;  // not a CI build of a release tag (cmake/nevr_build_info.cmake)
 
 }  // namespace nevr_build

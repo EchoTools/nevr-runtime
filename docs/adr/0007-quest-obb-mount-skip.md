@@ -63,12 +63,15 @@ refused mount: the same ~30 s, elsewhere), or it binds to the library's own copy
 ever called, runs the refused mount regardless of this hook). The sentinel counters do not show either; only the logcat
 deviation lines do (a second `Loading OBB from`, any `mounting encrypted OBBs is no longer supported`, a ~30 s gap).
 
-## Prediction (logcat, every launch)
+## Prediction (logcat, every launch that has an OBB file)
 
 - one `Loading OBB from '<path>'`, then `OBB mounted at '/storage/emulated/0/readyatdawn'`, then
   `OBB loading complete (took 0 ms)`;
 - no `mounting encrypted OBBs is no longer supported`, no `Error loading OBB`, no second `Loading OBB from`;
 - engine initialization follows immediately instead of at +30 s.
+
+A launch with no OBB file logs `OBB not found` at step 1 of the Context and returns before the mount, so none of these lines
+appear and the skip never runs; the engine reads the same legacy root (ADR 0013).
 
 It does not claim the not-responding dialog is gone: `android_main` still runs the rest of `CSysOS::Init` before it
 services the looper, and that remaining time is not measured. A missing extracted tree under
