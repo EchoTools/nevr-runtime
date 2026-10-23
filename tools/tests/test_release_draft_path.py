@@ -230,7 +230,7 @@ class ReleaseDraftPathTest(unittest.TestCase):
     def test_no_other_job_gains_write_access_for_the_lookup(self):
         jobs = load()["jobs"]
         self.assertEqual(jobs["drafts"]["permissions"]["contents"], "write")
-        for name in ("guard", "build", "sign", "seal", "repack"):
+        for name in ("guard", "build", "seal", "repack"):
             self.assertEqual(jobs[name]["permissions"]["contents"], "read", name)
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
 
@@ -253,24 +253,38 @@ class ReleaseDraftPathTest(unittest.TestCase):
         dist = step_named(build, "Create distribution packages (unsigned)")
         self.assertEqual(dist["if"], "steps.release.outputs.version != ''")
         self.assertEqual(dist["run"], "cmake --build --preset mingw-release --target dist")
-        for name in ("Verify distribution archives", "Upload the unsigned packages for signing"):
+        for name in ("Verify distribution archives", "Upload the unsigned packages for the repack job"):
             self.assertEqual(step_named(build, name)["if"],
                              "github.event_name == 'release' || needs.guard.outputs.draft == 'true'", name)
-        sign = jobs["sign"]
-        download = next(s for s in sign["steps"] if s.get("with", {}).get("name") == "unsigned-packages")
-        self.assertEqual(download["if"], "github.event_name == 'release' || " + DRAFT)
-        self.assertEqual(sign["if"], "${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}")
+        # repack reads the build's own artifact, and only runs for a release event or a draft (its `if`), so the
+        # download needs no condition of its own; seal reads the release tree whenever the build set a version.
+        repack_download = next(s for s in jobs["repack"]["steps"] if s.get("with", {}).get("name") == "unsigned-packages")
+        self.assertNotIn("if", repack_download)
+        self.assertEqual(repack_download["with"]["path"], "staged")
+        seal_download = next(s for s in jobs["seal"]["steps"] if s.get("with", {}).get("name") == "unsigned-release-tree")
+        self.assertEqual(seal_download["with"]["path"], "staged/release")
+        self.assertNotIn("if", seal_download)  # a dry run (no draft) seals too, so the tree is always downloaded
+        # The consumers' paths rest on how the build roots its two uploads: the release tree at release-stage/
+        # (seal lists staged/release/nevr-runtime-v*-windows) and the package trees at dist/ (repack loops over
+        # staged/nevr-runtime-v*/).
+        upload_tree = step_named(build, "Upload the release tree")
+        self.assertEqual(upload_tree["with"]["path"], "release-stage/")
+        upload_packages = step_named(build, "Upload the unsigned packages for the repack job")
+        self.assertEqual(upload_packages["with"]["path"].split(), ["dist/nevr-runtime-v*/", "!dist/.staging/"])
+        self.assertIn("staged/release/nevr-runtime-v*-windows", str(jobs["seal"]["steps"]))
+        self.assertIn("staged/nevr-runtime-v*/", str(jobs["repack"]["steps"]))
+        self.assertEqual(jobs["seal"]["if"], "${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.version != '' }}")
 
     def test_repack_and_publish_run_for_a_release_event_as_before_and_for_a_dispatch_only_with_a_draft(self):
         jobs = load()["jobs"]
         gate = ("(github.event_name == 'release' || needs.build.outputs.draft == 'true')")
         repack, publish = jobs["repack"], jobs["publish"]
-        self.assertEqual(repack["needs"], ["build", "sign", "seal"])
+        self.assertEqual(repack["needs"], ["build", "seal"])
         self.assertEqual(repack["if"],
-            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && " + gate + " }}")
-        self.assertEqual(publish["needs"], ["build", "quest", "sign", "seal", "repack"])
+            "${{ !cancelled() && needs.seal.result == 'success' && " + gate + " }}")
+        self.assertEqual(publish["needs"], ["build", "quest", "seal", "repack"])
         self.assertEqual(publish["if"],
-            "${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && "
+            "${{ !cancelled() && needs.seal.result == 'success' && "
             "needs.repack.result == 'success' && needs.quest.result == 'success' && " + gate + " }}")
         # the read-only/write split is kept: the draft path gives repack no write token
         self.assertEqual(repack["permissions"], {"contents": "read"})

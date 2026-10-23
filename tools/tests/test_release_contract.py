@@ -240,18 +240,18 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("- name: Toolchain versions", workflow)
         # The repack job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
         # there; the build job has no apt-get.
-        build_job = workflow.split("\n  sign:", 1)[0]
+        build_job = workflow.split("\n  seal:", 1)[0]
         self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        # Signing is stubbed until the policy signer (a private repository) exists: no Windows runner, no
-        # cloud login, no signing environment, and the files are passed through UNSIGNED. The release
-        # files get a build-provenance attestation instead (not code signing).
-        self.assertIn('name: "sign: stubbed, policy signer not built yet"', workflow)
-        self.assertIn("PLACEHOLDER: the signer dispatch goes here", workflow)
+        # Nothing here signs, and no job pretends to: no Windows runner, no cloud login, no signing environment.
+        # The release files get a build-provenance attestation (not code signing); the release signer signs the
+        # draft's files afterwards (RELEASING.md).
+        self.assertNotIn("sign: stubbed", workflow)
+        self.assertNotIn("PLACEHOLDER: the signer dispatch goes here", workflow)
         self.assertIn("actions/attest@", workflow)
         self.assertNotIn("azure/", workflow)
         self.assertNotIn("environment: codesign", workflow)

@@ -11,7 +11,7 @@ name: Build
 # (cmake/set_project_version_from_git.cmake): a CI build exactly on the tag stamps X.Y.Z, any other build
 # stamps X.Y.(Z+1)-dev.<N>+<sha>. Every release event goes through one packaging path: the build asserts
 # the DLL's identity literal (tools/package_release.py stamp), gates it and assembles the package tree
-# (tools/package_release.py tree), passes it through the signing stub, and seals it (seal): the Windows
+# (tools/package_release.py tree), and seals it (seal): the Windows
 # zip, attested and published with the Quest library (the .tar.zst archives stay a workflow artifact; the
 # notes and the SHA-256 table are the release body, written after signing). No file or text
 # depends on the pre-release flag, and no step reads it: the uploads leave the `prerelease` input unset so the
@@ -299,8 +299,8 @@ jobs:
         just proto
 
     - name: Configure CMake
-      # Never signs here, and nothing in this workflow signs yet: the `sign` job is a stub that passes the files
-      # through unsigned (the policy signer is not built).
+      # Never signs here, and nothing in this workflow signs: the release signer signs the draft's files
+      # afterwards (RELEASING.md).
       # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
       run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF
 
@@ -428,9 +428,9 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
-    # The unpacked package trees (dist/<name>/) go to the sign job; the unsigned
+    # The unpacked package trees (dist/<name>/) go to the repack job; the unsigned
     # archives are never published.
-    - name: Upload the unsigned packages for signing
+    - name: Upload the unsigned packages for the repack job
       if: github.event_name == 'release' || needs.guard.outputs.draft == 'true'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
@@ -549,51 +549,6 @@ jobs:
         path: .vcpkg-binary-cache
         key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}
 
-  # Signing is stubbed: the policy signer (a private repository under the owner) is not built yet. This
-  # job takes the build's unsigned files and hands them on UNCHANGED, and says so in its log. It runs on
-  # ubuntu-latest and costs no more than a few seconds: no Windows runner, no cloud login, no dispatch.
-  # Nothing downstream labels these files signed: the artifact is named packages-unsigned, and the release
-  # notes and SIGNING.txt state only what holds before and after a signer has run.
-  sign:
-    name: "sign: stubbed, policy signer not built yet"
-    needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'release' || needs.build.outputs.version != '') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-      if: github.event_name == 'release' || needs.build.outputs.draft == 'true'
-      with:
-        name: unsigned-packages
-        path: packages
-
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-      if: needs.build.outputs.version != ''
-      with:
-        name: unsigned-release-tree
-        path: packages/release
-
-    # PLACEHOLDER: the signer dispatch goes here. Intended flow, once the signer exists: dispatch the
-    # private signer repository with this run's `packages` artifact (the policy engine decides what may
-    # be signed), wait for it, download the signed files over `packages/`, and let `seal` seal them.
-    # Until then this step does not call anything.
-    - name: "sign: stubbed, policy signer not built yet (files pass through UNSIGNED)"
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "::warning::sign is stubbed: the policy signer is not built yet; these files are UNSIGNED"
-        find packages -type f \( -name '*.dll' -o -name '*.exe' -o -name '*.ps1' \) | sort | while read -r f; do
-          echo "UNSIGNED passthrough: $f"
-        done
-
-    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-      with:
-        name: packages-unsigned
-        path: packages
-        if-no-files-found: error
-        retention-days: 7
-
   # Seal the release: the zip with its SHA256SUMS regenerated from the files as they are (the unzipped zip is
   # checked with sha256sum -c). The release is that zip and the Quest library: no top-level SHA256SUMS and no
   # RELEASE-NOTES.md (the body carries the notes and a SHA-256 table). A release carries no Quest APK. The
@@ -601,8 +556,8 @@ jobs:
   # flag: sealing the same tree twice gives the same bytes. A dry run (a dispatch on a tag with no draft)
   # ends here: the sealed files are a workflow artifact.
   seal:
-    needs: [build, sign]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.sign.result == 'success' && needs.build.outputs.version != '' }}
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.version != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -611,8 +566,8 @@ jobs:
 
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
-        name: packages-unsigned
-        path: staged
+        name: unsigned-release-tree
+        path: staged/release
 
     - name: Seal the release
       shell: bash
@@ -637,10 +592,10 @@ jobs:
   # Repack the trees into the same archives the build job made and check them. This is the only job
   # that installs tools (apt, pip) or runs repository scripts after the build, and it holds a read-only
   # token: the write token and the attestation identity live in `publish`, which runs no repository
-  # code and installs nothing. Signing is stubbed above: the files are repacked exactly as built.
+  # code and installs nothing. Nothing here signs: the files are repacked exactly as built.
   repack:
-    needs: [build, sign, seal]
-    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    needs: [build, seal]
+    if: ${{ !cancelled() && needs.seal.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -655,13 +610,13 @@ jobs:
 
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       with:
-        name: packages-unsigned
+        name: unsigned-packages
         path: staged
 
     - name: Repack the packages (UNSIGNED, passed through unchanged)
       shell: bash
       env:
-        CODESIGN_SKIP: "1"  # signing is stubbed: the packager must not touch the files
+        CODESIGN_SKIP: "1"  # nothing here signs: the packager must not touch the files
       run: |
         set -euo pipefail
         mkdir -p dist
@@ -696,8 +651,8 @@ jobs:
 
   # Attest the provenance of the release files and publish them: the sealed Windows zip and the Quest library. Nothing is built, installed or run from the repository here.
   publish:
-    needs: [build, quest, sign, seal, repack]
-    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.seal.result == 'success' && needs.repack.result == 'success' && needs.quest.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
+    needs: [build, quest, seal, repack]
+    if: ${{ !cancelled() && needs.seal.result == 'success' && needs.repack.result == 'success' && needs.quest.result == 'success' && (github.event_name == 'release' || needs.build.outputs.draft == 'true') }}
     runs-on: ubuntu-latest
     # id-token and attestations are for the build-provenance attestation (Sigstore, keyless): artifact
     # attestations are available for public repositories on every plan (GitHub Docs, "GitHub security

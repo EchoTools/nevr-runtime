@@ -1,9 +1,10 @@
 """The release workflow (build.yml): structure and the small scripts it runs; nothing is published here.
 
-A release is a plain semver tag plus GitHub's pre-release flag. Signing is stubbed until the policy signer
-exists. These tests pin that the packaging path is one path for every release event, that nothing in it
-reads the pre-release flag (promotion changes no byte), that a release which already carries its assets is
-not rebuilt, and that the stub is honest."""
+A release is a plain semver tag plus GitHub's pre-release flag. Nothing in this workflow signs: the files on
+the draft are signed afterwards by the release signer (RELEASING.md), so no job here claims or skips it. These
+tests pin that the packaging path is one path for every release event, that nothing in it reads the
+pre-release flag (promotion changes no byte), that a release which already carries its assets is not rebuilt,
+and that no job pretends to sign."""
 
 import os
 import re
@@ -104,35 +105,38 @@ class WorkflowStructureTest(unittest.TestCase):
         for forbidden in ("windows-latest", "azure/", "codesign", "Get-AuthenticodeSignature", "signtool"):
             self.assertNotIn(forbidden, text)
 
-    def test_the_sign_job_is_a_named_stub_that_passes_the_files_through(self):
+    def test_there_is_no_sign_job_and_nothing_passes_files_through_as_unsigned(self):
         data, _ = load()
-        sign = data["jobs"]["sign"]
-        self.assertEqual(sign["name"], "sign: stubbed, policy signer not built yet")
-        self.assertIn("PLACEHOLDER: the signer dispatch goes here", WORKFLOW.read_text(encoding="utf-8"))
-        text = steps_text(sign)
-        self.assertIn("packages-unsigned", text)
-        self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), r"name: signed-")
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("sign", data["jobs"])
+        self.assertNotIn("signing stub", text)
+        for name, job in data["jobs"].items():
+            needs = job.get("needs", [])
+            self.assertNotIn("sign", [needs] if isinstance(needs, str) else needs, name)
+        for gone in ("needs.sign", "UNSIGNED passthrough", "packages-unsigned", "policy signer not built yet",
+                     "PLACEHOLDER: the signer dispatch goes here"):
+            self.assertNotIn(gone, text)
+        self.assertNotRegex(text, r"name: signed-")
 
-    def test_the_job_graph_is_drafts_guard_build_sign_seal_repack_publish(self):
+    def test_the_job_graph_is_drafts_guard_build_quest_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
         # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
-        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "sign", "seal", "repack", "publish"])
+        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "seal", "repack", "publish"])
         self.assertEqual(jobs["guard"]["needs"], "drafts")
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
-        self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
+        self.assertEqual(jobs["seal"]["needs"], "build")
         # repack and publish also need build: they read build's `draft` output (a dispatch on a draft's tag, see
         # test_release_draft_path.py); `needs` outputs are only visible from a direct dependency.
-        self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "quest", "repack", "seal", "sign"])
+        self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "quest", "repack", "seal"])
         # the Quest library is its own job off the guard, built for a release event or a dispatch on a tag, and
         # never when the release already carries its assets
         self.assertEqual(jobs["quest"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
         self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
-        self.assertEqual(jobs["sign"]["needs"], "build")
-        for name in ("sign", "seal", "repack", "publish"):
+        for name in ("seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 
     def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
@@ -185,9 +189,9 @@ class WorkflowStructureTest(unittest.TestCase):
                 self.assertRegex(str(job.get("if", "")), status, f"{name} has a skippable ancestor and no status function")
         # and each names the result of what it needs, so a failed or skipped need still stops it
         self.assertIn("needs.guard.result == 'success'", jobs["build"]["if"])
-        self.assertIn("needs.build.result == 'success'", jobs["sign"]["if"])
-        self.assertIn("needs.sign.result == 'success'", jobs["seal"]["if"])
-        for name in ("build", "sign", "seal", "repack", "publish"):
+        self.assertIn("needs.build.result == 'success'", jobs["seal"]["if"])
+        self.assertIn("needs.seal.result == 'success'", jobs["repack"]["if"])
+        for name in ("build", "seal", "repack", "publish"):
             self.assertIn("!cancelled()", jobs[name]["if"])
             self.assertNotRegex(jobs[name]["if"], r"(?<![!\w])success\(\)", name)
 
@@ -457,7 +461,8 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("--apk", seal_command)
         self.assertNotIn("gh release", seal)
         self.assertIn("sha256sum -c SHA256SUMS", seal)
-        self.assertIn("packages-unsigned", seal)
+        self.assertIn("unsigned-release-tree", seal)
+        self.assertNotIn("packages-unsigned", seal)
         self.assertIn("release-unsigned", seal)
         self.assertIn("staged/release/nevr-runtime-v*-windows)", seal)
         self.assertIn("unzip -q", seal)
