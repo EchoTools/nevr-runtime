@@ -250,10 +250,10 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- No hook logs or takes a lock. Their fourteen counters are `login_prompt_text_shown`,
+- No hook logs or takes a lock. Their sixteen counters are `login_prompt_text_shown`,
   `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the three
   thunks' fault counters, `_error_page_dropped`, `_logging_in_page_dropped`, `_page_passed_armed`,
-  `_error_resent` and `_error_resend_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
+  `_error_resent`, `_error_resend_unavailable`, `_login_restarted` and `_login_restart_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
 
 Exposure of the device code. It is shown to the player by design and is written to
