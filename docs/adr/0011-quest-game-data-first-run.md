@@ -166,7 +166,7 @@ refreshed).
   possible. Until the measurements say so, nothing of it is built.
 - **A failure ends the process nonzero** (exit code 1) after the `android_main_returned` line and the before-exit report; the
   floor message is held ten seconds (two holds of five, with the message shown again between).
-- **The probe** (`nevr-data-probe`) is read only in a development build (`-dev.` in the version).
+- **The probe** (`nevr-data-probe`) is read only in a development build (`nevr_build::kIsDev`, ADR 0013: false for a version with no `-dev.`, or for a CI build of a `vX.Y.Z` or `vX.Y.Z-rc.N` tag ref pointing at HEAD).
 
 ### Toast fallback plan (measurement 1; written, not built)
 

@@ -67,8 +67,9 @@ The chain, each step following from the one before it:
    after the boot request's wait (ADR 0009), and, when the microphone permission is already granted so that no request follows,
    from a hook on `CheckPermission` (`JUMP_SLOT 0x36c37c8`; `src/quest/sentinel/permission_wait_hook.cpp`, `CheckHandler`).
    `CR15Game::Initialize` calls `CheckPermission(RECORD_AUDIO)` and calls `RequestPermissions` only when that is denied.
-7. **Which build fetches** is `nevr_build::kIsDev` (`cmake/nevr_build_info.cmake`: false unless the version contains `-dev.`;
-   a release is a GitHub Actions build of a tag at distance 0, whose version is `X.Y.Z`). `entry.cpp` sets
+7. **Which build fetches** is `nevr_build::kIsDev` (`cmake/nevr_build_info.cmake`: false for a version with no `-dev.`, or
+   for a GitHub Actions build of a `vX.Y.Z` or `vX.Y.Z-rc.N` tag ref whose tag points at HEAD; a local build of a tagged commit
+   stays a development build, so a release build comes from CI). `entry.cpp` sets
    `Options::allow_fetch` and `Options::probe_enabled` from it; `Options::allow_fetch` is false by default, so a code path that
    does not set it cannot fetch. `tools/tests/test_quest_build_is_dev.py` runs the generator on a tag and on a non-tag and pins
    both results.
