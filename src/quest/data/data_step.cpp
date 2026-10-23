@@ -24,6 +24,7 @@ const char* StepOutcomeName(StepOutcome outcome) noexcept {
     case StepOutcome::kUsed: return "used";
     case StepOutcome::kFetched: return "fetched";
     case StepOutcome::kFailed: return "failed";
+    case StepOutcome::kMissing: return "missing";
   }
   return "unknown";
 }
@@ -117,13 +118,21 @@ std::vector<std::string> RecoveryRootsFor(const StepConfig& config) {
 
 StepResult RunDataStep(const StepConfig& config, Transport& transport) {
   StepResult result;
-  if (!config.legacy_root_readable && config.on_step) {
+  const bool engine_root = !config.engine_root.empty();
+  if (!engine_root && !config.legacy_root_readable && config.on_step) {
     config.on_step({"data_legacy_skipped", {{"root", data_root::kLegacyRoot}, {"reason", "no_storage_permission"}}});
   }
-  PutLeftoversRight(config);
-  const data_root::Resolution resolution =
-      config.legacy_root_readable ? data_root::Resolve(config.exists) : ResolveMediaOnly(config.exists);
-  const Decision decision = Decide(resolution, config.exists);
+  if (config.allow_fetch) PutLeftoversRight(config);
+  data_root::Resolution resolution;
+  if (engine_root) {
+    resolution = data_root::HoldsData(config.engine_root.c_str(), config.exists)
+                     ? data_root::Resolution{config.engine_root.c_str(), "engine", true}
+                     : data_root::Resolution{config.engine_root.c_str(), "none", false};
+  } else {
+    resolution = config.legacy_root_readable ? data_root::Resolve(config.exists) : ResolveMediaOnly(config.exists);
+  }
+  Decision decision = Decide(resolution, config.exists);
+  if (engine_root) decision.root = config.engine_root.c_str();
   result.action = decision.action;
   result.root = decision.root;
   if (config.on_step) {
@@ -131,8 +140,20 @@ StepResult RunDataStep(const StepConfig& config, Transport& transport) {
                     {{"action", ActionName(decision.action)}, {"source", decision.source}, {"root", decision.root}}});
   }
   if (decision.action == DataAction::kUse) {
+    if (!config.allow_fetch) {
+      result.outcome = StepOutcome::kUsed;
+      return result;
+    }
     RemoveUsedPart(config, config.fetch_root_override.empty() ? std::string(decision.root) : config.fetch_root_override);
     result.outcome = StepOutcome::kUsed;
+    return result;
+  }
+
+  if (!config.allow_fetch) {
+    result.outcome = StepOutcome::kMissing;
+    result.message = kGameDataMissing;
+    if (config.present) config.present(result.message);
+    if (config.hold) config.hold();
     return result;
   }
 

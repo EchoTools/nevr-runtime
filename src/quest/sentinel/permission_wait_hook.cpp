@@ -17,8 +17,13 @@ using WaitFn = StorageOutcome (*)(const char* const* names, std::uint64_t count)
 
 constexpr std::size_t kMaxNames = 16;
 constexpr const char kStorageSuffix[] = "_EXTERNAL_STORAGE";
+constexpr const char kMicPermission[] = "android.permission.RECORD_AUDIO";
+constexpr const char kStoragePermissions[2][48] = {"android.permission.READ_EXTERNAL_STORAGE",
+                                                   "android.permission.WRITE_EXTERNAL_STORAGE"};
 
 sentinel::GotHook g_hook;
+sentinel::GotHook g_checkHook;
+std::atomic<bool> g_micSeen{false};
 std::atomic<CheckFn> g_check{nullptr};
 std::atomic<WaitFn> g_wait{nullptr};
 std::atomic<AfterStorageFn> g_after{nullptr};
@@ -119,6 +124,31 @@ void RequestHandler(RequestThunk::Fn original, const char* const* names, std::ui
 
 NEVR_HOOK_RECORD(kRequestHook, RequestThunk, &RequestHandler);
 
+// CheckPermission. The first call in the process is CR15Game::Initialize's RECORD_AUDIO check; the game calls
+// RequestPermissions only when it answers "denied". When it answers "granted" no request and no wait will come, so the
+// after-storage step runs here, once, with what the game says about the storage permissions (asked through `original`,
+// the game's own function, so the hook is not re-entered). Every other call is the game's answer, untouched.
+bool CheckHandler(CheckThunk::Fn original, const char* permission) noexcept {
+  const bool granted = original(permission);
+  if (permission == nullptr || std::strcmp(permission, kMicPermission) != 0) return granted;
+  if (g_micSeen.exchange(true, std::memory_order_acq_rel)) return granted;  // only the boot check decides
+  if (!granted) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait", {{"state", "microphone_denied"}});
+    return granted;  // the game requests next; the request path runs the step
+  }
+  const bool storage = original(kStoragePermissions[0]) && original(kStoragePermissions[1]);
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "permission_wait",
+                      {{"state", "not_requested"}, {"microphone", "granted"}, {"storage", storage ? "granted" : "denied"}});
+  if (g_spent.exchange(true, std::memory_order_acq_rel)) return granted;
+  const AfterStorageFn after = g_after.load(std::memory_order_acquire);
+  if (after != nullptr) {
+    after(storage ? StorageOutcome::kAlreadyGranted : StorageOutcome::kDeniedNotRequested);
+  }
+  return granted;
+}
+
+NEVR_HOOK_RECORD(kCheckHook, CheckThunk, &CheckHandler);
+
 bool Equal(const char* a, const char* b) noexcept { return std::strcmp(a, b) == 0; }
 
 // Proves libr15's CheckPermission is the pinned build's (build ID, then its first four instructions) and returns it.
@@ -160,21 +190,24 @@ const char* StorageOutcomeName(StorageOutcome outcome) noexcept {
     case StorageOutcome::kTimeout: return "timeout";
     case StorageOutcome::kCheckUnavailable: return "check_unavailable";
     case StorageOutcome::kNoStoragePermission: return "no_storage_permission";
+    case StorageOutcome::kDeniedNotRequested: return "denied_not_requested";
   }
   return "unknown";
 }
 
 void SetAfterStorage(AfterStorageFn fn) noexcept { g_after.store(fn, std::memory_order_release); }
 
-bool InstallAt(const sentinel::GotTarget& target, CheckFn check) noexcept {
+bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept {
   const char* reason = "injected";
   if (check == nullptr) check = ResolveCheck(&reason);
   g_check.store(check, std::memory_order_release);
   g_spent.store(false, std::memory_order_relaxed);
+  g_micSeen.store(false, std::memory_order_relaxed);
   g_pollMs.store(kPollMs, std::memory_order_relaxed);
   g_timeoutMs.store(kTimeoutMs, std::memory_order_relaxed);
   g_wait.store(&WaitForStorage, std::memory_order_release);
   RequestThunk::Arm(kRequestHook);
+  CheckThunk::Arm(kCheckHook);
   const sentinel::GotStatus status = sentinel::InstallThunk<RequestThunk>(g_hook, target);
   const bool ok = status == sentinel::GotStatus::kOk;
   sentinel::LogFields(ok ? (check != nullptr ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn)
@@ -183,10 +216,18 @@ bool InstallAt(const sentinel::GotTarget& target, CheckFn check) noexcept {
                       {{"result", ok ? "installed" : "failed"},
                        {"status", sentinel::GotStatusName(status)},
                        {"check_permission", reason}});
-  return ok;
+  // The CheckPermission slot: without it a headset that holds the microphone permission is never reached.
+  const sentinel::GotStatus checkStatus = sentinel::InstallThunk<CheckThunk>(g_checkHook, checkTarget);
+  const bool checkOk = checkStatus == sentinel::GotStatus::kOk;
+  sentinel::LogFields(checkOk ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "permission_wait_check_install",
+                      {{"result", checkOk ? "installed" : "failed"},
+                       {"status", sentinel::GotStatusName(checkStatus)}});
+  return ok && checkOk;
 }
 
-bool Install() noexcept { return InstallAt(sentinel::pinned::LibR15RequestPermissions(), nullptr); }
+bool Install() noexcept {
+  return InstallAt(sentinel::pinned::LibR15RequestPermissions(), sentinel::pinned::LibR15CheckPermission(), nullptr);
+}
 
 void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept {
   g_check.store(check, std::memory_order_release);
@@ -194,7 +235,9 @@ void ArmForTest(CheckFn check, unsigned pollMs, unsigned timeoutMs) noexcept {
   g_pollMs.store(pollMs, std::memory_order_relaxed);
   g_timeoutMs.store(timeoutMs, std::memory_order_relaxed);
   g_wait.store(&WaitForStorage, std::memory_order_release);
+  g_micSeen.store(false, std::memory_order_relaxed);
   RequestThunk::Arm(kRequestHook);
+  CheckThunk::Arm(kCheckHook);
 }
 
 void ResetForTest() noexcept {
@@ -202,6 +245,7 @@ void ResetForTest() noexcept {
   g_after.store(nullptr, std::memory_order_relaxed);
   g_wait.store(nullptr, std::memory_order_relaxed);
   g_spent.store(false, std::memory_order_relaxed);
+  g_micSeen.store(false, std::memory_order_relaxed);
   g_pollMs.store(kPollMs, std::memory_order_relaxed);
   g_timeoutMs.store(kTimeoutMs, std::memory_order_relaxed);
   g_requests.store(0, std::memory_order_relaxed);

@@ -18,6 +18,16 @@
  * The wait does not pump the looper. Whether that matters to the grant dialog is what a headset run shows
  * (docs/adr/0009-quest-permission-wait.md has the prediction).
  *
+ * The request is not always made. CR15Game::Initialize calls RequestPermissions only when its RECORD_AUDIO check
+ * (CSysInfo::CheckPermission, the first call in the process) answers "denied"; a headset that already holds the
+ * microphone permission (any that has run the game before) goes straight into CncaGame::Initialize and the manifest
+ * read, with no request and no wait (headset run 2026-10-22, #758). So a second GOT hook sits on the CheckPermission
+ * slot: on the FIRST call, when it is the microphone check and the game's answer is "granted", the request will not
+ * come, and the after-storage step runs there instead, on the same thread, before CR15Game::Initialize goes on. Its
+ * outcome is kAlreadyGranted when both storage permissions are granted and kDeniedNotRequested when one is not (nothing
+ * will ask for it; the step must not write). A denied microphone leaves the step to the request path. The step runs at
+ * most once across both paths.
+ *
  * Lines (sentinel log, no counters): {"event":"permission_wait_install",...} at install and
  * {"event":"permission_wait","state":"already_granted"|"waiting"|"granted"|"timeout"|"check_unavailable"|
  * "no_storage_permission",...}. They are written after the original returned, never inside the game's call.
@@ -31,6 +41,7 @@
 namespace nevr_quest::permission_wait {
 
 using RequestThunk = sentinel::pinned::LibR15RequestPermissionsThunk;
+using CheckThunk = sentinel::pinned::LibR15CheckPermissionThunk;
 // The game's CheckPermission: true when `permission` is granted.
 using CheckFn = bool (*)(const char* permission) noexcept;
 
@@ -43,7 +54,8 @@ enum class StorageOutcome {
   kAlreadyGranted,      // every storage permission in the request was granted already
   kTimeout,             // still denied after kTimeoutMs (a denial or a dialog nobody answered)
   kCheckUnavailable,    // CheckPermission was not resolved: nothing can be said about the grant
-  kNoStoragePermission  // the boot request named no storage permission
+  kNoStoragePermission, // the boot request named no storage permission
+  kDeniedNotRequested   // the microphone was already granted, so the game asked for nothing, and storage is denied
 };
 const char* StorageOutcomeName(StorageOutcome outcome) noexcept;
 inline bool StorageGranted(StorageOutcome outcome) noexcept {
@@ -57,14 +69,15 @@ inline bool StorageGranted(StorageOutcome outcome) noexcept {
 using AfterStorageFn = void (*)(StorageOutcome outcome) noexcept;
 void SetAfterStorage(AfterStorageFn fn) noexcept;
 
-// Arms the handler and installs the thunk in libr15's RequestPermissions slot. One line
-// {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found. True when the
-// slot holds the thunk (a CheckPermission that was not found is logged and makes the wait a no-op, not a failure).
+// Arms the handlers and installs the thunks in libr15's RequestPermissions and CheckPermission slots. One line
+// {"event":"permission_wait_install",...} says what was installed and whether CheckPermission was found, and one line
+// {"event":"permission_wait_check_install",...} says whether the CheckPermission slot holds its thunk. True when both
+// slots hold their thunks (a CheckPermission that was not found is logged and makes the wait a no-op, not a failure).
 bool Install() noexcept;
 
 // The install on any target, with `check` as the permission check (null: resolve the pinned libr15's, as Install does
-// on its own slot). The host test installs it in a fixture library.
-bool InstallAt(const sentinel::GotTarget& target, CheckFn check) noexcept;
+// on its own slot). The host test installs it in a fixture library. `checkTarget` is the CheckPermission slot.
+bool InstallAt(const sentinel::GotTarget& target, const sentinel::GotTarget& checkTarget, CheckFn check) noexcept;
 
 // Test support: arms the handler without touching a GOT slot, with `check`, a poll of `pollMs` and a timeout of
 // `timeoutMs`. ResetForTest clears the one-shot and the counts.
