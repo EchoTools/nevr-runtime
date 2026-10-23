@@ -1,6 +1,7 @@
 # ADR 0011: Quest game data: how a headset-only install gets `_data`, and what the player sees when it is missing
 
-Status: accepted by the owner (tracking issue #758; his answers of 2026-10-22, relayed by the Spritz seat: option A, for every player, from the existing R2-hosted `_data.zip`, with the pinned sha256 as the trust). Nothing in this ADR is built yet; the measurements below come first.
+Status: superseded by ADR 0013 (#758) for who fetches the game data and for whom. The fetch design, the toast fallback plan and the
+measurement list below still describe the development-build step and the open measurements.
 
 The goal, in the owner's words (#nevr-runtime-testing): "i'm literally going for 0 jank". A player who sideloads the APK on the
 headset alone (no PC, no installer) must end with a game that starts, or with a message they can read in the headset that says
@@ -23,8 +24,7 @@ has had to exist since Meta removed encrypted OBB mounting (#nevr-runtime-testin
 owner has dropped the option. Whether the OBB survives uninstalling the store app was therefore not measured; it does not matter
 to this design.
 
-**The failure, confirmed once.** On a Quest 2 with `_data` hidden (the t5-no-game-data run, findings
-`/home/andrew/metis/gopher-spritz/findings/2026-10-22-758-no-game-data-diagnosis.md`), every launch logged, in order,
+**The failure, confirmed once.** On a Quest 2 with `_data` hidden (the t5-no-game-data run, #758), every launch logged, in order,
 `RAD: Initialization Error: Unknown error while loading the game.`, then
 `Failed to find package manifest file /storage/emulated/0/readyatdawn/_data/5932408047/rad15/android/manifests/48037dc70b0ecab2`,
 then the sentinel's `android_main_returned ... exit_code=0` (ADR 0008, `0008-quest-process-end.md`). The process ended; the player saw Home. The build on the
