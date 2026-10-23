@@ -251,6 +251,75 @@ class RenderedTemplateTest(unittest.TestCase):
         self.assertNotIn("NEVR-BUILD", rendered)
 
 
+MINI_PROJECT = """\
+cmake_minimum_required(VERSION 3.20)
+project(mini LANGUAGES C)
+set(PROJECT_VERSION "{version}")
+set(PROJECT_VERSION_MAJOR 5)
+set(PROJECT_VERSION_MINOR 5)
+set(PROJECT_VERSION_PATCH 1)
+set(PROJECT_VERSION_TWEAK 3)
+enable_language(RC)
+include("${{CMAKE_SOURCE_DIR}}/cmake/nevr_version_info.cmake")
+add_library(runtime SHARED runtime.c)
+set_target_properties(runtime PROPERTIES OUTPUT_NAME "BugSplat64" PREFIX "")
+nevr_add_version_info(runtime {runtime_args})
+add_executable(launcher launcher.c)
+set_target_properties(launcher PROPERTIES OUTPUT_NAME "echovr_server")
+nevr_add_version_info(launcher FILE_DESCRIPTION "nEVR dedicated server launcher" ORIGINAL_FILENAME "echovr_server.exe" TYPE APP)
+"""
+RUNTIME_ARGS = 'FILE_DESCRIPTION "nEVR runtime for Echo VR" ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL'
+
+
+@unittest.skipUnless(TOOLCHAIN and shutil.which("ninja"), "needs MinGW gcc, windres, cmake and ninja")
+class AddVersionInfoFunctionTest(unittest.TestCase):
+    """nevr_add_version_info in a one-DLL, one-exe project configured with the repo's MinGW toolchain."""
+
+    def configure(self, root: Path, runtime_args: str = RUNTIME_ARGS, version: str = DEV_VERSION):
+        (root / "cmake").mkdir(parents=True)
+        for name in ("nevr_version_info.cmake", "nevr_version_info.rc.in"):
+            shutil.copyfile(REPO / "cmake" / name, root / "cmake" / name)
+        (root / "CMakeLists.txt").write_text(MINI_PROJECT.format(version=version, runtime_args=runtime_args))
+        (root / "runtime.c").write_text("int __stdcall DllMain(void *h, unsigned long r, void *p) { return 1; }\n")
+        (root / "launcher.c").write_text("int main(void) { return 0; }\n")
+        return subprocess.run([CMAKE, "-S", str(root), "-B", str(root / "build"), "-G", "Ninja",
+                               f"-DCMAKE_TOOLCHAIN_FILE={REPO / 'cmake' / 'toolchain-mingw64.cmake'}"],
+                              capture_output=True, text=True)
+
+    def test_both_targets_carry_the_resource_the_function_makes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            configured = self.configure(root)
+            self.assertEqual(configured.returncode, 0, configured.stderr)
+            built = subprocess.run([CMAKE, "--build", str(root / "build")], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            for name in vi.EXPECTED_FILES:
+                with self.subTest(name=name):
+                    self.assertEqual(vi.problems_for(root / "build" / name, DEV_VERSION), [])
+            self.assertEqual(vi.read_version_info(root / "build" / "BugSplat64.dll").file_version, (5, 5, 1, 3))
+
+    def test_a_call_that_would_write_a_wrong_resource_fails_the_configure(self):
+        cases = {
+            "missing description": ('ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL', "FILE_DESCRIPTION is required"),
+            "missing file name": ('FILE_DESCRIPTION "x" TYPE DLL', "ORIGINAL_FILENAME is required"),
+            "missing type": ('FILE_DESCRIPTION "x" ORIGINAL_FILENAME "BugSplat64.dll"', "TYPE is required"),
+            "unknown type": ('FILE_DESCRIPTION "x" ORIGINAL_FILENAME "BugSplat64.dll" TYPE LIB', "TYPE is DLL or APP"),
+            "quote in text": ('FILE_DESCRIPTION "say \\"hi\\"" ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL', "quote or a backslash"),
+            "backslash in text": ('FILE_DESCRIPTION "a\\\\b" ORIGINAL_FILENAME "BugSplat64.dll" TYPE DLL', "quote or a backslash"),
+        }
+        for label, (args, message) in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                configured = self.configure(Path(tmp), runtime_args=args)
+                self.assertNotEqual(configured.returncode, 0, label)
+                self.assertIn(message, configured.stderr)
+
+    def test_a_version_with_a_quote_fails_the_configure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            configured = self.configure(Path(tmp), version='5.5.1\\"x')  # CMake source: a version with a literal quote
+            self.assertNotEqual(configured.returncode, 0)
+            self.assertIn("quote or a backslash", configured.stderr)
+
+
 @unittest.skipUnless(CMAKE, "needs cmake")
 class NumericVersionCmakeTest(unittest.TestCase):
     def run_numeric(self, major, minor, patch, distance):
@@ -361,6 +430,16 @@ class SyntheticPeTest(unittest.TestCase):
                 path = self.write(shipped_pe(name, DEV_VERSION, b"overlay"), name)
                 self.assertEqual(vi.problems_for(path, DEV_VERSION), [])
                 self.assertTrue(any("FILEVERSION" in p for p in vi.problems_for(path, RELEASE_VERSION)))
+
+    def test_two_identity_literals_or_none_are_refused(self):
+        literal = f"NEVR-BUILD {DEV_VERSION} {COMMIT}".encode()
+        for count in (0, 2):
+            with self.subTest(count=count):
+                dll = self.write(shipped_pe("BugSplat64.dll", DEV_VERSION, b"\0" + b"\0".join([literal] * count) + b"\0"))
+                with self.assertRaisesRegex(vi.PeVersionError, f"{count} NEVR-BUILD identity literals"):
+                    vi.identity_version(dll)
+        one = self.write(shipped_pe("BugSplat64.dll", DEV_VERSION, b"\0" + literal + b"\0"))
+        self.assertEqual(vi.identity_version(one), DEV_VERSION)
 
     def test_a_missing_file_is_a_problem_not_a_crash(self):
         found = vi.problems_for(Path("/nonexistent-dir/BugSplat64.dll"), DEV_VERSION)
