@@ -1407,7 +1407,10 @@ verify:
     unset VCPKG_ROOT
     # The log names what it tested, so a pass is never re-run to prove it.
     echo "verify: HEAD $(git rev-parse HEAD)"
-    echo "verify: tree $( [ -z "$(git status --porcelain)" ] && echo clean || echo DIRTY)"
+    dirty="$(git status --porcelain)"
+    echo "verify: tree $( [ -z "$dirty" ] && echo clean || echo DIRTY)"
+    # A dirty tree names its files, so the log says what differs from the commit it names (#844).
+    if [ -n "$dirty" ]; then printf '%s\n' "$dirty" | sed 's/^/verify: dirty /'; fi
     just build
     # `just build` filters its output through grep and always exits 0, so its exit
     # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
