@@ -171,7 +171,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()
         build = justfile.split("# Build all components\n", 1)[1].split("# Build only", 1)[0]
-        dist = justfile.split("# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
+        dist = justfile.split("# Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
         self.assertIn("cmake --build --preset {{ preset }}", build)
         self.assertNotIn("|", build)
         self.assertIn("cmake --build --preset {{ preset }} --target dist", dist)
@@ -179,7 +179,7 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
-        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")', cmake)
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
@@ -310,6 +310,12 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("CMake 4.0+", readme)
         self.assertIn("CMake 4.0+", agents)
         self.assertIn("echovr_server.exe", readme)
+        self.assertRegex(readme, r"server zip \(`nevr-runtime-v<ver>-windows-server\.zip`\)\s+has no entry for\s+it")
+        self.assertNotIn("the release zip has no entry", readme)
+        justfile = (REPO / "justfile").read_text()
+        self.assertIn("is published outside GitHub, never attached to a release", justfile)
+        self.assertNotIn("shared privately", justfile)
+        self.assertNotIn("The distribution package includes an empty `plugins/`", readme)
         self.assertTrue((REPO / "docs/design/2026-09-21-mic-provider-voip-fix.md").is_file())
 
     def test_sample_config_sensor_uses_tracked_fixture_not_ignored_local_state(self):

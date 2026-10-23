@@ -28,7 +28,7 @@ def release(draft, assets=()):
     return {"draft": draft, "assets": list(assets)}
 
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+FOUR = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0-windows-server.zip",
         "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
 
 

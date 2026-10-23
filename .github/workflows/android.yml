@@ -15,8 +15,6 @@ concurrency:
 jobs:
   android:
     runs-on: ubuntu-latest
-    env:
-      NDK_REVISION: 26.3.11579264   # NDK r26d, the one src/quest/CMakePresets.json names
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -38,38 +36,10 @@ jobs:
       with:
         just-version: '1.58.0'
 
-    # The runner image carries NDK r26d (26.3.11579264); if it ever stops, download it once and cache it.
-    - name: Locate the NDK
+    # The runner image carries NDK r26d; if it ever stops, the action downloads it once and caches it.
+    - name: Set up the Android NDK
       id: ndk
-      run: |
-        set -euo pipefail
-        dir="/usr/local/lib/android/sdk/ndk/$NDK_REVISION"
-        echo "dir=$dir" >> "$GITHUB_OUTPUT"
-        if [ -f "$dir/source.properties" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
-
-    - name: Restore the downloaded NDK
-      if: steps.ndk.outputs.present != 'true'
-      id: ndk_cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: ${{ runner.temp }}/android-ndk-r26d
-        key: android-ndk-r26d-linux
-
-    - name: Download NDK r26d
-      if: steps.ndk.outputs.present != 'true' && steps.ndk_cache.outputs.cache-hit != 'true'
-      run: |
-        set -euo pipefail
-        curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-        unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
-        test -d "$RUNNER_TEMP/android-ndk-r26d"
-
-    - name: Select the NDK and check its revision
-      run: |
-        set -euo pipefail
-        if [ "${{ steps.ndk.outputs.present }}" = "true" ]; then ndk="${{ steps.ndk.outputs.dir }}"; else ndk="$RUNNER_TEMP/android-ndk-r26d"; fi
-        grep -q "^Pkg.Revision = $NDK_REVISION" "$ndk/source.properties"
-        echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
-        cat "$ndk/source.properties"
+      uses: ./.github/actions/setup-ndk
 
     # The same pinned vcpkg revision and file binary cache as build.yml (src/quest has its own, tiny
     # manifest; the entry is keyed by its hash and the triplet).
@@ -88,9 +58,9 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}
         restore-keys: |
-          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-
+          vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-
 
     - name: Build and test (just build-android, just test-android)
       env:
@@ -108,4 +78,4 @@ jobs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ env.NDK_REVISION }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-android-${{ hashFiles('src/quest/vcpkg.json', 'src/quest/vcpkg-overlay-ports/**') }}-${{ steps.ndk.outputs.revision }}-${{ steps.vcpkg.outputs.sha }}

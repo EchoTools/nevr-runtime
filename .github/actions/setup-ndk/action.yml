@@ -1,0 +1,70 @@
+name: Set up the Android NDK
+description: >
+  Locates NDK r26d (the runner image's, or a download kept in the Actions cache), checks its revision, sets
+  ANDROID_NDK_HOME for the later steps of the job and links the NDK's llvm-objdump into /usr/local/bin. The one
+  place the NDK is set up: a job that runs a just recipe using `{{ ndk }}` (the Quest tests, and `just verify`,
+  which runs test-quest-hooks) uses this action before it, so the NDK steps cannot differ between jobs
+  (tools/tests/test_build_workflow_ndk.py).
+outputs:
+  revision:
+    description: The NDK revision this action selects; the Quest vcpkg cache keys carry it.
+    value: ${{ steps.revision.outputs.revision }}
+  home:
+    description: The directory exported as ANDROID_NDK_HOME.
+    value: ${{ steps.select.outputs.home }}
+runs:
+  using: composite
+  steps:
+  - id: revision
+    shell: bash
+    run: |
+      set -euo pipefail
+      # NDK r26d, the one src/quest/CMakePresets.json names.
+      echo "revision=26.3.11579264" >> "$GITHUB_OUTPUT"
+
+  - id: locate
+    shell: bash
+    env:
+      NDK_REVISION: ${{ steps.revision.outputs.revision }}
+    run: |
+      set -euo pipefail
+      dir="/usr/local/lib/android/sdk/ndk/$NDK_REVISION"
+      echo "dir=$dir" >> "$GITHUB_OUTPUT"
+      if [ -f "$dir/source.properties" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+  - name: Restore the downloaded NDK
+    if: steps.locate.outputs.present != 'true'
+    id: ndk_cache
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+    with:
+      path: ${{ runner.temp }}/android-ndk-r26d
+      key: android-ndk-r26d-linux
+
+  - name: Download NDK r26d
+    if: steps.locate.outputs.present != 'true' && steps.ndk_cache.outputs.cache-hit != 'true'
+    shell: bash
+    run: |
+      set -euo pipefail
+      curl -fsSL -o "$RUNNER_TEMP/ndk.zip" https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+      unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+      test -d "$RUNNER_TEMP/android-ndk-r26d"
+
+  - id: select
+    name: Select the NDK and check its revision
+    shell: bash
+    env:
+      NDK_REVISION: ${{ steps.revision.outputs.revision }}
+      NDK_PRESENT: ${{ steps.locate.outputs.present }}
+      NDK_DIR: ${{ steps.locate.outputs.dir }}
+    run: |
+      set -euo pipefail
+      if [ "$NDK_PRESENT" = "true" ]; then ndk="$NDK_DIR"; else ndk="$RUNNER_TEMP/android-ndk-r26d"; fi
+      grep -q "^Pkg.Revision = $NDK_REVISION" "$ndk/source.properties"
+      echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+      echo "home=$ndk" >> "$GITHUB_OUTPUT"
+      # The Quest tests run llvm-objdump from PATH and the hosted runner has none (v5.2.0 failed here). Link the
+      # NDK's into /usr/local/bin rather than editing PATH: PATH is hashed into the vcpkg ABI (test_vcpkg_pin).
+      bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+      test -x "$bin/llvm-objdump" || { echo "no llvm-objdump in $bin"; exit 1; }
+      sudo ln -sf "$bin/llvm-objdump" /usr/local/bin/llvm-objdump
+      llvm-objdump --version

@@ -104,7 +104,7 @@ class LocalDevPackageTest(PackageFixture):
     def test_a_clean_local_build_is_packaged_under_a_dev_name_with_checksums_and_notes(self):
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
-        zip_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-windows.zip"
+        zip_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-windows-player.zip"
         apk_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-quest.apk"
         self.assertTrue(zip_path.exists() and apk_path.exists(), sorted(p.name for p in self.out.iterdir()))
         with zipfile.ZipFile(zip_path) as z:
@@ -211,7 +211,7 @@ class ReleaseStagesTest(PackageFixture):
     def make_tree(self):
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 0, result.stderr)
-        return self.out / "nevr-runtime-v5.0.0-windows"
+        return self.out / "nevr-runtime-v5.0.0-windows-player"
 
     def seal_to(self, tree, name="sealed", *extra):
         sealed = self.tmp / name
@@ -259,10 +259,10 @@ class ReleaseStagesTest(PackageFixture):
         self.dll.write_bytes(binary("5.1.2"))
         result = self.run_stage("tree", *self.tree_args(**{"--version": "5.1.2"}))
         self.assertEqual(result.returncode, 0, result.stderr)
-        tree = self.out / "nevr-runtime-v5.1.2-windows"
+        tree = self.out / "nevr-runtime-v5.1.2-windows-player"
         sealed = self.seal_to(tree)
         self.assertEqual(sorted(p.name for p in sealed.iterdir()),
-                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.1.2-windows.zip"])
+                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.1.2-windows-player.zip"])
 
     def sign_scripts(self, tree):
         """What signing does to a PowerShell script: an Authenticode block is appended."""
@@ -274,19 +274,19 @@ class ReleaseStagesTest(PackageFixture):
         tree = self.make_tree()
         sealed = self.seal_to(tree)
         self.assertEqual(sorted(p.name for p in sealed.iterdir()),
-                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.0.0-windows.zip"])
+                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.0.0-windows-player.zip"])
         notes = (sealed / "RELEASE-NOTES.md").read_text()
         self.assertIn("No Quest APK in this release", notes)
         self.assertNotIn("adb install", notes)
         self.assertNotIn("Two artifacts", notes)
         top = (sealed / "SHA256SUMS").read_text()
-        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
+        zip_path = sealed / "nevr-runtime-v5.0.0-windows-player.zip"
         self.assertEqual(top, f"{hashlib.sha256(zip_path.read_bytes()).hexdigest()}  {zip_path.name}\n")
 
     def test_the_texts_state_facts_that_hold_before_and_after_signing_and_use_no_old_model_words(self):
         tree = self.make_tree()
         sealed = self.seal_to(tree)
-        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
+        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows-player.zip") as z:
             texts = {"SIGNING.txt": z.read("SIGNING.txt").decode(), "README.txt": z.read("README.txt").decode()}
         texts["RELEASE-NOTES.md"] = (sealed / "RELEASE-NOTES.md").read_text()
         for name, text in texts.items():
@@ -305,7 +305,7 @@ class ReleaseStagesTest(PackageFixture):
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
         self.assertIn("Two zips", texts["RELEASE-NOTES.md"])
-        self.assertIn("nevr-runtime-v5.0.0.zip", texts["RELEASE-NOTES.md"])
+        self.assertIn("nevr-runtime-v5.0.0-windows-server.zip", texts["RELEASE-NOTES.md"])
         self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
@@ -323,8 +323,8 @@ class ReleaseStagesTest(PackageFixture):
         (tree / "BugSplat64.dll").write_bytes(signed)
         self.sign_scripts(tree)
         sealed = self.seal_to(tree, "after", "--require-signed")
-        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
-        with zipfile.ZipFile(zip_path) as z, zipfile.ZipFile(before / "nevr-runtime-v5.0.0-windows.zip") as zb:
+        zip_path = sealed / "nevr-runtime-v5.0.0-windows-player.zip"
+        with zipfile.ZipFile(zip_path) as z, zipfile.ZipFile(before / "nevr-runtime-v5.0.0-windows-player.zip") as zb:
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             self.assertEqual(sums["BugSplat64.dll"], hashlib.sha256(signed).hexdigest())
             self.assertNotEqual(sums["BugSplat64.dll"], unsigned_sha)
@@ -359,7 +359,7 @@ class ReleaseStagesTest(PackageFixture):
         # ... so sealing the same tree twice gives the same bytes, whatever flag the release carries.
         first = self.seal_to(tree, "first")
         second = self.seal_to(tree, "second")
-        for name in ("nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md"):
+        for name in ("nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md"):
             self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
 
     def test_seal_has_no_apk_option(self):
