@@ -24,6 +24,9 @@ namespace pw = nevr_quest::permission_wait;
 pw::RequestThunk::Fn RequestEntry() {
   return reinterpret_cast<pw::RequestThunk::Fn>(pw::RequestThunk::EntryAddress());
 }
+pw::CheckThunk::Fn CheckEntry() {
+  return reinterpret_cast<pw::CheckThunk::Fn>(pw::CheckThunk::EntryAddress());
+}
 
 const char* const kMic = "android.permission.RECORD_AUDIO";
 const char* const kRead = "android.permission.READ_EXTERNAL_STORAGE";
@@ -69,7 +72,9 @@ void Reset(int denyChecks) {
   g_thread = pthread_self();
   pw::ResetForTest();
   pw::RequestThunk::Reset();
+  pw::CheckThunk::Reset();
   *pw::RequestThunk::OriginalOut() = reinterpret_cast<void*>(&RealRequestPermissions);
+  *pw::CheckThunk::OriginalOut() = reinterpret_cast<void*>(&ModelCheck);
 }
 
 long long ElapsedMs(std::chrono::steady_clock::time_point since) {
@@ -237,6 +242,127 @@ void NoAfterStorageStepIsTheGamesCallAlone() {
   QCHECK(g_afterCalls == 0);
 }
 
+// ---- the CheckPermission hook: the step on a headset that already holds the microphone permission (#758) ----
+
+bool g_storageGranted = true;
+
+bool GameCheck(const char* permission) noexcept {
+  ++g_checkCalls;
+  g_events.push_back(std::string("check:") + permission);
+  if (permission == kMic) return g_micGranted;
+  return g_storageGranted;
+}
+
+void UseTheGamesCheck(bool mic, bool storage) {
+  g_micGranted = mic;
+  g_storageGranted = storage;
+  *pw::CheckThunk::OriginalOut() = reinterpret_cast<void*>(&GameCheck);
+}
+
+void AGrantedMicrophoneRunsTheStepWithTheStorageAnswerBeforeTheCheckReturns() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(true, true);
+  QCHECK(CheckEntry()(kMic));  // the game's answer is returned untouched
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kAlreadyGranted && pw::StorageGranted(g_afterOutcome));
+  QCHECK(g_eventsAtAfter == g_events.size());  // the checks were all made before the step ran
+  QCHECK(g_events.size() == 3 && g_events[0] == std::string("check:") + kMic);
+  QCHECK(g_events[1] == std::string("check:") + kRead && g_events[2] == std::string("check:") + kWrite);
+  QCHECK(g_events.back() != "request");  // the request never came
+}
+
+void AGrantedMicrophoneWithDeniedStorageIsReportedAsNotRequested() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(true, false);
+  QCHECK(CheckEntry()(kMic));
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kDeniedNotRequested && !pw::StorageGranted(g_afterOutcome));
+}
+
+void ADeniedMicrophoneLeavesTheStepToTheRequestPath() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(false, true);
+  QCHECK(!CheckEntry()(kMic));  // the game's "denied" comes back
+  QCHECK(g_afterCalls == 0);
+  RequestEntry()(kBoot, 3);     // the request the game makes next
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kAlreadyGranted);
+}
+
+void OnlyTheFirstMicrophoneCheckDecides() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(true, true);
+  QCHECK(CheckEntry()(kMic));
+  QCHECK(g_afterCalls == 1);
+  const int calls = g_checkCalls;
+  QCHECK(CheckEntry()(kMic));  // a later microphone check: the game's answer, no extra checks, no step
+  QCHECK(g_checkCalls == calls + 1 && g_afterCalls == 1);
+}
+
+void ACheckForAnotherPermissionIsTheGamesAnswerAndRunsNothing() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(true, true);
+  QCHECK(CheckEntry()(kWrite));
+  QCHECK(g_afterCalls == 0 && g_checkCalls == 1);
+  QCHECK(CheckEntry()(kMic));  // the microphone check still decides after it
+  QCHECK(g_afterCalls == 1);
+}
+
+void TheStepRunsOnceWhenTheRequestCameFirstAndTheMicrophoneIsCheckedAfterwards() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+  UseTheGamesCheck(true, true);
+  QCHECK(CheckEntry()(kMic));
+  QCHECK(g_afterCalls == 1);
+}
+
+void TheStepRunsOnceWhenTheCheckCameFirstAndARequestFollows() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  UseTheGamesCheck(true, true);
+  QCHECK(CheckEntry()(kMic));
+  QCHECK(g_afterCalls == 1);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+}
+
+void WithoutTheStepTheCheckIsTheGamesAnswerAlone() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  UseTheGamesCheck(true, false);
+  QCHECK(CheckEntry()(kMic));
+  QCHECK(g_afterCalls == 0);
+}
+
+void TheCheckThunkWithoutTheHookIsTheGamesCall() {
+  Reset(0);  // not armed
+  UseTheGamesCheck(false, true);
+  QCHECK(!CheckEntry()(kMic));
+  QCHECK(g_checkCalls == 1);
+}
+
 }  // namespace
 
 // A player who taps Deny waits out the cap before the game's own error: it is what a person waits (30 s).
@@ -261,6 +387,15 @@ int main() {
   WithoutACheckNothingIsKnownAboutTheGrant();
   ARequestWithNoStoragePermissionIsNotAGrant();
   NoAfterStorageStepIsTheGamesCallAlone();
+  AGrantedMicrophoneRunsTheStepWithTheStorageAnswerBeforeTheCheckReturns();
+  AGrantedMicrophoneWithDeniedStorageIsReportedAsNotRequested();
+  ADeniedMicrophoneLeavesTheStepToTheRequestPath();
+  OnlyTheFirstMicrophoneCheckDecides();
+  ACheckForAnotherPermissionIsTheGamesAnswerAndRunsNothing();
+  TheStepRunsOnceWhenTheRequestCameFirstAndTheMicrophoneIsCheckedAfterwards();
+  TheStepRunsOnceWhenTheCheckCameFirstAndARequestFollows();
+  WithoutTheStepTheCheckIsTheGamesAnswerAlone();
+  TheCheckThunkWithoutTheHookIsTheGamesCall();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
