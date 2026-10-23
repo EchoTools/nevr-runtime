@@ -788,6 +788,11 @@ your seat name, for example `claude-main` or `codex`.
   the new tip.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing.
+- **Name the result before the check.** Before a check, a test run or a done condition, write down the result that would
+  change what you do next. A check no result of which would change anything is cut.
+- **Force the mechanism to prove a fix.** Plant the bug, or inject the delay or the thread hop that exposes it, and run
+  once with the bug and once without; paste both outputs. "Run it N times" is neither proof nor a done condition. When a
+  failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
 - **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and

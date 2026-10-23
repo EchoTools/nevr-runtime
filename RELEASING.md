@@ -41,6 +41,16 @@ installed: the CDN caches the 200 HTML answer for that exact address. A changed 
    unpushed, no uncommitted change.
 2. `just verify` has run on this tip of `main`: its log starts `verify: HEAD <sha>` and `verify: tree clean`, and ends
    `verify: OK`. It runs once per tip (`AGENTS.md`, "Builds"); a missing HEAD line is checked, not re-run.
+3. A dry run of the full release workflow on this exact commit is green. It is the first release step and the proof for
+   the merge and the tag: the real tag follows only a green dry run.
+   ```sh
+   git tag -a v0.0.<issue> -m "scratch dry run" <commit> && git push origin v0.0.<issue>   # a scratch tag, never the release's
+   gh workflow run build.yml --ref v0.0.<issue>      # no release exists: nothing is attached, attested or published
+   ```
+   The run is green only when the `build` job (including its `Verify` step) and the `quest` job both succeed; the `quest`
+   job runs for a tag ref, never for a branch. Delete the scratch tag when the run ends (`git push origin --delete
+   v0.0.<issue>`, `git tag -d v0.0.<issue>`). A candidate that is a merge of branches not yet on `main` is a valid
+   dry-run commit for merging them; the tag is cut on `main` after the merge.
 
 ## Cut the draft
 
