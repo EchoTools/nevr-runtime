@@ -76,6 +76,27 @@ class ReleaseAssetsTest(unittest.TestCase):
             self.assertIn("gh release edit v", text)
             self.assertIn("--draft=false", text, name)
 
+    def test_every_workflow_gh_release_create_is_a_draft_prerelease_with_a_verified_tag(self):
+        # Release immutability is on: a release created as published is locked before any file is attached, so a
+        # workflow that creates one without --draft publishes an empty release nobody can fix.
+        found = 0
+        for path in sorted((REPO / ".github/workflows").glob("*.yml")):
+            text = path.read_text(encoding="utf-8").replace("\\\n", " ")
+            for line in text.splitlines():
+                if "gh release create" not in line or line.lstrip().startswith("#"):
+                    continue
+                found += 1
+                for flag in ("--draft", "--prerelease", "--verify-tag"):
+                    self.assertIn(flag, line, f"{path.name}: {line.strip()}")
+        self.assertGreaterEqual(found, 1)
+
+    def test_releasing_md_covers_the_failed_draft_and_both_checksum_files_after_signing(self):
+        releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
+        self.assertIn("A draft that fails its checks is deleted and cut again", releasing)
+        self.assertIn("gh release delete vX.Y.Z", releasing)
+        self.assertIn("The signer rewrites **both** checksum files", releasing)
+        self.assertIn("covers the unsigned build output CI attested", releasing)
+
     def test_readme_issue_template_and_justfile_carry_the_audience_names_and_sums_scope(self):
         self.assertIn("-windows-player.zip", (REPO / "README.md").read_text(encoding="utf-8"))
         self.assertIn("-windows-player.zip", (REPO / ".github/ISSUE_TEMPLATE/beta-bug.yml").read_text(encoding="utf-8"))

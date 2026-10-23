@@ -63,6 +63,13 @@ plain dispatch: a green plain dispatch says nothing about the Quest tests.
 locked the moment it exists, before the build can attach its files, and can never be filled or fixed. Never run
 `gh release create` without `--draft`.
 
+**A draft that fails its checks is deleted and cut again.** A second `gh workflow run build.yml` onto a draft that already
+carries any of the five names fails red, so a bad draft is never rebuilt in place. Delete it (`gh release delete vX.Y.Z
+--yes`; this leaves the tag) and, when the fault is in the files only, create the draft again from step 3. When the fault
+is in the tree, also delete the tag (`git push origin --delete vX.Y.Z`, `git tag -d vX.Y.Z`), fix `main`, and start again at
+"Before the tag". A tag with no published release may be removed; the rule that a tag name is never reused applies once a
+release is published ("When a published release is wrong").
+
 ## Check the draft
 
 All of these on the draft, before anything is signed or published. Read the output; do not trust a green run.
@@ -98,8 +105,15 @@ Check a signed file as `SIGNING.txt` in the player zip says: `Get-AuthenticodeSi
 certificate. The CI attestation covers the bytes CI built; for a file the signer replaced, the Authenticode signature and
 the signer's decision record are the evidence for the new bytes.
 
-After the signer has replaced assets (a `dry_run=false` pass), run the checks above again on the draft before publishing:
-the replaced files carry the signer's Authenticode signature and decision record, and the same five names must still be there.
+After the signer has replaced assets (a `dry_run=false` pass), run the checks above again on the draft before publishing,
+read this way:
+
+- The signer rewrites **both** checksum files. The top-level `SHA256SUMS` gets the line of the signed player zip, so
+  `sha256sum -c SHA256SUMS` on it checks the signed zip. The `SHA256SUMS` inside the player zip lists the signed files in
+  it, so run `sha256sum -c SHA256SUMS` again inside the unzipped player zip to check them.
+- `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. For a replaced
+  file the evidence is the Authenticode check above and the signer's decision record.
+- The same five names must still be on the draft.
 
 ## Publish
 
