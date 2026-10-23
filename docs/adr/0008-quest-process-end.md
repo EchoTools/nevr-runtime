@@ -23,7 +23,9 @@ storage permission is not granted yet, so the package manifest cannot be read); 
 One GOT hook on libr15's `android_main` slot (`LibR15AndroidMain`, build-ID pinned like the others). The handler calls the original;
 when it returns, for any reason:
 
-1. logs `{"event":"android_main_returned","action":"ending_process","exit_code":0}`;
+1. logs `{"event":"android_main_returned","action":"ending_process","exit_code":0}`. When `EndWithExitCode` ends the process (a
+   failed first-run data step, which can run when `android_main` has not returned) the line is
+   `{"event":"android_main_returned","action":"ending_process","exit_code":1,"reason":"<reason>"}`;
 2. runs the before-exit callback on a helper thread and waits for it at most 500 ms. The integration registers
    `ReportAndroidMainReturned` there: it reports the self-check `android_main_returned` (its Info line, `self_check` in the
    sentinel's log, is the record) and flushes the unit once. The remote string is **best effort**, and the ADR does not promise it:
@@ -33,7 +35,8 @@ when it returns, for any reason:
    written" signal through the router's transport interface, and still would not help when the login connection is already
    closed, so it is not built;
 3. ends the process with `_exit(0)`, as libr15's own failure paths end it with `exit(0)` (`0x1a6f124`, `0x1a70d08`). `_exit` runs no
-   static destructors: our threads and leaked objects are live.
+   static destructors: our threads and leaked objects are live. A failed first-run data step ends the same way through
+   `EndWithExitCode(1, reason)`: `_exit(1)`, so the launcher and `adb` see a failure.
 
 A new process is the only reset that works: stopping our threads would not change the engine's once-per-process state, and
 clearing the engine's destroy flag or its statics would re-run initialisation in a used process, undoing `OPENSSL_cleanup` is not

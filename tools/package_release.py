@@ -42,6 +42,10 @@ SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
 
 # The one identity literal: NUL-bounded "NEVR-BUILD <version> <commit40>".
 IDENTITY = re.compile(rb"(?<=\x00)NEVR-BUILD ([0-9A-Za-z.+-]+) ([0-9a-f]{40})(?=\x00)")
+# The plugin-trust literal (ADR 0010, #741): NUL-bounded "NEVR-PLUGIN-TRUST <mode>". Separate from the identity
+# literal, which is a cross-repo contract and has no such field. A packaged DLL carries exactly one, and it says
+# signed-only; unsigned-allowed is the mingw-plugin-dev preset and is never packaged.
+PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
 _NUM = r"(?:0|[1-9]\d*)"  # semver: no leading zeros
 RELEASE_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
 DEV_VERSION = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}-dev\.{_NUM}\+[0-9a-f]{{7,40}}$")
@@ -75,13 +79,24 @@ def identity_in(blob: bytes, label: str) -> tuple:
     return version.decode("ascii"), commit.decode("ascii")
 
 
+def plugin_trust_problems(label: str, blob: bytes) -> list:
+    """The packaged DLL must say it enforces the plugin signature gate: exactly one literal, signed-only."""
+    found = PLUGIN_TRUST.findall(blob)
+    if len(found) != 1:
+        return [f"{label}: expected exactly one 'NEVR-PLUGIN-TRUST <mode>' literal, found {len(found)}"]
+    if found[0] != b"signed-only":
+        return [f"{label}: NEVR-PLUGIN-TRUST is '{found[0].decode('ascii')}', not 'signed-only': a build that "
+                f"loads unsigned plugins is never packaged"]
+    return []
+
+
 def expected_identity_problems(label: str, blob: bytes, version, commit: str) -> list:
     """`version` None: any development version (a local build); else exactly that release version."""
     try:
         got_version, got_commit = identity_in(blob, label)
     except GateFailure as error:
         return [str(error)]
-    problems = []
+    problems = plugin_trust_problems(label, blob)
     if version is None:
         if not DEV_VERSION.match(got_version):
             problems.append(f"{label}: version '{got_version}' is not a development version "

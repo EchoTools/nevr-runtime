@@ -316,7 +316,7 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s\n", nevr_build_identity::IdentityLiteral());
   // Where this run is hosted (#673): a crash report names the Wine version without a second question.
-  // Boot phase, loader lock held: Get() touches only ntdll and kernel32, as at the mic-policy line below.
+  // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
   nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
@@ -518,8 +518,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
+  // The game-main wrapper is hooked by the host; the runtime's initialize arms RuntimeGameMain
+  // after this returns (lifecycle/runtime_entry.cpp, ArmGameMain, N125).
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing server crash-recovery hooks...\n");
-  InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();

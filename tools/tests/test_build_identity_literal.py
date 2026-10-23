@@ -50,5 +50,21 @@ class BuiltIdentityLiteralTest(unittest.TestCase):
         self.assertEqual(DLL.read_bytes().count(b"NEVR-BUILD "), 1)
 
 
+PLUGIN_TRUST = re.compile(rb"(?<=\x00)NEVR-PLUGIN-TRUST ([a-z-]+)(?=\x00)")
+
+
+@unittest.skipUnless(DLL.exists() and NINJA.exists(), "no built BugSplat64.dll in build/mingw-release")
+class BuiltPluginTrustLiteralTest(unittest.TestCase):
+    """ADR 0010 (#741): the DLL says which plugin trust mode it enforces, in a literal of its own."""
+
+    def test_the_dll_has_exactly_one_plugin_trust_literal_and_it_says_signed_only(self):
+        found = PLUGIN_TRUST.findall(DLL.read_bytes())
+        self.assertEqual(found, [b"signed-only"], "the mingw-release preset must enforce the signature gate")
+        self.assertEqual(DLL.read_bytes().count(b"NEVR-PLUGIN-TRUST "), 1)
+
+    def test_the_option_is_off_in_the_tree_that_built_it(self):
+        self.assertNotIn("NEVR_ALLOW_UNSIGNED_PLUGINS=1", NINJA.read_text(errors="replace"))
+
+
 if __name__ == "__main__":
     unittest.main()

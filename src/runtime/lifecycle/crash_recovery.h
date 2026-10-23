@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/pch.h"
+#include "core/runtime_abi.h"
 #include "runtime/lifecycle/timestep_log.h"
 #include "runtime/lifecycle/veh_policy.h"
 
@@ -14,11 +15,16 @@ void WriteCrashRecordLine(const char* line);
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.
 void InstallCrashRecoveryHooks();
 
-/// Hooks the game-main wrapper to establish the setjmp recovery point. On a
-/// null-pointer AV in server mode the VEH here longjmps back to it, holding the
-/// process alive instead of terminating. It sits with its longjmp counterpart
-/// (N125). Called from Initialize.
-void InstallGameMainHook();
+/// The runtime's game_main (NevrRuntimeApi): the host's wrapper detour calls it in place of the
+/// original wrapper. It establishes the setjmp recovery point; on a null-pointer AV in server mode
+/// the VEH here longjmps back to it, holding the process alive instead of terminating. It sits with
+/// its longjmp counterpart (N125).
+INT64 RuntimeGameMain(INT64 arg1);
+
+/// Takes over the host's hook on the game-main wrapper: resolves GameMain and records the hook with
+/// HookGuard from the bytes the host wrote. Called from the runtime's initialize (N125); `host`
+/// must have passed nevr_runtime_abi::ValidateHostContext.
+void ArmGameMain(const NevrHostContext* host);
 
 /// #515: what GameMainWrapperHook did to the game's command line (lifecycle/timestep_log.h).
 using nevr_timestep_log::TimestepStripReport;

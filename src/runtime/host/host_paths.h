@@ -27,4 +27,8 @@ inline constexpr wchar_t kBootstrapLogName[] = L"nevr-bootstrap.jsonl";
 inline constexpr wchar_t kBootstrapLogMutexName[] = L"Local\\nevr-host-bootstrap-log";
 inline constexpr unsigned long kBootstrapLogLockWaitMs = 500;
 
+// The last flush of a process that is ending waits this long for the log mutex, once, and writes nothing when it
+// does not get it (a live process on the same prefix may hold it).
+inline constexpr unsigned long kBootstrapExitLogLockWaitMs = 250;
+
 }  // namespace nevr_host

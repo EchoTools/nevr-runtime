@@ -116,11 +116,27 @@ class BootstrapDiagnostics {
   /// crash reporter even though no detour exists to trigger it earlier.
   void FlushAttachJournal() noexcept;
 
+  /// The last flush: the process is ending (DLL_PROCESS_DETACH with lpReserved != NULL), so every other thread
+  /// is already dead. Writes each recorded step not yet written, including those a flush thread claimed and was
+  /// killed before it wrote, the failing steps first. Each record carries its journal index as `seq` and
+  /// the process's `run` token (one key (run, seq) per step; the pid is not part of it, since pids are reused): a claimed
+  /// step is looked up in the log before it is written again. The
+  /// wait on the log mutex, which a live process on the same prefix can hold, is at most
+  /// kBootstrapExitLogLockWaitMs; when it is not taken the flush writes nothing (an unlocked line could
+  /// interleave with the holder's) and stops. It takes no other lock. A step already written is not written again.
+  void FlushAttachJournalAtExit() noexcept;
+
+  /// Name the thread that is inside the host's DllMain attach (0: none). A flush that runs on it is a defect (a
+  /// file cannot be written under the loader lock) and is counted, so a test can fail on it.
+  static void MarkAttachThread(DWORD thread_id) noexcept;
+  static std::size_t FlushesOnAttachThread() noexcept;
+
   /// True when any recorded attach step was a rejection or a failure, an install record says its
   /// hook bytes were unread, or the journal dropped entries.
   bool AttachDegraded() const noexcept;
 
-  /// Append one record built with nlohmann::json. `tag`, `ts` and `pid` are added.
+  /// Append one record built with nlohmann::json. `tag`, `ts`, `pid` and `run` (the process's run token, 16 hex
+  /// digits) are added.
   /// A record larger than kMaxRecordBytes is replaced by a marker record rather
   /// than truncated.
   /// Never throws: a failure to build the record is reported on stderr and returned as
@@ -133,6 +149,8 @@ class BootstrapDiagnostics {
   DiagnosticDestination AppendLine(const char* line, std::size_t length) noexcept;
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
+  static constexpr std::uint32_t kEntryClaimed = 1;  // a flush took the entry and may not have finished its write
+  static constexpr std::uint32_t kEntryWritten = 2;
   static constexpr std::size_t kJournalCapacity = 8;
 
   // Read-only accessors.
@@ -163,9 +181,22 @@ class BootstrapDiagnostics {
   /// True once an append's wait on the log mutex timed out.
   static bool LogLockUnreliableForTest();
 
+  /// Set the process's run token (0: compute it again), so a test can stand for another process that had this pid.
+  static void SetRunTokenForTest(std::uint64_t token);
+  static std::uint64_t RunTokenForTest();
+
+  /// An entry's flush state (0, kEntryClaimed, kEntryWritten), so a test can see it while a record is being written.
+  std::uint32_t EntryStateForTest(std::size_t at) const { return journal_[at].written.load(); }
+
   /// Entries flushes have claimed to write, over all flushes. Equal to the entries recorded once every
   /// flush has returned; more means an entry was claimed twice.
   std::size_t JournalClaimed() const;
+
+  /// Set an entry's flush state (0, kEntryClaimed, kEntryWritten): a flush thread killed between the write and the mark.
+  void SetEntryStateForTest(std::size_t at, std::uint32_t state) { journal_[at].written.store(state); }
+
+  /// Appends the last flush skipped because the log mutex was held (by another process) past its wait.
+  static std::size_t ExitFlushSkippedForTest();
 
   /// Replace the output: every record Emit would write goes to `sink` instead. Null restores the file.
   using EmitSink = void (*)(const nlohmann::json& record);
@@ -189,9 +220,14 @@ class BootstrapDiagnostics {
     // Stored last, with release ordering: RecordAttach reserves a slot before it fills it, so a flush
     // must not read an entry until this says it is complete.
     std::atomic<std::uint32_t> ready;
+    // 0: not taken by a flush; kEntryClaimed: a flush is writing it, or was killed doing so; kEntryWritten.
+    std::atomic<std::uint32_t> written;
   };
 
   void EmitJournalEntry(const JournalEntry& entry);
+  void EmitDroppedTotal() noexcept;
+  bool EntryIsInLog(std::size_t seq) const noexcept;
+  void NoteFlushCaller() noexcept;
   DiagnosticDestination EmitChecked(const nlohmann::json& record);
   void EnsureLogMutex() noexcept;
   bool AppendTo(const wchar_t* dir, bool create_dir, const char* line, std::size_t length) noexcept;

@@ -67,7 +67,31 @@ FATAL_PATTERNS = [
 ]
 FATAL = re.compile("|".join(FATAL_PATTERNS))
 STATE = re.compile(r"NetGame switching state \(from [^)]*, to [^)]*\)")
+STATE_LINE = re.compile(
+    r"^(?:(?P<ts>\d{4}-\d\d-\d\dT[\d:.]+Z)\s.*?)?NetGame switching state \(from (?P<from>[^,)]*), to (?P<to>[^)]*)\)",
+    re.MULTILINE)
 NOTABLE = re.compile(r"\b(warn|error)\b.*")
+
+
+def state_timeline(text: str) -> list[dict]:
+    """Every NetGame state change in the console text, in order, with the timestamp of its line
+    (None when the line carries none). A slow run is read from these: where the time went."""
+    return [{"from": m["from"], "to": m["to"], "ts": m["ts"]} for m in STATE_LINE.finditer(ANSI.sub("", text))]
+
+
+def read_loadavg(path: pathlib.Path = pathlib.Path("/proc/loadavg")) -> str | None:
+    """The 1, 5 and 15 minute load averages as the kernel prints them; None when unreadable."""
+    try:
+        return " ".join(path.read_text().split()[:3])
+    except OSError:
+        return None
+
+
+def build_report(name: str, dll: pathlib.Path, passed: bool, restored: bool, loadavg_start: str | None,
+                 console_text: str, results: list[dict]) -> dict:
+    """The run's result.json: the verdict, the steps, the load at the start and every state change."""
+    return {"scenario": name, "dll": str(dll), "passed": passed, "dll_restored": restored,
+            "loadavg_start": loadavg_start, "states": state_timeline(console_text), "steps": results}
 
 
 class StepFailed(Exception):
@@ -363,7 +387,10 @@ class Run:
         launcher_out = self.out / "launch-client.out"
         # -mp is the game's own multiplayer flag: with -windowed alone a client reaches the menu
         # and waits for a hand on Play, so no scenario waiting for "in game" can ever pass (#674).
-        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll), "--game-arg", "-mp"]
+        # --require-in-game arms launch-client.sh's own gate so the launcher also fails (in its log
+        # and exit code) if the client never entered multiplayer, not only if it never logged in.
+        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll), "--game-arg", "-mp",
+                   "--require-in-game"]
         if self.config is not None:
             command += ["--config", str(self.config)]
         self.launcher = subprocess.Popen(
@@ -517,6 +544,7 @@ def main(argv: list[str]) -> int:
     out = args.out or SCRATCH / f"{stamp}-{scenario['name']}"
     out.mkdir(parents=True, exist_ok=True)
 
+    loadavg_start = read_loadavg()
     run = Run(scenario, args.dll, out, args.config)
     try:
         passed = run.execute()
@@ -524,14 +552,14 @@ def main(argv: list[str]) -> int:
         run.teardown()
     if run.console and run.console.path.exists():
         shutil.copy(run.console.path, out / "console.log")
+    console_text = (out / "console.log").read_text(errors="replace") if (out / "console.log").exists() else ""
     launcher_text = (out / "launch-client.out").read_text() if (out / "launch-client.out").exists() else ""
     game_log = re.search(r"=== game log: (\S+) ===", launcher_text)
     if game_log and pathlib.Path(game_log.group(1)).exists():
         shutil.copy(game_log.group(1), out / "game.jsonl")
     restored = "original BugSplat64.dll restored and verified" in launcher_text
 
-    report = {"scenario": scenario["name"], "dll": str(args.dll), "passed": passed,
-              "dll_restored": restored, "steps": run.results}
+    report = build_report(scenario["name"], args.dll, passed, restored, loadavg_start, console_text, run.results)
     (out / "result.json").write_text(json.dumps(report, indent=2))
     md = f"# scenario {scenario['name']}: {'PASS' if passed else 'FAIL'}\n\n{table(run.results)}\n"
     md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll restored: {restored}\n"
