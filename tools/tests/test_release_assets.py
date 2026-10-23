@@ -58,6 +58,13 @@ class ReleaseAssetsTest(unittest.TestCase):
                      "gh workflow run build.yml --ref v<x.y.z>"):
             self.assertIn(step, agents)
 
+    def test_releasing_md_makes_a_green_scratch_tag_dry_run_a_step_before_the_real_tag(self):
+        text = (REPO / "RELEASING.md").read_text()
+        before = text.split("## Before the tag", 1)[1].split("## Cut the draft", 1)[0]
+        self.assertIn("gh workflow run build.yml --ref v0.0.<issue>", before)
+        self.assertIn("`build` job (including its `Verify` step) and the `quest`", before)
+        self.assertIn("git push origin --delete", before)
+
     def test_releasing_md_creates_a_titled_draft_and_publishes_from_it(self):
         text = (REPO / "RELEASING.md").read_text()
         self.assertIn("gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag", text)
