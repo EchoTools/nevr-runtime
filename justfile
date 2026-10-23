@@ -672,7 +672,7 @@ test-quest-data: _vcpkg-quest-host
     mkdir -p "$out"
     host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
     [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
-    for f in sha256 zip staging; do
+    for f in sha256 zip staging fetch data_step; do
         g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -isystem "$host/include" -c \
             "src/quest/data/$f.cpp" -o "$out/$f.o"
     done
@@ -680,6 +680,84 @@ test-quest-data: _vcpkg-quest-host
         "$out/sha256.o" "$out/zip.o" "$out/staging.o" src/quest/tests/data_test.cpp "$host/lib/libz.a" \
         -o "$out/data_test"
     timeout -k 5 300 "$out/data_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" src/quest/tests/fetch_test.cpp "$host/lib/libz.a" \
+        -o "$out/fetch_test"
+    timeout -k 5 300 "$out/fetch_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$host/include" \
+        "$out/sha256.o" "$out/zip.o" "$out/staging.o" "$out/fetch.o" "$out/data_step.o" src/quest/tests/data_step_test.cpp "$host/lib/libz.a" \
+        -o "$out/data_step_test"
+    timeout -k 5 300 "$out/data_step_test"
+
+# The data fetch over real HTTP (src/quest/data/curl_transport.cpp and fetch.cpp against src/quest/tests/range_server.py):
+# explicit Range, a server that ignores it, a dropped connection, an error page, a refusal with no trust anchors or over
+# plain http, and a whole fetch that resumes. Needs system libcurl, openssl, python3 and zlib development files, as
+# test-quest-tls does for libcurl; zlib comes from the host vcpkg install.
+test-quest-data-net: _vcpkg-quest-host
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tool in openssl python3 pkg-config g++; do
+        command -v "$tool" >/dev/null || { echo "test-quest-data-net: missing tool: $tool" >&2; exit 1; }
+    done
+    pkg-config --exists libcurl || { echo "test-quest-data-net: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-data-net-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    host="{{ justfile_directory() }}/build/quest-host-vcpkg/x64-linux"
+    [[ -f "$host/lib/libz.a" ]] || { echo "test-quest-data-net: FAIL — $host/lib/libz.a not found (just _vcpkg-quest-host installs it)" >&2; exit 1; }
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$host/include" $(pkg-config --cflags libcurl) \
+        src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
+        src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp src/quest/tests/curl_transport_test.cpp \
+        "$host/lib/libz.a" -o "$out/curl_transport_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    cd "$out"
+    export NEVR_TEST_TMP="$PWD"
+    # A throwaway CA and the leaves the HTTPS tests need: one valid, one expired, one for another host, one self-signed.
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout trust.key -out trust.pem -subj "/CN=nevr-data-test-ca" -days 2 \
+        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+    printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n' > ext-good.cnf
+    printf 'subjectAltName=DNS:other.invalid\nbasicConstraints=CA:FALSE\n' > ext-other.cnf
+    openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=localhost" 2>/dev/null
+    openssl x509 -req -in leaf.csr -CA trust.pem -CAkey trust.key -CAcreateserial -days 2 -extfile ext-good.cnf -out good.pem 2>/dev/null
+    openssl x509 -req -in leaf.csr -CA trust.pem -CAkey trust.key -CAcreateserial -not_before 20200101000000Z \
+        -not_after 20200102000000Z -extfile ext-good.cnf -out expired.pem 2>/dev/null
+    openssl x509 -req -in leaf.csr -CA trust.pem -CAkey trust.key -CAcreateserial -days 2 -extfile ext-other.cnf -out wronghost.pem 2>/dev/null
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout selfsigned.key -out selfsigned.pem -subj "/CN=localhost" -days 2 \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
+    ./curl_transport_test write-zip payload.zip
+    : > requests.log
+    servers=()
+    start() {  # name, extra args: a server writes <name>.port and logs to <name>.log
+        local name="$1"; shift
+        : > "$name.log"
+        python3 -I -W ignore ../../src/quest/tests/range_server.py "$name.port" "$name.log" payload.zip "$@" &
+        servers+=("$!")
+    }
+    trap 'kill "${servers[@]}" 2>/dev/null || true' EXIT
+    start plain
+    start good good.pem leaf.key
+    start expired expired.pem leaf.key
+    start wronghost wronghost.pem leaf.key
+    start selfsigned selfsigned.pem selfsigned.key
+    start tls11 good.pem leaf.key tls11
+    for name in plain good expired wronghost selfsigned tls11; do
+        for _ in $(seq 1 100); do [ -s "$name.port" ] && break; sleep 0.1; done
+        [ -s "$name.port" ] || { echo "test-quest-data-net: the $name server did not start" >&2; exit 1; }
+    done
+    # The host's OpenSSL may already refuse TLS 1.1 on its own; a permissive config leaves only the transport's own
+    # floor (CURLOPT_SSLVERSION) between the client and the TLS 1.1 server.
+    printf 'openssl_conf = nevr_lax\n[nevr_lax]\nssl_conf = nevr_ssl\n[nevr_ssl]\nsystem_default = nevr_sys\n[nevr_sys]\nMinProtocol = TLSv1\nCipherString = ALL:@SECLEVEL=0\n' > lax-openssl.cnf
+    OPENSSL_CONF="$PWD/lax-openssl.cnf" timeout -k 5 300 ./curl_transport_test "$(cat plain.port)" plain.log trust.pem "$PWD"
+    # The step as the game reaches it: through the permission-wait handler's thunk entry (src/quest/sentinel/data_wiring.cpp).
+    cd "{{ justfile_directory() }}"
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -pthread -Isrc -Isrc/quest/sentinel -isystem "$host/include" \
+        $(pkg-config --cflags libcurl) src/quest/tests/data_wiring_test.cpp src/quest/sentinel/data_wiring.cpp \
+        src/quest/sentinel/obb_skip_hook.cpp src/quest/sentinel/permission_wait_hook.cpp src/quest/sentinel/process_end_hook.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        src/quest/data/sha256.cpp src/quest/data/zip.cpp src/quest/data/staging.cpp src/quest/data/fetch.cpp \
+        src/quest/data/data_step.cpp src/quest/data/curl_transport.cpp src/quest/data/data_host_roots.cpp \
+        "$host/lib/libz.a" -o "$out/data_wiring_test" $(pkg-config --libs libcurl) -lssl -lcrypto -ldl
+    NEVR_TEST_TMP="$out" timeout -k 5 300 "$out/data_wiring_test"
+    echo "test-quest-data-net: the fetch passes over real HTTP on the host"
 
 # Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
 # compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
@@ -1033,6 +1111,15 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/permission_wait_hook_test" -ldl
     timeout 120 "$out/permission_wait_hook_test"
+    # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
+    # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
+    jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
+    [ -f "$jni" ] || { echo "test-quest-hooks: FAIL: $jni not found (the toast test needs the NDK's jni.h)" >&2; exit 1; }
+    mkdir -p "$out/jni"
+    cp "$jni" "$out/jni/jni.h"
+    "${cxx[@]}" -isystem "$out/jni" -fno-exceptions src/quest/tests/toast_presenter_test.cpp \
+        src/quest/sentinel/toast_presenter.cpp -o "$out/toast_presenter_test"
+    timeout 60 "$out/toast_presenter_test"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
@@ -1329,9 +1416,9 @@ verify:
     # The DLL embeds exactly the public defaults file (the build reads no other source).
     python3 tools/check_embedded_defaults.py --header build/{{ preset }}/generated/nevr_builtin_defaults.h --binary build/{{ preset }}/bin/BugSplat64.dll
     # --- Parallel test block --------------------------------------------------
-    # Nine independent suites run concurrently (capped at nproc) instead of one after
+    # Ten independent suites run concurrently (capped at nproc) instead of one after
     # another: each test-quest-* compiles its own host binary in its own out dir and runs
-    # it, so the serial wall clock was ~9 compiles back to back. The shared vcpkg host
+    # it, so the serial wall clock was ~10 compiles back to back. The shared vcpkg host
     # prereq (yaml-cpp) is built once, serially, here, so the workers that depend on it hit
     # the idempotent guard in _vcpkg-quest-host and never run vcpkg concurrently.
     # tools/verify-parallel.sh fails closed and names the failing suite: any suite failing
@@ -1346,6 +1433,7 @@ verify:
         test-quest-redirect \
         test-quest-social \
         test-quest-data \
+        test-quest-data-net \
         test-quest-integration
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

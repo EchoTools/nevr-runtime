@@ -20,171 +20,14 @@
 #include "quest/data/sha256.h"
 #include "quest/data/staging.h"
 #include "quest/data/zip.h"
+#include "quest/tests/data_test_support.h"
 #include "quest/tests/mini_test.h"
 #include "quest/tests/pinned_zip_directory.h"
 
 using namespace nevr_quest::data;
+using namespace data_test;
 
 namespace {
-
-// ---- a scratch directory that removes itself ----
-struct Scratch {
-  std::string dir;
-  Scratch() {
-    char tmpl[] = "build/quest-data-host/work-XXXXXX";
-    const char* made = ::mkdtemp(tmpl);
-    dir = made != nullptr ? made : "";
-  }
-  ~Scratch() {
-    if (!dir.empty()) RemoveTree(dir);
-  }
-  std::string Path(const std::string& rel) const { return dir + "/" + rel; }
-};
-
-bool Exists(const std::string& path) {
-  struct stat st;
-  return ::lstat(path.c_str(), &st) == 0;
-}
-
-std::string ReadFile(const std::string& path) {
-  std::string out;
-  const int fd = ::open(path.c_str(), O_RDONLY);
-  if (fd < 0) return out;
-  char buf[4096];
-  ssize_t n;
-  while ((n = ::read(fd, buf, sizeof(buf))) > 0) out.append(buf, static_cast<std::size_t>(n));
-  ::close(fd);
-  return out;
-}
-
-void WriteFile(const std::string& path, const std::string& data) {
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (fd < 0) return;
-  if (!data.empty()) {
-    const ssize_t n = ::write(fd, data.data(), data.size());
-    (void)n;
-  }
-  ::close(fd);
-}
-
-// ---- a zip writer: one knob per rule the reader enforces ----
-struct SrcEntry {
-  SrcEntry(std::string n, std::string d, std::uint16_t m = 8) : name(std::move(n)), data(std::move(d)), method(m) {}
-  std::string name;
-  std::string data;
-  std::uint16_t method = 8;
-  std::uint16_t flags = 0;
-  std::uint16_t made_by = 20;
-  std::uint32_t external = 0;
-  std::int64_t crc_delta = 0;     // added to the CRC the directory records
-  std::int64_t usize_delta = 0;   // added to the uncompressed size the directory records
-  std::string raw_payload;        // when not empty, the bytes stored as the entry's payload instead of the compressed data
-  bool use_raw = false;
-  std::int32_t local_method = -1;      // >= 0: the method the LOCAL header says, the directory keeps `method`
-  std::string local_name;              // not empty: the name the LOCAL header carries (same length as the name)
-  std::int64_t local_crc_delta = 0;    // added to the CRC the LOCAL header records
-  std::int64_t local_usize_delta = 0;  // added to the uncompressed size the LOCAL header records
-  std::uint16_t local_flags = 0;       // flags of the LOCAL header only
-};
-
-void Put16(std::string& s, std::uint16_t v) {
-  s.push_back(static_cast<char>(v & 0xff));
-  s.push_back(static_cast<char>(v >> 8));
-}
-void Put32(std::string& s, std::uint32_t v) {
-  Put16(s, static_cast<std::uint16_t>(v & 0xffff));
-  Put16(s, static_cast<std::uint16_t>(v >> 16));
-}
-
-std::string Deflate(const std::string& in) {
-  z_stream zs;
-  std::memset(&zs, 0, sizeof(zs));
-  deflateInit2(&zs, 6, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
-  std::string out(deflateBound(&zs, static_cast<uLong>(in.size())) + 16, '\0');
-  zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
-  zs.avail_in = static_cast<uInt>(in.size());
-  zs.next_out = reinterpret_cast<Bytef*>(&out[0]);
-  zs.avail_out = static_cast<uInt>(out.size());
-  deflate(&zs, Z_FINISH);
-  out.resize(zs.total_out);
-  deflateEnd(&zs);
-  return out;
-}
-
-struct ZipOptions {
-  bool zip64_marker = false;     // 0xFFFF in the end record's entry counts
-  std::uint16_t disk = 0;
-  bool zip64_locator = false;    // a zip64 end-of-central-directory locator in front of the end record
-  std::string trailing;          // bytes after the end record
-  std::uint16_t comment_len = 0; // the comment length the end record claims (no comment follows)
-};
-
-std::string BuildZip(const std::vector<SrcEntry>& entries, const ZipOptions& opt = {}) {
-  std::string body, central;
-  for (const SrcEntry& e : entries) {
-    const bool dir = !e.name.empty() && e.name.back() == '/';
-    std::string payload = dir ? std::string() : (e.method == 8 ? Deflate(e.data) : e.data);
-    if (e.use_raw) payload = e.raw_payload;
-    const std::uint32_t crc = static_cast<std::uint32_t>(
-        crc32(crc32(0L, Z_NULL, 0), reinterpret_cast<const Bytef*>(e.data.data()), static_cast<uInt>(e.data.size())));
-    const std::uint32_t rec_crc = static_cast<std::uint32_t>(static_cast<std::int64_t>(crc) + e.crc_delta);
-    const std::uint32_t usize = static_cast<std::uint32_t>(static_cast<std::int64_t>(e.data.size()) + e.usize_delta);
-    const std::uint32_t offset = static_cast<std::uint32_t>(body.size());
-    Put32(body, 0x04034b50);
-    Put16(body, 20);
-    Put16(body, static_cast<std::uint16_t>(e.flags | e.local_flags));
-    Put16(body, static_cast<std::uint16_t>(e.local_method >= 0 ? e.local_method : e.method));
-    Put32(body, 0);
-    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(rec_crc) + e.local_crc_delta));
-    Put32(body, static_cast<std::uint32_t>(payload.size()));
-    Put32(body, static_cast<std::uint32_t>(static_cast<std::int64_t>(usize) + e.local_usize_delta));
-    Put16(body, static_cast<std::uint16_t>(e.name.size()));
-    Put16(body, 0);
-    body += e.local_name.empty() ? e.name : e.local_name;
-    body += payload;
-    Put32(central, 0x02014b50);
-    Put16(central, e.made_by);
-    Put16(central, 20);
-    Put16(central, e.flags);
-    Put16(central, e.method);
-    Put32(central, 0);
-    Put32(central, rec_crc);
-    Put32(central, static_cast<std::uint32_t>(payload.size()));
-    Put32(central, usize);
-    Put16(central, static_cast<std::uint16_t>(e.name.size()));
-    Put16(central, 0);
-    Put16(central, 0);
-    Put16(central, 0);
-    Put16(central, 0);
-    Put32(central, e.external);
-    Put32(central, offset);
-    central += e.name;
-  }
-  std::string out = body;
-  const std::uint32_t cd_offset = static_cast<std::uint32_t>(out.size());
-  out += central;
-  if (opt.zip64_locator) {
-    Put32(out, 0x07064b50);
-    out.append(16, '\0');
-  }
-  Put32(out, 0x06054b50);
-  Put16(out, opt.disk);
-  Put16(out, 0);
-  const std::uint16_t count = opt.zip64_marker ? 0xFFFF : static_cast<std::uint16_t>(entries.size());
-  Put16(out, count);
-  Put16(out, count);
-  Put32(out, static_cast<std::uint32_t>(central.size()));
-  Put32(out, cd_offset);
-  Put16(out, opt.comment_len);
-  out += opt.trailing;
-  return out;
-}
-
-std::string Pattern(std::size_t n) {
-  std::string s;
-  for (std::size_t i = 0; i < n; ++i) s.push_back(static_cast<char>('a' + (i * 7 + i / 13) % 26));
-  return s;
-}
 
 struct Extracted {
   ZipStatus status;
@@ -765,6 +608,153 @@ TEST(RecoverReplacedLeavesAPlayersOwnBackupAlone) {
   CHECK(!RecoverReplaced(s.dir, nullptr));
   CHECK(!Exists(s.Path("_data")));
   CHECK_EQ(ReadFile(s.Path("_data.replaced-my-backup/b")), std::string("backup"));
+}
+
+namespace {
+
+std::string Absolute(const std::string& path) {
+  char* abs = ::realpath(path.c_str(), nullptr);
+  const std::string out = abs != nullptr ? abs : "";
+  std::free(abs);
+  return out;
+}
+
+std::string Snapshot(const std::string& root, const std::string& aside, const std::string& staging) {
+  std::string out;
+  out += Exists(root + "/_data") ? "data " : "nodata ";
+  out += Exists(aside) ? "aside " : "noaside ";
+  out += IsOwned(aside) ? "asidemarked " : "asideunmarked ";
+  out += Exists(staging) ? "staging" : "nostaging";
+  return out;
+}
+
+}  // namespace
+
+// The two states a crash during InstallStaged leaves. The marker is written before anything moves, so a crash after
+// the first rename leaves the old tree recognisable as ours, and RecoverReplaced puts it back.
+TEST(InstallStagedWritesTheMarkerBeforeItMovesAnythingAndCanBeRecoveredBetweenTheRenames) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/old"), "old");
+  CHECK(MarkOwned(staging));
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  WriteFile(staging + "/new", "new");
+
+  struct Ctx {
+    const std::string* root;
+    const std::string* aside;
+    const std::string* staging;
+    std::string first;
+    std::string between;
+  } ctx{&s.dir, &aside, &staging, {}, {}};
+  InstallProbe probe;
+  probe.context = &ctx;
+  probe.at = [](void* raw, const char* point) {
+    auto* c = static_cast<Ctx*>(raw);
+    const std::string state = Snapshot(*c->root, *c->aside, *c->staging);
+    if (std::strcmp(point, "before_first_rename") == 0) c->first = state;
+    if (std::strcmp(point, "between_renames") == 0) c->between = state;
+  };
+  std::string replaced;
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced, &probe), StageStatus::kOk);
+  // Before anything moved: the old tree is still `_data`, and the aside marker already exists.
+  CHECK_EQ(ctx.first, std::string("data noaside asidemarked staging"));
+  // Between the renames: no `_data`, the old tree aside and marked, the new one still staged.
+  CHECK_EQ(ctx.between, std::string("nodata aside asidemarked staging"));
+  CHECK_EQ(ReadFile(s.Path("_data/new")), std::string("new"));
+}
+
+TEST(ARecoveryFromTheStateBetweenTheRenamesPutsTheOldTreeBack) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(aside));
+  CHECK_EQ(::mkdir(aside.c_str(), 0755), 0);
+  WriteFile(aside + "/old", "old");
+  CHECK(RecoverReplaced(s.dir, nullptr));
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+  CHECK(!IsOwned(aside));
+}
+
+TEST(AFailedFirstRenameLeavesNoNewMarkerAndKeepsAnEarlierOne) {
+  Scratch s;
+  const std::string aside = s.Path("_data.replaced-20261022T000000Z");
+  CHECK_EQ(::mkdir(s.Path("_data").c_str(), 0755), 0);
+  WriteFile(s.Path("_data/old"), "old");
+  CHECK_EQ(::mkdir(aside.c_str(), 0755), 0);  // a non-empty directory of that name: rename onto it fails
+  WriteFile(aside + "/x", "x");
+  const std::string staging = s.Path("_data.staging-aaaaaaaaaaaa");
+  CHECK_EQ(::mkdir(staging.c_str(), 0755), 0);
+  std::string replaced;
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced), StageStatus::kRenameFailed);
+  CHECK(!IsOwned(aside));  // the marker this call made is gone
+  CHECK_EQ(ReadFile(s.Path("_data/old")), std::string("old"));
+  CHECK_EQ(ReadFile(aside + "/x"), std::string("x"));
+
+  CHECK(MarkOwned(aside));  // an earlier marker of ours stays
+  CHECK_EQ(InstallStaged(s.dir, staging, "20261022T000000Z", &replaced), StageStatus::kRenameFailed);
+  CHECK(IsOwned(aside));
+}
+
+TEST(MarkOwnedNeverTruncatesOrFollowsWhatIsAlreadyAtTheMarkerName) {
+  Scratch s;
+  const std::string item = s.Path("_data.replaced-20261022T000000Z");
+  const std::string marker = OwnerMarkerPath(item);
+  WriteFile(marker, "the player's notes");  // a file with content at the exact marker name
+  CHECK(!MarkOwned(item));
+  CHECK_EQ(ReadFile(marker), std::string("the player's notes"));
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+
+  WriteFile(s.Path("target"), "user file");  // a link there is refused and its target is untouched
+  CHECK_EQ(::symlink(Absolute(s.Path("target")).c_str(), marker.c_str()), 0);
+  CHECK(!MarkOwned(item));
+  CHECK_EQ(ReadFile(s.Path("target")), std::string("user file"));
+  CHECK(RemoveTree(marker));
+
+  CHECK(MarkOwned(item));  // an empty file of ours is accepted again, as a resume does
+  CHECK(MarkOwned(item));
+  CHECK(IsOwned(item));
+}
+
+TEST(IsOwnedNeedsAnEmptyRegularFile) {
+  Scratch s;
+  const std::string item = s.Path("_data.staging-aaaaaaaaaaaa");
+  const std::string marker = OwnerMarkerPath(item);
+  CHECK_EQ(::mkdir(marker.c_str(), 0755), 0);  // a directory
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(s.Path("empty"), "");
+  CHECK_EQ(::symlink(Absolute(s.Path("empty")).c_str(), marker.c_str()), 0);  // a link to an empty file
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(marker, "content");  // a file with content
+  CHECK(!IsOwned(item));
+  CHECK(RemoveTree(marker));
+  WriteFile(marker, "");
+  CHECK(IsOwned(item));
+}
+
+TEST(CleanLeftoversKeepsAFileWithContentThatOnlyLooksLikeAnOrphanMarker) {
+  Scratch s;
+  const std::string file = s.Path("_data.staging-notes.nevr-owned");
+  WriteFile(file, "mine");
+  int failed = 0;
+  CHECK_EQ(CleanLeftovers(s.dir, &failed), 0);
+  CHECK_EQ(ReadFile(file), std::string("mine"));
+}
+
+TEST(RecoverReplacedNeverTakesALinkEvenWithAMarker) {
+  Scratch s;
+  CHECK_EQ(::mkdir(s.Path("userdir").c_str(), 0755), 0);
+  WriteFile(s.Path("userdir/keep"), "k");
+  const std::string link = s.Path("_data.replaced-20261022T000000Z");
+  CHECK(MarkOwned(link));
+  CHECK_EQ(::symlink(Absolute(s.Path("userdir")).c_str(), link.c_str()), 0);
+  CHECK(!RecoverReplaced(s.dir, nullptr));
+  CHECK(!Exists(s.Path("_data")));
+  CHECK_EQ(ReadFile(s.Path("userdir/keep")), std::string("k"));
 }
 
 TEST(RemoveTreeDoesNotFollowLinks) {
