@@ -21,7 +21,7 @@ all read or check that one list, so the names below cannot drift from the build.
 | file | audience | holds |
 |---|---|---|
 | `nevr-runtime-vX.Y.Z-windows-player.zip` | players on Windows | `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
-| `nevr-runtime-vX.Y.Z-windows-server.zip` | people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `README.md`, `INSTALL.md`, an empty `plugins/` |
+| `nevr-runtime-vX.Y.Z-windows-server.zip` | people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `README.md`, `INSTALL.md` (the zip has no `plugins/` entry: the staged directory is empty and a zip holds no empty directory) |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
 | `SHA256SUMS` | everyone | one line: the SHA-256 of the Windows player zip (what `seal()` in `tools/package_release.py` writes). The server zip and the Quest `.so` are not in it; their integrity is the attestation |
 | `RELEASE-NOTES.md` | everyone | the notes `tools/package_release.py seal` writes from `tools/package-release/RELEASE-NOTES.template.md` |

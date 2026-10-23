@@ -84,6 +84,8 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertIn("the SHA-256 of the Windows player zip", releasing)
         self.assertIn("Quest APKs and dry runs are published outside GitHub", releasing)
         self.assertNotIn("echo.taxi", releasing)
+        self.assertIn("the zip has no `plugins/` entry", releasing)
+        self.assertNotIn("an empty `plugins/`", releasing)
 
 
 if __name__ == "__main__":
