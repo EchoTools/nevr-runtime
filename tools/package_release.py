@@ -42,6 +42,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_embedded_defaults as defaults_check  # noqa: E402
+import pe_version_info  # noqa: E402
 
 PACKAGE_DIR = REPO / "tools" / "package-release"
 SENTINEL_IN_APK = "lib/arm64-v8a/libovrplatformloader.so"
@@ -168,12 +169,14 @@ def ps1_has_signature_block(path: Path) -> bool:
 
 
 def windows_problems(args, dll: Path) -> list:
-    """The Windows half of the gate: embedded defaults, then the identity literal (version and commit)."""
+    """The Windows half of the gate: embedded defaults, the identity literal (version and commit), and the
+    VERSIONINFO of both files at that version (tools/pe_version_info.py)."""
     problems = [f"windows: {p}" for p in defaults_check.check(Path(args.defaults), Path(args.pc_header), [dll])]
     problems += expected_identity_problems("windows", dll.read_bytes(), args.version, args.commit)
     server = Path(args.server_exe)
     if not server.is_file() or server.read_bytes()[:2] != b"MZ":
         problems.append(f"windows: {SERVER_EXE} is missing or not a PE file: {server}")
+    problems += [f"windows: {p}" for p in pe_version_info.check(dll, server, args.version or None)]
     return problems
 
 

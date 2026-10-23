@@ -2403,6 +2403,10 @@ verify:
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
         python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
     fi
+    # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
+    # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
+    # version that is not the build's exits 1.
+    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
