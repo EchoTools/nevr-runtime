@@ -55,7 +55,7 @@ run time is **not established**. The check must take them from the game's own pa
 
 | Option | What it is | Cost / risk |
 | --- | --- | --- |
-| A. Fetch on first launch | The sentinel downloads `_data.zip` (the file `just quest-install` uses: `https://mia.cdn.echo.taxi/_data.zip`, sha256 `fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c`, `justfile` `quest-install`), verifies it, extracts it under the resolved root, and lets the game start. | Needs a download of about 937 MB and about 2.2 GiB free (`tools/quest-install.sh` `need_kb`); a zip reader on the Quest side (not in `src/quest/vcpkg.json` today; or `java.util.zip` over JNI); an HTTP range client (`src/quest/auth/curl_http.h` is the existing libcurl wrapper); a long blocking step on the game's thread; and a way to show progress, which is the open problem below. The pin is trust-on-first-use (the `justfile` says so), not a publisher signature. |
+| A. Fetch on first launch | The sentinel downloads `_data.zip` (the hosted `_data` archive that `just quest-install` uses, sha256 `fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c`, `justfile` `quest-install`), verifies it, extracts it under the resolved root, and lets the game start. | Needs a download of about 937 MB and about 2.2 GiB free (`tools/quest-install.sh` `need_kb`); a zip reader on the Quest side (not in `src/quest/vcpkg.json` today; or `java.util.zip` over JNI); an HTTP range client (`src/quest/auth/curl_http.h` is the existing libcurl wrapper); a long blocking step on the game's thread; and a way to show progress, which is the open problem below. The pin is trust-on-first-use (the `justfile` says so), not a publisher signature. |
 | B. Installer step | Keep `just quest-install` / `tools/quest-install.{sh,ps1}` (adb pushes and extracts the data). | No runtime code. Needs a PC and USB debugging, so it does not serve the headset-only route that fails. |
 | C. Data inside the APK | The APK carries `_data.zip` as an asset; the runtime extracts it on first launch. | No network at first launch. The APK grows by about 937 MB (the dev APK is 161385468 bytes today), every release re-uploads it, and data and runtime versions are tied together. Still needs the extraction, the space check, and visible progress. |
 | D. A companion app | A separate APK with its own screen downloads the data. | A second install and a second signing identity; the player must be told to run it first, which is jank. |
@@ -67,8 +67,8 @@ show the player progress; without that, A is a long blank screen, which is the j
 
 **Relation to earlier positions.** The position recorded on #538 on 2026-10-15 was no player-facing data downloader. This pick
 replaced it for the Quest sentinel (the game data fetched for every player, with no switch), and ADR 0013 restores it for
-release builds. The source is the file `just quest-install` already uses, `https://mia.cdn.echo.taxi/_data.zip`
-(sha256 `fc2eedea...543c`), which is in the project's own Cloudflare R2; no new path is introduced. The sha256 baked into the
+release builds. The source is the hosted `_data` archive that `just quest-install` already uses
+(sha256 `fc2eedea...543c`), which is in the project's own storage; no new path is introduced. The sha256 baked into the
 signed runtime is the trust, so the zip carries no separate signature.
 
 ## The order of fallbacks
