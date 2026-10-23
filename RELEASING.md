@@ -93,9 +93,13 @@ for f in "$S"/*; do gh attestation verify "$f" -R EchoTools/nevr-runtime; done  
 mkdir -p "$S.unzipped" && unzip -q "$S"/nevr-runtime-vX.Y.Z-windows.zip -d "$S.unzipped"   # a new, empty directory
 (cd "$S.unzipped" && sha256sum -c SHA256SUMS)                         # every file but SHA256SUMS: OK
 (cd "$S.unzipped" && strings -a BugSplat64.dll | grep -a '^NEVR-BUILD')
+python3 tools/pe_version_info.py check --dll "$S.unzipped/BugSplat64.dll" --exe "$S.unzipped/echovr_server.exe"   # exits 0
 ```
 
-The last line must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
+The `NEVR-BUILD` line must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
+The last line reads the VERSIONINFO of both files (the Details tab: description, product name, copyright, company, original
+file name and the file and product version `X.Y.Z`, numeric `X.Y.Z.0`) and compares every field with the pinned values and
+with the version in the DLL's `NEVR-BUILD` literal; `python3 tools/pe_version_info.py show <file>` prints them.
 
 ## Sign
 
@@ -126,6 +130,8 @@ read this way:
 - `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. For a replaced
   file the evidence is the Authenticode check above and the signer's decision record.
 - The same two names must still be on the draft.
+- Run `python3 tools/pe_version_info.py check` on the signed files too (the command under "Check the draft"): signing
+  must leave the VERSIONINFO as the build wrote it.
 - Write the release body next (below) from these final bytes.
 
 ## Write the release body

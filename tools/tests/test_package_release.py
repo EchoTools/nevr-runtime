@@ -20,6 +20,7 @@ TOOL = REPO / "tools" / "package_release.py"
 PACKAGE = REPO / "tools" / "package-release"
 sys.path.insert(0, str(REPO / "tools"))
 import package_release  # noqa: E402
+from pe_version_fixtures import shipped_pe  # noqa: E402
 
 COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
@@ -49,10 +50,10 @@ def identity(version, commit=COMMIT):
 
 
 def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST signed-only",)):
-    """A fake binary: the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
+    """A fake DLL: a PE with the pinned VERSIONINFO, then the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
     literal(s) in `trust` (ADR 0010), then `extra`."""
     parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals + list(trust)
-    return b"MZ" + b"\0" + b"\0".join(parts) + b"\0" + extra
+    return shipped_pe("BugSplat64.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
 class PackageFixture(unittest.TestCase):
@@ -74,7 +75,7 @@ class PackageFixture(unittest.TestCase):
         self.dll = self.tmp / "BugSplat64.dll"
         self.dll.write_bytes(binary(self.version))
         self.server = self.tmp / "echovr_server.exe"
-        self.server.write_bytes(b"MZ\0the dedicated-server launcher\0")
+        self.server.write_bytes(shipped_pe("echovr_server.exe", self.version, b"\0the dedicated-server launcher\0"))
         self.apk = self.tmp / "signed.apk"
         self.write_apk(self.version)
         self.out = self.tmp / "out"
@@ -261,6 +262,7 @@ class ReleaseStagesTest(PackageFixture):
 
     def test_the_file_names_follow_the_tag_version(self):
         self.dll.write_bytes(binary("5.1.2"))
+        self.server.write_bytes(shipped_pe("echovr_server.exe", "5.1.2", b"\0the dedicated-server launcher\0"))
         result = self.run_stage("tree", *self.tree_args(**{"--version": "5.1.2"}))
         self.assertEqual(result.returncode, 0, result.stderr)
         tree = self.out / "nevr-runtime-v5.1.2-windows"
@@ -378,6 +380,25 @@ class ReleaseStagesTest(PackageFixture):
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 1)
         self.assertIn("echovr_server.exe is missing or not a PE file", result.stderr)
+
+    def test_the_tree_stage_refuses_a_file_without_the_pinned_version_info(self):
+        """#850: the Details tab of both shipped files is part of the gate, at the version the DLL states."""
+        self.server.write_bytes(b"MZ\0the dedicated-server launcher\0")
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: echovr_server.exe:", result.stderr)
+        self.assertFalse(self.out.exists())
+        self.server.write_bytes(shipped_pe("echovr_server.exe", "5.0.1"))
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: echovr_server.exe: FILEVERSION 5.0.1.0 is not 5.0.0.0", result.stderr)
+        self.server.write_bytes(shipped_pe("echovr_server.exe", RELEASE))
+        parts = [v.encode() for v in VALUES.values()] + [identity(RELEASE), b"NEVR-PLUGIN-TRUST signed-only"]
+        self.dll.write_bytes(b"MZ\0" + b"\0".join(parts) + b"\0")  # everything but the VERSIONINFO
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: BugSplat64.dll:", result.stderr)
+        self.assertFalse(self.out.exists())
 
     def test_seal_refuses_a_tree_without_the_server_exe(self):
         tree = self.make_tree()

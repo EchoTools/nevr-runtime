@@ -34,6 +34,13 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
+# BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
+# resource compiler is a language, and enable_language cannot be called from a function.
+if(WIN32)
+  enable_language(RC)
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
+
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
