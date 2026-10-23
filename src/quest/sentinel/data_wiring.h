@@ -10,14 +10,15 @@
  * (obb_skip::CurrentRoot); without one CSysFile::Init returned at "OBB not found", the skip never ran, and
  * CSysInfo::GetDataRootDir answers the legacy root. So:
  *   - Storage not granted and the engine reads the legacy root (shared storage): nothing is looked at, fetched or
- *     written; the player is shown data::kNeedsStoragePermission, it is held ten seconds, and the process ends nonzero
+ *     written; the player is shown data::kNeedsStoragePermission, it is held ten seconds (a release build holds
+ *     nothing: Options::hold_ms 0), and the process ends nonzero
  *     (`data_step outcome=no_storage_grant`). The media root needs no permission and is used as it is.
  *   - data::RunDataStep looks at that root only (StepConfig::engine_root), after (development builds only) putting the
  *     leftovers of an interrupted install right (RecoverReplaced, CleanLeftovers):
  *   - data already there: nothing is fetched and one `data_check action=use` line says so;
  *   - data missing or of another build, in a development build (Options::allow_fetch): the fetch runs into that root;
  *   - data missing or of another build, in a release build: nothing is fetched or written; the player is shown
- *     data::kGameDataMissing (install with Echo Launcher), it is held ten seconds, a `data_step outcome=missing`
+ *     data::kGameDataMissing (install with Echo Launcher), it is not held (Options::hold_ms 0), a `data_step outcome=missing`
  *     Error line records it, and the process ends nonzero (reason `game_data_missing`);
  *   - the fetch fails: the visible message (toast_presenter.h) is shown and held ten seconds, a `data_step` Error line
  *     records it, and the process ends with a nonzero code after the `android_main_returned` line and the before-exit
@@ -72,6 +73,7 @@ struct Options {
   std::string probe_path;                      // empty: <media root>/nevr-data-probe
   std::string fetch_root_override;             // empty: where the data step decides (test seam)
   unsigned hold_ms = 5000;                     // the message is held twice this long (ten seconds), shown again between
+                                               // 0: not held and not shown again (release builds, entry.cpp)
   bool probe_enabled = false;                  // read the measurement probe file (dev builds only; entry.cpp sets it)
   bool allow_fetch = false;                    // download missing data (dev builds only; entry.cpp sets it); false: only look
   std::vector<std::string> recovery_roots;     // empty: both data roots (test seam)

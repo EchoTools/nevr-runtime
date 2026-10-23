@@ -142,6 +142,13 @@ class TheStepOrder(unittest.TestCase):
         hold = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
         self.assertEqual(hold.count("Sleep(Opts().hold_ms)"), 2)
 
+    def test_a_release_build_holds_nothing_while_no_presenter_is_known_to_draw(self):
+        hold = extract_braced_function(read("data_wiring.cpp"), "void HoldMessage(const std::string& message) noexcept {")
+        self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Sleep(Opts().hold_ms)"))
+        self.assertLess(hold.index("if (Opts().hold_ms == 0) return;"), hold.index("Present("))
+        entry = extract_braced_function(read("entry.cpp"), "bool InstallPermissionWaitHook() noexcept {")
+        self.assertRegex(entry, r"if \(!nevr_build::kIsDev\) options\.hold_ms = 0;")
+
     def test_the_log_never_says_shown_for_a_toast_that_was_only_requested(self):
         text = re.sub(r"//[^\n]*", "", read("data_wiring.cpp") + read("toast_presenter.cpp"))
         self.assertIn('"requested"', text)

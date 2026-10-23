@@ -49,8 +49,12 @@ The chain, each step following from the one before it:
 4. **The one thing the runtime still owes a player is a visible message when data is missing, instead of a silent exit.**
    A release build, when the data is not there, fetches nothing, writes nothing, recovers nothing, cleans nothing, shows
    `kGameDataMissing` ("Echo VR game data is missing. Install Echo VR with Echo Launcher first, then start the game again."),
-   holds it for two periods of five seconds with the message shown again between, and ends the process nonzero with reason
-   `game_data_missing` (`src/quest/data/data_step.cpp`, `src/quest/sentinel/data_wiring.cpp`).
+   and ends the process nonzero with reason `game_data_missing` (`src/quest/data/data_step.cpp`,
+   `src/quest/sentinel/data_wiring.cpp`). A release build holds the message for no time (`Options::hold_ms` is 0,
+   `src/quest/sentinel/entry.cpp`): the one headset run found no presenter that draws at this point (see "Not
+   established"), and a hold on a message nobody sees only delays the exit. The hold of two periods of five seconds, with
+   the message shown again between, stays in development builds and returns in release builds with a presenter a
+   headset shows.
 5. **Without the storage grant and with the legacy root as the engine root,** nothing is looked at or written: the player is
    shown the Storage message (`kNeedsStoragePermission`) and the process ends nonzero with reason `no_storage_grant`.
 6. **When the data step runs.** On the game's thread, once, before the manifest read: from the `RequestPermissions` hook
@@ -104,13 +108,15 @@ data root (`data_root::Resolve`) and a fetch into the media root, which the engi
 
 Written before the run. A release build, sideloaded, no `_data` in the legacy root, Storage granted: a `data_step_start` line, a
 `data_check` line with `action=fetch` or `replace`, a `data_step` Error line with `outcome=missing` and no `data_fetch` line,
-two `data_present` lines for the message, then `android_main_returned` and a nonzero exit; no file written under either data
-root. The same build with `_data` in place: `data_check action=use` and the game starts. A development build with `_data`
+one `data_present` line for the message, then `android_main_returned` and a nonzero exit at once; no file written under
+either data root. The same build with `_data` in place: `data_check action=use` and the game starts. A development build with `_data`
 missing: the `data_fetch` lines of ADR 0011. Whether Horizon OS draws the toast this early (ADR 0011, measurement 1) is not
 known; a `data_present` line with `result=requested` says `Toast.show()` returned, not that anything drew.
 
 ## Not established
 
-Whether the toast is drawn and for how long it is readable; whether `/sdcard/readyatdawn` and `/storage/emulated/0/readyatdawn`
+Which presenter a player sees at the microphone check (the one headset run showed no `Toast` from the `android_main`
+thread, whose Looper is prepared and never run; a `Toast` posted to the main looper, a dialog and an own-frames display are
+untried); whether the toast is drawn and for how long it is readable; whether `/sdcard/readyatdawn` and `/storage/emulated/0/readyatdawn`
 are the same folder for every player; where `gOBBPath` is assigned; whether `-dataroot` or `-datadir` exists; whether
 `Android/media/<package>` survives an uninstall.

@@ -138,8 +138,11 @@ void EndFailed(const char* reason) noexcept {
   }
 }
 
-// The message stays up long enough to read: shown, held, shown again, held (two holds of hold_ms, ten seconds).
+// The message stays up long enough to read: shown, held, shown again, held (two holds of hold_ms, ten seconds). With
+// hold_ms 0 (a release build: no presenter is known to draw, docs/adr/0013) nothing is held and the message is not
+// shown a second time.
 void HoldMessage(const std::string& message) noexcept {
+  if (Opts().hold_ms == 0) return;
   Sleep(Opts().hold_ms);
   Present(message, "floor");
   Sleep(Opts().hold_ms);

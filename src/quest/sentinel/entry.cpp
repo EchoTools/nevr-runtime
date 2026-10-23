@@ -99,6 +99,7 @@ bool InstallPermissionWaitHook() noexcept {
     options.show = &nevr_quest::toast::Show;
     options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
+    if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
     return nevr_quest::permission_wait::Install();
 }

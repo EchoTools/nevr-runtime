@@ -468,17 +468,17 @@ void TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows() {
 
 // ---- a release build never fetches ----
 
-void AReleaseBuildWithoutDataShowsTheMissingMessageHoldsItAndEndsNonzero() {
+void AReleaseBuildWithoutDataShowsTheMissingMessageHoldsNothingAndEndsNonzero() {
   Rig rig;
   rig.options.allow_fetch = false;
+  rig.options.hold_ms = 0;  // entry.cpp: a release build holds nothing while no presenter is known to draw
   rig.BootRequest();
   QCHECK(rig.net.calls == 0);                       // no network at all
   QCHECK(!Exists(rig.options.fetch_root_override));  // and nothing written
   QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "game_data_missing");
-  QCHECK(g_shown.size() == 2);
-  QCHECK(g_shown[0] == nevr_quest::data::kGameDataMissing && g_shown[1] == g_shown[0]);
-  // shown, held, shown again, held, then the process ends: the player has had ten seconds in production (two holds).
-  const std::vector<std::string> want = {"show", "sleep:7", "show", "sleep:7", "end"};
+  QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kGameDataMissing);
+  // shown once, then the process ends at once: no hold, no second show.
+  const std::vector<std::string> want = {"show", "end"};
   std::vector<std::string> got;
   for (const std::string& e : g_log) {
     if (e == "sleep:7" || e == "show" || e == "end") got.push_back(e);
@@ -491,10 +491,22 @@ void AReleaseBuildWithoutDataShowsTheMissingMessageHoldsItAndEndsNonzero() {
 void AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath() {
   Rig rig;
   rig.options.allow_fetch = false;
+  rig.options.hold_ms = 0;
   QCHECK(rig.MicCheck());
   QCHECK(rig.net.calls == 0 && g_requests == 0);
   QCHECK(g_ends == 1 && g_exit_reason == "game_data_missing");
-  QCHECK(g_shown.size() == 2 && g_shown[0] == nevr_quest::data::kGameDataMissing);
+  QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kGameDataMissing);
+}
+
+void AReleaseBuildWithoutTheStorageGrantShowsTheStorageMessageHoldsNothingAndEndsNonzero() {
+  Rig rig;
+  rig.options.allow_fetch = false;
+  rig.options.hold_ms = 0;
+  rig.BootRequest(&DeniedCheck);
+  QCHECK(rig.net.calls == 0 && !Exists(rig.options.fetch_root_override));
+  QCHECK(g_ends == 1 && g_exit_code != 0 && g_exit_reason == "no_storage_grant");
+  QCHECK(g_shown.size() == 1 && g_shown[0] == nevr_quest::data::kNeedsStoragePermission);
+  for (const std::string& e : g_log) QCHECK(e.rfind("sleep:", 0) != 0);  // nothing is held and nothing is fetched
 }
 
 void AReleaseBuildWithDataUsesItAndSaysNothing() {
@@ -626,8 +638,9 @@ int main() {
   AGrantedUnwritableRootEndsWithTheStepsOwnReason();
   TheStepRunsOnceWhenTheMicrophoneIsDeniedAndAnotherCheckFollows();
   TheStepRunsOnceWhenTheMicrophoneIsGrantedAndARequestFollows();
-  AReleaseBuildWithoutDataShowsTheMissingMessageHoldsItAndEndsNonzero();
+  AReleaseBuildWithoutDataShowsTheMissingMessageHoldsNothingAndEndsNonzero();
   AReleaseBuildWithoutDataEndsTheSameOnTheMicGrantedPath();
+  AReleaseBuildWithoutTheStorageGrantShowsTheStorageMessageHoldsNothingAndEndsNonzero();
   AReleaseBuildWithDataUsesItAndSaysNothing();
   AReleaseBuildWithAnObbServingTheMediaRootLooksThereAndWritesNothing();
   ThePathCheckAcceptsDirectoriesAndNonEmptyFilesOnly();
