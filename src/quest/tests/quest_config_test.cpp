@@ -1,5 +1,6 @@
 // Host and Android test for the Quest configuration and activation logic (quest_config.cpp). The file is
 // config.yaml, parsed by the PC's nevr_config (src/core/nevr_config.cpp).
+#include "core/nevr_config.h"
 #include "quest/sentinel/quest_config.h"
 
 #include <chrono>
@@ -391,14 +392,42 @@ std::string NestedAliases(int levels) {
   return s;
 }
 
-// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s.
-constexpr std::chrono::milliseconds kRejectionBudget{100};
+// A rejection takes at most kMaxConfigNodes visits; the unbounded walk over 8 nested levels ran for 10.8 s. What
+// proves the bound is the count, not the clock: TheNodeBudgetIsExactlyKMaxConfigNodes pins the visit at which a
+// file is rejected, and the rejection reason below is only reachable past it. A wall-clock limit that a loaded
+// host can meet cannot tell that host from a slow loop, so this one is a backstop for a walk that never ends
+// (the rejection takes 64 ms on an idle host), not the check.
+constexpr std::chrono::milliseconds kRejectionBackstop{5000};
 
-LoadResult TimedLoad(const std::string& file, bool& withinBudget) {
+LoadResult TimedLoad(const std::string& file, bool& withinBackstop) {
   const auto start = std::chrono::steady_clock::now();
   LoadResult r = Load(Full(), file);
-  withinBudget = std::chrono::steady_clock::now() - start < kRejectionBudget;
+  withinBackstop = std::chrono::steady_clock::now() - start < kRejectionBackstop;
   return r;
+}
+
+// A file the walk visits exactly `visits` nodes of, under the Quest's 64 KiB size cap: plain entries cannot reach
+// kMaxConfigNodes in that size (OversizedFileIsRejected), so most visits come from aliases of a 10-node sequence.
+// Visits: the root mapping (1), `x-a0`'s sequence and its 9 scalars (10), `x-b`'s sequence (1), each `*a0` in it
+// (10 each, a visit of the aliased sequence and its scalars) and each plain `0` in it (1).
+std::string FileWithVisits(std::size_t visits) {
+  const std::size_t rest = visits - 12;
+  std::string s = "x-a0: &a0 [0,0,0,0,0,0,0,0,0]\nx-b: [";
+  for (std::size_t i = 0; i < rest / 10; ++i) s += i == 0 ? "*a0" : ",*a0";
+  for (std::size_t i = 0; i < rest % 10; ++i) s += ",0";  // rest >= 10 for any real cap, so the list is not empty
+  return s + "]\n";
+}
+
+// The walk counts every visit of a node, aliased or not, and rejects the file at the first visit past
+// kMaxConfigNodes. So the file that visits exactly that many nodes is the last that loads and the next is the
+// first that is rejected: a walk that counts a node twice, skips the count, or moves the cap changes which of the
+// two loads. This, not the clock, is what proves the bound.
+void TheNodeBudgetIsExactlyKMaxConfigNodes() {
+  const char* const tooMany = "config file=config.yaml rejected reason=too_many_nodes (embedded defaults stay)";
+  LoadResult r = Load(Full(), FileWithVisits(nevr::kMaxConfigNodes));
+  CHECK(!r.fileRejected && !EventsContain(r, "too_many_nodes"));
+  r = Load(Full(), FileWithVisits(nevr::kMaxConfigNodes + 1));
+  CHECK(r.fileRejected && EventsContain(r, tooMany));
 }
 
 void AliasesThatLoopOrExplodeAreRejectedNotWalkedForever() {
@@ -613,6 +642,7 @@ int main() {
   OversizedFileIsRejected();
   TheSizeCapIsInclusive();
   AliasesThatLoopOrExplodeAreRejectedNotWalkedForever();
+  TheNodeBudgetIsExactlyKMaxConfigNodes();
   ADeepButLegalNestingStillLoads();
   BadKeyValuesKeepTheDefault();
   UriShapeValidation();
