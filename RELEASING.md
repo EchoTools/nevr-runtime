@@ -127,8 +127,10 @@ read this way:
 
 - The signer replaces the zip. The `SHA256SUMS` inside it lists the signed files in it, so unzip the signed zip into a
   new directory and run `sha256sum -c SHA256SUMS` there.
-- `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. For a replaced
-  file the evidence is the Authenticode check above and the signer's decision record.
+- `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. The loop under
+  "Check the draft" exits non-zero for the signed zip (`HTTP 404: Not Found` from the attestations API) and still exits 0
+  for the Quest library, which the signer does not replace; that failure is the signer's work, not a bad draft. For a
+  replaced file the evidence is the Authenticode check above and the signer's decision record.
 - The same two names must still be on the draft.
 - Run `python3 tools/pe_version_info.py check` on the signed files too (the command under "Check the draft"): signing
   must leave the VERSIONINFO as the build wrote it.
