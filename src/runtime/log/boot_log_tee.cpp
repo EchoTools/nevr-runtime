@@ -21,7 +21,7 @@ static std::atomic<bool> g_boot_active{false};  // Init() to Close(), the boot p
 static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for the replay (#5)
 
 // Log()'s boot sink (BootLogSink, core/logging.h), set from Init() to Close() whether or not the
-// file opened: the boot phase is defined by the loader lock being held, not by the file being
+// file opened: the boot phase is defined by the tee being open (Init() to Close()), not by the file being
 // writable. Rule 12: the level goes after the subsystem tag ("[NEVR.HEADLESS] warn; ..."), or first
 // when there is no tag.
 static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {

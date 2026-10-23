@@ -162,6 +162,81 @@ void ANullNameListIsSafe() {
   QCHECK(g_checkCalls == 0 && pw::CurrentCounts().waits == 0);
 }
 
+int g_afterCalls = 0;
+std::size_t g_eventsAtAfter = 0;
+pw::StorageOutcome g_afterOutcome = pw::StorageOutcome::kCheckUnavailable;
+
+void AfterStorage(pw::StorageOutcome outcome) noexcept {
+  ++g_afterCalls;
+  g_eventsAtAfter = g_events.size();
+  g_afterOutcome = outcome;
+}
+
+void TheAfterStorageStepRunsOnceAfterTheWaitAndBeforeTheCallReturns() {
+  Reset(3);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_eventsAtAfter == g_events.size());  // every check of the wait had been made when it ran
+  QCHECK(pw::CurrentCounts().granted == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kGranted && pw::StorageGranted(g_afterOutcome));
+  const char* const script[1] = {kWrite};
+  RequestEntry()(script, 1);                   // a later request does not run it again
+  QCHECK(g_afterCalls == 1);
+}
+
+void AGrantThatWasAlreadyThereIsReportedAsAGrant() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kAlreadyGranted && pw::StorageGranted(g_afterOutcome));
+}
+
+void ADeniedPermissionIsReportedAsNoGrant() {
+  Reset(-1);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 40);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(pw::CurrentCounts().timeouts == 1);
+  QCHECK(g_afterCalls == 1);  // the step is told, and the step does nothing without a grant (data_wiring.cpp)
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kTimeout && !pw::StorageGranted(g_afterOutcome));
+}
+
+void WithoutACheckNothingIsKnownAboutTheGrant() {
+  Reset(-1);
+  g_afterCalls = 0;
+  pw::ArmForTest(nullptr, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kCheckUnavailable && !pw::StorageGranted(g_afterOutcome));
+}
+
+void ARequestWithNoStoragePermissionIsNotAGrant() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  pw::SetAfterStorage(&AfterStorage);
+  const char* const mic[1] = {kMic};
+  RequestEntry()(mic, 1);
+  QCHECK(g_afterCalls == 1);
+  QCHECK(g_afterOutcome == pw::StorageOutcome::kNoStoragePermission && !pw::StorageGranted(g_afterOutcome));
+}
+
+void NoAfterStorageStepIsTheGamesCallAlone() {
+  Reset(0);
+  g_afterCalls = 0;
+  pw::ArmForTest(&ModelCheck, 5, 5000);
+  RequestEntry()(kBoot, 3);
+  QCHECK(g_afterCalls == 0);
+}
+
 }  // namespace
 
 // A player who taps Deny waits out the cap before the game's own error: it is what a person waits (30 s).
@@ -180,6 +255,12 @@ int main() {
   ARequestWithoutStoragePermissionsDoesNotWait();
   WithoutACheckTheGamesCallIsUntouched();
   ANullNameListIsSafe();
+  TheAfterStorageStepRunsOnceAfterTheWaitAndBeforeTheCallReturns();
+  AGrantThatWasAlreadyThereIsReportedAsAGrant();
+  ADeniedPermissionIsReportedAsNoGrant();
+  WithoutACheckNothingIsKnownAboutTheGrant();
+  ARequestWithNoStoragePermissionIsNotAGrant();
+  NoAfterStorageStepIsTheGamesCallAlone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "permission_wait_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

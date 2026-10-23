@@ -63,11 +63,13 @@ enum Event : LONG {
 inline constexpr char kRecordEventExport[] = "RendezvousProbeRecordEvent";
 inline constexpr char kGameImageExport[] = "RendezvousProbeGameImage";
 inline constexpr char kLauncherModeExport[] = "RendezvousProbeLauncherMode";
+inline constexpr char kFailHookCreateExport[] = "RendezvousProbeFailHookCreate";
 using RecordEventFn = void (*)(LONG event, std::uint64_t payload);
 using GameImageFn = HMODULE (*)();
 // Returns 1 when the child is exercising the external NEVR_SetGameModule launcher
 // contract: the host shim's DllMain then skips its own direct-import detour install
 // so the test can prove NEVR_SetGameModule does the Prepare -> Install -> dispatch.
 using LauncherModeFn = int (*)();
+using FailHookCreateFn = int (*)();
 
 }  // namespace nevr_rendezvous_probe
