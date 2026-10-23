@@ -206,9 +206,9 @@ From `build/mingw-release/bin/`:
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
 The staged server package and its `.tar.zst` carry an empty `plugins/` directory
-for optional operator plugins; the release zip has no entry for it, so create
-`plugins/` next to the game binary. Plugin DLLs are built separately and are not
-bundled. The community beta install guide covers installing the game client and
+for optional operator plugins; the server zip (`nevr-runtime-v<ver>-windows-server.zip`)
+has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+built separately and are not bundled. The community beta install guide covers installing the game client and
 uses only `BugSplat64.dll`.
 
 For the community beta on Windows, follow [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).

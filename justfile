@@ -240,7 +240,7 @@ release-preflight base="main":
 # a different key forces an uninstall on the headset. `store_apk` is the unmodified store APK.
 # Neither build needs a config file: the Quest redirects, bridges, logs in and runs the social facade from the
 # embedded endpoints and keys alone (config.yaml only overrides).
-# The Quest APK is a repack of the store game: it is for testers, shared privately, never attached to a release.
+# The Quest APK is a repack of the store game: it is for testers and is published outside GitHub, never attached to a release.
 # This never tags, uploads or publishes.
 package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     #!/usr/bin/env bash

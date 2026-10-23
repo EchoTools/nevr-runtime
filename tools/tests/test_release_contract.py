@@ -310,7 +310,11 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("CMake 4.0+", readme)
         self.assertIn("CMake 4.0+", agents)
         self.assertIn("echovr_server.exe", readme)
-        self.assertRegex(readme, r"release zip has no entry for\s+it")
+        self.assertRegex(readme, r"server zip \(`nevr-runtime-v<ver>-windows-server\.zip`\)\s+has no entry for\s+it")
+        self.assertNotIn("the release zip has no entry", readme)
+        justfile = (REPO / "justfile").read_text()
+        self.assertIn("is published outside GitHub, never attached to a release", justfile)
+        self.assertNotIn("shared privately", justfile)
         self.assertNotIn("The distribution package includes an empty `plugins/`", readme)
         self.assertTrue((REPO / "docs/design/2026-09-21-mic-provider-voip-fix.md").is_file())
 
