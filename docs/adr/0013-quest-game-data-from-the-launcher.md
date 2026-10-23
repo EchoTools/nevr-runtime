@@ -17,8 +17,9 @@ build.
 The game reads its data from `<root>/_data/<version>/rad15/android/manifests/<id>`. Which root it reads depends on whether an
 OBB file exists:
 
-- With an OBB file, `CSysFile::Init` mounts it and the game records the mounted path; ADR 0007 makes the sentinel answer that
-  mount with the legacy root (`/storage/emulated/0/readyatdawn`).
+- With an OBB file, `CSysFile::Init` mounts it and the game records the mounted path; the sentinel's OBB skip answers that
+  mount with the first root that holds the game's `_data`: the installer app's `Android/media` directory, then the legacy
+  root (`/storage/emulated/0/readyatdawn`) (`ResolveRoot`, `src/quest/sentinel/data_root.h`; `src/quest/sentinel/obb_skip_hook.h`).
 - Without one, `CSysFile::Init` returns at `OBB not found` (the `access()` call at `0xf853b8`, ADR 0007, Context, step 1),
   before `AStorageManager_mountObb`. The OBB skip hooks are on `mountObb` and `getMountedObbPath`, so they never run, `gOBBPath`
   stays empty, and `CSysInfo::GetDataRootDir` (`0xf87250`) answers its literal fallback, `/storage/emulated/0/readyatdawn`
@@ -98,6 +99,10 @@ data root (`data_root::Resolve`) and a fetch into the media root, which the engi
   `kIsDev` gates the data step, not the skip.
 - **ADR 0007, Context:** consistent. It states the `OBB not found` early return and the `GetDataRootDir` fallback that this
   record relies on.
+- **ADR 0007, Hooks (the `getMountedObbPath` bullet: "after the skip, return `/storage/emulated/0/readyatdawn`"):** stale. The
+  hook returns the root `ResolveRoot` chose, the `Android/media` directory first when it holds `_data`, the legacy root
+  otherwise (`src/quest/sentinel/obb_skip_hook.h`). The legacy root is the answer only on a launch where the skip finds no
+  `_data` in the media directory, and the engine's own fallback on a launch with no OBB file.
 - **ADR 0009, "Not established": the case where RECORD_AUDIO is granted and storage is not (no request is made at all; not
   handled).** Contradicted: that case is now handled, by the `CheckPermission` hook (Design 6). Its decision (one hook on the
   `RequestPermissions` slot, first call only, 500 ms poll, 30 s cap) is unchanged and the new hook is added beside it.
