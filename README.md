@@ -105,9 +105,9 @@ yet. On PC:
    `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
    `dbgcore.dll.legacy-<date>` and installs the new file. It deletes nothing.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
-4. **Quest:** the APK repacks the store game, so it is not on GitHub. It is published on echo.taxi as
-   `https://echo.taxi/nevr-runtime/quest/nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk` (built by
-   `just package-dev`); download it and install it with `adb install -r`. It is signed with the same key as
+4. **Quest:** a release is the Windows zip only: the APK repacks the store game, so it is not on GitHub. The
+   development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`) is published
+   outside GitHub; download it and install it with `adb install -r`. It is signed with the same key as
    earlier test builds, so it installs over them and keeps your data.
 5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
    (PowerShell) says whether a file is signed.
