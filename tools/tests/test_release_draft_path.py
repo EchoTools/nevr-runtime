@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 BUILT = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
+FOUR = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0-windows-server.zip",
         "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
 
 DRAFT = "needs.build.outputs.draft == 'true'"
@@ -238,9 +238,9 @@ class ReleaseDraftPathTest(unittest.TestCase):
     def test_the_release_steps_in_agents_md_have_unique_labels_and_every_reference_resolves(self):
         text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
         section = text.split("Releases are built by CI from a tag", 1)[1].split("Build presets:", 1)[0]
-        labels = re.findall(r"#\s+((?:D)?\d+)\.\s", section)
+        labels = re.findall(r"#\s+(\d+)\.\s", section)
         self.assertEqual(sorted(labels), sorted(set(labels)), f"a step number is used twice: {labels}")
-        self.assertTrue({"1", "2", "3", "D1", "D2"} <= set(labels), labels)
+        self.assertTrue({"1", "2", "3", "4", "5"} <= set(labels), labels)
         for ref in re.findall(r"\(step (\d+)(?:, or (D\d+))?\)", section):
             for label in filter(None, ref):
                 self.assertIn(label, labels)

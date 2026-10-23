@@ -8,10 +8,10 @@ Commit `@COMMIT@`.
 
 | file | what |
 |---|---|
-| `@ZIP@` | Windows: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+| `@ZIP@` | Windows player: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
-@IF_NOAPK@| `nevr-runtime-v@VERSION@.zip` | `BugSplat64.dll`, `echovr_server.exe`, `README.md`, `INSTALL.md`; both PE files stripped, no debug symbols |
+@IF_NOAPK@| `nevr-runtime-v@VERSION@-windows-server.zip` | Windows dedicated server: `BugSplat64.dll`, `echovr_server.exe`, `README.md`, `INSTALL.md`; both PE files stripped, no debug symbols |
 @IF_NOAPK@| `SHA256SUMS` | SHA-256 of `@ZIP@` |
 
 @IF_APK@Neither build needs a config file. The service endpoints and the public client keys are built in; the

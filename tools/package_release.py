@@ -222,12 +222,12 @@ def check_apk_version(apk: Path, version: str, commit: str) -> None:
 def write_tree(args, out: Path, version: str) -> Path:
     """The package tree: what the signing step signs. SHA256SUMS is written after, by seal()."""
     base = package_base(version, args.commit)
-    tree = out / f"{base}-windows"
+    tree = out / f"{base}-windows-player"
     if tree.exists():
         raise GateFailure(f"{tree} exists; not overwritten")
     tree.mkdir(parents=True)
     values = {"VERSION": version, "COMMIT": args.commit,
-              "ZIP": f"{base}-windows.zip", "APK": f"{base}-quest.apk"}
+              "ZIP": f"{base}-windows-player.zip", "APK": f"{base}-quest.apk"}
     shutil.copyfile(args.dll, tree / "BugSplat64.dll")
     shutil.copyfile(PACKAGE_DIR / "install.ps1", tree / "install.ps1")
     shutil.copyfile(PACKAGE_DIR / "uninstall.ps1", tree / "uninstall.ps1")
@@ -279,7 +279,7 @@ def seal(tree: Path, out: Path, apk: Path = None, require_signed: bool = False) 
             raise GateFailure("not signed (no signature block): " + ", ".join(unsigned_scripts))
     out.mkdir(parents=True, exist_ok=True)
     base = package_base(version, commit)
-    zip_path = out / f"{base}-windows.zip"
+    zip_path = out / f"{base}-windows-player.zip"
     apk_path = out / f"{base}-quest.apk"
     notes_path = out / "RELEASE-NOTES.md"
     sums_path = out / "SHA256SUMS"

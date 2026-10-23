@@ -3,10 +3,12 @@
 # published guard) and tools/release_draft.sh (the draft attach) both read, so they cannot disagree about
 # what "already built" means. Sourced, not run.
 #
-#   release_asset_names <X.Y.Z>   prints the five names, one per line:
-#     nevr-runtime-vX.Y.Z-windows.zip   the sealed zip
-#     SHA256SUMS, RELEASE-NOTES.md      its checksums and notes
-#     nevr-runtime-vX.Y.Z.zip           the dist archive (stripped, linked to the symbols artifact)
+#   release_asset_names <X.Y.Z>   prints the five names, one per line; each file that is for one audience carries
+#   that audience in its name (RELEASING.md, "Assets"):
+#     nevr-runtime-vX.Y.Z-windows-player.zip   the player package, sealed (install.ps1, uninstall.ps1, SHA256SUMS,
+#                                              SIGNING.txt, README.txt, the DLL)
+#     SHA256SUMS, RELEASE-NOTES.md             its checksums and notes
+#     nevr-runtime-vX.Y.Z-windows-server.zip   the server package (stripped, linked to the symbols artifact)
 #     nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so   the Quest library (a loose ELF: attested and not
 #                                       signed; our own seal does not list it in SHA256SUMS, the signer's
 #                                       updateSums appends it, so a signed release does; declared in the
@@ -24,7 +26,7 @@ release_quest_asset_name() {
 
 release_asset_names() {
   local version=${1:?usage: release_asset_names <X.Y.Z>}
-  printf '%s\n' "nevr-runtime-v$version-windows.zip" SHA256SUMS RELEASE-NOTES.md \
-    "nevr-runtime-v$version.zip"
+  printf '%s\n' "nevr-runtime-v$version-windows-player.zip" SHA256SUMS RELEASE-NOTES.md \
+    "nevr-runtime-v$version-windows-server.zip"
   release_quest_asset_name "$version"
 }
