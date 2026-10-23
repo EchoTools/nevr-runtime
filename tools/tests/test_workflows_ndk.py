@@ -1,4 +1,4 @@
-"""Every build.yml job that runs a just recipe using the NDK sets the NDK up first, with the one composite action.
+"""Every workflow job that runs a just recipe using the NDK sets the NDK up first, with the one composite action.
 
 `test-quest-hooks` copies the NDK's jni.h (`{{ ndk }}`), and `ndk` defaults to a path on the maintainers' machine, so
 a runner without ANDROID_NDK_HOME fails that suite and with it `just verify`: the v5.5.0 release build stopped at
@@ -14,7 +14,7 @@ import unittest
 import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-WORKFLOW = REPO / ".github/workflows/build.yml"
+WORKFLOWS = sorted((REPO / ".github/workflows").glob("*.yml"))
 ACTION = REPO / ".github/actions/setup-ndk/action.yml"
 JUSTFILE = REPO / "justfile"
 USES = "./.github/actions/setup-ndk"
@@ -81,44 +81,60 @@ def sets_up_ndk(step: dict) -> bool:
     return step.get("uses") == USES
 
 
-class BuildWorkflowNdkTest(unittest.TestCase):
+def load_workflows() -> dict[str, dict]:
+    return {path.name: yaml.safe_load(path.read_text()) for path in WORKFLOWS}
+
+
+class WorkflowsNdkTest(unittest.TestCase):
     def setUp(self):
-        self.workflow = yaml.safe_load(WORKFLOW.read_text())
+        self.workflows = load_workflows()
         self.justfile = JUSTFILE.read_text()
 
-    def test_the_scan_sees_verify_and_the_quest_build(self):
+    def needing(self) -> dict[tuple[str, str], int]:
+        return {
+            (name, job): first
+            for name, workflow in self.workflows.items()
+            for job, first in jobs_needing_the_ndk(workflow, self.justfile).items()
+        }
+
+    def test_the_scan_sees_verify_the_quest_build_and_the_android_workflow(self):
         for suite in verify_suites(self.justfile):
             recipe(self.justfile, suite)  # raises when a verify suite is not a recipe
         self.assertIn("test-quest-hooks", verify_suites(self.justfile))
         self.assertTrue(uses_ndk(self.justfile, "test-quest-hooks"))
         self.assertTrue(uses_ndk(self.justfile, "test-android"), "test-android reaches {{ ndk }} through a dependency")
-        needing = jobs_needing_the_ndk(self.workflow, self.justfile)
-        self.assertIn("build", needing, "the build job runs `just verify`, which runs test-quest-hooks")
-        self.assertIn("quest", needing, "the quest job runs `just test-android`")
+        needing = self.needing()
+        self.assertIn(("build.yml", "build"), needing, "the build job runs `just verify`, which runs test-quest-hooks")
+        self.assertIn(("build.yml", "quest"), needing, "the quest job runs `just test-android`")
+        self.assertIn(("android.yml", "android"), needing, "the android job runs `just build-android`")
 
     def test_each_such_job_uses_the_composite_action_before_the_recipe(self):
-        for job_name, first in jobs_needing_the_ndk(self.workflow, self.justfile).items():
-            steps = self.workflow["jobs"][job_name]["steps"]
+        for (name, job_name), first in self.needing().items():
+            steps = self.workflows[name]["jobs"][job_name]["steps"]
             before = [i for i, s in enumerate(steps) if sets_up_ndk(s)]
-            self.assertTrue(before, f"job `{job_name}` runs a recipe using the NDK and never uses {USES}")
+            self.assertTrue(before, f"{name} job `{job_name}` runs a recipe using the NDK and never uses {USES}")
             self.assertLess(
-                min(before), first, f"job `{job_name}` uses {USES} after the step that runs a recipe using the NDK"
+                min(before), first, f"{name} job `{job_name}` uses {USES} after the step that runs a recipe using the NDK"
             )
 
     def test_no_job_sets_the_ndk_up_by_itself(self):
-        text = WORKFLOW.read_text()
-        self.assertNotIn("ANDROID_NDK_HOME=", text, "ANDROID_NDK_HOME is exported by the composite action only")
-        self.assertNotIn("android-ndk-r26d", text, "the NDK download belongs to the composite action only")
-        for job_name, job in self.workflow["jobs"].items():
-            self.assertNotIn("NDK_REVISION", job.get("env", {}), f"job `{job_name}` pins its own NDK revision")
+        for path in WORKFLOWS:
+            text = path.read_text()
+            self.assertNotIn("ANDROID_NDK_HOME=", text, f"{path.name}: the composite action exports ANDROID_NDK_HOME")
+            self.assertNotIn("android-ndk-r26d", text, f"{path.name}: the NDK download belongs to the composite action")
+        for name, workflow in self.workflows.items():
+            for job_name, job in workflow["jobs"].items():
+                self.assertNotIn("NDK_REVISION", job.get("env", {}), f"{name} job `{job_name}` pins its own NDK revision")
 
     def test_a_job_that_reads_the_selected_revision_has_the_step_that_makes_it(self):
-        for job_name, job in self.workflow["jobs"].items():
-            text = yaml.safe_dump(job.get("steps", []))
-            if "steps.ndk." not in text:
-                continue
-            ids = [s for s in job["steps"] if s.get("id") == "ndk" and sets_up_ndk(s)]
-            self.assertEqual(len(ids), 1, f"job `{job_name}` reads steps.ndk.* but has no `id: ndk` step using {USES}")
+        for name, workflow in self.workflows.items():
+            for job_name, job in workflow["jobs"].items():
+                if "steps.ndk." not in yaml.safe_dump(job.get("steps", [])):
+                    continue
+                made = [s for s in job["steps"] if s.get("id") == "ndk" and sets_up_ndk(s)]
+                self.assertEqual(
+                    len(made), 1, f"{name} job `{job_name}` reads steps.ndk.* but has no `id: ndk` step using {USES}"
+                )
 
     def test_the_action_exports_the_ndk_and_its_revision(self):
         action = yaml.safe_load(ACTION.read_text())
