@@ -12,6 +12,11 @@ A player who has the production build must end with a game that starts, or with 
 The game must never return to Home with nothing shown. A player's data is never written, replaced or deleted by a release
 build.
 
+**The release build does not meet "never return to Home with nothing shown" yet.** It requests the message and ends the
+process at once, and no presenter is known to draw at that point (see "Not established"), so a player can still return to Home
+with nothing shown. Issue #829 (milestone v5.5.1) closes that gap: it finds a presenter the headset draws, and the hold
+returns for a presenter that was seen to draw. The requirement about player data is met.
+
 ## Context
 
 The game reads its data from `<root>/_data/<version>/rad15/android/manifests/<id>`. Which root it reads depends on whether an
