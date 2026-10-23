@@ -116,6 +116,14 @@ class ReleaseAssetsTest(unittest.TestCase):
         self.assertIn("after the last signing pass", body)
         self.assertNotIn("top-level `SHA256SUMS` gets", releasing)
 
+    def test_releasing_md_says_the_attestation_loop_fails_for_the_signed_zip_and_passes_for_the_quest_library(self):
+        releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
+        after_signing = " ".join(releasing.split("## Sign", 1)[1].split("## Write the release body", 1)[0].split())
+        self.assertIn('The loop under "Check the draft" exits non-zero for the signed zip (`HTTP 404: Not Found` from '
+                      "the attestations API)", after_signing)
+        self.assertIn("still exits 0 for the Quest library, which the signer does not replace", after_signing)
+        self.assertIn("not a bad draft", after_signing)
+
     def test_readme_issue_template_and_justfile_carry_the_asset_names_and_the_body_holds_the_sums(self):
         self.assertIn("-windows.zip", (REPO / "README.md").read_text(encoding="utf-8"))
         self.assertIn("-windows.zip", (REPO / ".github/ISSUE_TEMPLATE/beta-bug.yml").read_text(encoding="utf-8"))
