@@ -6,6 +6,7 @@ takes these ports in place of vcpkg's. The Quest build reads its own overlays (`
 
 | Port | Version | vcpkg's port at `.vcpkg-commit` | Source of these files |
 |---|---|---|---|
+| `abseil` | 20260817.0 | 20260107.1 | vcpkg 2026.10.16's port with the version and the archive's SHA512; `fix-heterogeneous_lookup_testing-target.patch` and `fix-mingw-dll.patch` dropped (20260817.0 has both changes), `fix-gcc13-constexpr-function-pointer.patch` regenerated for the moved lines |
 | `ixwebsocket` | 12.1.0 | 12.0.1 | microsoft/vcpkg#54444 (`ports/ixwebsocket`), unchanged |
 | `mbedtls` | 3.6.7 | 3.6.5 | vcpkg 2026.10.16's 3.6.5 port with the version and the `v3.6.7` archive's SHA512 |
 | `miniupnpc` | 2.3.3 | 2.3.2 | vcpkg's 2.3.2 port with the version and the `miniupnpc_2_3_3` archive's SHA512 |
