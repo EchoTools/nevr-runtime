@@ -126,6 +126,9 @@ std::vector<std::string> g_driverNames;
 std::int32_t g_driverError = 0;  // nonzero: a buffer call fails with this
 std::uint32_t g_driverCountShave = 0;  // a buffer call reports this many fewer than it was given (and still says incomplete)
 int g_enumCalls = 0;
+bool g_failNextCountQuery = false;  // the next count-only query fails with VK_ERROR_OUT_OF_HOST_MEMORY, count untouched
+int g_failBufferCallNumber = 0;     // the Nth buffer call (1 = the game's own) fails with VK_ERROR_OUT_OF_HOST_MEMORY
+int g_bufferCalls = 0;
 void (*g_driverHook)() = nullptr;  // runs once, inside the driver, at the next count-only query
 
 std::int32_t FakeEnumerate(void*, const char*, std::uint32_t* count, void* props) {
@@ -137,9 +140,15 @@ std::int32_t FakeEnumerate(void*, const char*, std::uint32_t* count, void* props
   }
   const std::uint32_t total = static_cast<std::uint32_t>(g_driverNames.size());
   if (props == nullptr) {
+    if (g_failNextCountQuery) {
+      g_failNextCountQuery = false;
+      return -1;
+    }
     *count = total;
     return 0;
   }
+  ++g_bufferCalls;
+  if (g_failBufferCallNumber != 0 && g_bufferCalls == g_failBufferCallNumber) return -1;
   if (g_driverError != 0) return g_driverError;
   const std::uint32_t n = std::min(*count, total);
   char* out = static_cast<char*>(props);
@@ -156,9 +165,12 @@ std::int32_t FakeEnumerate(void*, const char*, std::uint32_t* count, void* props
 void FakeCreateDevice() {}
 
 int g_gipaCalls = 0;
-VoidFn FakeGetInstanceProcAddr(void*, const char* name) {
+VoidFn FakeGetInstanceProcAddr(void* instance, const char* name) {
   ++g_gipaCalls;
-  if (std::strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0) return reinterpret_cast<VoidFn>(&FakeEnumerate);
+  // Like a real loader: an instance-level function asked for with no instance is not found.
+  if (std::strcmp(name, "vkEnumerateDeviceExtensionProperties") == 0) {
+    return instance == nullptr ? nullptr : reinterpret_cast<VoidFn>(&FakeEnumerate);
+  }
   if (std::strcmp(name, "vkCreateDevice") == 0) return reinterpret_cast<VoidFn>(&FakeCreateDevice);
   return nullptr;
 }
@@ -207,6 +219,9 @@ void Reset() {
   g_driverNames.clear();
   g_driverError = 0;
   g_driverCountShave = 0;
+  g_failNextCountQuery = false;
+  g_failBufferCallNumber = 0;
+  g_bufferCalls = 0;
   g_vrapiWritesOnFailure = false;
   g_driverHook = nullptr;
   g_enumCalls = g_gipaCalls = g_findMethodCalls = g_vrapiCalls = 0;
@@ -408,6 +423,19 @@ void TheQuest3GameCallKeepsItsResultAndTotalAndGetsTheRequiredNames() {
   QCHECK(g_vrapiCalls == 1);
   QCHECK(g_vrapiCapacitySeen == vk::kVrapiChars);
 
+  // The game's whole buffer, every record, is the window BuildWindow plans (the last record and the spec versions too).
+  {
+    const std::vector<std::string> driver = Split(kQ3Driver);
+    const std::vector<char> driverRaw = Records(driver);
+    std::vector<char> expected(vk::kMaxWindow * vk::kRecordStride, 0);
+    const vk::WindowPlan plan = vk::BuildWindow(driverRaw.data(), driver.size(), kGameCapacity, kQ3Vrapi, expected.data());
+    QCHECK(plan.reorder);
+    QCHECK(listed.raw.size() == kGameCapacity * vk::kRecordStride);
+    QCHECK(std::memcmp(listed.raw.data(), expected.data(), kGameCapacity * vk::kRecordStride) == 0);
+    const std::size_t last = (kGameCapacity - 1) * vk::kRecordStride;
+    QCHECK(std::strlen(&listed.raw[last]) != 0 && listed.raw[last] != 0x5a);  // not the fill the test put there
+  }
+
   // The rewrite is logged, once, with the reason and the evidence.
   const std::vector<std::string> lines = LinesFor("vk_ext_window");
   QCHECK(lines.size() == 1);  // the count query carries no buffer and is not logged; the buffer call is
@@ -595,8 +623,10 @@ void EveryOtherNameAndModulePassesThroughTheChain() {
   GipaFn wrapped = reinterpret_cast<GipaFn>(gipa);
   QCHECK(wrapped(nullptr, "vkCreateDevice") == reinterpret_cast<VoidFn>(&FakeCreateDevice));
   QCHECK(wrapped(nullptr, "vkNoSuchFunction") == nullptr);
-  QCHECK(reinterpret_cast<void*>(wrapped(nullptr, "vkEnumerateDeviceExtensionProperties")) !=
-         reinterpret_cast<void*>(&FakeEnumerate));
+  void* const wrappedEnumerate = reinterpret_cast<void*>(wrapped(reinterpret_cast<void*>(0x10), "vkEnumerateDeviceExtensionProperties"));
+  QCHECK(wrappedEnumerate != nullptr && wrappedEnumerate != reinterpret_cast<void*>(&FakeEnumerate));
+  // The loader did not find it (no instance): the game gets that null, not a wrapper with nothing behind it.
+  QCHECK(wrapped(nullptr, "vkEnumerateDeviceExtensionProperties") == nullptr);
   // The VrApi hook is a pass-through: whatever the platform writes is what the game gets.
   char names[64] = {};
   std::uint32_t size = sizeof(names);
@@ -699,6 +729,49 @@ void AFailedVrapiCallContributesNoNames() {
   QCHECK(viaWrapper.raw == direct.raw);  // text left in the buffer by a failing call is not a list
 }
 
+void ADriverThatFailsTheDecisionsListQueryLeavesTheGamesAnswerAlone() {
+  Reset();
+  UseQ3Driver();
+  EnumFn fn = GameResolvesEnumerate();
+  QCHECK(fn != nullptr);
+  if (fn == nullptr) return;
+  Query(fn, nullptr, kGameCapacity, true);  // a normal decision first, so the wrapper's list buffer holds the Q3 list
+  g_bufferCalls = 0;
+  g_failBufferCallNumber = 2;  // the game's own buffer call is the first; the decision's list query is the second
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const Call viaWrapper = Query(fn, nullptr, kGameCapacity, true);
+  sentinel::SetLogSink(previous);
+  g_failBufferCallNumber = 0;
+  const Call direct = Query(&FakeEnumerate, nullptr, kGameCapacity, true);
+  QCHECK(viaWrapper.result == vk::kVkIncomplete && viaWrapper.raw == direct.raw);  // the driver's first 128, unchanged
+  const std::vector<std::string> lines = LinesFor("vk_ext_window");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) {
+    QCHECK(Field(lines[0], "action") == "passthrough" || Field(lines[0], "action") == "unchanged");
+    QCHECK(Field(lines[0], "reason") == "list_query_failed");
+  }
+}
+
+void ADriverThatFailsTheDecisionsCountQueryLeavesTheGamesAnswerAlone() {
+  Reset();
+  UseQ3Driver();
+  EnumFn fn = GameResolvesEnumerate();
+  QCHECK(fn != nullptr);
+  if (fn == nullptr) return;
+  Query(fn, nullptr, kGameCapacity, true);
+  g_failNextCountQuery = true;  // the first count query after this is the decision's
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  g_lines.clear();
+  const Call viaWrapper = Query(fn, nullptr, kGameCapacity, true);
+  sentinel::SetLogSink(previous);
+  const Call direct = Query(&FakeEnumerate, nullptr, kGameCapacity, true);
+  QCHECK(viaWrapper.result == vk::kVkIncomplete && viaWrapper.raw == direct.raw);
+  const std::vector<std::string> lines = LinesFor("vk_ext_window");
+  QCHECK(lines.size() == 1);
+  if (lines.size() == 1) QCHECK(Field(lines[0], "reason") == "total_query_failed");
+}
+
 }  // namespace
 
 int main() {
@@ -723,6 +796,8 @@ int main() {
   AVrapiTokenIsMatchedWholeNotByPrefix();
   ADriverThatReportsFewerThanItWasGivenIsLeftAlone();
   AFailedVrapiCallContributesNoNames();
+  ADriverThatFailsTheDecisionsListQueryLeavesTheGamesAnswerAlone();
+  ADriverThatFailsTheDecisionsCountQueryLeavesTheGamesAnswerAlone();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "vk_ext_window_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
