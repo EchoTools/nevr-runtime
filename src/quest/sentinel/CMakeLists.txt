@@ -39,6 +39,7 @@ add_library(ovrplatformloader SHARED
   obb_skip_hook.cpp
   process_end_hook.cpp
   permission_wait_hook.cpp
+  vk_ext_window.cpp
   toast_presenter.cpp
   android_glue_layout_check.cpp
   sentinel.cpp
@@ -61,7 +62,7 @@ target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_c
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_wait_hook.cpp toast_presenter.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_wait_hook.cpp vk_ext_window.cpp toast_presenter.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # android_glue_layout_check.cpp asserts the glue offsets against the NDK's own native_app_glue header.
 if(DEFINED ANDROID_NDK)
