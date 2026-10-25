@@ -203,7 +203,9 @@ uint64_t ConfigSymbol(std::string_view text) {
   for (const char raw : text) {
     uint8_t byte = static_cast<uint8_t>(raw);
     if (static_cast<uint8_t>(byte - 'A') <= 25) byte = static_cast<uint8_t>(byte + 32);
-    hash = static_cast<uint64_t>(byte) ^ EchoVR::kCSymbol64Table[(hash >> 56) & 0xFF] ^ (hash << 8);
+    // The game reads the name byte with MOVSX (echovr.exe CSymbol64::Lookup) and the service with int64(int8(ch)):
+    // a byte >= 0x80 enters the hash sign-extended (nakama#710, #908).
+    hash = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(byte))) ^ EchoVR::kCSymbol64Table[(hash >> 56) & 0xFF] ^ (hash << 8);
   }
   return hash;
 }
