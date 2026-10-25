@@ -9,14 +9,14 @@ and no name. Every run therefore writes, under the log directory:
   pytest-randomly seed, the command), then pytest's full output, also echoed to stdout line by
   line, then an end line with the exit code;
 - `<stem>.xml`: pytest's JUnit XML, one record per test;
-- two JSON lines in `runs.jsonl`: `"event": "start"` before pytest starts (so a run that is
-  killed outright still leaves its start), and `"event": "end"` after it exits, with the exit
-  code, the summary line, the failing test ids (`classname::name` from the XML, or the name alone
-  when the XML gives no class, as for a collection error), whether the XML was read
-  (`junit_state`: `ok`, `missing` or `unparseable`), the signals received, whether pytest's output
-  was read to its end (`output_complete`), whether a process pytest left behind was sent a kill
-  (`stray_kill_sent`), what became of the echo (`echo`), any error writing the log or reading the
-  output, and the paths of the two files.
+- two JSON lines in `runs.jsonl`: `"event": "start"` before pytest starts (so a run that is killed
+  outright still leaves its start), and `"event": "end"` after it exits, with the exit code, the
+  summary line, the failing test ids (`classname::name` from the XML, or the name alone when the
+  XML gives no class, as for a collection error), whether the XML was read (`junit_state`: `ok`,
+  `missing`, `unparseable` or `unreadable`), the signals received, whether pytest's output was read
+  to its end (`output_complete`), whether a process pytest left behind was sent a kill
+  (`stray_kill_sent`), what became of the echo (`echo`), any error writing the log, reading the
+  output or starting pytest, and the paths of the two files.
 
 pytest's short summary (on by default, `-rfE`) names every failure and error even under `-q`; the
 log keeps it whole. When pytest-randomly is installed and loads automatically, and neither the
@@ -29,23 +29,26 @@ alone. From before the start record until after the end record, SIGINT, SIGTERM 
 recorded, never fatal here (a signal this script inherited as ignored stays ignored). The first is
 passed to pytest's process group as SIGINT (pytest stops and prints its summary). A later one, at
 least 1 s after the one before it, or 30 s without an exit ($NEVR_TEST_INTERRUPT_GRACE_S), kills
-the group; a repeat within 1 s (`just` passes on a SIGTERM the group also got) is recorded and
-not escalated. A signal before pytest is started means it is never started; one that lands while
-it is being started is passed on as soon as it has started. When pytest has exited and something
-it left behind still holds its output open for 10 s ($NEVR_TEST_DRAIN_S), pytest's process group
-is sent a kill (`stray_kill_sent`), and `output_complete` says whether the output then closed. If
-this script is killed outright, pytest is killed with it.
+the group; a repeat within 1 s (`just` passes on a SIGTERM the group also got) is recorded and not
+escalated. A signal before pytest is started means it is never started; one that lands while it is
+being started is passed on as soon as it has started. A signal after pytest exits is recorded and
+does not change the outcome. When pytest has exited and something it left behind still holds its
+output open for 10 s ($NEVR_TEST_DRAIN_S), pytest's process group is sent a kill
+(`stray_kill_sent`), and `output_complete` says whether the output then closed. If this script is
+killed outright, pytest is killed with it.
 
-The echo. stdout is written from a thread of its own, so a stdout that nobody reads holds up only
-the echo, never the run, the log or the record. `echo` in the end record is `complete`, `closed`
-(stdout went away), `stalled` (stdout stopped taking lines; the echo was dropped, or did not finish
-within $NEVR_TEST_DRAIN_S) or `none` (no stdout). A line stdout cannot encode is echoed with
-replacements; the log keeps it as read.
+The echo. stdout, and stderr while pytest runs, are each written from a thread of their own, so a
+stdout or stderr that nobody reads holds up only that echo, never the run, the log or the record.
+`echo` in the end record is `complete`, `closed` (stdout went away), `stalled` (stdout stopped
+taking lines; the echo was dropped, or did not finish within $NEVR_TEST_DRAIN_S in all) or `none`
+(no stdout). A line stdout cannot encode is echoed with replacements; the log keeps it as read.
 
 Exit code: pytest's. Exceptions, each loud on stderr:
-- 2 before pytest runs, when the log directory or the start record cannot be written,
-  `--junitxml` is passed (the run owns its XML path), or a wait above is not a positive number of
-  seconds: a run whose record cannot be kept is refused, never run unrecorded;
+- 2 before pytest runs, when the log directory, the log or the start record cannot be written, the
+  echo threads cannot start, `--junitxml` is passed (the run owns its XML path), or a wait above is
+  not a positive number of seconds: a run whose record cannot be kept is refused, never run
+  unrecorded;
+- 2 when pytest cannot be started (`start_error`; the end record is still written);
 - 128 + the number of the first signal when a signal interrupted the run (130 for SIGINT);
 - when the log or the end record cannot be written, or pytest's output could not be read, pytest's
   exit code if it is non-zero, else 2: a run is never reported green without its record.
@@ -65,6 +68,7 @@ import queue
 import random
 import re
 import secrets
+import select
 import shlex
 import signal
 import subprocess
@@ -108,6 +112,18 @@ HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 PR_SET_PDEATHSIG = 1
 
 
+# While a run is live, its stderr echo: a loud line then never blocks on a stderr nobody reads.
+STDERR_ECHO = None
+
+
+def report(text: str) -> None:
+    """A loud line on stderr."""
+    if STDERR_ECHO is not None:
+        STDERR_ECHO.put(text + "\n")
+    else:
+        print(text, file=sys.stderr, flush=True)
+
+
 def git(*args: str):
     """git's output, or None when git fails (not a repository, refused, not installed)."""
     try:
@@ -123,13 +139,15 @@ def run_stem(start: datetime.datetime, head: str) -> str:
 
 
 def failing_ids(xml_path: pathlib.Path) -> tuple:
-    """(the id of every failed or errored test case, junit_state)."""
+    """(the id of every failed or errored test case, junit_state: ok, missing, unparseable or unreadable)."""
     if not xml_path.exists():
         return [], "missing"
     try:
         root = ET.parse(xml_path).getroot()
     except ET.ParseError:
         return [], "unparseable"
+    except OSError:
+        return [], "unreadable"
     ids = []
     for case in root.iter("testcase"):
         if case.find("failure") is not None or case.find("error") is not None:
@@ -195,22 +213,26 @@ def append_record(index: pathlib.Path, record: dict) -> bool:
             f.write(lead + (json.dumps(record) + "\n").encode("utf-8"))
         return True
     except OSError as exc:
-        print(f"test-tools: FAIL cannot append the {record['event']} record to {index}: {exc}",
-              file=sys.stderr, flush=True)
+        report(f"test-tools: FAIL cannot append the {record['event']} record to {index}: {exc}")
         return False
+
+
+# Looked up here, not in the forked child, where another thread may hold a lock the lookup needs.
+try:
+    PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+except (OSError, AttributeError):
+    PRCTL = None  # not Linux
 
 
 def die_with_parent() -> None:
     """In pytest, before exec: a SIGKILL of this script kills pytest too (Linux; elsewhere a no-op)."""
-    try:
-        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
-    except (OSError, AttributeError):
-        pass
+    if PRCTL is not None:
+        PRCTL(PR_SET_PDEATHSIG, signal.SIGKILL)
 
 
 class Echo:
-    """Lines to stdout from a thread of its own, straight to the file descriptor: a stdout nobody reads
-    blocks that thread alone, and holds no lock the rest of the process (or its exit) needs."""
+    """Lines to stdout or stderr from a thread of its own, straight to the file descriptor: a stream nobody
+    reads blocks that thread alone, and holds no lock the rest of the process (or its exit) needs."""
 
     def __init__(self, stream):
         self.state = "complete"
@@ -245,20 +267,24 @@ class Echo:
             data = item.encode(self.encoding, errors="replace")
             try:
                 while data:
-                    data = data[os.write(self.fd, data):]
+                    try:
+                        data = data[os.write(self.fd, data):]
+                    except BlockingIOError:  # a non-blocking stdout that is full: wait until it is not
+                        select.select([], [self.fd], [], 1)
             except OSError:
                 self.state = "closed"
 
     def flush(self, timeout: float) -> str:
-        """Wait up to `timeout` for every line put so far to be written; the echo's state."""
-        if self.fd is None:
+        """Wait up to `timeout` in all for every line put so far to be written; the echo's state."""
+        if self.state != "complete":
             return self.state
+        deadline = time.monotonic() + timeout
         mark = threading.Event()
         try:
             self.lines.put(mark, timeout=timeout)
         except queue.Full:
             mark = None
-        if (mark is None or not mark.wait(timeout)) and self.state == "complete":
+        if (mark is None or not mark.wait(max(0.0, deadline - time.monotonic()))) and self.state == "complete":
             self.state = "stalled"
         return self.state
 
@@ -271,11 +297,14 @@ class Run:
         self.log_closed = False
         self.lock = threading.Lock()
         self.echo = Echo(sys.stdout)
+        self.errs = Echo(sys.stderr)
         self.log_error = None
         self.read_error = None
         self.summary = ""
         self.proc = None
         self.signals = []
+        self.signals_at_exit = None  # how many had arrived when pytest exited
+        self.start_error = None
         self.signal_times = []
         self.escalations = 0
         self.forwarded = 0
@@ -284,7 +313,7 @@ class Run:
     def note_log_error(self, exc: Exception) -> None:
         if self.log_error is None:
             self.log_error = str(exc)
-            print(f"test-tools: FAIL cannot write the log: {exc}", file=sys.stderr, flush=True)
+            report(f"test-tools: FAIL cannot write the log: {exc}")
 
     def emit(self, text: str) -> None:
         self.echo.put(text)
@@ -351,6 +380,7 @@ class Run:
         while True:
             try:
                 self.proc.wait(timeout=0.2)
+                self.signals_at_exit = len(self.signals)
                 break
             except subprocess.TimeoutExpired:
                 if self.signal_times and time.monotonic() - self.signal_times[0] > INTERRUPT_GRACE_S:
@@ -404,7 +434,15 @@ def main(argv: list) -> int:
     except OSError as exc:
         print(f"test-tools: FAIL cannot write the log {log_path}: {exc}", file=sys.stderr)
         return 2
-    run = Run(log)
+    global STDERR_ECHO
+    try:
+        run = Run(log)
+    except RuntimeError as exc:  # the echo threads could not start
+        log.close()
+        log_path.unlink()
+        print(f"test-tools: FAIL cannot start the run: {exc}", file=sys.stderr)
+        return 2
+    STDERR_ECHO = run.errs
     previous = {}
     for s in HANDLED_SIGNALS:
         if signal.getsignal(s) is not signal.SIG_IGN:
@@ -420,15 +458,27 @@ def main(argv: list) -> int:
             run.emit(line + "\n")
         output_complete = True
         if not run.signals:
-            run.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding="utf-8", errors="replace", start_new_session=True,
-                                        preexec_fn=die_with_parent)
+            try:
+                run.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                            encoding="utf-8", errors="replace", start_new_session=True,
+                                            preexec_fn=die_with_parent)
+            except (OSError, subprocess.SubprocessError) as exc:
+                run.start_error = f"{type(exc).__name__}: {exc}"
+                report(f"test-tools: FAIL pytest could not be started: {run.start_error}")
+        if run.proc is not None:
             run.forward()
             output_complete = run.wait()
         pytest_rc = run.proc.returncode if run.proc else None
-        # A signal from here on is recorded in `signals` but does not change the outcome.
-        interrupted = bool(run.signals)
-        rc = 128 + signal.Signals[run.signals[0]].value if interrupted else pytest_rc
+        # Only a signal that came before pytest exited (or kept it from starting) interrupted the run; a
+        # later one is recorded in `signals` but does not change the outcome.
+        before_exit = run.signals_at_exit if run.proc else len(run.signals)
+        interrupted = before_exit > 0
+        if interrupted:
+            rc = 128 + signal.Signals[run.signals[0]].value
+        elif run.start_error is not None:
+            rc = 2
+        else:
+            rc = pytest_rc
         end = datetime.datetime.now(datetime.timezone.utc)
         run.emit(f"test-tools: end {end.isoformat()} rc={rc}"
                  + (f" interrupted={run.signals[0]}" if interrupted else "")
@@ -441,11 +491,10 @@ def main(argv: list) -> int:
                   "interrupted": interrupted, "signals": list(run.signals), "summary": run.summary,
                   "failed": failed, "junit_state": junit_state, "output_complete": output_complete,
                   "stray_kill_sent": run.stray_kill_sent, "echo": echo, "log_error": run.log_error,
-                  "read_error": run.read_error}
+                  "read_error": run.read_error, "start_error": run.start_error}
         recorded = append_record(index, record)
         if run.read_error is not None:
-            print(f"test-tools: FAIL pytest's output could not be read to its end: {run.read_error}",
-                  file=sys.stderr, flush=True)
+            report(f"test-tools: FAIL pytest's output could not be read to its end: {run.read_error}")
         if not recorded or run.log_error is not None or run.read_error is not None:
             return rc if rc != 0 else 2
         run.echo.put(f"test-tools: log {log_path}\n")
@@ -453,6 +502,8 @@ def main(argv: list) -> int:
         return rc
     finally:
         run.close_log()
+        STDERR_ECHO = None
+        run.errs.flush(DRAIN_S)
         for s, h in previous.items():
             signal.signal(s, h)
 

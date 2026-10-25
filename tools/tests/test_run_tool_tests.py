@@ -10,6 +10,7 @@ import io
 import json
 import os
 import resource
+import select
 import shutil
 import signal
 import stat
@@ -388,7 +389,8 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertNotIn("passed", result.stdout)
         self.assertEqual(sorted(p.name for p in self.logs.iterdir()), ["runs.jsonl"])
 
-    def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, preexec_fn=None, **extra_env: str):
+    def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, preexec_fn=None, merge_stderr=False,
+                   **extra_env: str):
         """Start the wrapper in its own session on a suite that waits; return it once the test runs."""
         slow = self.write_suite("slow", body)
         self.marker = self.root / "marker"
@@ -396,7 +398,8 @@ class RunToolTestsRecord(unittest.TestCase):
         env = self.env(self.logs, RUN_TOOL_TESTS_MARKER=str(self.marker), RUN_TOOL_TESTS_GO=str(self.go),
                        **extra_env)
         argv = [sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *extra_args, str(slow)]
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE, text=True,
                                 cwd=REPO, env=env, start_new_session=True, preexec_fn=preexec_fn)
         self.addCleanup(lambda: proc.poll() is None and os.killpg(proc.pid, signal.SIGKILL))
         deadline = time.monotonic() + 60
@@ -912,6 +915,144 @@ class RunToolTestsRecord(unittest.TestCase):
         record = self.records()[0]
         self.assertEqual(record["cmd"][-1], str(spaced))
         self.assertEqual(record["failed"], ["test_sample::test_breaks"])
+
+    def test_a_stderr_nobody_reads_holds_up_no_failure_line_nor_the_record(self):
+        # The log fails while stdout and stderr share one pipe that is never read: the failure line
+        # must not block the run, which still ends with its end record.
+        loud = SLOW_SUITE.replace("    go = ", "    for _ in range(200):\n"
+                                  "        print('z' * 4095, flush=True)\n    go = ")
+        limit = 64 * 1024
+        proc = self.start_slow(loud, "-s", merge_stderr=True, NEVR_TEST_INTERRUPT_GRACE_S="2",
+                               NEVR_TEST_DRAIN_S="1",
+                               preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+        time.sleep(2)
+        os.kill(proc.pid, signal.SIGINT)
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("the runner hung on a stderr nobody reads")
+        self.assertEqual(proc.returncode, 130)
+        record = self.records()[0]
+        self.assertIsNotNone(record["log_error"])
+        self.assertEqual(record["echo"], "stalled")
+
+    def test_a_signal_after_pytest_exits_while_its_output_drains_does_not_change_the_outcome(self):
+        stray = self.write_suite("stray", STRAY_SUITE)
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=REPO,
+                                env=self.env(self.logs, NEVR_TEST_DRAIN_S="5"), start_new_session=True)
+        self.addCleanup(lambda: proc.poll() is None and os.killpg(proc.pid, signal.SIGKILL))
+        for line in proc.stdout:
+            if "1 passed" in line:
+                break
+        time.sleep(1.5)  # pytest has exited; its child still holds the output, so the run is draining
+        os.kill(proc.pid, signal.SIGINT)
+        proc.stdout.read()
+        proc.wait(timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr.read())
+        record = self.records()[0]
+        self.assertEqual(record["pytest_rc"], 0)
+        self.assertFalse(record["interrupted"])
+        self.assertEqual(record["signals"], ["SIGINT"])
+        self.assertTrue(record["stray_kill_sent"])
+
+    def test_a_stalled_echo_is_not_waited_for_twice(self):
+        module = load_script()
+        read_end, write_end = os.pipe()
+        stream = open(write_end, "w")
+        self.addCleanup(stream.close)
+        self.addCleanup(os.close, read_end)
+        echo = module.Echo(stream)
+        echo.put("x" * 200_000 + "\n")  # more than the pipe holds, and nobody reads it
+        self.assertEqual(echo.flush(1), "stalled")
+        started = time.monotonic()
+        self.assertEqual(echo.flush(5), "stalled")
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_flushing_an_echo_waits_once_in_all_not_once_per_step(self):
+        # The backlog is full, so the flush's marker waits for a place; the reader frees one at 0.9 s
+        # and then stops, so the marker is queued but never reached. One deadline: about 1 s in all.
+        module = load_script()
+        module.ECHO_BACKLOG = 1
+        read_end, write_end = os.pipe()
+        stream = open(write_end, "w")
+        self.addCleanup(stream.close)
+        self.addCleanup(os.close, read_end)
+        echo = module.Echo(stream)
+        echo.put("a" * 100_000 + "\n")  # taken by the writer, which blocks on the full pipe
+        deadline = time.monotonic() + 5
+        while echo.lines.qsize() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        echo.put("b" * 100_000 + "\n")  # fills the backlog
+
+        def read_once():
+            time.sleep(0.9)
+            os.read(read_end, 65536)  # the writer finishes "a", takes "b" and blocks again
+
+        reader = threading.Thread(target=read_once, daemon=True)
+        reader.start()
+        self.addCleanup(reader.join)
+        started = time.monotonic()
+        self.assertEqual(echo.flush(1), "stalled")
+        self.assertLess(time.monotonic() - started, 1.45)  # two waits: about 1.9 s
+
+    def test_a_non_blocking_stdout_that_is_slow_to_drain_still_gets_the_whole_echo(self):
+        module = load_script()
+        read_end, write_end = os.pipe()
+        os.set_blocking(write_end, False)
+        stream = open(write_end, "w")
+        self.addCleanup(stream.close)
+        self.addCleanup(os.close, read_end)
+        echo = module.Echo(stream)
+        line = "x" * 300_000 + "\n"
+        echo.put(line)
+        got = []
+        deadline = time.monotonic() + 30
+
+        def read_late():
+            # Bounded, and done before the cleanups close the pipe: a read left blocked on a closed
+            # descriptor would take the output of whatever reuses its number.
+            time.sleep(0.5)
+            while sum(map(len, got)) < len(line) and time.monotonic() < deadline:
+                if select.select([read_end], [], [], 0.2)[0]:
+                    got.append(os.read(read_end, 65536))
+
+        reader = threading.Thread(target=read_late, daemon=True)
+        reader.start()
+        self.addCleanup(reader.join)
+        self.assertEqual(echo.flush(30), "complete")
+        reader.join(30)
+        self.assertEqual(sum(map(len, got)), len(line))
+
+    def test_pytest_that_cannot_be_started_is_loud_and_still_recorded(self):
+        prelude = ("real = subprocess.Popen\n"
+                   "def Popen(*a, **k):\n"
+                   "    if '-m' in a[0] and 'pytest' in a[0]:\n"
+                   "        raise BlockingIOError(11, 'Resource temporarily unavailable')\n"
+                   "    return real(*a, **k)\n"
+                   "m.subprocess.Popen = Popen")
+        result = self.run_driver(prelude)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL pytest could not be started", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        record = self.records()[0]
+        self.assertIsNone(record["pytest_rc"])
+        self.assertEqual(record["rc"], 2)
+        self.assertIn("BlockingIOError", record["start_error"])
+
+    def test_a_run_whose_threads_cannot_start_is_refused_and_leaves_nothing(self):
+        prelude = ("def start(self):\n"
+                   "    raise RuntimeError(\"can't start new thread\")\n"
+                   "m.threading.Thread.start = start")
+        result = self.run_driver(prelude)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL cannot start the run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual([p.name for p in self.logs.iterdir() if not p.name.startswith(".")], [])
+
+    def test_a_junit_file_that_cannot_be_read_is_recorded_as_unreadable(self):
+        module = load_script()
+        self.assertEqual(module.failing_ids(self.root), ([], "unreadable"))  # a directory
 
 
 if __name__ == "__main__":
