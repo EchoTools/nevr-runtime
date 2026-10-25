@@ -403,7 +403,7 @@ const Probe kProbes[] = {
     {"dofile_loadfile", "if dofile or loadfile then nevr.override('escape', true) end"},
     {"load_loadstring", "if load or loadstring then nevr.override('escape', true) end"},
     {"string_dump", "if string.dump then nevr.override('escape', true) end"},
-    {"debug", "if debug ~= nil and (debug.getregistry or debug.getupvalue or debug.setupvalue or "
+    {"debug_library", "if debug ~= nil and (debug.getregistry or debug.getupvalue or debug.setupvalue or "
               "debug.sethook or debug.getlocal or debug.setlocal or debug.getmetatable or "
               "debug.setmetatable or debug.upvaluejoin) then nevr.override('escape', true) end"},
     {"collectgarbage", "if collectgarbage and pcall(collectgarbage, 'stop') then nevr.override('escape', true) end"},

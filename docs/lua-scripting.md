@@ -1,7 +1,7 @@
 # Lua scripting
 
 Status: prototype (refs #440). Mods are Luau scripts that reach the game only through the runtime's host API. The VM
-choice and its measurements are in `docs/adr/0015-luau-for-scripting.md`. This document covers what the
+choice and its measurements are in `docs/adr/0016-luau-for-scripting.md`. This document covers what the
 prototype does and proves, how to build and test it, and what is left.
 
 ## A script
