@@ -456,6 +456,24 @@ TEST(ServerContextEntrants, EntrantSessionGuidIsEmptyBeforeInitializeAndAfterTer
   EXPECT_EQ(out.Data1, 0xAAU);
 }
 
+TEST(ServerContextEntrants, EntrantSessionGuidIsEmptyUntilInitializationFinishes) {
+  // Initialize stores the lobby but the context is not Running until FinalizeInitialization: a save
+  // request that arrives in that window has no accepted session to name.
+  SessionLobby fixture(1, 1, 1);
+  nevr_game_server::ServerContext context;
+  context.Initialize(&fixture.lobby, nullptr);
+
+  GUID out{};
+  out.Data1 = 0xAA;
+  EXPECT_EQ(context.GetEntrantSessionGuid(0).Data1, 0U);
+  EXPECT_FALSE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 0xAAU);
+
+  context.FinalizeInitialization();
+  EXPECT_TRUE(context.TryGetEntrantSessionGuid(0, &out));
+  EXPECT_EQ(out.Data1, 1U);
+}
+
 TEST(ServerContextEntrants, EntrantSessionGuidIsEmptyWithoutALobbyOrItsArrays) {
   nevr_game_server::ServerContext noLobby;
   noLobby.Initialize(nullptr, nullptr);

@@ -17,7 +17,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tools.tests.test_runtime_lifecycle_invariants import extract_braced_function
+from tools.tests.test_runtime_lifecycle_invariants import extract_braced_function, strip_comments
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,8 +72,8 @@ class SaveLoadoutEntrantId(unittest.TestCase):
     def test_no_other_runtime_file_builds_a_save_loadout_envelope(self):
         builders = [
             str(path.relative_to(ROOT))
-            for path in sorted((ROOT / "src/runtime").rglob("*.cpp"))
-            if "mutable_game_server_save_loadout" in path.read_text()
+            for path in sorted((ROOT / "src/runtime").rglob("*"))
+            if path.suffix in {".cpp", ".h"} and "mutable_game_server_save_loadout" in strip_comments(path.read_text())
         ]
         self.assertEqual(builders, ["src/runtime/server/gameserver_callbacks.cpp"])
 

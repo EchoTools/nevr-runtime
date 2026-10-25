@@ -156,6 +156,9 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         dropped = score("[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session, slot=3 \u2014 loadout not sent\n",
                         group="client")
         self.assertIn("FAIL", row(dropped.stdout, "C12"))
+        no_session = score("[NEVR.GAMESERVER] [SAVE_LOADOUT] No accepted client session for slot=3; not sending\n",
+                           group="client")
+        self.assertIn("FAIL", row(no_session.stdout, "C12"))
         base = score("[NEVR.GAMESERVER] [SAVE_LOADOUT] No game base address\n", group="client")
         self.assertIn("FAIL", row(base.stdout, "C12"))
 

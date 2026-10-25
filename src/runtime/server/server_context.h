@@ -114,8 +114,8 @@ class ServerContext {
   bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
 
   // The client session GUID of an accepted entrant slot, read from the lobby's
-  // player-session array (lobby+0xC8, stride 0x28). Zero GUID when the slot is
-  // out of range, not accepted, or the lobby is not initialized.
+  // player-session array (lobby+0xC8, stride 0x28). Zero GUID when the lobby or its
+  // arrays are absent, the slot is out of range or not accepted, or its GUID is zero.
   GUID GetEntrantSessionGuid(uint32_t slot) const;
 
   // True only when the slot holds an ACCEPTED client session; on true, *out is
