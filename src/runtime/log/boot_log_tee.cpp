@@ -1,7 +1,9 @@
 #include "runtime/log/boot_log_tee.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -15,10 +17,11 @@
 // ---------------------------------------------------------------------------
 
 static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
+static std::atomic<bool> g_boot_active{false};  // Init() to Close(), the boot phase
 static char g_boot_path[MAX_PATH] = {};  // set by Init(); survives Close() for the replay (#5)
 
 // Log()'s boot sink (BootLogSink, core/logging.h), set from Init() to Close() whether or not the
-// file opened: the boot phase is defined by the loader lock being held, not by the file being
+// file opened: the boot phase is defined by the tee being open (Init() to Close()), not by the file being
 // writable. Rule 12: the level goes after the subsystem tag ("[NEVR.HEADLESS] warn; ..."), or first
 // when there is no tag.
 static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
@@ -37,6 +40,7 @@ static void ReportBootLog(EchoVR::LogLevel level, const CHAR* msg) {
 
 void nevr_boot_log_tee::Init() {
     SetBootLogSink(&ReportBootLog);
+    g_boot_active.store(true, std::memory_order_release);
     // Get the EXE directory
     char exe_path[MAX_PATH];
     DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
@@ -94,7 +98,7 @@ void nevr_boot_log_tee::Init() {
     // N80: this file accumulates every run. Without a delimiter an operator reading
     // it cannot tell where the current run's boot lines begin — the previous five
     // runs sit directly above them with nothing separating the sequences.
-    TeeFprintf("[NEVR.PATCH] boot log opened run=%s", GetRunId());
+    TeeFprintf("[NEVR.PATCH] boot log opened run=%s\n", GetRunId());
 }
 
 void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
@@ -154,8 +158,11 @@ void nevr_boot_log_tee::TeeFprintf(const char* fmt, ...) {
 
 const char* nevr_boot_log_tee::Path() { return g_boot_path; }
 
+bool nevr_boot_log_tee::Active() { return g_boot_active.load(std::memory_order_acquire); }
+
 void nevr_boot_log_tee::Close() {
     SetBootLogSink(nullptr);
+    g_boot_active.store(false, std::memory_order_release);
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);
         g_boot_handle = INVALID_HANDLE_VALUE;

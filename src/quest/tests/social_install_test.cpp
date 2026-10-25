@@ -11,11 +11,14 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <elf.h>
 #include <string>
 #include <vector>
 
 #include "hook_install.h"
+#include "pinned_targets.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/social/social_abi.h"
@@ -703,6 +706,39 @@ bool EmptyImage(const char*, sentinel::ElfImage* out) {
   return true;
 }
 
+// A synthetic libr15 image whose build id is the pinned one: the resolver accepts it, so a null `send` with the
+// probe off can only come from the gate (the real image does the same in social_pinned_test.cpp, which needs the APK).
+alignas(Elf64_Nhdr) unsigned char g_pinnedBytes[128];
+Elf64_Phdr g_pinnedPhdr[2];
+bool PinnedBuildIdImage(const char*, sentinel::ElfImage* out) {
+  std::memset(g_pinnedBytes, 0, sizeof(g_pinnedBytes));
+  std::memset(g_pinnedPhdr, 0, sizeof(g_pinnedPhdr));
+  g_pinnedPhdr[0].p_type = PT_LOAD;
+  g_pinnedPhdr[0].p_memsz = sizeof(g_pinnedBytes);
+  g_pinnedPhdr[1].p_type = PT_NOTE;
+  g_pinnedPhdr[1].p_vaddr = 16;
+  g_pinnedPhdr[1].p_memsz = sizeof(Elf64_Nhdr) + 4 + 20;
+  const Elf64_Nhdr note{4, 20, NT_GNU_BUILD_ID};
+  std::memcpy(g_pinnedBytes + 16, &note, sizeof(note));
+  std::memcpy(g_pinnedBytes + 16 + sizeof(note), "GNU", 4);
+  const char* id = sentinel::pinned::kLibR15BuildId;
+  for (int i = 0; i < 20; ++i) {
+    const char pair[3] = {id[2 * i], id[2 * i + 1], 0};
+    g_pinnedBytes[16 + sizeof(note) + 4 + i] = static_cast<unsigned char>(std::strtoul(pair, nullptr, 16));
+  }
+  *out = sentinel::ElfImage{};
+  out->base = reinterpret_cast<std::uintptr_t>(g_pinnedBytes);
+  out->phdr = g_pinnedPhdr;
+  out->phnum = 2;
+  return true;
+}
+
+void TestProbeOffMeansNoPostFunction() {
+  QCHECK(ResolveGameEvents(&PinnedBuildIdImage).send != nullptr);  // the fixture is accepted as the pinned build
+  QCHECK(SelectGameEvents(true, &PinnedBuildIdImage).send != nullptr);
+  QCHECK(SelectGameEvents(false, &PinnedBuildIdImage).send == nullptr);
+}
+
 // The game's CJson functions are found only in libr15 of the pinned build.
 void TestResolveGameJson() {
   for (const sentinel::ImageLookup lookup : {&NoImage, &EmptyImage, static_cast<sentinel::ImageLookup>(nullptr)}) {
@@ -712,6 +748,18 @@ void TestResolveGameJson() {
   QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
   QCHECK(kLibR15CJsonDecodeFromVaddr == 0xfa7e8cULL);
   QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
+}
+
+// The script event post function is found only in libr15 of the pinned build, at its pinned address.
+void TestResolveGameEvents() {
+  for (const sentinel::ImageLookup lookup : {&NoImage, &EmptyImage, static_cast<sentinel::ImageLookup>(nullptr)}) {
+    QCHECK(ResolveGameEvents(lookup).send == nullptr);
+  }
+  // Probe off (the default): no post function, whatever the lookup finds.
+  QCHECK(SelectGameEvents(false, &NoImage).send == nullptr);
+  QCHECK(SelectGameEvents(true, &NoImage).send == nullptr);
+  QCHECK(kLibR15SendComponentEventVaddr == 0x1244758ULL);
+  QCHECK(kSymEvtArmComputerFriends == 0x976edb4d0c250317ULL);
 }
 
 void TestTarget() {
@@ -734,6 +782,8 @@ int main() {
   TestCounterRegistration();
   TestInstall();
   TestResolveGameJson();
+  TestResolveGameEvents();
+  TestProbeOffMeansNoPostFunction();
   TestTarget();
   TestPresenceSelection();
   TestPresenceSlotCheckAcceptsTheRealAddresses();

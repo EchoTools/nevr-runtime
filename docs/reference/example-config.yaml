@@ -15,7 +15,7 @@
 # builds read it ("both", "PC only", "Quest only"), its default, and the file that reads it.
 #
 # The Quest reads exactly these keys: services.socket_uri, auth.http_uri, auth.http_key, auth.server_key,
-# social.facade, social.send_presence_to_meta and diagnostics.hardware_dump. Every other key below is PC only: the
+# social.facade, social.send_presence_to_meta, diagnostics.hardware_dump and diagnostics.ui_event_probe. Every other key below is PC only: the
 # Quest accepts it (it is valid YAML under a known section) and reads nothing from it.
 #
 # A file the parser cannot use as a whole (a YAML error, an unknown top-level key, a top level that is not a
@@ -80,6 +80,11 @@ diagnostics:
   # Quest only. Write the hardware/environment dump (docs/adr/0006-quest-hardware-dump.md) at start-up.
   # Default (absent): false.
   # hardware_dump: true
+
+  # Quest only. The invite/party UI probe: the party tab's Invite Members and the main-menu FRIENDS LIST press also
+  # ask the tablet to switch to its Friends list, to measure whether that opens an invite path. Needs social.facade.
+  # Default (absent): false.
+  # ui_event_probe: true
 
 # ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
@@ -211,6 +216,15 @@ network:
   # Not a secret.
   # tick_rate_hz: 120
 
+  # Which game sockets the PC bridge hands to the session router (the rules the Quest build ships).
+  # legacy: the bridge's own rules for every socket. config: the /config sockets route through the router;
+  # login and matchmaker sockets keep the bridge's rules. all: every game socket (config, login and matchmaker)
+  # routes through the router. Any other value is refused at boot with a fatal error naming the key; the bridge
+  # never guesses a mode from a misspelling.
+  # Absent: legacy.
+  # Not a secret.
+  # session_router: legacy
+
 # ---------------------------------------------------------------------------
 # identity — server identity fields sent during ServerDB registration
 #
@@ -304,7 +318,7 @@ auth:
 #
 # When enabled (via the "-telemetry" CLI flag, which is the default for
 # servers), the server streams match telemetry over a dedicated WebSocket
-# to a telemetry ingest server. Disable with "-notelemetry".
+# to a telemetry ingest server. Disable with "-no-telemetry".
 #
 # Reader: src/runtime/server/gameserver_serverdb.cpp (RequestRegistration),
 #         src/runtime/server/gameserver_telemetry.cpp (telemetry streamer)
@@ -367,8 +381,8 @@ arena:
 #
 # When true, the game process calls ExitProcess on fatal errors (e.g.
 # ServerDB disconnection) rather than showing a crash dialog. This is the
-# default behavior for dedicated servers. CLI flag "-noexitonerror" overrides
-# to false; "-exitonerror" is deprecated (it's now the default).
+# default behavior for dedicated servers. CLI flag "-no-exit-on-error" overrides
+# to false; "-exit-on-error" has no effect (it's now the default).
 # Absent: true (exit on error).
 # Not a secret.
 # Reader: src/runtime/lifecycle/config.cpp (LoadLocalConfigHook)

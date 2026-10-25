@@ -73,10 +73,28 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle);
 void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired);
 bool  TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr);
 size_t TestHook_GameSocketsBoundTo(void* remoteHandle);
+bool TestHook_SendFrameToServer(const std::string& frame);  // the sender the bridge gives the self-check unit
+void TestHook_CloseGameSocketsForRemote(void* remoteHandle, int connIdx, unsigned int code);
+// A real ix client/server pair: the server drops the login remote and its Close callback ends the session. False when
+// the callback's thread never came back (then end the process; do not tear down).
+bool TestHook_LoginRemoteDroppedThroughRealIx(unsigned int timeoutMs);
+// #738: a send on a login remote whose connection has gone, from the thread that made it. `path` 0 SendFrameToServer, 1 the
+// game->server forward, 2 the flush on the remote's open. 0: the send failed and returned; 1: the sending thread never
+// came back (end the process); 2: no send failed (the rig, not the bridge).
+int TestHook_SendOnDroppedRemote(int path, unsigned int timeoutMs);
 bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx);
 bool  TestHook_N61_HasActiveCallback();
 int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 size_t TestHook_ConnectedGameSockets();  // game sockets the bridge's two listeners still hold
+// #708 S2b: the router's account gate and remote-open policy, for a test (production wires neither).
+// gate: -1 none (the account is always available), 0 awaiting, 1 ready, 2 refused. Read on every decision; call
+// TestHook_ReevaluateRouterGate after changing it to release or end a held session.
+void TestHook_SetRouterGate(int gate);
+void TestHook_SetRefuseRemoteOpens(bool refuse);  // the adapter refuses to start a remote, as Quest's does with no token
+void TestHook_ReevaluateRouterGate();
+// The live router's counters; false when the bridge routes nothing through it.
+bool TestHook_RouterStats(uint64_t* droppedGame, uint64_t* droppedRemote, uint64_t* droppedUnrequires,
+                          uint64_t* loginsRemoved, uint64_t* heldRemotes);
 #endif

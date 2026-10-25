@@ -1,7 +1,7 @@
 #pragma once
 // The pnsrad.dll / pnsovr.dll / pnsdemo.dll export tracer (#20), runtime half.
 //
-// OFF by default. `-traceexports <list>` (pnsrad, pnsovr, pnsdemo, all; comma separated) switches it on for
+// OFF by default. `-trace-exports <list>` (pnsrad, pnsovr, pnsdemo, all; comma separated) switches it on for
 // the named DLLs. The static half is tools/pe_exports.py (the export table and the names that share a body).
 //
 // How it sees the exports: the game reaches a platform DLL's exports only through CSysDLL_GetSymbol (the
@@ -21,7 +21,7 @@
 
 namespace nevr_export_tracer {
 
-/// Reads the selection (a `-traceexports` value), arms the thunk ring and starts the drain thread when it
+/// Reads the selection (a `-trace-exports` value), arms the thunk ring and starts the drain thread when it
 /// names a module. Idempotent: only the first call has an effect.
 void Configure(const char* list);
 

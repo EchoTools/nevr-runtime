@@ -6,14 +6,16 @@
  * (20 s of 100 ms polls, then 51 retries 200 ms apart). Horizon OS refuses keyed OBB mounts and never calls
  * the callback, so every launch waits the whole time and the system shows the not-responding dialog. After
  * the wait the game uses CSysInfo::GetDataRootDir's fallback, /storage/emulated/0/readyatdawn, which is
- * where its assets are read from.
+ * where its assets are read from. The skip serves the first root that holds the game's `_data` directory
+ * (data_root.h: the installer app's Android/media directory, then that fallback), chosen once by ResolveRoot.
  *
  * Two GOT hooks in libr15.so, both lock-free, both on the caller's thread (android_main):
  *   - AStorageManager_mountObb: when the game passes a callback, report AOBB_STATE_MOUNTED to it at once
  *     (cb(filename, 1, data), synchronously, the original is not called). The game's own callback then
  *     asks for the mounted path, records it and sets its completion flag, exactly as for a real mount.
- *   - AStorageManager_getMountedObbPath: after that skip, return the fallback data root, so the game
- *     records the root it would have used after the timeout.
+ *   - AStorageManager_getMountedObbPath: after that skip, return the root ResolveRoot chose (the game's
+ *     fallback root when neither candidate holds `_data`), so the game records the root it would have used
+ *     after the timeout.
  * The path hook is installed first and the mount hook only when it took: a mount skipped without the path
  * would record an empty path and the game would retry for the same ~30 s.
  *
@@ -28,6 +30,7 @@
  */
 #pragma once
 
+#include "data_root.h"
 #include "pinned_targets.h"
 
 namespace nevr_quest::obb_skip {
@@ -48,9 +51,25 @@ bool Install() noexcept;
 // Install() when `countersRegistered`; otherwise logs the skip and installs nothing.
 bool InstallIfCounted(bool countersRegistered) noexcept;
 
+// Chooses the root the skipped mount serves (data_root.h) with `exists` and logs one line {"event":"data_root",...}
+// saying which won, or that neither holds the game's `_data`. Install() calls it with the real filesystem; call it
+// before the game's first mount request. Until it runs, the game's own fallback root is served.
+void ResolveRoot(data_root::ExistsFn exists) noexcept;
+
+// The real filesystem for ResolveRoot: true when `path` is an existing directory.
+bool DirectoryExists(const char* path) noexcept;
+
+// The real filesystem for the data step: true for an existing directory or a non-empty regular file. The step asks
+// about the data root and `_data` (directories) and about the manifest under it (a regular file, 828213 bytes in the
+// pinned zip), so DirectoryExists would call present data missing.
+bool PathExists(const char* path) noexcept;
+
 // Test support: arms both handlers without touching a GOT slot, and clears the "skipped" state.
 void ArmForTest() noexcept;
 void ResetForTest() noexcept;
+
+// The root ResolveRoot chose last (a string literal, never freed): what the game's data-root question is answered with.
+const char* CurrentRoot() noexcept;
 
 struct Counts {
   unsigned long long mountSkipped, pathServed;

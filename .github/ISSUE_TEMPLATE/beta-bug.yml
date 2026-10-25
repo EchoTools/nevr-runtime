@@ -67,7 +67,7 @@ body:
     id: version
     attributes:
       label: Beta version
-      description: The name of the zip you installed (for example `nevr-runtime-v4.0.0+9.27dcaaa.zip`), if you still have it.
+      description: The name of the zip you installed (for example `nevr-runtime-v5.5.0-windows.zip`), if you still have it.
   - type: textarea
     id: files
     attributes:

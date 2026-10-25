@@ -22,8 +22,8 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-windowed", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-windowed", "[NEVR] Run the game with no headset, in a window");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-noconsole", "[NEVR] Disable console window creation");
+  EchoVR::AddArgSyntax(pArgSyntax, "-no-console", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-no-console", "[NEVR] Disable console window creation");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config", 1, 1, FALSE);
   // Issue #22: this said "custom path to config.yaml", but the path itself is
@@ -39,28 +39,28 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-serverregion", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-serverregion", "[NEVR] Set the server fleet region");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-noexitonerror", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-noexitonerror",
+  EchoVR::AddArgSyntax(pArgSyntax, "-no-exit-on-error", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-no-exit-on-error",
       "[NEVR] Keep server running after serverdb disconnect (default: exit)");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-exitonerror",
-      "[NEVR] Deprecated — exit-on-error is now the default");
+  EchoVR::AddArgSyntax(pArgSyntax, "-exit-on-error", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-exit-on-error",
+      "[NEVR] No effect: exiting on error is the default");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-traceexports",
+  EchoVR::AddArgSyntax(pArgSyntax, "-trace-exports", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-trace-exports",
                            "[NEVR] Trace the export calls of platform DLLs: pnsrad, pnsovr, pnsdemo or all (comma "
                            "separated); logs [NEVR.TRACE] lines. Off by default. Read from the command line by "
                            "runtime/hook/export_tracer.cpp");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-notelemetry", "[NEVR] Disable telemetry streaming");
+  EchoVR::AddArgSyntax(pArgSyntax, "-no-telemetry", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-no-telemetry", "[NEVR] Disable telemetry streaming");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-telemetryrate", "[NEVR] Set telemetry rate in Hz (default 10)");
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetry-rate", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-telemetry-rate", "[NEVR] Set telemetry rate in Hz (default 10)");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-telemetrydiag", "[NEVR] Log telemetry diagnostics every second");
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetry-diag", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-telemetry-diag", "[NEVR] Log telemetry diagnostics every second");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-timestamps", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-timestamps", "[NEVR] Prefix log lines with timestamps");
@@ -68,13 +68,26 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-upnp", "[NEVR] Enable UPnP port forwarding");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-allow-dbgcore", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-allow-dbgcore",
-      "[NEVR] Allow dbgcore.dll in the game directory (legacy injection)");
+  EchoVR::AddArgSyntax(pArgSyntax, "-skip-dbgcore-check", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-skip-dbgcore-check",
+      "[NEVR] Skip the check that refuses a dbgcore.dll in the game directory (legacy injection)");
 
   // -config-path is NOT ignored: boot.cpp handles it exactly like -config.
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
+
+
+  // #697: the names these flags had before they were kebab-case. The game's parser rejects a token with no
+  // syntax entry (ValidateMainArgs, echovr.exe 0x1400da830), so each stays registered, with no help string so
+  // `--help` never lists it. boot.cpp maps each to its new flag and warns once per run (core/cli_flags.h).
+  EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-noexitonerror", 0, 0, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-traceexports", 1, 1, FALSE);
+  EchoVR::AddArgSyntax(pArgSyntax, "-allow-dbgcore", 0, 0, FALSE);
 
   // GameMainWrapperHook removes -timestep and -fixedtimestep from the command line before the game parses
   // it when the line holds an option token exactly `-server` (crash_recovery.cpp, #515). They still reach

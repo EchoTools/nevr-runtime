@@ -1,9 +1,10 @@
 """The release workflow (build.yml): structure and the small scripts it runs; nothing is published here.
 
-A release is a plain semver tag plus GitHub's pre-release flag. Signing is stubbed until the policy signer
-exists. These tests pin that the packaging path is one path for every release event, that nothing in it
-reads the pre-release flag (promotion changes no byte), that a release which already carries its assets is
-not rebuilt, and that the stub is honest."""
+A release is a plain semver tag plus GitHub's pre-release flag. Nothing in this workflow signs: the files on
+the draft are signed afterwards by the release signer (RELEASING.md), so no job here claims or skips it. These
+tests pin that the packaging path is one path for every release event, that nothing in it reads the
+pre-release flag (promotion changes no byte), that a release which already carries its assets is not rebuilt,
+and that no job pretends to sign."""
 
 import os
 import re
@@ -20,8 +21,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "build.yml"
 GUARD = REPO / "tools" / "release_already_built.sh"
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; FOUR predates the Quest library
+TWO = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the release's two assets
 
 
 def load():
@@ -105,40 +105,43 @@ class WorkflowStructureTest(unittest.TestCase):
         for forbidden in ("windows-latest", "azure/", "codesign", "Get-AuthenticodeSignature", "signtool"):
             self.assertNotIn(forbidden, text)
 
-    def test_the_sign_job_is_a_named_stub_that_passes_the_files_through(self):
+    def test_there_is_no_sign_job_and_nothing_passes_files_through_as_unsigned(self):
         data, _ = load()
-        sign = data["jobs"]["sign"]
-        self.assertEqual(sign["name"], "sign: stubbed, policy signer not built yet")
-        self.assertIn("PLACEHOLDER: the signer dispatch goes here", WORKFLOW.read_text(encoding="utf-8"))
-        text = steps_text(sign)
-        self.assertIn("packages-unsigned", text)
-        self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), r"name: signed-")
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("sign", data["jobs"])
+        self.assertNotIn("signing stub", text)
+        for name, job in data["jobs"].items():
+            needs = job.get("needs", [])
+            self.assertNotIn("sign", [needs] if isinstance(needs, str) else needs, name)
+        for gone in ("needs.sign", "UNSIGNED passthrough", "packages-unsigned", "policy signer not built yet",
+                     "PLACEHOLDER: the signer dispatch goes here"):
+            self.assertNotIn(gone, text)
+        self.assertNotRegex(text, r"name: signed-")
 
-    def test_the_job_graph_is_drafts_guard_build_sign_seal_repack_publish(self):
+    def test_the_job_graph_is_drafts_guard_build_quest_seal_repack_publish(self):
         jobs = load()[0]["jobs"]
         # `drafts` lists the tag's releases for a dispatch on a tag (write token, no checkout); guard reads it
-        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "sign", "seal", "repack", "publish"])
+        self.assertEqual(list(jobs), ["drafts", "guard", "build", "quest", "seal", "repack", "publish"])
         self.assertEqual(jobs["guard"]["needs"], "drafts")
         self.assertEqual(jobs["build"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["build"]["if"])
-        self.assertEqual(sorted(jobs["seal"]["needs"]), ["build", "sign"])
+        self.assertEqual(jobs["seal"]["needs"], "build")
         # repack and publish also need build: they read build's `draft` output (a dispatch on a draft's tag, see
         # test_release_draft_path.py); `needs` outputs are only visible from a direct dependency.
-        self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal", "sign"])
-        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "quest", "repack", "seal", "sign"])
+        self.assertEqual(sorted(jobs["repack"]["needs"]), ["build", "seal"])
+        self.assertEqual(sorted(jobs["publish"]["needs"]), ["build", "quest", "repack", "seal"])
         # the Quest library is its own job off the guard, built for a release event or a dispatch on a tag, and
         # never when the release already carries its assets
         self.assertEqual(jobs["quest"]["needs"], "guard")
         self.assertIn("needs.guard.outputs.built != 'true'", jobs["quest"]["if"])
         self.assertIn("github.event_name == 'release' || github.ref_type == 'tag'", jobs["quest"]["if"])
         self.assertEqual(jobs["quest"]["permissions"], {"contents": "read"})
-        self.assertEqual(jobs["sign"]["needs"], "build")
-        for name in ("sign", "seal", "repack", "publish"):
+        for name in ("seal", "repack", "publish"):
             self.assertNotIn("rc", name)
 
     def test_the_quest_asset_name_has_one_source_the_guard_also_reads(self):
         # A name written inline in build.yml can drift from tools/release_asset_names.sh, and then the guard
-        # never sees all five names and a published, signed release is rebuilt over. The quest job must take
+        # never sees both names and a published, signed release is rebuilt over. The quest job must take
         # its output name from release_quest_asset_name, and that name must be one the list yields.
         jobs = load()[0]["jobs"]
         naming = [s for s in jobs["quest"]["steps"] if s.get("id") == "asset"]
@@ -186,9 +189,9 @@ class WorkflowStructureTest(unittest.TestCase):
                 self.assertRegex(str(job.get("if", "")), status, f"{name} has a skippable ancestor and no status function")
         # and each names the result of what it needs, so a failed or skipped need still stops it
         self.assertIn("needs.guard.result == 'success'", jobs["build"]["if"])
-        self.assertIn("needs.build.result == 'success'", jobs["sign"]["if"])
-        self.assertIn("needs.sign.result == 'success'", jobs["seal"]["if"])
-        for name in ("build", "sign", "seal", "repack", "publish"):
+        self.assertIn("needs.build.result == 'success'", jobs["seal"]["if"])
+        self.assertIn("needs.seal.result == 'success'", jobs["repack"]["if"])
+        for name in ("build", "seal", "repack", "publish"):
             self.assertIn("!cancelled()", jobs[name]["if"])
             self.assertNotRegex(jobs[name]["if"], r"(?<![!\w])success\(\)", name)
 
@@ -214,8 +217,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertFalse(str(step.get("uses", "")).startswith("actions/checkout@"), step)
         self.assertEqual([str(s.get("uses", "")).split("@")[0] for s in publish["steps"]],
                          ["actions/download-artifact", "actions/download-artifact", "actions/download-artifact",
-                          "actions/download-artifact", "actions/attest-build-provenance", "softprops/action-gh-release",
-                          "softprops/action-gh-release"])
+                          "actions/attest", "softprops/action-gh-release"])
         text = steps_text(publish)
         for word in ("pip", "apt-get", "cmake", "tools/"):
             self.assertNotIn(word, text, word)
@@ -223,26 +225,35 @@ class WorkflowStructureTest(unittest.TestCase):
         for word in ("pip install cmake==", "tools/build_distribution.py", "cmake/VerifyDistribution.cmake"):
             self.assertIn(word, repack_text, word)
         self.assertEqual([s["with"]["name"] for s in repack["steps"] if "with" in s and "path" in s["with"]
-                          and s["with"]["path"].startswith("dist/")], ["dist-tar-zst", "dist-zips"])
+                          and s["with"]["path"].startswith("dist/")], ["dist-tar-zst"])
 
     def test_the_release_files_get_a_provenance_attestation_in_the_publish_job_only(self):
         data, _ = load()
         for name, job in data["jobs"].items():
-            has_attest = "actions/attest-build-provenance" in steps_text(job)
+            has_attest = "actions/attest@" in steps_text(job)
             self.assertEqual(has_attest, name == "publish", name)
             permissions = job.get("permissions", {})
             self.assertEqual(permissions.get("id-token") == "write", name == "publish", name)
         self.assertEqual(data["jobs"]["publish"]["permissions"]["attestations"], "write")
+
+    def test_the_attestation_is_actions_attest_v4_pinned_by_sha_and_nothing_older(self):
+        """The release files are attested by actions/attest at v4 (GitHub Docs, "Using artifact attestations to
+        establish provenance for builds"), pinned by a full commit SHA with the version in a comment."""
+        text = (REPO / ".github/workflows/build.yml").read_text()
+        self.assertNotIn("attest-build-provenance", text)
+        self.assertRegex(text, r"uses: actions/attest@[0-9a-f]{40} # v4(\.\d+)*\n")
+        publish = load()[0]["jobs"]["publish"]
+        self.assertEqual(publish["permissions"], {"contents": "write", "id-token": "write", "attestations": "write"})
 
     def test_the_attested_files_are_exactly_the_uploaded_files(self):
         """`gh attestation verify <file>` finds a file only if its digest is a subject of an attestation: a
         file the release receives that is not attested has nothing to verify (#450), and an attested file
         that is never uploaded is a lie. The two lists are the same set."""
         steps = load()[0]["jobs"]["publish"]["steps"]
-        attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest-build-provenance@")]
+        attest = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/attest@")]
         uploads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
         self.assertEqual(len(attest), 1)
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 1)
         subjects = lines(steps[attest[0]]["with"]["subject-path"])
         uploaded = []
         for i in uploads:
@@ -251,14 +262,14 @@ class WorkflowStructureTest(unittest.TestCase):
         # The symbol files are attested to the same commit but are a workflow artifact, never a release asset.
         self.assertEqual(sorted(s for s in subjects if not s.startswith("symbols/")), sorted(uploaded))
         self.assertEqual(sorted(subjects), sorted([
-            "dist/*.zip", "release-assets/*.zip", "release-assets/SHA256SUMS", "release-assets/RELEASE-NOTES.md",
-            "quest-asset/*.so", "symbols/*/*.dbg"]))
+            "release-assets/*.zip", "quest-asset/*.so", "symbols/*/*.dbg"]))
         self.assertNotIn("symbols", " ".join(uploaded), "the symbol files are not release assets")
         self.assertNotIn("tar.zst", " ".join(subjects + uploaded), "zips only: no .tar.zst is a release asset")
         repack_steps = load()[0]["jobs"]["repack"]["steps"]
         tar_steps = [s for s in repack_steps if s.get("with", {}).get("path") == "dist/*.tar.zst"]
         self.assertEqual([s["with"]["name"] for s in tar_steps], ["dist-tar-zst"])
-        self.assertEqual([s["with"]["name"] for s in steps if s.get("with", {}).get("path") == "dist"], ["dist-zips"])
+        self.assertEqual([s for s in steps if s.get("with", {}).get("path") == "dist"], [],
+                         "no dist zip is downloaded for the release: the release zip is the sealed one")
 
     def test_the_build_job_checks_and_keeps_the_symbol_files_of_the_stripped_binaries(self):
         steps = load()[0]["jobs"]["build"]["steps"]
@@ -271,6 +282,8 @@ class WorkflowStructureTest(unittest.TestCase):
         tree = [s for s in steps if s.get("name") == "Gate and assemble the release tree"]
         self.assertEqual(len(tree), 1)
         self.assertIn('--dll "$pkg/BugSplat64.dll"', tree[0]["run"])
+        self.assertIn('--server-exe "$pkg/echovr_server.exe"', tree[0]["run"])
+        self.assertNotIn("--server-exe build/mingw-release", tree[0]["run"])
         self.assertNotIn("--dll build/mingw-release", tree[0]["run"])
         self.assertLess(steps.index(verify[0]), steps.index(tree[0]))
         windows = [s for s in steps if s.get("name") == "Verify the Windows tree ships only stripped binaries"]
@@ -294,7 +307,7 @@ class WorkflowStructureTest(unittest.TestCase):
             self.assertNotIn("prerelease", steps_text(job).lower(), name)
         steps = data["jobs"]["publish"]["steps"]
         uploads = [s for s in steps if str(s.get("uses", "")).startswith("softprops/action-gh-release@")]
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 1)
         for step in uploads:
             self.assertNotIn("prerelease", step["with"])
             # The one argued exception: softprops/action-gh-release PUBLISHES a reused draft after uploading
@@ -377,7 +390,7 @@ class WorkflowStructureTest(unittest.TestCase):
 
     # --- the guard: a release that already carries its assets is not rebuilt --------------------------
 
-    def guard(self, event="release", tag="v5.0.0", assets=FOUR, view_rc=0):
+    def guard(self, event="release", tag="v5.0.0", assets=TWO, view_rc=0):
         with tempfile.TemporaryDirectory(prefix="guard-") as tmp:
             bindir = Path(tmp) / "bin"
             bindir.mkdir()
@@ -391,23 +404,23 @@ class WorkflowStructureTest(unittest.TestCase):
                                                  EVENT=event, TAG=tag, **env)
             return rc, out.get("built"), (log.read_text().splitlines() if log.exists() else [])
 
-    def test_a_release_with_all_five_assets_is_not_rebuilt(self):
+    def test_a_release_with_both_assets_is_not_rebuilt(self):
         rc, built, calls = self.guard()
         self.assertEqual((rc, built), (0, "true"))
         self.assertEqual(len(calls), 1)
         self.assertIn("release view v5.0.0", calls[0])
 
     def test_a_release_missing_any_one_asset_is_built(self):
-        for missing in FOUR:
+        for missing in TWO:
             with self.subTest(missing=missing):
-                rc, built, _ = self.guard(assets=[a for a in FOUR if a != missing])
+                rc, built, _ = self.guard(assets=[a for a in TWO if a != missing])
                 self.assertEqual((rc, built), (0, "false"))
 
     def test_a_release_with_no_assets_is_built(self):
         self.assertEqual(self.guard(assets=[])[:2], (0, "false"))
 
     def test_other_versions_assets_do_not_count(self):
-        other = [a.replace("5.0.0", "4.9.9") for a in FOUR]
+        other = [a.replace("5.0.0", "4.9.9") for a in TWO]
         self.assertEqual(self.guard(assets=other)[:2], (0, "false"))
 
     def test_a_failing_listing_fails_the_job_it_does_not_mean_rebuild(self):
@@ -448,9 +461,12 @@ class WorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("--apk", seal_command)
         self.assertNotIn("gh release", seal)
         self.assertIn("sha256sum -c SHA256SUMS", seal)
-        self.assertIn("packages-unsigned", seal)
+        self.assertIn("unsigned-release-tree", seal)
+        self.assertNotIn("packages-unsigned", seal)
         self.assertIn("release-unsigned", seal)
-        self.assertIn("staged/release/nevr-runtime-v*-windows", seal)
+        self.assertIn("staged/release/nevr-runtime-v*-windows)", seal)
+        self.assertIn("unzip -q", seal)
+        self.assertNotIn("release-assets && sha256sum", seal, "no top-level SHA256SUMS is checked: none is written")
         self.assertFalse((REPO / "tools" / "rc_release_apk.sh").exists())
 
     def test_the_build_writes_the_public_defaults_before_it_configures(self):

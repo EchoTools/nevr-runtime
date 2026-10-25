@@ -82,7 +82,7 @@ class TelemetryStreamer {
   void ProcessResponses();
 
   // Diagnostic mode: log snapshot data to console (game thread, rate-limited to 1Hz).
-  // Called from Update() when -telemetrydiag is set. Does NOT require a WS connection.
+  // Called from Update() when -telemetry-diag is set. Does NOT require a WS connection.
   void RunDiagnostics();
 
  private:

@@ -47,6 +47,9 @@ struct RuntimeLoadResult {
   // Whether the loading thread owned the process loader lock when the load began (measured
   // by Load, from the PEB). False at the rendezvous; the record says so.
   bool loader_lock_held = false;
+  // True when the descriptor came from the host's own image (RuntimeLoader::PrepareInProcess): no
+  // file was loaded and `module` is the host.
+  bool in_process = false;
 
   bool Loaded() const { return outcome == RuntimeLoadOutcome::kLoaded; }
   const char* OutcomeName() const;
@@ -81,6 +84,11 @@ class RuntimeLoader {
   // Resolve the runtime path (ResolveRuntimePath) into a fixed buffer. No allocation, no I/O.
   void Prepare(HMODULE host_module);
 
+  // The runtime is compiled into the host's own image: `get_api` is its descriptor entry point,
+  // `module` in the result is `host_module`, and nothing is loaded from disk. The descriptor
+  // checks and initialize() are the same as for a file runtime.
+  void PrepareInProcess(HMODULE host_module, NevrGetRuntimeApiFn get_api);
+
   // Run the state machine against the prepared path. Emits a diagnostic on every
   // outcome. The failed runtime is left mapped (it may already have
   // patched something); it is never FreeLibrary'd.
@@ -93,6 +101,8 @@ class RuntimeLoader {
   RuntimeLoadResult result_{};
   wchar_t path_[MAX_PATH] = {};
   bool path_ok_ = false;
+  HMODULE in_process_module_ = nullptr;
+  NevrGetRuntimeApiFn in_process_get_api_ = nullptr;
 };
 
 }  // namespace nevr_host

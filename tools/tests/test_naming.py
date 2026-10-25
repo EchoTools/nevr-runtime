@@ -59,14 +59,24 @@ BRAND_PROSE_SPELLINGS = {
     "CONTRIBUTING.md": {"nEVR"},
     "README.md": {"nEVR"},
     "docs/README.md": {"nEVR"},
+    "RELEASING.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
+    "docs/adr/0010-signed-plugins-only.md": {"nEVR"},
+    "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
+    "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
     "docs/standards/verification.md": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
+    "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
+    "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
+    "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
+    "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
     "tools/package-release/README.template.txt": {"nEVR"},
+    "tools/pe_version_info.py": {"nEVR"},  # the pinned ProductName and FileDescription
+    "tools/tests/test_pe_version_info.py": {"nEVR"},  # the same pins, read back from built files
     "tools/package-release/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
 }

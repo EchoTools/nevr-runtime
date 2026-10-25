@@ -1,5 +1,10 @@
 # nEVR Runtime Logging Standards
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
 adding a `Log()` call, BEFORE reviewing a PR that touches logging, and
@@ -42,46 +47,46 @@ how an agent triangulates a correct log line.
 
 ### You SHALL
 
-- You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
+- You **SHALL** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
   no `std::cout`. See `src/core/logging.h` and the C++ Mingw Addendum in `AGENTS.md`.
   A plugin is a separate DLL and cannot call `Log()`; its single entry point is the host's
   log function in its context, reached through `plugin_logger.h` (Rule 15).
-- You **shall** include a subsystem tag on EVERY log line. The tag identifies which
+- You **SHALL** include a subsystem tag on EVERY log line. The tag identifies which
   nEVR component produced the line. See the Subsystem Tags table below.
-- You **shall** log the outcome. A log line that says "connecting" without a
+- You **SHALL** log the outcome. A log line that says "connecting" without a
   corresponding "connected" or "connection failed" is incomplete.
-- You **shall** log the relevant identifier. Connection index, session ID, XPID
+- You **SHALL** log the relevant identifier. Connection index, session ID, XPID
   string, server ID, or request ID — there is always one identifier
   that the operator needs to trace the event through the system.
-- You **shall** use the correct log level per the Level Guidelines below. When in
+- You **SHALL** use the correct log level per the Level Guidelines below. When in
   doubt, go one level higher (DEBUG -> INFO, INFO -> WARNING) — a
   too-verbose log can be filtered; a missing log cannot be recovered.
-- You **shall** log identity at login. Every login/acquisition path SHALL include the
+- You **SHALL** log identity at login. Every login/acquisition path SHALL include the
   full platform-identity string (XPID) as a structured field (see Rule 2).
 
 ### You SHALL NOT
 
-- You **shall not** log a bare free-text message with no subsystem tag and no identifier.
+- You **SHALL NOT** log a bare free-text message with no subsystem tag and no identifier.
   `Log(Info, "Connected")` is not a log line — it is a riddle.
-- You **shall not** log at INFO level inside a hot path (per-frame, per-tick,
+- You **SHALL NOT** log at INFO level inside a hot path (per-frame, per-tick,
   per-connection). Use DEBUG for the narrative detail; emit one INFO
   summary line instead (Rule 12).
-- You **shall not** log a state transition without also logging the state it transitioned
+- You **SHALL NOT** log a state transition without also logging the state it transitioned
   FROM and TO. "State changed" without the old and new states is
   useless.
-- You **shall not** log an error without the error code. `"Failed to connect"` without
+- You **SHALL NOT** log an error without the error code. `"Failed to connect"` without
   the `WSAGetLastError` or HRESULT is not actionable.
-- You **shall not** suppress a hook installation failure silently. Hook failures are
+- You **SHALL NOT** suppress a hook installation failure silently. Hook failures are
   WARNING-level events with the target address, expected prologue, and
   actual bytes (see Rule 5).
-- You **shall not** log raw binary data, hex dumps, or pointer values at INFO level.
+- You **SHALL NOT** log raw binary data, hex dumps, or pointer values at INFO level.
   These are DEBUG-level diagnostics and SHALL be gated by a verbosity
   flag or compile-time guard.
-- You **shall not** use `Log(Debug, ...)` for anything you expect an operator to need
+- You **SHALL NOT** use `Log(Debug, ...)` for anything you expect an operator to need
   during a production incident. DEBUG is off by default in production
   builds. If an operator needs it, it is INFO.
-- You **shall not** leave a `// TODO: add logging` comment without a N-ledger
+- You **SHALL NOT** leave a `// TODO: add logging` comment without a N-ledger
   entry. A TODO without a ticket is a wish.
 
 ---
@@ -187,7 +192,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 
 **Where:** This rule applies to every `Log()` call site.
 
-### Rule 2: XPID shall be logged at login
+### Rule 2: XPID SHALL be logged at login
 
 The login/acquisition path SHALL log the full platform-identity string
 being used. The XPID is the external identifier that ties a log session

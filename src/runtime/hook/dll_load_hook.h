@@ -2,8 +2,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #endif
 #ifdef NEVR_DLL_LOAD_HOOK_TESTING
@@ -27,6 +29,10 @@ constexpr int kLoadLibraryVariantCount = 4;
 int Install();
 void Shutdown();
 
+/* Writes the lines a load made under the loader lock left waiting (#688), unless this thread holds the
+ * lock. Called at graceful shutdown, before the process is ended, so a held line is not lost with it. */
+void FlushPendingLines();
+
 /* Predicate for AddLoadFilter(): `lower_path` is the full path or name passed to LoadLibrary*,
  * lowercased, as wide characters. Return true to refuse the load. */
 typedef bool (*LoadFilter)(const wchar_t* lower_path);
@@ -43,6 +49,10 @@ void AddLoadFilter(const char* name, LoadFilter filter);
  * last '\\' or '/') contains "ovrplatform", e.g. libovrplatform64_1.dll. A folder named like that
  * does not match, so a library under such a directory is not refused. */
 bool IsOculusPlatformPath(const wchar_t* lower_path);
+
+/* The lowercase (ASCII fold) wide spelling of an ANSI path, converted through the ANSI code page: what the
+ * LoadLibraryA/ExA hooks hand to the filters. Empty for a null or empty path, or one that cannot be converted. */
+std::wstring AnsiPathToLowerWide(const char* path);
 
 /* True when a registered filter refuses `lower_path` (what the hooks call; exposed for tests).
  * `blocked_by` remains valid until the next IsLoadBlocked call on the same thread. */

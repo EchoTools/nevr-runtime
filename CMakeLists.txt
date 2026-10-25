@@ -34,6 +34,13 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
+# BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
+# resource compiler is a language, and enable_language cannot be called from a function.
+if(WIN32)
+  enable_language(RC)
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
+
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
@@ -137,9 +144,7 @@ if(MINGW)
   add_compile_options(
     -Wall
     -Wextra
-    -Werror=unused-function
-    -Werror=unused-variable
-    -Werror=unused-but-set-variable
+    -Werror
     # Disable specific warnings that are unavoidable in this codebase
     -Wno-unknown-pragmas           # Windows-specific pragmas like #pragma comment
     -Wno-unused-parameter          # DLL export functions have required but unused params
@@ -233,9 +238,9 @@ add_subdirectory(src/legacy/gamepatches)
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
 target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
-# Frozen code carries an unused variable it may not lose; the new -Werror=unused-* flags apply to everything else.
+# Frozen code carries warnings it may not lose; -Werror applies to everything else.
 if(MINGW)
-  target_compile_options(gamepatcheslegacy PRIVATE -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=unused-but-set-variable)
+  target_compile_options(gamepatcheslegacy PRIVATE -Wno-error)
 endif()
 # There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
 # pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
@@ -257,7 +262,7 @@ target_compile_definitions(gamepatcheslegacy PRIVATE NEVR_USE_MINHOOK)
 
 add_subdirectory(src/libovr-stub)
 
-# Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -noconsole
+# Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -no-console
 add_subdirectory(src/launcher)
 
 add_subdirectory(plugins)
@@ -312,7 +317,9 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the one release package, nevr-runtime-v<ver>: binaries run through strip --strip-all.
+# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: the BugSplat64.dll and
+# echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
+# and the source of the .tar.zst workflow artifact: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
 # function names through the .dbg's COFF symbol table. The release preset has no -g, so there are no source
@@ -321,7 +328,7 @@ endif()
 # Usage: cmake --build <build_dir> --target dist
 # =============================================================================
 
-set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
+set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
 set(DIST_SYMBOLS_DIR "${CMAKE_SOURCE_DIR}/dist/symbols/${DIST_NAME}")
@@ -444,7 +451,10 @@ add_custom_target(dist-legacy
 # =============================================================================
 # Combined dist-all target
 # =============================================================================
+# The legacy build is not part of it: its plugin loader (src/legacy/gamepatches/plugin_loader.cpp) loads every
+# DLL in plugins\ unchecked and src/legacy/ is frozen, so a legacy DLL never goes into a package that is
+# shipped (#741, docs/adr/0010-signed-plugins-only.md). `just dist-legacy` stays an explicit developer recipe.
 add_custom_target(dist-all
-  DEPENDS dist dist-legacy
+  DEPENDS dist
   COMMENT "All distribution packages created"
 )

@@ -45,8 +45,8 @@ feels risky":
    NEVER" clauses are enforced constraints, not advice: no C-style casts; no
    `catch(...)`; never throw across a DLL boundary; no I/O from DllMain; Ninja-only;
    vcpkg-manifest deps only; PE VERSIONINFO in every DLL; sign release DLLs. The
-   addendum says `-Werror`; the tree does not apply it everywhere (see "Compiler
-   warnings" in the primer). A change that violates a Hard-Stop is rejected
+   addendum says `-Werror`; the MinGW targets apply it, with the frozen legacy
+   target exempt (see "Compiler warnings" in the primer). A change that violates a Hard-Stop is rejected
    regardless of whether it "works".
 2. **INVOKE THE `nevr-work` SKILL** (`.claude/skills/nevr-work/SKILL.md`) as your
    gate harness and walk it gate by gate: orient → measure/verify-first →
@@ -165,21 +165,22 @@ stale snapshot.
 
 ## Compiler warnings — what `-Werror` actually covers
 
-The C++ addendum says warnings are errors; the tree does not apply a blanket `-Werror` to
-the MinGW targets. Measured with `git grep -n Werror origin/main -- CMakeLists.txt src
-plugins justfile cmake`:
+The C++ addendum says warnings are errors. The MinGW targets apply it; check with
+`git grep -n Werror -- CMakeLists.txt src plugins justfile cmake`:
 
-- Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra
-  -Werror=unused-function -Werror=unused-variable -Werror=unused-but-set-variable ...)`
-  with several `-Wno-*` entries. Only those three warnings are errors.
-- `gamepatcheslegacy` (frozen `src/legacy/`) opts out of those three with
-  `-Wno-error=unused-*` (comment in root `CMakeLists.txt`).
-- `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only.
+- Root `CMakeLists.txt`, `if(MINGW)` block: `add_compile_options(-Wall -Wextra -Werror ...)`
+  with several `-Wno-*` entries. Every other warning is an error.
+- `gamepatcheslegacy` (frozen `src/legacy/`) opts out with `-Wno-error` (comment in root
+  `CMakeLists.txt`). It still prints its warnings.
+- `src/runtime/CMakeLists.txt` sets `-Werror=old-style-cast` on `compat/ws_bridge.cpp` only
+  (plain `-Werror` does not enable that warning).
 - `-Wall -Wextra -Werror` is set per target in `src/quest/**/CMakeLists.txt` and on the
   host `g++` test recipes in `justfile`.
-- Reviewers report warnings that still exit 0 (`-Wunused-variable` in legacy, `-Wcomment`
-  in `plugins/example`, a `#warning` from winsock2.h); I did not reproduce them. Do not
-  write "builds with `-Werror`" without naming the target.
+- A source that includes `<windows.h>` (directly or through a project header) before
+  `<winsock2.h>` fails the build with `#warning Please include winsock2.h before windows.h`:
+  put `#include <winsock2.h>` first (`tools/tests/test_header_include_order.py`).
+- `tools/tests/test_werror_live.py` compiles a deliberate `#warning` with the project's own flags
+  and expects it to fail; it needs `build/mingw-release/compile_commands.json`.
 
 ## Modules vs plugins — the distinction that causes hangs
 
@@ -245,7 +246,7 @@ BEFORE that commit, and still constrains any new fatal path you write.
   and lets that through — which is precisely why the handler path
   terminates and a raw `exit()` does not.
 - The suppression tests `g_isServer` ONLY. It never reads `g_exitOnError`
-  (`src/core/globals.cpp`, default `TRUE`). `-noexitonerror` therefore does not
+  (`src/core/globals.cpp`, default `TRUE`). `-no-exit-on-error` therefore does not
   change this path; `g_exitOnError` is read elsewhere (`git grep -n g_exitOnError
   origin/main -- src`: `gameserver.cpp`, `gameserver_callbacks.cpp`).
 - The suppression is LEGITIMATE (commits `6284c48`, `6c0369f`): the game's
@@ -265,11 +266,11 @@ Parsed in the `CommandLineToArgvW` loop in `src/runtime/lifecycle/boot.cpp` (the
 that sets `g_isServer`, `g_isOffline`, ...); registered with the game's argument
 parser in `src/runtime/lifecycle/cli.cpp`.
 
-- **Handled by that loop:** `-server`, `-offline`, `-noconsole`, `-windowed`,
-  `-noexitonerror`, `-notelemetry`, `-telemetryrate N`, `-telemetrydiag`, `-timestamps`,
-  `-upnp`, `-allow-dbgcore`, `-config` / `-config-path PATH`, `-region` /
-  `-serverregion S`, `-traceexports` (consumes a value; the tracer reads its own).
-- **`-exitonerror`** is accepted and logs a deprecation warning (it is the default).
+- **Handled by that loop:** `-server`, `-offline`, `-no-console`, `-windowed`,
+  `-no-exit-on-error`, `-no-telemetry`, `-telemetry-rate N`, `-telemetry-diag`, `-timestamps`,
+  `-upnp`, `-skip-dbgcore-check`, `-config` / `-config-path PATH`, `-region` /
+  `-serverregion S`, `-trace-exports` (consumes a value; the tracer reads its own).
+- **`-exit-on-error`** is accepted and logs that it has no effect (it is the default).
 - **`-timestep` / `-fixedtimestep`:** on a server `GameMainWrapperHook`
   (`crash_recovery.cpp`) strips them from the string the game parses (#515); `boot.cpp`
   only consumes the value, and `LogTimestepArgs` reports it once.
@@ -278,7 +279,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   the token is harmless (N99; the log never tells the operator to remove it). `-noovr`
   sets `g_noOvr`.
 - `-server` sets `g_isServer` and `g_isHeadless` together (never separable), then
-  `g_noOvr = g_noOvr || g_isServer`. `-noconsole` auto-enables under Wine, detected via
+  `g_noOvr = g_noOvr || g_isServer`. `-no-console` auto-enables under Wine, detected via
   `wine_get_version` in ntdll.
 - `-server` + `-offline` → `FatalError("Arguments -server and -offline are mutually
   exclusive.", ...)` in `boot.cpp`. Per the section above this terminates cleanly via
@@ -339,7 +340,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
 - **The scripts are writers, not launchers.** `./launch-server.sh` (repo root) deploys
   `build/mingw-release/bin/BugSplat64.dll` and, if present, `bin/plugins/*` into
   `$NEVR_GAME_ROOT/echovr/bin/win10` and then runs
-  `wine ./echovr.exe -server -headless -noconsole`; it leaves the test DLL and any
+  `wine ./echovr.exe -server -headless -no-console`; it leaves the test DLL and any
   plugins behind (plugins make `launch-client.sh` abort). It does **not** `unset DISPLAY`
   and does not `tee`; output goes to stdout, so under a desktop session this is a
   `DISPLAY`-SET run, not a headless one. `./verify-server.sh <run-name> [flag-set] [seconds]`
@@ -348,7 +349,7 @@ parser in `src/runtime/lifecycle/cli.cpp`.
   `./tests/smoke/score-log.sh <log>` scores the log. `-headless` is a native token, so
   passing it logs an Info line and nothing more.
 - `echovr/_local/launch-nevr-server.sh` exists in the owner's install (it is not in the
-  repo). It runs `unset DISPLAY`, then `wine ./echovr.exe -server -noconsole 2>&1 | tee
+  repo). It runs `unset DISPLAY`, then `wine ./echovr.exe -server -no-console 2>&1 | tee
   <log>` with absolute paths into the owner's `echovr/` and no deploy. That is the true
   headless shape, but it points at the owner's install: reproduce the shape on a copy, do
   not run it (maintainers only).

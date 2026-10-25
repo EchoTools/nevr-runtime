@@ -16,6 +16,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
@@ -63,7 +64,8 @@ static uint64_t AcceptedEntrantsNow() {
 }
 
 void CallScheduleReturnToLobby() {
-    if (g_pGame) nevr_return_to_lobby::Request(g_pGame);
+    // g_pGame is the game context; the game's function takes the net game (#730).
+    if (g_pGame) nevr_return_to_lobby::Request(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame));
 }
 
 #include "core/logging.h"
@@ -269,7 +271,7 @@ VOID GameServerLib::Terminate() {
   }
 }
 
-// File-static state for -exitonerror disconnect detection
+// File-static state for -exit-on-error disconnect detection
 static bool s_wasConnectedToServerDb = false;
 static bool s_exitPending = false;
 
@@ -303,13 +305,13 @@ VOID GameServerLib::Update() {
     m_telemetry->RunDiagnostics();
   }
 
-  // -exitonerror: detect serverdb disconnect and trigger graceful shutdown
+  // -exit-on-error: detect serverdb disconnect and trigger graceful shutdown
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();
     if (s_wasConnectedToServerDb && !nowConnected) {
       s_exitPending = true;
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- beginning graceful shutdown");
+          "[NEVR.GAMESERVER] ServerDB disconnected with -exit-on-error -- beginning graceful shutdown");
       BeginGracefulShutdown(false);
     }
     s_wasConnectedToServerDb = nowConnected;

@@ -17,6 +17,8 @@
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
 #include "runtime/patch/resource_override.h"
+#include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/lifecycle/state_machine.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/server/gameserver.h"
@@ -30,6 +32,7 @@
 #include "core/globals.h"
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "core/host_environment_line.h"
 #include "core/system_info.h"
 #include "abi/echovr_functions.h"
 #include "runtime/hook/addresses.h"
@@ -120,7 +123,7 @@ static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name
 }
 
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
-  // The export tracer (#20; off unless -traceexports names a platform DLL) wraps what the game is handed for a
+  // The export tracer (#20; off unless -trace-exports names a platform DLL) wraps what the game is handed for a
   // symbol of a selected DLL, so the mic provider's overrides are traced as well as pnsrad's own exports.
   static const bool tracerConfigured = (nevr_export_tracer::ConfigureFromCommandLine(), true);
   static_cast<void>(tracerConfigured);
@@ -245,7 +248,9 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
 // ============================================================================
 
 extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
-  if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
+  if (g_pGame) {
+    nevr_return_to_lobby::ScheduleNow(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame), "export");
+  }
 }
 
 extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevrUPnPConfig* out) {
@@ -310,6 +315,9 @@ static VOID InitializeAfterGameImageGuard() {
 
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", NEVR_PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] %s\n", nevr_build_identity::IdentityLiteral());
+  // Where this run is hosted (#673): a crash report names the Wine version without a second question.
+  // Boot phase (the tee is open, the game's CLog is not): Get() touches only ntdll and kernel32, as at the mic-policy line below.
+  nevr_boot_log_tee::TeeFprintf("%s", nevr_host_environment::BootLine(nevr_system_info::Get()).c_str());
   EchoVR::InitializeFunctionPointers();
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
@@ -510,8 +518,9 @@ static VOID InitializeAfterGameImageGuard() {
   nevr_boot_log_tee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
+  // The game-main wrapper is hooked by the host; the runtime's initialize arms RuntimeGameMain
+  // after this returns (lifecycle/runtime_entry.cpp, ArmGameMain, N125).
   nevr_boot_log_tee::TeeFprintf("[NEVR.BOOT] installing server crash-recovery hooks...\n");
-  InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();

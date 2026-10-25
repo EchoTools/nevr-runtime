@@ -22,11 +22,26 @@ target_compile_options(nevr_quest_got_hook PRIVATE
   -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 
+# The first-run data step (#807). Its std::function lambdas instantiate libc++ templates whose type info is exported
+# from an object file of the shared library; in an archive, --exclude-libs (below) keeps it out of the export set
+# (tests/quest TestExportAllowlist). It calls into the hook sources that are the shared library's own objects.
+add_library(nevr_quest_data_wiring STATIC data_wiring.cpp)
+target_include_directories(nevr_quest_data_wiring PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+target_compile_options(nevr_quest_data_wiring PRIVATE
+  -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
+target_link_libraries(nevr_quest_data_wiring PUBLIC nevr_quest_got_hook nevr_quest_data nevr_quest_data_net)
+
 add_library(ovrplatformloader SHARED
   entry.cpp
   login_prompt_hook.cpp
   obb_skip_hook.cpp
   process_end_hook.cpp
+  permission_wait_hook.cpp
+  vk_ext_window.cpp
+  toast_presenter.cpp
+  android_glue_layout_check.cpp
   sentinel.cpp
   sentinel_log.cpp
   activation.cpp)
@@ -40,14 +55,25 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_config nlohmann_json::nlohmann_json nevr_quest_prompt_board nevr_quest_data_wiring nevr_quest_data_net breakpad_client log dl)
 
 # The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
 # call; the prompt board the login-prompt handler reads is built the same way, see
 # src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
 # personality or LSDA; see the contract in callback_thunk.h. tests/quest
 # TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+set_source_files_properties(entry.cpp login_prompt_hook.cpp obb_skip_hook.cpp process_end_hook.cpp permission_wait_hook.cpp vk_ext_window.cpp toast_presenter.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+
+# android_glue_layout_check.cpp asserts the glue offsets against the NDK's own native_app_glue header.
+if(DEFINED ANDROID_NDK)
+  set_source_files_properties(android_glue_layout_check.cpp PROPERTIES
+    COMPILE_FLAGS "-I${ANDROID_NDK}/sources/android/native_app_glue")
+elseif(DEFINED CMAKE_ANDROID_NDK)
+  set_source_files_properties(android_glue_layout_check.cpp PROPERTIES
+    COMPILE_FLAGS "-I${CMAKE_ANDROID_NDK}/sources/android/native_app_glue")
+else()
+  message(FATAL_ERROR "the NDK directory is unknown: android_glue_layout_check.cpp needs its native_app_glue header")
+endif()
 
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.

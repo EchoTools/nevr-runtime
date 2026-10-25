@@ -7,6 +7,14 @@ set(PATCHES_SOURCES
     "lifecycle/dllmain.cpp"
     "lifecycle/initialize.cpp"
     "lifecycle/game_image_guard.cpp"
+    "lifecycle/runtime_entry.cpp"
+    # The host units (runtime/host/) are compiled in without NEVR_HOST_TESTING: the DLL's
+    # DllMain and exports call them, and the runtime is handed to the host as an in-process provider.
+    "host/bootstrap_diagnostics.cpp"
+    "host/crash_capture.cpp"
+    "host/host_entry.cpp"
+    "host/runtime_load.cpp"
+    "host/runtime_rendezvous.cpp"
     "lifecycle/system_module_loader.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
@@ -30,15 +38,23 @@ set(PATCHES_SOURCES
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
     "ext/plugin_manifest.cpp"
+    "ext/plugin_signature.cpp"
+    "ext/plugin_tree.cpp"
+    "ext/plugin_trust.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
+    "patch/asset_cache.cpp"
     "compat/ws_bridge.cpp"
+    # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
+    "compat/session_router.cpp"
+    "compat/ws_session_transport.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
     "compat/self_check.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
+    "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
@@ -110,6 +126,7 @@ set(PATCHES_HEADERS
     "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/asset_cache.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
@@ -191,7 +208,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -200,7 +217,8 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -229,6 +247,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(compat/ws_bridge.cpp PROPERTIES COMPILE_OPTIONS "-Werror=old-style-cast")
 endif()
 
+# Signed plugins only (ADR 0010, #741). Every build enforces the signature gate unless this is ON; only the
+# mingw-plugin-dev preset turns it on. The mode is compiled in and embedded as a NUL-bounded
+# "NEVR-PLUGIN-TRUST <mode>" literal that tools/package_release.py reads from the packaged DLL and refuses
+# unless it says signed-only. No config key and no environment variable changes it.
+option(NEVR_ALLOW_UNSIGNED_PLUGINS "Load plugins the signature gate refuses, with a Warning (plugin developers' builds only, never ship)" OFF)
+if(NEVR_ALLOW_UNSIGNED_PLUGINS)
+  set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll loads unsigned plugins (plugin developer build, never ship)")
+endif()
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
 # on; `just verify` checks the release DLL carries none of its strings.
@@ -244,6 +273,12 @@ set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
   PREFIX ""
 )
+
+# The Details tab of BugSplat64.dll (cmake/nevr_version_info.cmake; tools/pe_version_info.py reads it back).
+nevr_add_version_info(nevr_runtime
+  FILE_DESCRIPTION "nEVR runtime for Echo VR"
+  ORIGINAL_FILENAME "BugSplat64.dll"
+  TYPE DLL)
 
 # Disable specific warnings (MSVC only)
 if(MSVC)
@@ -880,6 +915,17 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
+    # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
+    add_executable(test_asset_cache
+      tests/test_asset_cache.cpp
+      patch/asset_cache.cpp)
+    set_source_files_properties(tests/test_asset_cache.cpp patch/asset_cache.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_asset_cache PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_cache PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json advapi32)
+    gtest_discover_tests(test_asset_cache DISCOVERY_MODE PRE_TEST)
+
     # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
     # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
     add_executable(test_evr_codec
@@ -892,6 +938,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_evr_codec PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
+
+    # Session router (compat/session_router.cpp, #708 S0): the source the Quest target compiles, with its host
+    # test (plain main, no framework: the Quest NDK build shares the file), run under Wine here.
+    add_executable(test_session_router
+      ../quest/tests/session_router_test.cpp
+      compat/session_router.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(../quest/tests/session_router_test.cpp compat/session_router.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_session_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_session_router PRIVATE nlohmann_json::nlohmann_json)
 
     # Self-check unit (compat/self_check.cpp): the registry that reports a run-card check's result as one
     # remote log string, and the SNSRemoteLogSetv3 frame builder it sends through. Platform neutral, the same
@@ -1064,9 +1121,11 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
     # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
-    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) ride in this executable.
+    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) and
+    # test_return_to_lobby_queue.cpp (#730, header-only lifecycle/return_to_lobby_queue.h) and
+    # test_window_watch.cpp (#341, the decision half of frame/window_watch.h) ride in this executable.
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
-                   tests/test_server_bringup.cpp)
+                   tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp tests/test_window_watch.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
                                ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
@@ -1117,6 +1176,43 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
 
+    # plugin_signature tests (ADR 0010, #741) — the pure verifier over signed fixtures that
+    # tools/gen_plugin_signature_fixtures.py writes into $NEVR_SIGFIX_DIR. Links only the
+    # verifier TU and crypt32/advapi32: no game stubs, no Log.
+    add_executable(test_plugin_signature
+      tests/test_plugin_signature.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_signature PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_signature PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
+
+    # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
+    # pass the same check, over fixture directories the same generator writes.
+    add_executable(test_plugin_tree
+      tests/test_plugin_tree.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_tree.cpp ext/plugin_tree.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_tree PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_tree PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
+    # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
+    add_executable(test_plugin_trust
+      tests/test_plugin_trust.cpp
+      ext/plugin_trust.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_trust.cpp ext/plugin_trust.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_trust PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_trust PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
+    gtest_discover_tests(test_plugin_trust DISCOVERY_MODE PRE_TEST)
+
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
     # compiled with NEVR_TEST_HOOKS to enable mock-callback injection into the
@@ -1133,6 +1229,8 @@ if(BUILD_TESTING)
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      # #703: resource_override registers the cache's overrides through the production cache.
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
       patch/xpid_patch.cpp
@@ -1149,11 +1247,17 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       # #60: plugin_loader.cpp builds the login's plugin report through this.
       ext/plugin_manifest.cpp
+      # #741: the signature gate StageOne consults, linked as production source.
+      ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
       log/boot_log_tee.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
       # self-checks: ws_bridge.cpp wires the sender and the login gate through the unit.
@@ -1166,6 +1270,8 @@ if(BUILD_TESTING)
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
       hook/hook_liveness.cpp
+      # #741: plugin_loader registers its load filter with the hook.
+      hook/dll_load_hook.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
       NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
@@ -1182,19 +1288,26 @@ if(BUILD_TESTING)
       tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/asset_cache.cpp
       patch/resource_override.cpp
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
       compat/self_check.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
+      hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
@@ -1223,7 +1336,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
-      ws2_32 psapi
+      ws2_32 psapi advapi32 crypt32
     )
 
     # Hermetic DLL fixtures for the real LoadLibraryExA path in

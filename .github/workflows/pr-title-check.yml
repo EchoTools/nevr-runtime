@@ -1,0 +1,32 @@
+name: PR title check
+
+# The PR title must be a Conventional Commits 1.0.0 header (AGENTS.md, "Commits, versions and requirement words").
+# tools/check_pr_title.py decides.
+#
+# Trust boundary: `pull_request`, never `pull_request_target`. The token is read-only, no secret is named, the
+# clone keeps no credential, and the title reaches the script through env only, never inside a script body.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: the PR title is a conventional commit header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Check the title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 tools/check_pr_title.py

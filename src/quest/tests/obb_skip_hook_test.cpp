@@ -11,7 +11,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <set>
 #include <string>
+#include <vector>
 
 #include "hook_log.h"
 #include "hook_report.h"
@@ -170,6 +175,145 @@ void AThunkWithoutAnOriginalIsAFaultAndSkipsNothing() {
   QCHECK(obb::MountThunk::Faults() == 1);
 }
 
+// The filesystem, as the resolver sees it (#749): the paths that exist.
+std::set<std::string> g_existing;
+bool FakeExists(const char* path) noexcept { return g_existing.count(path) != 0; }
+
+std::vector<std::string> g_lines;
+void CaptureLine(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+
+constexpr const char* kMediaDir = "/sdcard/Android/media/com.readyatdawn.r15/files";
+constexpr const char* kMediaData = "/sdcard/Android/media/com.readyatdawn.r15/files/_data";
+constexpr const char* kLegacyData = "/storage/emulated/0/readyatdawn/_data";
+
+bool SomeLineContains(const char* needle) {
+  for (const std::string& l : g_lines) {
+    if (l.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+void TheAndroidMediaRootWinsWhenBothHoldTheData() {
+  Reset();
+  g_existing = {kMediaData, kLegacyData};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "android_media") == 0);
+  QCHECK(std::strcmp(r.root, "/sdcard/Android/media/com.readyatdawn.r15/files") == 0);
+}
+
+void TheLegacyRootIsServedWhenOnlyItHoldsTheData() {
+  Reset();
+  g_existing = {kLegacyData};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "legacy") == 0);
+  QCHECK(std::strcmp(r.root, "/storage/emulated/0/readyatdawn") == 0);
+}
+
+void ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt() {
+  Reset();
+  g_existing = {kMediaDir, "/sdcard/Android/media/com.readyatdawn.r15/asset_patches", kLegacyData};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(std::strcmp(r.source, "legacy") == 0);
+}
+
+void TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaDir};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "android_media_unmarked") == 0);
+  QCHECK(std::strcmp(r.root, kMediaDir) == 0);
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  obb::ResolveRoot(&FakeExists);
+  sentinel::SetLogSink(previous);
+  QCHECK(SomeLineContains("\"source\":\"android_media_unmarked\""));
+  QCHECK(SomeLineContains("\"level\":\"warn\""));
+}
+
+// #757: the media directory without _data AND the legacy root without _data. The unmarked tier is the media
+// directory, so the legacy directory's existence changes nothing.
+void TheMediaDirectoryBeatsALegacyRootThatAlsoHoldsNoData() {
+  Reset();
+  g_lines.clear();
+  g_existing = {kMediaDir, "/storage/emulated/0/readyatdawn"};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(r.found);
+  QCHECK(std::strcmp(r.source, "android_media_unmarked") == 0);
+  QCHECK(std::strcmp(r.root, kMediaDir) == 0);
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  obb::ResolveRoot(&FakeExists);
+  sentinel::SetLogSink(previous);
+  QCHECK(g_lines.size() == 1);
+  QCHECK(SomeLineContains("\"source\":\"android_media_unmarked\""));
+  QCHECK(SomeLineContains(kMediaDir));
+}
+
+void NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback() {
+  Reset();
+  g_existing = {};
+  const nevr_quest::data_root::Resolution r = nevr_quest::data_root::Resolve(&FakeExists);
+  QCHECK(!r.found);
+  QCHECK(std::strcmp(r.source, "none") == 0);
+  QCHECK(std::strcmp(r.root, sentinel::pinned::kObbFallbackDataRoot) == 0);
+}
+
+void ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt() {
+  Reset();
+  g_lines.clear();
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  g_existing = {kMediaData};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  GameInit(1000);
+  sentinel::SetLogSink(previous);
+  QCHECK(GetDataRootDir() == "/sdcard/Android/media/com.readyatdawn.r15/files");
+  QCHECK(SomeLineContains("\"event\":\"data_root\""));
+  QCHECK(SomeLineContains("\"result\":\"found\""));
+  QCHECK(SomeLineContains("\"source\":\"android_media\""));
+  QCHECK(SomeLineContains("\"level\":\"info\""));  // a root found is an operator line, not a warning (#757)
+}
+
+void WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths() {
+  Reset();
+  g_lines.clear();
+  sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLine);
+  g_existing = {};
+  obb::ResolveRoot(&FakeExists);
+  obb::ArmForTest();
+  GameInit(1000);
+  sentinel::SetLogSink(previous);
+  QCHECK(GetDataRootDir() == "/storage/emulated/0/readyatdawn");
+  QCHECK(g_lines.size() == 1);
+  QCHECK(SomeLineContains("\"result\":\"not_found\""));
+  QCHECK(SomeLineContains("\"level\":\"error\""));  // the one line that says the game will fail is an error (#757)
+  QCHECK(SomeLineContains("/sdcard/Android/media/com.readyatdawn.r15/files"));
+  QCHECK(SomeLineContains("/storage/emulated/0/readyatdawn"));
+}
+
+void TheRealFilesystemCheckSaysDirectoryOnlyForADirectory() {
+  char tmpl[] = "/tmp/obb_skip_rootXXXXXX";
+  char* dir = ::mkdtemp(tmpl);
+  QCHECK(dir != nullptr);
+  if (dir == nullptr) return;
+  const std::string base = dir;
+  const std::string sub = base + "/_data";
+  const std::string file = base + "/afile";
+  QCHECK(::mkdir(sub.c_str(), 0700) == 0);
+  std::FILE* f = std::fopen(file.c_str(), "w");
+  QCHECK(f != nullptr);
+  if (f != nullptr) std::fclose(f);
+  QCHECK(obb::DirectoryExists(sub.c_str()));
+  QCHECK(!obb::DirectoryExists(file.c_str()));  // a file is not a data directory
+  QCHECK(!obb::DirectoryExists((base + "/missing").c_str()));
+  QCHECK(nevr_quest::data_root::HoldsData(base.c_str(), &obb::DirectoryExists));
+  ::unlink(file.c_str());
+  ::rmdir(sub.c_str());
+  ::rmdir(base.c_str());
+}
+
 void TheFourCountersRegisterAndLeaveTheRestOfTheTable() {
   sentinel::StopReporter();
   QCHECK(obb::RegisterCounters());
@@ -195,6 +339,15 @@ int main() {
   EveryLaterPathRequestAfterTheSkipGetsTheFallbackRoot();
   ADisarmedHookPassesEverythingThrough();
   AThunkWithoutAnOriginalIsAFaultAndSkipsNothing();
+  TheAndroidMediaRootWinsWhenBothHoldTheData();
+  TheLegacyRootIsServedWhenOnlyItHoldsTheData();
+  ARootWithoutTheDataDirectoryDoesNotBeatARootThatHasIt();
+  TheMediaDirectoryWithoutTheDataDirectoryIsServedAndSaidSo();
+  TheMediaDirectoryBeatsALegacyRootThatAlsoHoldsNoData();
+  NeitherRootHoldingTheDataIsFoundFalseWithTheGamesOwnFallback();
+  ASkippedMountServesTheResolvedRootAndTheGameReadsFromIt();
+  WithNoRootTheGameKeepsItsFallbackAndOneErrorLineNamesBothPaths();
+  TheRealFilesystemCheckSaysDirectoryOnlyForADirectory();
   TheFourCountersRegisterAndLeaveTheRestOfTheTable();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "obb_skip_hook_test: %d check(s) failed\n", quest_test::Failures());

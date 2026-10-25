@@ -162,11 +162,11 @@ class LaunchClientTest(unittest.TestCase):
         env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
         result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad,pnsovr", env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("-traceexports pnsrad,pnsovr", args_file.read_text())
+        self.assertIn("-trace-exports pnsrad,pnsovr", args_file.read_text())
         self.assertIn("tracing platform DLL exports: pnsrad,pnsovr", result.stdout)
         result = self.run_script("--dll", str(self.dll), env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("-traceexports", args_file.read_text())
+        self.assertNotIn("-trace-exports", args_file.read_text())
 
     def test_trace_exports_refuses_a_list_with_other_characters(self):
         result = self.run_script("--dll", str(self.dll), "--trace-exports", "pnsrad;rm -rf")
@@ -197,6 +197,29 @@ class LaunchClientTest(unittest.TestCase):
         self.assertIn("PASS: client reached logged in", result.stdout)
         self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
         self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_require_in_game_fails_when_the_client_only_logs_in(self):
+        # The default fake run reaches "to logged in" and stops; with --require-in-game the launcher
+        # must refuse that as never entering multiplayer, not report the one-assertion-short PASS.
+        result = self.run_script("--dll", str(self.dll), "--require-in-game")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached in game", result.stderr)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_require_in_game_passes_when_the_client_reaches_in_game(self):
+        env = dict(self.env, FAKE_LOG_TEXT='{"msg":"NetGame switching state (from logging in, to logged in)"}\\n'
+                                            '{"msg":"NetGame switching state (from ready for game, to in game)"}\\n')
+        result = self.run_script("--dll", str(self.dll), "--require-in-game", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS: client reached in game (multiplayer entry)", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_without_require_in_game_the_launcher_stays_at_logged_in(self):
+        # The player default must not change: without the flag a login-only run is still a PASS.
+        result = self.run_script("--dll", str(self.dll))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS: client reached logged in", result.stdout)
+        self.assertNotIn("PASS: client reached in game", result.stdout)
 
     def run_until_login(self, log_text=None, *extra, timeout_flag=("--login-timeout", "45"), env_extra=None):
         env = dict(self.env, FAKE_WINE_SLEEP="3", NEVR_LOGIN_POLL_SECONDS="0.1")
@@ -401,6 +424,39 @@ class LaunchClientTest(unittest.TestCase):
             run_scenario.wineprefix.cache_clear()
         self.assertEqual(args_file.read_text().strip(), "./echovr.exe -windowed -mp")
 
+    def test_the_scenario_runner_hands_its_config_to_the_launcher(self):
+        """`--config` reaches launch-client.sh and so the game's `-config`, which is how a suite runs with
+        network.session_router set (#708); without it the game gets no -config."""
+        import sys
+        sys.path.insert(0, str(REPO / "tools/scenario"))
+        import run_scenario
+        config = self.tmp / "cfg" / "config.json"
+        config.parent.mkdir()
+        config.write_text("{}")
+        args_file = self.tmp / "wine-args.txt"
+        env = dict(self.env, FAKE_WINE_ARGS=str(args_file))
+        out = self.tmp / "scenario-out"
+        out.mkdir()
+        old_env = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT", "NEVR_LAUNCH_LOCK",
+                                                  "NEVR_RUN_SCRATCH_ROOT", "PATH", "FAKE_WINE_ARGS",
+                                                  "NEVR_EVIDENCE_DELAY", "FAKE_EXPECT_DLL")}
+        os.environ.update(env)
+        try:
+            run = run_scenario.Run({"name": "launch-config"}, self.dll, out, config)
+            try:
+                run.launch()
+            finally:
+                run.teardown()
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            run_scenario.wineprefix.cache_clear()
+        expected = "./echovr.exe -windowed -mp -config Z:" + str(config).replace("/", "\\")
+        self.assertEqual(args_file.read_text().strip(), expected)
+
 
 class VerifyServerTest(unittest.TestCase):
     """verify-server.sh deploys the test DLL and a plugin, runs a (fake) game, and restores."""
@@ -447,7 +503,7 @@ class VerifyServerTest(unittest.TestCase):
         result = subprocess.run([str(self.checkout / "verify-server.sh"), "run-ts", "timestep", "1"], env=self.env,
                                 cwd=self.checkout, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("args=-server -headless -noconsole -fixedtimestep -timestep 120",
+        self.assertIn("args=-server -headless -no-console -fixedtimestep -timestep 120",
                       (self.tmp / "server-runs/run-ts/context.txt").read_text().splitlines())
 
     def started_fifo(self) -> Fifo:

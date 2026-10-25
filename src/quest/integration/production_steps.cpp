@@ -424,6 +424,18 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallPermissionWait() override {
+    const bool ok = nevr_quest::integration::InstallPermissionWaitHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallVkExtWindow() override {
+    const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallLoginPrompt(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
@@ -512,7 +524,8 @@ class ProductionSteps final : public Steps {
     const char* detail = "unknown";
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
                                                               sentinel::ActiveConfig().effective.presenceNames,
-                                                              sentinel::ActiveConfig().effective.presenceLocal);
+                                                              sentinel::ActiveConfig().effective.presenceLocal,
+                                                              sentinel::ActiveConfig().effective.uiEventProbe);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);

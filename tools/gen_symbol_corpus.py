@@ -473,9 +473,9 @@ def main():
 
     if args.split_dir:
         os.makedirs(args.split_dir, exist_ok=True)
-        with open(os.path.join(args.split_dir, 'symbol_corpus.h'), 'w') as f:
+        with open(os.path.join(args.split_dir, 'symbol_corpus.h'), 'w', encoding='utf-8') as f:
             f.write(H_HEADER)
-        with open(os.path.join(args.split_dir, 'symbol_corpus.cpp'), 'w') as f:
+        with open(os.path.join(args.split_dir, 'symbol_corpus.cpp'), 'w', encoding='utf-8') as f:
             f.write(cpp_content)
         print(f"Wrote {args.split_dir}/symbol_corpus.{{h,cpp}} "
               f"({len(sorted_entries)} entries)", file=sys.stderr)
@@ -484,7 +484,10 @@ def main():
             print(f"Audit log coverage: {resolved}/{len(audit_hashes)} "
                   f"({100.0*resolved/len(audit_hashes):.1f}%)", file=sys.stderr)
     else:
-        # Output combined
+        # Output combined. UTF-8 under any locale, as the files above and the readers are (#663);
+        # a stdout without reconfigure() (an in-memory buffer) takes any text as it is.
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
         print(f"/* {len(sorted_entries)} entries */")
         print(H_HEADER)
         print()

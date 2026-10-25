@@ -93,8 +93,7 @@ VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
   if (const BootLogSink sink = g_bootLogSink.load(std::memory_order_acquire)) {
-    // The boot phase: the game's CLog is not usable under the loader lock (#495). A stack buffer, no
-    // heap: this runs under the loader lock.
+    // The boot phase: the game's CLog does not exist yet (#495). A stack buffer, no heap.
     char message[2048];
     if (vsnprintf(message, sizeof(message), format, args) >= 0) sink(level, message);
   } else if (EchoVR::WriteLog != nullptr) {

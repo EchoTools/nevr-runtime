@@ -132,9 +132,9 @@ TEST(CheckedPatch, SpectatorStreamSiteAddressIsTheKnownRvaAndSize) {
 TEST(CheckedPatch, SpectatorStreamRecordFormat) {
   char out[192];
   const uintptr_t addr = 0x140000000u + nevr_patch_addresses::SPECTATORSTREAM_CHECK;
-  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "pre-preprocess", addr, kJe, Result::Applied);
+  nevr_checked_patch::FormatSpectatorStreamRecord(out, sizeof(out), "PatchEnableServer", addr, kJe, Result::Applied);
   EXPECT_STREQ(out,
-               "[NEVR.PATCH] spectatorstream_check phase=pre-preprocess addr=0x140116f3d "
+               "[NEVR.PATCH] spectatorstream_check phase=PatchEnableServer addr=0x140116f3d "
                "expected=0f84df000000 actual=0f84df000000 result=applied");
 
   const uint8_t found[6] = {0x0f, 0x85, 0xdf, 0x00, 0x00, 0xcc};

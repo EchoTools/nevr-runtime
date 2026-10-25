@@ -1,5 +1,10 @@
 # nEVR Runtime Verification Standards
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
 **Required reading** for anyone claiming a fix works or adding a check to
 `just verify`. Read it before writing "verified" or relying on a green gate.
 
@@ -36,25 +41,25 @@ claim.
 
 ### You SHALL
 
-- You **shall** state the verification method with every "fixed"/"closed" claim, using the
+- You **SHALL** state the verification method with every "fixed"/"closed" claim, using the
   ladder below, and quote the measurement.
-- You **shall** falsify every check you add. Break the thing the check watches, observe the
+- You **SHALL** falsify every check you add. Break the thing the check watches, observe the
   check fail, restore, observe it pass. Record both in the commit.
-- You **shall** prefer a discriminating measurement over a fix when the failure mode is
+- You **SHALL** prefer a discriminating measurement over a fix when the failure mode is
   ambiguous. One bit that splits two hypotheses is worth more than a day of
   plausible reasoning.
-- You **shall** read `git log --follow` on any file before deleting it (see §Deleting).
-- You **shall** say which parts of a fix are unverified, in the same breath as the parts
+- You **SHALL** read `git log --follow` on any file before deleting it (see §Deleting).
+- You **SHALL** say which parts of a fix are unverified, in the same breath as the parts
   that are.
 
 ### You SHALL NOT
 
-- You **shall not** write "verified" for a check you have not falsified.
-- You **shall not** close an entry on a gate that inspects source shape when the claim is about
+- You **SHALL NOT** write "verified" for a check you have not falsified.
+- You **SHALL NOT** close an entry on a gate that inspects source shape when the claim is about
   runtime behaviour.
-- You **shall not** let a green `just verify` stand in for "the code runs". It cannot see that.
-- You **shall not** treat absence of an error line as evidence of success (see §Silence).
-- You **shall not** delete dead code without reading its history first.
+- You **SHALL NOT** let a green `just verify` stand in for "the code runs". It cannot see that.
+- You **SHALL NOT** treat absence of an error line as evidence of success (see §Silence).
+- You **SHALL NOT** delete dead code without reading its history first.
 
 ---
 

@@ -171,7 +171,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()
         build = justfile.split("# Build all components\n", 1)[1].split("# Build only", 1)[0]
-        dist = justfile.split("# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
+        dist = justfile.split("# Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
         self.assertIn("cmake --build --preset {{ preset }}", build)
         self.assertNotIn("|", build)
         self.assertIn("cmake --build --preset {{ preset }} --target dist", dist)
@@ -179,15 +179,26 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
-        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")', cmake)
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
-        self.assertIn("DEPENDS dist dist-legacy", cmake)
+        dist_all = cmake.split("add_custom_target(dist-all", 1)[1].split(")", 1)[0]
+        self.assertIn("DEPENDS dist\n", dist_all)
+        self.assertNotIn("dist-legacy", dist_all)
         justfile = (REPO / "justfile").read_text()
         workflows = "".join(path.read_text() for path in (REPO / ".github/workflows").glob("*.yml"))
         for name, text in (("CMakeLists.txt", cmake), ("justfile", justfile), ("workflows", workflows)):
             self.assertNotRegex(text, r"(?i)dist[-_](lite|debug)|DIST_(LITE|DEBUG)|PROJECT_VERSION}-(lite|debug)", name)
+
+    def test_no_release_input_names_the_legacy_build(self):
+        """#741: the legacy plugin loader loads every DLL in plugins\\ unchecked and src/legacy/ is frozen, so no
+        release workflow, packaging script or build target a release uses may name or build it."""
+        inputs = {path.name: path.read_text() for path in (REPO / ".github/workflows").glob("*.yml")}
+        inputs["package_release.py"] = (REPO / "tools/package_release.py").read_text()
+        inputs["build_distribution.py"] = (REPO / "tools/build_distribution.py").read_text()
+        for name, text in inputs.items():
+            self.assertNotRegex(text, r"gamepatcheslegacy|gameserverlegacy|dist-legacy|dist-all", name)
 
     def test_distribution_targets_build_required_runtime_and_validate_packages(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
@@ -221,34 +232,36 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertNotIn("pacman -Syu", workflow, "the toolchain is installed in the builder image, not per run")
         dockerfile = (REPO / ".github/builder/Dockerfile").read_text()
         self.assertIn("FROM archlinux:base-devel", dockerfile)
-        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", dockerfile)
-        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -Syu")
+        pacman = re.search(r"pacman -S --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", dockerfile)
+        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -S of pinned name=version packages (#695)")
         for pkg in ("mingw-w64-gcc", "cmake", "ninja", "wine", "zstd", "openssl", "python-yaml"):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
         self.assertIn("mtrojnar/osslsigncode.git", dockerfile)  # not in Arch's official repos: pinned build
         self.assertIn("- name: Toolchain versions", workflow)
         # The repack job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
         # there; the build job has no apt-get.
-        build_job = workflow.split("\n  sign:", 1)[0]
+        build_job = workflow.split("\n  seal:", 1)[0]
         self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        # Signing is stubbed until the policy signer (a private repository) exists: no Windows runner, no
-        # cloud login, no signing environment, and the files are passed through UNSIGNED. The release
-        # files get a build-provenance attestation instead (not code signing).
-        self.assertIn('name: "sign: stubbed, policy signer not built yet"', workflow)
-        self.assertIn("PLACEHOLDER: the signer dispatch goes here", workflow)
-        self.assertIn("actions/attest-build-provenance@", workflow)
+        # Nothing here signs, and no job pretends to: no Windows runner, no cloud login, no signing environment.
+        # The release files get a build-provenance attestation (not code signing); the release signer signs the
+        # draft's files afterwards (RELEASING.md).
+        self.assertNotIn("sign: stubbed", workflow)
+        self.assertNotIn("PLACEHOLDER: the signer dispatch goes here", workflow)
+        self.assertIn("actions/attest@", workflow)
         self.assertNotIn("azure/", workflow)
         self.assertNotIn("environment: codesign", workflow)
         self.assertNotIn("windows-latest", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
-        self.assertIn("          dist/*.zip", workflow)
-        # Zips only are release assets; the .tar.zst archives are kept as a workflow artifact.
+        # The one release zip is the sealed Windows tree's; the dist zip is not a release asset.
+        self.assertIn("          release-assets/*.zip", workflow)
+        self.assertNotIn("          dist/*.zip", workflow)
+        # The .tar.zst archives are kept as a workflow artifact.
         self.assertNotIn("          dist/*.tar.zst", workflow)
         self.assertIn("name: dist-tar-zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
@@ -299,6 +312,12 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("CMake 4.0+", readme)
         self.assertIn("CMake 4.0+", agents)
         self.assertIn("echovr_server.exe", readme)
+        self.assertRegex(readme, r"Windows zip \(`nevr-runtime-v<ver>-windows\.zip`\)\s+has no entry for\s+it")
+        self.assertNotIn("the release zip has no entry", readme)
+        justfile = (REPO / "justfile").read_text()
+        self.assertIn("is published outside GitHub, never attached to a release", justfile)
+        self.assertNotIn("shared privately", justfile)
+        self.assertNotIn("The distribution package includes an empty `plugins/`", readme)
         self.assertTrue((REPO / "docs/design/2026-09-21-mic-provider-voip-fix.md").is_file())
 
     def test_sample_config_sensor_uses_tracked_fixture_not_ignored_local_state(self):
@@ -313,10 +332,31 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(sample, rf"(?m)^\s*{section}")
 
     def test_dllmain_and_launcher_both_enter_the_validated_game_module_route(self):
+        # #800: DllMain and NEVR_SetGameModule hand the process to the host (runtime/host), which installs
+        # the one detour on the game's main wrapper; the runtime's initialize, called from that detour,
+        # is the only caller of InitializeGameModule.
         dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
+        entry = (REPO / "src/runtime/lifecycle/runtime_entry.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
-        self.assertIn("InitializeGameModule(GetModuleHandle(NULL))", dllmain)
-        self.assertIn("InitializeGameModule(hGame)", dllmain)
+        self.assertIn("nevr_host::OnProcessAttach(", dllmain)
+        # The in-process runtime entry the host loads nothing for: a null here passes every other check and makes
+        # every release run the unmodified game.
+        self.assertRegex(
+            dllmain,
+            r"nevr_host::OnProcessAttach\([^;]*&nevr_runtime_entry::GetRuntimeApi\s*\)",
+            "DllMain must pass &nevr_runtime_entry::GetRuntimeApi to OnProcessAttach",
+        )
+        self.assertIn("nevr_host::SetGameModule(hGame)", dllmain)
+        self.assertNotIn("InitializeGameModule", dllmain)
+        # #804: a process that ends right after a failed attach never reaches a later flush trigger, so DllMain's
+        # process-detach hands termination (lpReserved != NULL) to the host, which writes the journal's remainder.
+        detach = dllmain.split("case DLL_PROCESS_DETACH:", 1)[1]
+        self.assertRegex(
+            detach.split("break;", 1)[0],
+            r"nevr_host::OnProcessDetach\(\s*lpReserved\s*!=\s*(NULL|nullptr)\s*\)",
+            "DLL_PROCESS_DETACH must call nevr_host::OnProcessDetach(lpReserved != NULL)",
+        )
+        self.assertIn("InitializeGameModule(host->game_module)", entry)
         route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
         self.assertIn("RunWithSupportedGameModule", route)
         self.assertNotIn("VerifyGameVersion", initialize)

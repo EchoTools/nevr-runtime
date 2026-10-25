@@ -186,6 +186,46 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
 
+    def test_a_value_option_never_takes_an_option_as_its_value(self):
+        # #587: `-timestep -no-console` lost -no-console because boot.cpp took argv[i + 1] unchecked.
+        # Every value option reads its value through nevr_cli::OptionValue (core/cli_option_value.h).
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+
+        self.assertNotRegex(boot, r"i\s*\+\s*1\s*<\s*argc", "a raw lookahead past the option is back")
+        self.assertNotRegex(boot, r"argv\[\s*(\+\+i|i\s*\+\s*1)\s*\]", "argv[i + 1] is read unchecked")
+        # -config (twice: the early pass and the main parse), -telemetry-rate, -region, -trace-exports, -timestep.
+        self.assertGreaterEqual(len(re.findall(r"nevr_cli::OptionValue\(", boot)), 6)
+
+    def test_the_boot_log_names_the_host_environment_in_the_boot_phase(self):
+        # #673: a crash report names the Wine version from the log. The line is written through the boot
+        # tee (loader lock held), after the tee opens and before it first closes.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        line = body.index("nevr_host_environment::BootLine(nevr_system_info::Get())")
+        self.assertLess(body.index("nevr_boot_log_tee::Init()"), line,
+                        "the host environment line must come after Init(), but it is written before the tee opens")
+        self.assertLess(line, body.index("nevr_boot_log_tee::Close()"),
+                        "the host environment line must come before Close(), but it is written after the tee closes")
+        self.assertRegex(body[max(0, line - 40):line], r"TeeFprintf\(", "the line must go through the boot tee")
+
+    def test_the_dll_load_hook_reports_through_the_log_never_raw_stderr(self):
+        # #654: four [NEVR.DLLHOOK] lines went to fprintf(stderr) and never reached the JSONL log. The
+        # hook's own lines go through ReportLine (Log() in the boot phase and outside the loader lock, held
+        # until released under it) or, for the install report, the boot tee.
+        source = strip_comments((ROOT / "src/runtime/hook/dll_load_hook.cpp").read_text())
+
+        self.assertNotRegex(source, r"fprintf\s*\(\s*stderr", "a hook line is written to raw stderr again")
+        self.assertGreaterEqual(len(re.findall(r"\bReportLine\s*\(\s*EchoVR::LogLevel::", source)), 4)
+
+    def test_graceful_shutdown_writes_the_dll_hook_lines_held_under_the_loader_lock(self):
+        # #688: a line made by a load under the loader lock waits in dll_load_hook.cpp's buffer. The graceful
+        # shutdown writes it, outside the lock, before the process is ended.
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void PerformGracefulShutdown(")
+        flush = body.index("nevr_dll_load_hook::FlushPendingLines()")
+        self.assertLess(flush, body.index("ForceFatalExit(exitCode)"),
+                        "the held lines must be written before ForceFatalExit ends the process")
+
     def test_every_boot_detour_result_is_consumed(self):
         # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
         # hook that never installed could not reach g_bootHookFailed and a server booted as if
@@ -270,8 +310,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         avail = extract_braced_function(source, "uint64_t nevr_mic_provider::MicAvailable(")
         self.assertNotRegex(avail, r"\bNoteGameReader\s*\(", "MicAvailable must not drop the backlog")
         # #95: the capture side is in the periodic line and the overflow warning is counted, not one-shot.
-        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}result\.ringOverflow")
+        # The gate is polled on every packet while the game reads, so its window slides while nothing waits.
+        self.assertRegex(source, r"!g_ring\.ReaderActive\(\)[\s\S]{0,200}g_overflowGate\.Poll\(")
+        self.assertNotRegex(source, r"result\.ringOverflow", "the gate is polled only on overflow packets")
         self.assertNotIn("g_ringOverflowLogged", source)
+        # The overflow line reports what the game did in the window (stalled or slow), not that it "is not
+        # draining"; the window's read counters reach the gate from the live counters.
+        self.assertIn("ring overflow reader=%s", source)
+        self.assertNotIn("is not draining", source)
+        self.assertRegex(source, r"flow\.readCalls\s*=\s*g_readCalls\.load\(\)")
+        self.assertRegex(source, r"flow\.samplesRead\s*=\s*g_samplesRead\.load\(\)")
+        self.assertRegex(source, r"g_overflowGate\.Poll\(\s*flow\s*,")
         for field in ("packets=", "silent=", "discontinuities=", "samples_pushed=", "samples_dropped=",
                       "max_poll_gap_ms="):
             self.assertIn(field, source, field)
@@ -279,6 +328,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         cap = re.search(r"kRingCapacitySamples\s*=\s*(\d+)\s*;", source)
         self.assertIsNotNone(cap)
         self.assertLessEqual(int(cap.group(1)), 9600)
+
+    def test_the_recently_met_line_is_logged_after_the_list_is_stored(self):
+        # #676: the scenario harness waits for `recently met list count=` and then reads the list, so the
+        # line must not come before RecentlyMet().SetList (a wait that fires early reads the old list).
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        store = source.index("nevr_social_roster::RecentlyMet().SetList(")
+        line = source.index("[NEVR.SOCIAL] recently met list count=")
+        self.assertLess(store, line, "the recently-met log line is written before the list is stored")
 
     def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
         # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
@@ -485,7 +542,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_game_main_hook_has_no_c_style_casts(self):
         # Issue #254 (CPP-MINGW addendum: no C-style casts).
         source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
-        body = extract_braced_function(source, "void InstallGameMainHook(")
+        body = extract_braced_function(source, "void ArmGameMain(")
         self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
 
     def test_matchmaking_host_patch_decision_is_stateless(self):
@@ -561,6 +618,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
         self.assertIn("nevr_boot_lines::Build(", tee)
+        # #664: the replay carries each record's own level into the main log, not a literal.
+        self.assertRegex(replay, r"WriteFileRecord\(\s*line\.ts\.c_str\(\)\s*,\s*line\.level\.c_str\(\)")
         self.assertIn("GetSystemTime(", tee)
         close = extract_braced_function(tee, "void nevr_boot_log_tee::Close(")
         self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")

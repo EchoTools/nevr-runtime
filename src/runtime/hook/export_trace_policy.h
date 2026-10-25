@@ -1,5 +1,5 @@
 #pragma once
-// The export tracer's pure decisions (#20): which DLLs a `-traceexports` list selects, and which loaded
+// The export tracer's pure decisions (#20): which DLLs a `-trace-exports` list selects, and which loaded
 // file is which. Header-only and free of windows.h, so the unit test needs neither Wine nor the game.
 
 #include <cstddef>
@@ -72,7 +72,7 @@ inline std::uint32_t ModuleOfPath(const char* path) {
   return 0;
 }
 
-/// The value after `flag` in a Windows command line ("echovr.exe -windowed -traceexports pnsrad,pnsovr"):
+/// The value after `flag` in a Windows command line ("echovr.exe -windowed -trace-exports pnsrad,pnsovr"):
 /// tokens split on spaces and tabs outside double quotes, the flag matched case-insensitively. Writes the
 /// value (ASCII only) into `out` and returns true; false when the flag is absent, has no value, or the
 /// value does not fit or is not ASCII. The tracer reads the process's own command line with this instead of a
@@ -108,16 +108,27 @@ inline bool ExtractFlagValue(const wchar_t* commandLine, const wchar_t* flag, ch
     }
     std::size_t flagLen = 0;
     while (flag[flagLen] != L'\0') ++flagLen;
-    if (n == flagLen) {
+    // #697: `--name` is `-name` (the same one extra dash nevr_cli::Resolve reads); `---name` is neither.
+    const std::size_t extraDash = (flag[0] == L'-' && token[0] == L'-' && n == flagLen + 1) ? 1 : 0;
+    const wchar_t* const tokenBody = token + extraDash;
+    const std::size_t tokenLen = n - extraDash;
+    if (tokenLen == flagLen) {
       bool same = true;
-      for (std::size_t i = 0; i < n && same; ++i) {
-        const wchar_t a = token[i] >= L'A' && token[i] <= L'Z' ? static_cast<wchar_t>(token[i] - L'A' + L'a') : token[i];
+      for (std::size_t i = 0; i < tokenLen && same; ++i) {
+        const wchar_t a = tokenBody[i] >= L'A' && tokenBody[i] <= L'Z' ? static_cast<wchar_t>(tokenBody[i] - L'A' + L'a') : tokenBody[i];
         const wchar_t b = flag[i] >= L'A' && flag[i] <= L'Z' ? static_cast<wchar_t>(flag[i] - L'A' + L'a') : flag[i];
         same = a == b;
       }
       wantValue = same;
     }
   }
+}
+
+/// The `-trace-exports` list in `commandLine`, under its name or its deprecated alias `-traceexports` (#697;
+/// boot.cpp reports the alias, this only reads it), with one or two leading dashes either way.
+inline bool ExtractTraceExportsValue(const wchar_t* commandLine, char* out, std::size_t capacity) {
+  return ExtractFlagValue(commandLine, L"-trace-exports", out, capacity) ||
+         ExtractFlagValue(commandLine, L"-traceexports", out, capacity);
 }
 
 inline const char* ModuleName(std::uint32_t bit) {

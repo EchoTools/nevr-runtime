@@ -211,6 +211,49 @@ void SlotResetEntry(void* self) noexcept {
   for (std::size_t i = 0; i < kMemberJsonSlots; ++i) reset(MemberJsonBase(self) + 16 * i);
 }
 
+namespace {
+
+// The delegate context is the CR15NetGame (see CallbackEntry): the first registered delegate's context.
+void RunUiEvent(void* self, UiEventJob* job) noexcept {
+  job->result = UiEventResult::kNoFunction;
+  if (job->symbol == 0 || job->game.send == nullptr) return;
+  void* const netGame = EntryAt(self, kCbCreated).context;
+  job->result = UiEventResult::kNoNetGame;
+  if (netGame == nullptr) return;
+  job->game.send(netGame, job->symbol);
+  job->result = UiEventResult::kPosted;
+}
+
+}  // namespace
+
+void SlotInviteUiNoTargetEntry(void* self, std::uint32_t user) noexcept {
+  (void)user;
+  if (self == nullptr) return;
+  TraceSlotCall(self, kOpenNewSendInviteUI);
+  UiEventJob job;
+  job.game = GameEvents{};
+  job.symbol = 0;
+  job.slot = kOpenNewSendInviteUI;
+  job.result = UiEventResult::kNotRun;
+  UiEventBegin(self, kOpenNewSendInviteUI, 0, &job);
+  RunUiEvent(self, &job);
+  UiEventFinish(self, &job);
+}
+
+void SlotPartyUiTargetEntry(void* self, std::uint32_t user, std::uint64_t target) noexcept {
+  (void)user;
+  if (self == nullptr) return;
+  TraceSlotCall(self, kOpenPartyUITarget);
+  UiEventJob job;
+  job.game = GameEvents{};
+  job.symbol = 0;
+  job.slot = kOpenPartyUITarget;
+  job.result = UiEventResult::kNotRun;
+  UiEventBegin(self, kOpenPartyUITarget, target, &job);
+  RunUiEvent(self, &job);
+  UiEventFinish(self, &job);
+}
+
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept {
   if (self == nullptr) return;
   TraceSlotCall(self, kAcceptInvite);

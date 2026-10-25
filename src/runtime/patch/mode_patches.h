@@ -25,6 +25,6 @@ nevr_checked_patch::Result PatchSpectatorStreamCheck(const char* phase);
 VOID InstallEntityHooks();
 VOID InstallBugSplatHook();
 VOID InstallGameSpaceHook();
-// InstallGameMainHook is in lifecycle/crash_recovery.h (N125) — it installs the
+// RuntimeGameMain and ArmGameMain are in lifecycle/crash_recovery.h (N125) — they carry the
 // setjmp side of the game-loop recovery whose longjmp lives in crash_recovery.cpp.
 

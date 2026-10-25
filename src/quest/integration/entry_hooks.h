@@ -25,6 +25,14 @@ bool InstallObbSkipHook(bool countersRegistered) noexcept;
 void SetProcessEndCallback(void (*callback)() noexcept) noexcept;
 bool InstallProcessEndHook() noexcept;  // true when the android_main slot holds the thunk
 
+// The #640 permission-wait hook (sentinel/permission_wait_hook.h), through this seam for the same reason: the game
+// waits for the storage permission it just asked for. No counters.
+bool InstallPermissionWaitHook() noexcept;  // true when the RequestPermissions slot holds the thunk
+
+// The #868 Vulkan extension window (sentinel/vk_ext_window.h), through this seam for the same reason: the device extensions
+// libr15 requires stay inside the 128 entries it reads. No counters.
+bool InstallVkExtWindowHook() noexcept;  // true when the FindMethod and VrApi slots hold their thunks
+
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;

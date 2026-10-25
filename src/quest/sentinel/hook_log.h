@@ -27,6 +27,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <type_traits>
@@ -57,6 +58,10 @@ const char* HexString(char (&buf)[19], std::uint64_t value);
 
 // Emits one JSON line: ts_ms, level, event, then the fields in order.
 void LogFields(LogLevel level, const char* event, std::initializer_list<LogField> fields);
+
+// The same line from an array the caller built (a count that is only known at run time). `fields` must hold `count`
+// entries; the strings they point at must stay valid for the call.
+void LogFieldList(LogLevel level, const char* event, const LogField* fields, std::size_t count);
 
 // Free-text compatibility form: {"event":"message","msg":"..."} (printf-style).
 void LogEvent(LogLevel level, const char* format, ...) __attribute__((format(printf, 2, 3)));

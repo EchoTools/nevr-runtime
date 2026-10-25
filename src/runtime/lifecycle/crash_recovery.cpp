@@ -27,8 +27,10 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/hook/patching.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/dll_load_hook.h"
 #include "runtime/hook/export_tracer.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/patch/binary_bug_fixes.h"
@@ -171,21 +173,24 @@ static INT64 GameMainWrapperHook(INT64 arg1) {
   return gameResult;
 }
 
-void InstallGameMainHook() {
-  // Hook game main wrapper — longjmp recovery on crash keeps server alive
+INT64 RuntimeGameMain(INT64 arg1) { return GameMainWrapperHook(arg1); }
+
+void ArmGameMain(const NevrHostContext* host) {
+  // The host owns the detour on the game's main wrapper (runtime/host) and calls RuntimeGameMain
+  // from it, so the setjmp recovery point sits in the call chain without a second hook (N125).
   GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN);
-  OriginalGameMainWrapper =
-      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + nevr_patch_addresses::GAME_MAIN_WRAPPER);
-  // Runs in the boot phase, where Log() reports through the boot tee.
-  const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  if (hooked) {
+  OriginalGameMainWrapper = reinterpret_cast<GameMainWrapperFunc*>(host->original_game_main_wrapper);
+  if (nevr_runtime_abi::HookRecordUsable(host)) {
+    nevr_hook_guard::RecordBytes(host->wrapper_hook_target, "GameMainWrapper", host->wrapper_hook_bytes);
     Log(EchoVR::LogLevel::Debug,
-        "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
-        "null-deref AV in server mode will longjmp back here instead of terminating the process)");
+        "[NEVR.PATCH] game main wrapper hook is the host's — crash recovery armed (setjmp in "
+        "RuntimeGameMain; a null-deref AV in server mode will longjmp back there instead of "
+        "terminating the process); hook bytes recorded from the host");
   } else {
+    nevr_hook_guard::Record(host->wrapper_hook_target, "GameMainWrapper");
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via longjmp is NOT "
-        "armed; a null-deref AV in server mode will terminate the process instead of recovering");
+        "[NEVR.PATCH] game main wrapper hook is the host's but it did not hand over the hook's bytes; "
+        "HookGuard recorded the live ones, so a change since the hook was written is not detected");
   }
 }
 
@@ -1395,6 +1400,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
   nevr_binary_bug_fixes::Shutdown();
+
+  // 2b. Write any DLL-hook line a load under the loader lock left waiting (#688); outside the lock here.
+  nevr_dll_load_hook::FlushPendingLines();
 
   // 3. Force exit (bypasses server-mode ExitProcess suppression).
   //    ForceFatalExit sets g_forceExitInProgress, then calls

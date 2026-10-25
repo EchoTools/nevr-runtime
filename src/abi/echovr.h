@@ -1,6 +1,7 @@
 #pragma once
 
 #if defined(_WIN32) || defined(_WINDOWS) || defined(__MINGW32__) || defined(__MINGW64__)
+#include <winsock2.h>
 #include <windows.h>
 #include <guiddef.h>
 #else

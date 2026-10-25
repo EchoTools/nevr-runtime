@@ -1,9 +1,10 @@
 # Accept a party invite and join the party. docs/design/2026-10-01-social-features-test-plan.md #5.
-# As party_invite_accept up to the accept going out, then the server's answer is injected as
+# As party_invite_accept up to the accept going out, then the admission is injected as
 # PartyJoinSuccess{party P, owner F} (what Nakama's snsPartyRespondToInviteRequest sends after
 # snsPartyTrackAndJoin). Pass = the Joined callback (index 1) and MemberJoined for the owner (index
 # 9, arg 1) ran, the game logged "'<name>' joined party", and the party is P with [self, F], F
-# leading. The inviter and party are synthetic; the server never heard of P.
+# leading. The inviter and party are synthetic; production does not know P, and refuses the join
+# itself (PartyJoinFailure code 1, ~33 ms after the accept) before the injected admission lands.
 name: party_invite_join
 description: accept an invite, inject the server's PartyJoinSuccess, see the game in the inviter's party
 vars:
@@ -24,8 +25,11 @@ steps:
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: an accepting PartyInviteResponse left the game
     expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
-  - name: the join is in flight, the old party kept until the server answers
-    state_until: {party_joining: true, timeout: 15}
+  # The join's outbound proof. The in-flight state this replaces (`party_joining: true`) is polled
+  # once a second and the state machine leaves it well inside one poll, so it cannot be observed
+  # (#674); production also refuses the synthetic party itself ~33 ms after the accept.
+  - name: the join went out, the old party kept until the server answers
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] party join: 1 request\(s\) sent', timeout: 10}
   - name: the server lets us in (PartyJoinSuccess, F owns it)
     inject: {msg: PartyJoinSuccess, party: '${party_id}', owner: '${inviter_id}'}
   - name: admitted, the old party is left now (Left callback)

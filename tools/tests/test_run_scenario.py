@@ -21,6 +21,18 @@ class LoadScenarioTest(unittest.TestCase):
         last = scenario["steps"][-1]
         self.assertIn("target=1000000000000000001", last["expect_log"]["pattern"])
 
+    def test_smoke_scenario_loads_with_the_three_checks(self):
+        scenario = run_scenario.load_scenario(REPO / "tools/scenario/smoke.yaml")
+        self.assertEqual(scenario["name"], "smoke")
+        self.assertEqual([s["kind"] for s in scenario["steps"]], ["wait_log", "wait_log", "fire", "expect_log"])
+        self.assertIn("to in game", scenario["steps"][0]["wait_log"]["pattern"])
+        # A cold load of the lobby level takes 177-185 s on a quiet machine, so 300 s left under
+        # 50 s of headroom and a loaded machine failed the step (#792).
+        self.assertEqual(scenario["steps"][0]["wait_log"]["timeout"], 600)
+        self.assertIn("control listening", scenario["steps"][1]["wait_log"]["pattern"])
+        self.assertEqual(scenario["steps"][2]["fire"]["action"], "refresh_friends")
+        self.assertIn("slot=45 name=RefreshFriends", scenario["steps"][3]["expect_log"]["pattern"])
+
     def test_a_step_with_two_kinds_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "bad.yaml"
@@ -96,6 +108,74 @@ class ControlPatienceTest(unittest.TestCase):
             thread.join(5)
 
 
+class TeardownRaceTest(unittest.TestCase):
+    """A client that outlives its Wine server makes the next launch refuse to start (launch-client.sh
+    exit 4), which cost the invite scenario in suite 20261018T061805 (#674)."""
+
+    def fake_bin(self, tmp, pgrep_body: str):
+        import os
+        import pathlib
+        bin_dir = pathlib.Path(tmp) / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "pgrep").write_text("#!/bin/bash\n" + pgrep_body)
+        kill_log = pathlib.Path(tmp) / "killed"
+        (bin_dir / "kill").write_text(f'#!/bin/bash\necho "$@" >> "{kill_log}"\n')
+        (bin_dir / "wineserver").write_text("#!/bin/bash\nexit 0\n")
+        for f in bin_dir.iterdir():
+            f.chmod(0o755)
+        old = os.environ["PATH"]
+        os.environ["PATH"] = f"{bin_dir}:{old}"
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", old))
+        return kill_log
+
+    def test_waits_for_a_client_that_goes_away_and_never_kills_it(self):
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            state = f"{tmp}/count"
+            kill_log = self.fake_bin(
+                tmp, f'n=$(cat "{state}" 2>/dev/null || echo 0); echo $((n+1)) > "{state}"\n'
+                     'if [ "$n" -lt 1 ]; then echo 4242; fi\n')
+            started = time.monotonic()
+            self.assertTrue(run_scenario.wait_for_game_exit(timeout=10))
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertFalse(kill_log.exists())
+
+    def test_teardown_waits_for_the_client_after_the_wine_server(self):
+        import os
+        import pathlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            state = f"{tmp}/count"
+            self.fake_bin(tmp, f'n=$(cat "{state}" 2>/dev/null || echo 0); echo $((n+1)) > "{state}"\n'
+                              'if [ "$n" -eq 0 ]; then echo 4242; fi\n')
+            root = pathlib.Path(tmp) / "game"
+            (root / "echovr/bin/win10").mkdir(parents=True)
+            old = {k: os.environ.get(k) for k in ("NEVR_GAME_ROOT",)}
+            os.environ["NEVR_GAME_ROOT"] = str(root)
+            run_scenario.wineprefix.cache_clear()
+            try:
+                run = run_scenario.Run({"name": "teardown"}, pathlib.Path("/nonexistent.dll"), pathlib.Path(tmp))
+                run.teardown()
+            finally:
+                for k, v in old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+                run_scenario.wineprefix.cache_clear()
+            # pgrep ran during teardown, i.e. it waited for the client after the Wine server.
+            self.assertTrue(pathlib.Path(state).exists(), "teardown never looked for a live client")
+            self.assertGreaterEqual(int(pathlib.Path(state).read_text().strip()), 1)
+
+    def test_kills_a_client_that_never_goes_away(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            kill_log = self.fake_bin(tmp, "echo 4242\n")
+            self.assertFalse(run_scenario.wait_for_game_exit(timeout=0.1))
+            self.assertIn("4242", kill_log.read_text())
+
+
 class StateMatchesTest(unittest.TestCase):
     def test_friend_invitable(self):
         state = {"friends": [{"id": 7, "online": True, "invitable": 1}]}
@@ -169,6 +249,19 @@ class WaitStopsOnFailureTest(unittest.TestCase):
                 log.wait("to in game", None)
             self.assertIn("no driver could be loaded", str(caught.exception))
 
+    def test_a_client_that_lost_its_lobby_ends_the_wait(self):
+        """Suite 20261018T065159 hung 38 minutes on this line: the client was dropped by its lobby
+        host and the first step waited without a timeout (#674)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "console.log"
+            path.write_text("2026-10-18T12:16:27.680Z error [EVR] [NETGAME] Disconnected from server "
+                            "due to timeout\n")
+            log = run_scenario.ConsoleLog(path)
+            # A bounded wait: without the pattern this test would hang forever, not fail.
+            with self.assertRaises(run_scenario.StepFailed) as caught:
+                log.wait("to in game", 0.2)
+            self.assertIn("Disconnected from server due to timeout", str(caught.exception))
+
     def test_a_game_that_exited_ends_the_wait(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "console.log"
@@ -229,3 +322,51 @@ class ListStateTest(unittest.TestCase):
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "contains": "77"}})[0])
         self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 77}})[0])
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 9}})[0])
+
+
+CONSOLE = (
+    "\x1b[90m2026-10-22T09:21:01.746Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from logged out, to loading root)\n"
+    "noise line without a state\n"
+    "\x1b[90m2026-10-22T09:21:05.782Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from loading root, to logged in)\n"
+    "\x1b[90m2026-10-22T09:25:15.532Z\x1b[0m \x1b[0minfo\x1b[0m [EVR] [NETGAME] "
+    "NetGame switching state (from ready for game, to in game)\n"
+)
+
+
+class StateTimelineTest(unittest.TestCase):
+    def test_every_state_change_is_listed_with_its_timestamp(self):
+        self.assertEqual(run_scenario.state_timeline(CONSOLE), [
+            {"from": "logged out", "to": "loading root", "ts": "2026-10-22T09:21:01.746Z"},
+            {"from": "loading root", "to": "logged in", "ts": "2026-10-22T09:21:05.782Z"},
+            {"from": "ready for game", "to": "in game", "ts": "2026-10-22T09:25:15.532Z"},
+        ])
+
+    def test_a_console_without_states_gives_an_empty_list(self):
+        self.assertEqual(run_scenario.state_timeline("nothing here\n"), [])
+
+    def test_a_state_line_without_a_timestamp_keeps_its_states_and_a_null_ts(self):
+        self.assertEqual(run_scenario.state_timeline("NetGame switching state (from a, to b)\n"),
+                         [{"from": "a", "to": "b", "ts": None}])
+
+
+class BuildReportTest(unittest.TestCase):
+    def test_the_report_carries_the_load_at_start_and_the_state_timeline(self):
+        report = run_scenario.build_report("smoke", pathlib.Path("/x/BugSplat64.dll"), True, True,
+                                           "1.00 2.00 3.00", CONSOLE, [{"step": "s", "result": "PASS"}])
+        self.assertEqual(report["loadavg_start"], "1.00 2.00 3.00")
+        self.assertEqual([s["to"] for s in report["states"]], ["loading root", "logged in", "in game"])
+        self.assertEqual((report["scenario"], report["passed"], report["dll_restored"]), ("smoke", True, True))
+        self.assertEqual(report["steps"], [{"step": "s", "result": "PASS"}])
+
+
+class LoadavgTest(unittest.TestCase):
+    def test_reads_the_three_averages_from_the_given_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "loadavg"
+            path.write_text("11.20 63.69 143.84 3/4779 777090\n")
+            self.assertEqual(run_scenario.read_loadavg(path), "11.20 63.69 143.84")
+
+    def test_an_unreadable_file_gives_none_not_an_exception(self):
+        self.assertIsNone(run_scenario.read_loadavg(pathlib.Path("/nonexistent/loadavg")))

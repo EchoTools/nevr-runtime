@@ -897,7 +897,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
      *   PluginLog("state: %u → %u flags=0x%x",
      *             old_state, new_state, ctx->flags);
      *
-     *   if (new_state == 2 /* IN_GAME *​/ && (ctx->flags & NEVR_HOST_HAS_NETGAME)) {
+     *   if (new_state == 2 && (ctx->flags & NEVR_HOST_HAS_NETGAME)) {  // 2 = IN_GAME
      *       PluginLog("state: entered IN_GAME, net_game=%p", ctx->net_game);
      *   }
      */

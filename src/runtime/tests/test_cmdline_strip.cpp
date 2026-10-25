@@ -4,10 +4,13 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cwchar>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/cli_flags.h"
 #include "core/globals.h"
 #include "runtime/lifecycle/cmdline_strip.h"
 #include "runtime/lifecycle/server_timestep.h"
@@ -37,16 +40,16 @@ bool Has(const std::vector<std::string>& texts, const std::string& token) {
 }  // namespace
 
 TEST(CmdlineStrip, AServerLosesFixedtimestep) {
-  const auto r = StripServerTimestepArgs("echovr.exe -server -fixedtimestep -noconsole");
-  EXPECT_EQ(r.commandLine, "echovr.exe -server -noconsole");
+  const auto r = StripServerTimestepArgs("echovr.exe -server -fixedtimestep -no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe -server -no-console");
   EXPECT_FALSE(Has(TextsOf(r.commandLine), "-fixedtimestep"));
   EXPECT_EQ(r.removed.size(), 1u);
   EXPECT_EQ(r.options, std::vector<std::string>{"-fixedtimestep"});
 }
 
 TEST(CmdlineStrip, AServerLosesTimestepAndItsValue) {
-  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep 120 -noconsole");
-  EXPECT_EQ(r.commandLine, "echovr.exe -server -noconsole");
+  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep 120 -no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe -server -no-console");
   const auto texts = TextsOf(r.commandLine);
   EXPECT_FALSE(Has(texts, "-timestep"));
   EXPECT_FALSE(Has(texts, "120")) << "the value goes with its option";
@@ -62,9 +65,9 @@ TEST(CmdlineStrip, BothTogetherInAnyOrderAndAtTheEnd) {
 }
 
 TEST(CmdlineStrip, ATimestepWithoutAValueTakesNoNeighbour) {
-  // -noconsole is an option, not -timestep's value.
-  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep -noconsole");
-  EXPECT_EQ(r.commandLine, "echovr.exe -server -noconsole");
+  // -no-console is an option, not -timestep's value.
+  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep -no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe -server -no-console");
   EXPECT_EQ(r.removed.size(), 1u);
   // A negative number is a value, as the game's parser reads it.
   const auto n = StripServerTimestepArgs("echovr.exe -server -timestep -5");
@@ -82,8 +85,8 @@ TEST(CmdlineStrip, TheGamesNameLookupIsMatched) {
 
 TEST(CmdlineStrip, TheGames0x96DashIsADash) {
   // 0x96 starts an option and is skipped by a name lookup, exactly like '-' (FUN_1400d9000, 0x14011672F...).
-  const auto r = StripServerTimestepArgs(std::string("echovr.exe -server \x96") + "timestep 5 -noconsole");
-  EXPECT_EQ(r.commandLine, "echovr.exe -server -noconsole");
+  const auto r = StripServerTimestepArgs(std::string("echovr.exe -server \x96") + "timestep 5 -no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe -server -no-console");
   const auto f = StripServerTimestepArgs(std::string("echovr.exe -server -x \x96\x96") + "fixedtimestep");
   EXPECT_EQ(f.commandLine, "echovr.exe -server -x");
 }
@@ -135,7 +138,7 @@ TEST(CmdlineStrip, TheServerRuleIsTheGamesParserNotBootCpps) {
 }
 
 TEST(CmdlineStrip, ACommandLineWithNothingToRemoveIsReturnedAsIs) {
-  const std::string text = "echovr.exe   -server   -noconsole ";
+  const std::string text = "echovr.exe   -server   -no-console ";
   const auto r = StripServerTimestepArgs(text);
   EXPECT_EQ(r.commandLine, text);
   EXPECT_TRUE(r.removed.empty());
@@ -144,10 +147,10 @@ TEST(CmdlineStrip, ACommandLineWithNothingToRemoveIsReturnedAsIs) {
 // --- N1: removal must not glue the kept text into one token ---------------------------------------------
 
 TEST(CmdlineStrip, ARemovalDoesNotGlueTheNextTokenOnToTheLast) {
-  // "120" ends where -noconsole begins: without a space the result would read `-server-noconsole`.
-  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"-noconsole");
-  EXPECT_EQ(r.commandLine, "echovr.exe -server -noconsole");
-  EXPECT_TRUE(Has(TextsOf(r.commandLine), "-noconsole"));
+  // "120" ends where -no-console begins: without a space the result would read `-server-no-console`.
+  const auto r = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"-no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe -server -no-console");
+  EXPECT_TRUE(Has(TextsOf(r.commandLine), "-no-console"));
   // The same where the removed token is the first thing after the program name.
   const auto q = StripServerTimestepArgs("echovr.exe -server -timestep \"-server\"\"x + -FixedTimeStep  ");
   EXPECT_FALSE(HasTimestepOption(q.commandLine));
@@ -162,8 +165,8 @@ TEST(CmdlineStrip, TheResidualCasesFromTheReviewLeaveNoTimestepOption) {
       "echovr.exe --timestep \"-server\"\"120 -fixedtimestep ",
       "echovr.exe -timestep [-server][ -timestep -5 ] [-server]",
       "echovr.exe --timestep    [-server]\"+ -FixedTimeStep",
-      "echovr.exe -timestep \"-server\"\"-server 120-noconsole -fixedtimestep",
-      "echovr.exe -timestep [-server]\"-noconsole \t-FixedTimeStep []",
+      "echovr.exe -timestep \"-server\"\"-server 120-no-console -fixedtimestep",
+      "echovr.exe -timestep [-server]\"-no-console \t-FixedTimeStep []",
   };
   for (const std::string& probe : inputs) {
     const std::string in = "echovr.exe -server " + probe.substr(std::string("echovr.exe ").size());
@@ -179,7 +182,7 @@ TEST(CmdlineStrip, EveryGeneratedServerLineEndsWithNoTimestepOptionAndStaysAServ
   // For a line without one: the text is returned untouched.
   const std::vector<std::string> pieces = {
       "echovr.exe", "-server", "-servers", "-timestep", "--timestep", "+TimeStep", "-FixedTimeStep", "-fixedtimestep",
-      "-timestepper", "-config", "-noconsole", "120", "-5", "x", "\"", "[", "]", " ", "  ", "\t", "-", "+",
+      "-timestepper", "-config", "-no-console", "120", "-5", "x", "\"", "[", "]", " ", "  ", "\t", "-", "+",
       std::string("\x96"), std::string("\x96") + "timestep", "\"-server\"", "[-server]", "\"120\"", "a b"};
   std::uint64_t state = 0x9E3779B97F4A7C15ull;
   auto next = [&state]() {
@@ -212,12 +215,12 @@ TEST(CmdlineStrip, EveryGeneratedServerLineEndsWithNoTimestepOptionAndStaysAServ
 // --- SF2: the game ends an unquoted token only at a space, so a tab at the seam must not glue ---------------
 
 TEST(CmdlineStrip, ATabAtTheSeamDoesNotGlueTheKeptTokens) {
-  // A tab does not end an unquoted token for the game, so `-server\t-noconsole` would be one token.
-  const auto a = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"\t-noconsole");
-  EXPECT_EQ(TextsOf(a.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "-noconsole"}))
+  // A tab does not end an unquoted token for the game, so `-server\t-no-console` would be one token.
+  const auto a = StripServerTimestepArgs("echovr.exe -server -timestep \"120\"\t-no-console");
+  EXPECT_EQ(TextsOf(a.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "-no-console"}))
       << "[" << a.commandLine << "]";
-  const auto b = StripServerTimestepArgs("echovr.exe -server x\t -timestep \"5\"-noconsole");
-  EXPECT_EQ(TextsOf(b.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "x\t", "-noconsole"}))
+  const auto b = StripServerTimestepArgs("echovr.exe -server x\t -timestep \"5\"-no-console");
+  EXPECT_EQ(TextsOf(b.commandLine), (std::vector<std::string>{"echovr.exe", "-server", "x\t", "-no-console"}))
       << "[" << b.commandLine << "]";
 }
 
@@ -229,8 +232,8 @@ TEST(CmdlineStrip, EveryParameterTheGameWouldAttachToARemovedOptionGoesWithIt) {
   EXPECT_EQ(a.commandLine, "echovr.exe -server -config c.json");
   EXPECT_EQ(a.removed.size(), 2u);
   // Several parameters: all of them, up to the next option.
-  const auto b = StripServerTimestepArgs("echovr.exe -server -timestep 120 extra more -noconsole");
-  EXPECT_EQ(b.commandLine, "echovr.exe -server -noconsole");
+  const auto b = StripServerTimestepArgs("echovr.exe -server -timestep 120 extra more -no-console");
+  EXPECT_EQ(b.commandLine, "echovr.exe -server -no-console");
   // Parameters before the option stay with the option they follow.
   const auto c = StripServerTimestepArgs("echovr.exe -server -config c.json -timestep 120");
   EXPECT_EQ(c.commandLine, "echovr.exe -server -config c.json");
@@ -240,7 +243,7 @@ TEST(CmdlineStrip, EveryParameterTheGameWouldAttachToARemovedOptionGoesWithIt) {
 
 TEST(CmdlineStrip, ABracketedTokenSwallowsAnOptionInsideIt) {
   // `[x -fixedtimestep ]` is one token for the game: -fixedtimestep inside it is not an option.
-  const std::string line = "echovr.exe -server -config [x -fixedtimestep ] -noconsole";
+  const std::string line = "echovr.exe -server -config [x -fixedtimestep ] -no-console";
   const auto r = StripServerTimestepArgs(line);
   EXPECT_EQ(r.commandLine, line);
   EXPECT_TRUE(r.removed.empty());
@@ -272,13 +275,13 @@ TEST(CmdlineStrip, AnyByteUpToSpaceSeparatesTokensButOnlyASpaceEndsOne) {
 // --- S1: the hook's one decision ------------------------------------------------------------------------------
 
 TEST(PrepareForGame, AServerGetsANewPointerWithoutTheTokens) {
-  const char* original = "echovr.exe -server -fixedtimestep -timestep 120 -noconsole";
+  const char* original = "echovr.exe -server -fixedtimestep -timestep 120 -no-console";
   std::string storage;
   const auto h = PrepareForGame(original, storage);
   ASSERT_NE(h.commandLine, nullptr);
   EXPECT_NE(h.commandLine, original) << "a new pointer, not the original";
   EXPECT_EQ(h.commandLine, storage.c_str()) << "the text lives in the caller's storage";
-  EXPECT_EQ(std::string(h.commandLine), "echovr.exe -server -noconsole");
+  EXPECT_EQ(std::string(h.commandLine), "echovr.exe -server -no-console");
   EXPECT_FALSE(HasTimestepOption(h.commandLine));
   EXPECT_EQ(h.tokensRemoved, 3u);
   EXPECT_EQ(h.options, (std::vector<std::string>{"-fixedtimestep", "-timestep"}));
@@ -293,7 +296,7 @@ TEST(PrepareForGame, AClientOrNothingToRemoveGetsTheOriginalPointer) {
   EXPECT_EQ(c.commandLine, client);
   EXPECT_EQ(c.tokensRemoved, 0u);
   EXPECT_TRUE(c.options.empty());
-  const char* clean = "echovr.exe -server -noconsole";
+  const char* clean = "echovr.exe -server -no-console";
   const auto s = PrepareForGame(clean, storage);
   EXPECT_EQ(s.commandLine, clean);
   EXPECT_EQ(s.tokensRemoved, 0u);
@@ -321,10 +324,143 @@ TEST(CmdlineStrip, AServerLineLosesItsTimestepArgsAndThenGetsTheConfiguredStep) 
   // The strip, then the step NEVR writes: 1,000,000 / g_headlessTickRateHz (120 Hz by default, 8333 us),
   // written over the game's own 33333 in the clock's 64-bit step field.
   std::string storage;
-  const auto h = PrepareForGame("echovr.exe -server -fixedtimestep -timestep 30 -noconsole", storage);
-  EXPECT_EQ(std::string(h.commandLine), "echovr.exe -server -noconsole");
+  const auto h = PrepareForGame("echovr.exe -server -fixedtimestep -timestep 30 -no-console", storage);
+  EXPECT_EQ(std::string(h.commandLine), "echovr.exe -server -no-console");
   uint64_t stepField = nevr_server_timestep::kGameDefaultStepUs;
   const auto w = nevr_server_timestep::ApplyStep(true, g_headlessTickRateHz, &stepField);
   EXPECT_EQ(w.outcome, nevr_server_timestep::StepOutcome::kSet);
   EXPECT_EQ(stepField, 8333u);
+}
+
+// --- #697: kebab-case flag names, deprecated aliases, one or two leading dashes ----------------------------------
+
+namespace {
+
+struct AliasPair {
+  const wchar_t* alias;
+  const wchar_t* flag;
+};
+
+// Written out here, not read from nevr_cli::kFlags, so the table cannot vouch for itself.
+const AliasPair kAliasPairs[] = {
+    {L"-noconsole", L"-no-console"},         {L"-noexitonerror", L"-no-exit-on-error"},
+    {L"-exitonerror", L"-exit-on-error"},    {L"-notelemetry", L"-no-telemetry"},
+    {L"-telemetryrate", L"-telemetry-rate"}, {L"-telemetrydiag", L"-telemetry-diag"},
+    {L"-traceexports", L"-trace-exports"},   {L"-allow-dbgcore", L"-skip-dbgcore-check"},
+};
+
+bool SameWide(const wchar_t* a, const wchar_t* b) { return a != nullptr && b != nullptr && std::wcscmp(a, b) == 0; }
+
+std::wstring OneMoreDash(const std::wstring& token) { return std::wstring(L"-") + token; }
+
+}  // namespace
+
+TEST(CliFlags, EveryAliasMapsToItsNewFlagAndNamesItself) {
+  for (const AliasPair& p : kAliasPairs) {
+    const nevr_cli::Resolved r = nevr_cli::Resolve(p.alias);
+    EXPECT_TRUE(SameWide(r.flag, p.flag)) << "alias maps to the new flag";
+    EXPECT_TRUE(SameWide(r.alias, p.alias)) << "the alias is reported as the alias";
+    EXPECT_FALSE(r.rejected);
+    const nevr_cli::Resolved fresh = nevr_cli::Resolve(p.flag);
+    EXPECT_TRUE(SameWide(fresh.flag, p.flag));
+    EXPECT_EQ(fresh.alias, nullptr) << "the new name is not an alias";
+  }
+}
+
+TEST(CliFlags, TheAliasTableIsExactlyTheEightRenames) {
+  std::size_t aliases = 0;
+  for (const nevr_cli::FlagSpec& spec : nevr_cli::kFlags) {
+    if (spec.alias != nullptr) ++aliases;
+  }
+  EXPECT_EQ(aliases, sizeof(kAliasPairs) / sizeof(kAliasPairs[0]));
+}
+
+TEST(CliFlags, OneOrTwoLeadingDashesNameTheFlagThreeAreRejected) {
+  // A plain flag, a value flag, a game token NEVR also reads, and an alias.
+  for (const wchar_t* flag : {L"-server", L"-telemetry-rate", L"-headless", L"-noconsole"}) {
+    const std::wstring two = OneMoreDash(flag);
+    const std::wstring three = OneMoreDash(two);
+    const nevr_cli::Resolved rOne = nevr_cli::Resolve(flag);
+    const nevr_cli::Resolved rTwo = nevr_cli::Resolve(two.c_str());
+    const nevr_cli::Resolved rThree = nevr_cli::Resolve(three.c_str());
+    ASSERT_NE(rOne.flag, nullptr);
+    EXPECT_TRUE(SameWide(rOne.flag, rTwo.flag)) << "--name is -name";
+    EXPECT_EQ(rOne.alias, rTwo.alias);
+    EXPECT_EQ(rThree.flag, nullptr) << "---name is not read";
+    EXPECT_TRUE(rThree.rejected) << "---name is refused, so the caller can say so";
+    EXPECT_FALSE(rOne.rejected);
+    EXPECT_FALSE(rTwo.rejected);
+  }
+}
+
+TEST(CliFlags, TokensThatNameNoFlagResolveToNothing) {
+  for (const wchar_t* token : {L"server", L"+server", L"-Server", L"-servers", L"-serve", L"-", L"--", L"", L"-5",
+                               L"--unknown-flag", L"---unknown-flag", L"-no-consol"}) {
+    const nevr_cli::Resolved r = nevr_cli::Resolve(token);
+    EXPECT_EQ(r.flag, nullptr) << "not a NEVR flag";
+    EXPECT_FALSE(r.rejected) << "an unknown token is left to the caller, as before";
+  }
+  EXPECT_EQ(nevr_cli::Resolve(nullptr).flag, nullptr);
+}
+
+TEST(CliFlags, IsFlagAnswersForTheNameAndForTheAlias) {
+  EXPECT_TRUE(nevr_cli::IsFlag(L"-no-console", L"-no-console"));
+  EXPECT_TRUE(nevr_cli::IsFlag(L"--no-console", L"-no-console"));
+  EXPECT_TRUE(nevr_cli::IsFlag(L"-noconsole", L"-no-console"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"-no-console", L"-server"));
+  EXPECT_FALSE(nevr_cli::IsFlag(L"---no-console", L"-no-console"));
+}
+
+// The text a deprecated alias earns, once per run: pinned whole, including the version it goes away in.
+TEST(CliFlags, TheAliasWarningTextIsPinned) {
+  char line[256];
+  std::snprintf(line, sizeof(line), nevr_cli::kAliasWarningFormat, L"-noconsole", L"-no-console");
+  EXPECT_STREQ(line, "[NEVR.PATCH] -noconsole is deprecated and will be removed in v6.0.0; use -no-console");
+  std::snprintf(line, sizeof(line), nevr_cli::kAliasWarningFormat, L"-allow-dbgcore", L"-skip-dbgcore-check");
+  EXPECT_STREQ(line, "[NEVR.PATCH] -allow-dbgcore is deprecated and will be removed in v6.0.0; use -skip-dbgcore-check");
+}
+
+// `--server` is a server to NEVR (boot.cpp through nevr_cli, the strip through HasServerToken) and to the game
+// (its name lookup skips every leading dash): the two readings agree.
+TEST(CliFlags, DoubleDashServerIsAServerToBothNevrAndTheGame) {
+  EXPECT_TRUE(nevr_cli::IsFlag(L"--server", L"-server"));
+  EXPECT_TRUE(HasServerToken("echovr.exe --server"));
+  EXPECT_TRUE(nevr_cmdline::detail::NameIs("--server", "server")) << "the game's lookup";
+  EXPECT_TRUE(nevr_cmdline::detail::NameIs("-server", "server"));
+
+  const auto r = StripServerTimestepArgs("echovr.exe --server -fixedtimestep -timestep 30 -no-console");
+  EXPECT_EQ(r.commandLine, "echovr.exe --server -no-console") << "a --server line is stripped like a -server one";
+  EXPECT_EQ(r.options.size(), 2u);
+  EXPECT_FALSE(HasTimestepOption(r.commandLine));
+
+  // A client line is untouched.
+  const std::string client = "echovr.exe -fixedtimestep -timestep 30";
+  EXPECT_EQ(StripServerTimestepArgs(client).commandLine, client);
+}
+
+TEST(CliFlags, ThreeDashesIsNotAServerToNevrAndTheDisagreementIsPinned) {
+  // The game's lookup would read ---server as a server; NEVR does not, and boot.cpp warns (Resolved::rejected).
+  EXPECT_FALSE(nevr_cli::IsFlag(L"---server", L"-server"));
+  EXPECT_TRUE(nevr_cli::Resolve(L"---server").rejected);
+  EXPECT_FALSE(HasServerToken("echovr.exe ---server"));
+  EXPECT_TRUE(nevr_cmdline::detail::NameIs("---server", "server"));
+  EXPECT_FALSE(HasServerToken("echovr.exe +server"));
+}
+
+TEST(CliFlags, AnAliasIsReportedOncePerRunPerAlias) {
+  nevr_cli::AliasReports reports;
+  const nevr_cli::Resolved noConsole = nevr_cli::Resolve(L"-noconsole");
+  const nevr_cli::Resolved noConsoleTwoDashes = nevr_cli::Resolve(L"--noconsole");
+  const nevr_cli::Resolved rate = nevr_cli::Resolve(L"-telemetryrate");
+  EXPECT_TRUE(reports.First(noConsole)) << "the first use warns";
+  EXPECT_FALSE(reports.First(noConsole)) << "the second does not";
+  EXPECT_FALSE(reports.First(noConsoleTwoDashes)) << "another spelling of the same alias does not";
+  EXPECT_TRUE(reports.First(rate)) << "a different alias warns on its own";
+  EXPECT_FALSE(reports.First(rate));
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-no-console"))) << "the new name never warns";
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"-unknown")));
+  EXPECT_FALSE(reports.First(nevr_cli::Resolve(L"---noconsole"))) << "a refused token is not an alias use";
+
+  nevr_cli::AliasReports another;
+  EXPECT_TRUE(another.First(noConsole)) << "each run starts clean";
 }
