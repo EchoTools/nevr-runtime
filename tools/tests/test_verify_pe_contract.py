@@ -48,12 +48,14 @@ class HostContractTest(unittest.TestCase):
         self.assertEqual(exports, contract.EXPECTED_EXPORTS)
 
     def test_every_name_in_exports_def_is_pinned(self):
-        # exports.def is what the linker exports; a name added there without a pin is surface nobody reviewed
-        # (#884 added two and the pin stayed at 26).
+        # A name added to exports.def without a pin is surface nobody reviewed (#884 added two and the pin stayed
+        # at 26). exports.def holds 18 of the 28 pinned names; the TokenAuth_*, platform_compat_* and token_auth_*
+        # ones come from NEVR_MODULE_API and are caught only by the pe-contract check on the built DLL.
         text = (REPO / "src" / "runtime" / "exports.def").read_text(encoding="utf-8")
+        lines = [line.split(";", 1)[0].strip() for line in text.splitlines()]
+        self.assertIn("EXPORTS", lines, "exports.def has no EXPORTS line")
         declared = set()
-        for line in text.splitlines()[2:]:
-            line = line.split(";", 1)[0].strip()
+        for line in lines[lines.index("EXPORTS") + 1:]:
             if line:
                 declared.add(line.split("=", 1)[0].split()[0])
         self.assertGreater(len(declared), 10, "exports.def parsed to almost nothing")
