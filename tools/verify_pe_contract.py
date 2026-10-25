@@ -10,7 +10,7 @@ export.
 Checks (all fail-closed; an unreadable or empty table is a failure, never a pass):
 
   1. EXPORTS   - the export table equals EXPECTED_EXPORTS exactly, name AND
-                 ordinal (26 entries). A missing export breaks a caller; an extra
+                 ordinal (28 entries). A missing export breaks a caller; an extra
                  export is surface nobody reviewed; a renumbered export is a
                  change of the ordinal table nobody asked for.
   2. ORDINAL 1 - DetoursExportPlaceholder is ordinal 1 (exports.def `@1`); a
@@ -53,21 +53,23 @@ EXPECTED_EXPORTS = {
     "?setDefaultUserName@MiniDmpSender@@QEAAXPEB_W@Z": 9,
     "?setFlags@MiniDmpSender@@QEAA_NK@Z": 10,
     "MiniDumpWriteDump": 11,
-    "NEVR_DeregisterResourceOverrides": 12,
-    "NEVR_GetUPnPConfig": 13,
-    "NEVR_RegisterResourceOverride": 14,
-    "NEVR_ResetResourceOverrides": 15,
-    "NEVR_ScheduleReturnToLobby": 16,
-    "NEVR_SetGameModule": 17,
-    "TokenAuth_GetDiscordId": 18,
-    "TokenAuth_GetToken": 19,
-    "TokenAuth_GetUsername": 20,
-    "platform_compat_ApiVersion": 21,
-    "platform_compat_Init": 22,
-    "platform_compat_Shutdown": 23,
-    "token_auth_ApiVersion": 24,
-    "token_auth_Init": 25,
-    "token_auth_Shutdown": 26,
+    "NEVR_DeregisterAssets": 12,
+    "NEVR_DeregisterResourceOverrides": 13,
+    "NEVR_GetUPnPConfig": 14,
+    "NEVR_RegisterAsset": 15,
+    "NEVR_RegisterResourceOverride": 16,
+    "NEVR_ResetResourceOverrides": 17,
+    "NEVR_ScheduleReturnToLobby": 18,
+    "NEVR_SetGameModule": 19,
+    "TokenAuth_GetDiscordId": 20,
+    "TokenAuth_GetToken": 21,
+    "TokenAuth_GetUsername": 22,
+    "platform_compat_ApiVersion": 23,
+    "platform_compat_Init": 24,
+    "platform_compat_Shutdown": 25,
+    "token_auth_ApiVersion": 26,
+    "token_auth_Init": 27,
+    "token_auth_Shutdown": 28,
 }
 
 ORDINAL_ONE = "DetoursExportPlaceholder"
