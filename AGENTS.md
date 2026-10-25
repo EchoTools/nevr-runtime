@@ -828,7 +828,9 @@ your seat name, for example `claude-main` or `codex`.
   the gitignored files `.worktreeinclude` lists (`.mcp.json`, `.claude/settings.local.json`; Claude Code's own worktrees
   copy them from the same file). Run `just worktree-setup` in the new linked worktree: it
   copies `extern/{minhook,breakpad,lss}` (without their `.git` files) and `gen/` from the main
-  checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
+  checkout, only into places that are absent or empty. On a branch that pins `extern/luau` (read by `just
+  test-scripting`, so by `just verify`) it fills that too: from the main checkout when that has it, else by
+  `git submodule update --init extern/luau` in the worktree (network), and a failure is an error. It keeps anything already there (delete `gen/`
   to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
   that `extern/<d>` and run `git submodule update --init extern/<d>`).
   The build embeds the public client defaults from `config/public-defaults.env` (git-ignored: CI
