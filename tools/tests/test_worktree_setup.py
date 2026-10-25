@@ -473,5 +473,90 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
 
+class WorktreeSetupLuauTest(unittest.TestCase):
+    """extern/luau is a submodule the main checkout may not have initialised: setup fills it either way (#893)."""
+
+    ENV = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="protocol.file.allow", GIT_CONFIG_VALUE_0="always")
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="worktree-setup-luau-test-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.upstream = self.tmp / "luau-upstream"
+        (self.upstream / "VM/src").mkdir(parents=True)
+        (self.upstream / "VM/src/lapi.cpp").write_text("// luau\n")
+        git(self.upstream, "init", "-q")
+        git(self.upstream, "add", "VM/src/lapi.cpp")
+        git(self.upstream, "commit", "-q", "-m", "luau", "--no-gpg-sign")
+        self.main = self.tmp / "main"
+        (self.main / "tools").mkdir(parents=True)
+        shutil.copy(SCRIPT, self.main / "tools/worktree-setup.sh")
+        git(self.main, "init", "-q")
+        git(self.main, "add", "tools/worktree-setup.sh")
+        git(self.main, "commit", "-q", "-m", "init", "--no-gpg-sign")
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(self.main),
+                        "submodule", "add", "-q", str(self.upstream), "extern/luau"],
+                       check=True, capture_output=True, env=self.ENV)
+        git(self.main, "commit", "-q", "-m", "pin luau", "--no-gpg-sign")
+        for name in ("minhook", "breakpad", "lss"):
+            d = self.main / "extern" / name
+            d.mkdir(parents=True)
+            (d / "CMakeLists.txt").write_text(f"# {name}\n")
+        (self.main / "gen/cpp").mkdir(parents=True)
+        (self.main / "gen/cpp/x.pb.cc").write_text("// generated\n")
+        (self.main / "config").mkdir()
+        (self.main / "config/public-defaults.env").write_text(DEFAULTS)
+        self.wt = self.tmp / "wt"
+        git(self.main, "worktree", "add", "-q", "--no-track", "-b", "feature", str(self.wt))
+        for name in ("minhook", "breakpad", "lss"):
+            (self.wt / "extern" / name).mkdir(parents=True)
+
+    def run_script(self):
+        return subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                              timeout=120, env=self.ENV)
+
+    def test_luau_is_copied_from_a_main_checkout_that_has_it(self):
+        self.assertTrue((self.main / "extern/luau/VM/src/lapi.cpp").exists(), "the fixture's main has luau")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.wt / "extern/luau/VM/src/lapi.cpp").exists())
+        self.assertFalse((self.wt / "extern/luau/.git").exists(), "the main checkout's .git pointer is not copied")
+        self.assertIn("extern/luau", result.stdout.split("filled from")[1].splitlines()[0])
+
+    def test_luau_is_initialised_in_the_worktree_when_the_main_checkout_lacks_it(self):
+        git(self.main, "submodule", "deinit", "-q", "-f", "extern/luau")
+        self.assertFalse((self.main / "extern/luau/VM").exists(), "the fixture's main has no luau content")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.wt / "extern/luau/VM/src/lapi.cpp").exists())
+        self.assertFalse((self.main / "extern/luau/VM").exists(), "the main checkout is untouched")
+
+    def test_a_luau_that_cannot_be_initialised_fails_loudly_after_the_rest_is_filled(self):
+        git(self.main, "submodule", "deinit", "-q", "-f", "extern/luau")
+        shutil.rmtree(self.upstream)
+        shutil.rmtree(self.main / ".git/modules/extern/luau")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("extern/luau", result.stderr)
+        self.assertTrue((self.wt / "extern/minhook/CMakeLists.txt").exists(), "the other inputs are still filled")
+        self.assertFalse((self.wt / "extern/luau/VM").exists())
+
+    def test_an_existing_luau_is_kept(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        (self.wt / "extern/luau/VM/src/lapi.cpp").write_text("// mine\n")
+        again = self.run_script()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual((self.wt / "extern/luau/VM/src/lapi.cpp").read_text(), "// mine\n")
+        self.assertIn("extern/luau", again.stdout.split("kept what this worktree already has:")[1])
+
+    def test_a_branch_that_does_not_pin_luau_gets_none(self):
+        git(self.wt, "reset", "-q", "--hard", "HEAD~1")
+        pinned = subprocess.run(["git", "-C", str(self.wt), "ls-tree", "HEAD", "extern/luau"], capture_output=True, text=True)
+        self.assertEqual(pinned.stdout.strip(), "", "the branch pins no luau")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.wt / "extern/luau").exists())
+        self.assertNotIn("extern/luau", result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

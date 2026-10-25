@@ -4,6 +4,8 @@
 # A new worktree has empty extern/{minhook,breakpad,lss} (submodules) and no gen/ (gitignored,
 # generated), so `cmake --preset ...` fails on the first missing file. This fills those from the main
 # checkout, and the git-ignored config/public-defaults.env (the public client defaults the build embeds).
+# It also fills extern/luau (read by `just test-scripting`, so by `just verify`) on a branch that pins it:
+# from the main checkout when that has it, else by `git submodule update --init extern/luau` here.
 # .env is runtime-only and is never copied here.
 #
 # What it will and will not do:
@@ -121,6 +123,26 @@ for d in minhook breakpad lss; do
   mv -T "$scratch/tmp/$d" "extern/$d"
   filled+=("extern/$d")
 done
+# extern/luau (the scripting VM; only `just test-scripting` reads it) is filled only on a branch that pins it:
+# copied from the main checkout when that has it, else initialised in this worktree (it needs the network then).
+# A failure is refused below, so the exit status is non-zero and the line names it.
+if [[ -n "$(git ls-tree HEAD extern/luau 2>/dev/null)" ]]; then
+  if has_files extern/luau; then
+    kept+=(extern/luau)
+  elif ! is_fillable extern/luau; then
+    refused+=("extern/luau (has content but no files)")
+  elif has_files "$main/extern/luau"; then
+    mkdir "$scratch/tmp/luau"
+    tar -C "$main/extern/luau" --exclude=.git -cf - . | tar -C "$scratch/tmp/luau" -xf -
+    [[ ! -d extern/luau ]] || rmdir extern/luau
+    mv -T "$scratch/tmp/luau" extern/luau
+    filled+=(extern/luau)
+  elif git submodule update --init extern/luau >"$scratch/luau-init.log" 2>&1 && has_files extern/luau; then
+    filled+=(extern/luau)
+  else
+    refused+=("extern/luau (the main checkout has none and 'git submodule update --init extern/luau' failed: $(tail -n 1 "$scratch/luau-init.log" 2>/dev/null))")
+  fi
+fi
 if has_gen "$here"; then
   kept+=(gen/)
 elif is_fillable gen; then
