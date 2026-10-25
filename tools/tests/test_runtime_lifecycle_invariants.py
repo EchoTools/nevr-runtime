@@ -434,8 +434,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
         for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
             self.assertNotIn(gone, patches)
-        for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
-                             ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
+        for hook, marker in (("static INT16 CBroadcasterListenHook(", "kBroadcasterListen"),
+                             ("static VOID CBroadcasterReceiveLocalEventHook(", "kBroadcasterReceiveLocal")):
             body = extract_braced_function(patches, hook)
             self.assertIn(f"nevr_hook_liveness::Mark(nevr_hook_liveness::{marker})", body)
             self.assertRegex(body, r"chainReadable\s*=\s*nevr_broadcaster_guard::TryReadListenerTable\(")
@@ -448,8 +448,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
     def test_broadcaster_hooks_report_rejected_chains_before_original_call(self):
         patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
-        for hook, original in (("static INT16 EngineEntityLookupHook(", "OriginalEngineEntityLookup("),
-                               ("static VOID EngineEntityPropDispatchHook(", "OriginalEngineEntityPropDispatch(")):
+        for hook, original in (("static INT16 CBroadcasterListenHook(", "OriginalCBroadcasterListen("),
+                               ("static VOID CBroadcasterReceiveLocalEventHook(", "OriginalCBroadcasterReceiveLocalEvent(")):
             body = extract_braced_function(patches, hook)
             guard = body.find("nevr_broadcaster_guard::TryReadListenerTable(")
             self.assertGreaterEqual(guard, 0, hook)

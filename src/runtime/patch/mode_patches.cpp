@@ -392,8 +392,8 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
 
 /// CBroadcaster::Listen @ 0x140f80ed0 reads the listener table through arg1.
 /// A low pointer in either link can fault before the table-value guard runs.
-typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
-static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
+typedef INT16 CBroadcasterListenFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+static CBroadcasterListenFunc* OriginalCBroadcasterListen = nullptr;
 
 // N83: this hooks CBroadcaster::Listen (0xF80ED0), NOT an entity lookup — see
 // hook/addresses.h. What that means for the code below:
@@ -417,7 +417,7 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 // function is never called proves nothing. If you are debugging a server that registers but
 // receives nothing, grep the log for `hook_liveness name=CBroadcaster::Listen` first.
 
-static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+static INT16 CBroadcasterListenHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterListen);
   if (g_isServer) {
     INT64 hashTablePtr = 0;
@@ -442,7 +442,7 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
       return -1;
     }
   }
-  return OriginalEngineEntityLookup(arg1, arg2, arg3, arg4, arg5);
+  return OriginalCBroadcasterListen(arg1, arg2, arg3, arg4, arg5);
 }
 
 // ============================================================================
@@ -452,8 +452,8 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
 /// CBroadcaster::ReceiveLocalEvent @ 0x140f87aa0 reads its broadcaster through
 /// arg1. A low pointer in either link can fault before dispatch reaches the
 /// listener table.
-typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
-static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
+typedef VOID CBroadcasterReceiveLocalEventFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+static CBroadcasterReceiveLocalEventFunc* OriginalCBroadcasterReceiveLocalEvent = nullptr;
 
 // N83 (2026-07-26): re-implemented as the null-guard it was always described as.
 //
@@ -481,7 +481,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 //
 // So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
 // The original protection is preserved; the collateral severance is not.
-static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+static VOID CBroadcasterReceiveLocalEventHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   nevr_hook_liveness::Mark(nevr_hook_liveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     INT64 table = 0;
@@ -506,11 +506,11 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
       return;  // the AV 7beccee was written to prevent
     }
   }
-  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
+  OriginalCBroadcasterReceiveLocalEvent(arg1, arg2, arg3, arg4, arg5);
 }
 
 // The unconditional server-mode skip of the broadcaster's listener dispatcher, and why its justification is false.
-[[maybe_unused]] static VOID EngineEntityPropDispatchHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+[[maybe_unused]] static VOID CBroadcasterReceiveLocalEventHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   // !! N83 — the justification below is FALSE. It is quoted so the next reader
   // !! can recognise the shape of the mistake:
   // !!
@@ -541,7 +541,7 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   // deleting the line because the name was wrong — that is the same error in the
   // opposite direction.
   if (g_isServer) return;
-  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
+  OriginalCBroadcasterReceiveLocalEvent(arg1, arg2, arg3, arg4, arg5);
 }
 
 // ============================================================================
@@ -761,10 +761,10 @@ VOID PatchDisableWwise() {
   PVOID base = GetModuleHandleA(NULL);
 
   Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + nevr_patch_addresses::WWISE_INIT);
-  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "AK::SoundEngine::Init");
+  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "CWwiseEngine::Init");
 
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + nevr_patch_addresses::WWISE_RENDERAUDIO);
-  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "AK::SoundEngine::RenderAudio");
+  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "CWwiseEngine::RenderAudio");
 
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] Wwise audio blocking hooks installed — VOIP preserved "
@@ -845,17 +845,17 @@ VOID InstallEntityHooks() {
   // Hook engine entity lookup to prevent null-pointer AV in server mode.
   // The function dereferences a hash table pointer at +0x5e0 that's uninitialized
   // in dedicated server mode (no player actor / client-side state).
-  OriginalEngineEntityLookup =
-      (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_LOOKUP);
-  PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook), "EngineEntityLookup");
+  OriginalCBroadcasterListen =
+      (CBroadcasterListenFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_LISTEN);
+  PatchDetour(&OriginalCBroadcasterListen, reinterpret_cast<PVOID>(CBroadcasterListenHook), "CBroadcaster::Listen");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
   // N83: re-installed 2026-07-26 with a real null-guard body (see above). The
   // hook now preserves the AV protection 7beccee intended while allowing the
   // broadcaster's listener dispatch through when the structure is valid.
-  OriginalEngineEntityPropDispatch =
-      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::ENGINE_ENTITY_PROP_DISPATCH);
-  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook), "EngineEntityPropDispatch");
+  OriginalCBroadcasterReceiveLocalEvent =
+      (CBroadcasterReceiveLocalEventFunc*)(EchoVR::g_GameBaseAddress + nevr_patch_addresses::BROADCASTER_RECEIVE_LOCAL_EVENT);
+  PatchDetour(&OriginalCBroadcasterReceiveLocalEvent, reinterpret_cast<PVOID>(CBroadcasterReceiveLocalEventHook), "CBroadcaster::ReceiveLocalEvent");
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] hooked name=CBroadcaster::ReceiveLocalEvent va=0x140F87AA0 mode=null_guard");
 }
