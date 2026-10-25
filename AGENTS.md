@@ -659,7 +659,9 @@ your seat name, for example `claude-main` or `codex`.
   `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
   `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
   `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. Every PR, whatever it touches, also runs
+  the count and says in its body which tests went and why. A PR that touches `src/runtime/exports.def`, an
+  `NEVR_MODULE_API` function or `src/runtime/host/` also runs
+  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll` on the build it made. Every PR, whatever it touches, also runs
   `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a
   fresh worktree: the doc-path check reads `extern/`). Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
   not run is named as not run.

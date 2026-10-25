@@ -45,16 +45,15 @@ installed: the CDN caches the 200 HTML answer for that exact address. A changed 
    unpushed, no uncommitted change.
 2. `just verify` has run on this tip of `main`: its log starts `verify: HEAD <sha>` and `verify: tree clean`, and ends
    `verify: OK`. It runs once per tip (`AGENTS.md`, "Builds"); a missing HEAD line is checked, not re-run.
-3. A dry run of the full release workflow on this exact commit is green. It is the first release step and the proof for
-   the merge and the tag: the real tag follows only a green dry run.
+3. The build the workflow does passes locally on this exact commit. GitHub Actions minutes are billed, so the pipeline
+   runs once, on the real tag; nothing is rehearsed there. After step 2 (which builds `mingw-release` and checks it),
+   run the packaging the workflow runs, from the same clone:
    ```sh
-   git tag -a v0.0.<issue> -m "scratch dry run" <commit> && git push origin v0.0.<issue>   # a scratch tag, never the release's
-   gh workflow run build.yml --ref v0.0.<issue>      # no release exists: nothing is attached, attested or published
+   just package-dev    # tools/package_release.py over the stripped DLL and the Quest library; stamps -dev, not a release
    ```
-   The run is green only when the `build` job (including its `Verify` step) and the `quest` job both succeed; the `quest`
-   job runs for a tag ref, never for a branch. Delete the scratch tag when the run ends (`git push origin --delete
-   v0.0.<issue>`, `git tag -d v0.0.<issue>`). A candidate that is a merge of branches not yet on `main` is a valid
-   dry-run commit for merging them; the tag is cut on `main` after the merge.
+   Read its output to the end: it fails on a Windows or Quest build that does not package. It needs the Quest signing
+   keystore in `pass`, the store APK and the NDK, as its recipe says. What it cannot show is the signer, the attestation
+   and the draft upload; those are checked on the draft ("Check the draft").
 
 ## Cut the draft
 
