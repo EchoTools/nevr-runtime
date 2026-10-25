@@ -540,11 +540,11 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    requests are kept per session up to 256; past that the oldest unanswered one is forgotten, counted
    (`Stats::configRequestsEvicted`) and logged. A request payload that is not a pad byte and a JSON object with
    string `type` and `id` has no key, and matches only a reply with no key.
-   `nevr_evr_codec::ConfigSymbol` reproduces the service's `ToSymbol` (nakama `server/evr/core_packet.go`), zero
-   extension of bytes included, because the service computes the reply symbols: it is not `EchoVR::CSymbol64Hash`,
-   which differs for the empty string (0 here, its seed there), for an 18-character `0x` + 16 hex digits string
-   (parsed here) and for bytes >= 0x80 (sign extension there; issue #657). If the service's hash changes to match
-   the game, `ConfigSymbol` changes in the same release.
+   `nevr_evr_codec::ConfigSymbol` reproduces the service's `ToSymbol` (nakama `server/evr/core_packet.go`), sign
+   extension of bytes >= 0x80 included (as the game does), because the service computes the reply symbols: it is
+   not `EchoVR::CSymbol64Hash`, which differs for the empty string (0 here, its seed there) and for an
+   18-character `0x` + 16 hex digits string (parsed here). If the service's hash changes, `ConfigSymbol` changes
+   in the same release.
    `ChannelInfoResponse` goes to the login connection (the
    game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
    to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery

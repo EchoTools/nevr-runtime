@@ -2701,7 +2701,9 @@ void TestAHintedConfigSocketIsNotRefusedByTheMatchmakerCap() {
 // (server/evr/core_packet.go with CalculateSymbolValue, core_hash.go) and encoding/json decoding of the
 // ConfigRequest {type, id} and ConfigErrorInfo {type, identifier} structs (server/evr/config_request.go,
 // config_failure.go), in a scratch Go module that holds verbatim copies of those functions; the nakama
-// repository was only read. ok is whether encoding/json decoded the text without error.
+// repository was only read. ok is whether encoding/json decoded the text without error. The values for names with a
+// byte >= 0x80 follow the service's sign extension (nakama#711): they are the game's own EchoVR::CSymbol64Hash of
+// the bytes the decoder emits, which the nakama#710 vectors pin to the service.
 
 struct SymbolVector {
   std::string text;
