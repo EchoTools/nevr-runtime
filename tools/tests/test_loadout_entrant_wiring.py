@@ -8,7 +8,9 @@ links it, so these source sensors pin what it does with the accessor:
   - the session GUID comes from TryGetEntrantSessionGuid for the slot being saved;
   - a slot with no accepted client session logs at Warning and returns, sending nothing;
   - entrant_id is set once, from that GUID formatted by GuidToUuidString, after the guard;
-  - the account id never reaches set_entrant_id.
+  - the account id never reaches set_entrant_id;
+  - the handler builds one game_server_save_loadout envelope and sends it, and nothing else in
+    src/runtime builds one (the game service handles GameServerSaveLoadout since nakama #708).
 """
 
 import re
@@ -60,6 +62,20 @@ class SaveLoadoutEntrantId(unittest.TestCase):
         body = handler_body()
         self.assertNotRegex(body, r"set_entrant_id\([^;]*accountId")
         self.assertNotRegex(body, r"set_entrant_id\([^;]*to_string")
+
+    def test_the_handler_sends_one_save_loadout_envelope(self):
+        body = handler_body()
+        self.assertEqual(len(re.findall(r"mutable_game_server_save_loadout\(", body)), 1)
+        self.assertEqual(len(re.findall(r"SendProtobufEnvelope\(\s*self\s*,\s*envelope\s*\)", body)), 1)
+        self.assertNotRegex(body, r"not sent: the game service does not accept")
+
+    def test_no_other_runtime_file_builds_a_save_loadout_envelope(self):
+        builders = [
+            str(path.relative_to(ROOT))
+            for path in sorted((ROOT / "src/runtime").rglob("*.cpp"))
+            if "mutable_game_server_save_loadout" in path.read_text()
+        ]
+        self.assertEqual(builders, ["src/runtime/server/gameserver_callbacks.cpp"])
 
 
 if __name__ == "__main__":
