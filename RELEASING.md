@@ -5,7 +5,9 @@ publish. Nothing about a published release is edited afterwards: a wrong release
 
 ## Names
 
-- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). Every
+- **Version:** plain semver, `X.Y.Z` (no leading zeros, `tools/release_asset_names.sh` `release_tag_regex`). It is computed, not chosen: `python3
+  tools/next_release_version.py` prints it from the commits since the last release tag (`docs/standards/planning.md`,
+  "Release versions"). Every
   other build stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from; it is never released.
 - **Tag:** `vX.Y.Z`, annotated (`git tag -a vX.Y.Z -m "X.Y.Z"`), cut from `origin/main`.
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else (`gh release create vX.Y.Z --title vX.Y.Z`).

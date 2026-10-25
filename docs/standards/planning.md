@@ -10,25 +10,36 @@ drifts; the hygiene rules at the end are how it gets corrected, on a schedule, t
 
 ## Release milestones
 
-One milestone per planned release, titled by version, then the theme:
+Milestones are ordered by when they ship, not by version number. There are three:
 
-    v4.0.0 — beta testers
+| milestone | holds |
+|---|---|
+| `Next release` | what ships in the next tagged release |
+| `Release after` | what ships in the release after that |
+| `Future` | wanted, not scheduled |
 
 - The description opens with `Outcome:`: the state of the world when the release is done, then its definition of done.
 - **No due dates.** Releases are scoped by work, not by the calendar.
-- Keep a few releases ahead, plus `Future` for work that is wanted but not scheduled.
-- When a release is ready, anything still open in its milestone **moves to the next milestone**. Unfinished work never
-  holds a release.
-- A patch release (`v4.0.1`) gets a milestone only when there is a fix to ship.
+- When a release is tagged, `Next release` is renamed to the version it shipped as (`v5.6.0`) and closed. Anything
+  still open in it moves to `Release after` first. Unfinished work never holds a release. `Release after` is then
+  renamed `Next release`, and a new `Release after` is opened.
 - Work nobody has decided to schedule has no milestone and carries the `backlog` label.
 
-| milestone | outcome |
-|---|---|
-| v4.0.0 — beta testers | testers can install, log in and play, and the release is provably the one we built |
-| v4.1.0 — community game servers | a community game server comes up, registers, matchmakes and shuts down correctly |
-| v4.2.0 — clean exits and crash handling | closing or crashing never leaves a process behind or loses a crash report |
-| v4.3.0 — honest diagnostics | every log line and status message tells the truth, and dead code is gone |
-| Future | wanted, not scheduled |
+### Release versions
+
+A release's version is not chosen ahead of time. It is computed when the release is tagged, from the
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) on `main` since the last release tag:
+
+- a breaking change (`!` before the colon, or a `BREAKING CHANGE:` footer) bumps the major: `v5.5.1` to `v6.0.0`;
+- otherwise any `feat` bumps the minor: `v5.5.1` to `v5.6.0`;
+- otherwise any `fix` or `perf` bumps the patch: `v5.5.1` to `v5.5.2`;
+- any other type bumps nothing, and with nothing bumped there is nothing to release.
+
+`python3 tools/next_release_version.py` computes it and prints the tag. On stderr it prints one line per commit with the bump
+that commit gives. A pre-release tag is not a release tag, and a scratch dry-run tag (`v0.0.<issue>`) sorts below every
+release, so neither is ever the base. The PR title becomes the squash commit's first line, so the PR title check (`tools/check_pr_title.py`) is what
+keeps the type honest. A PR whose title understates its change (a `fix` that breaks an interface) gives the release the
+wrong version, and the review is where that is caught.
 
 ## Points
 
@@ -104,7 +115,8 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
   "Branch lifecycle"); nothing is left to age across sprints.
 
 **Milestones**
-- The title is `vX.Y.Z — theme`, or `Future`.
+- An open milestone's title is `Next release`, `Release after` or `Future`. A closed milestone's title is the version it
+  shipped as, `vX.Y.Z`.
 - The description starts with `Outcome:`.
 - No due date.
-- A closed milestone has no open items. A release milestone with no open items is ready to ship.
+- A closed milestone has no open items.
