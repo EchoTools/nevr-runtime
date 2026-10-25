@@ -552,7 +552,7 @@ layout in #907/#712 matches the game.**
 
 ## Prior work
 
-Dualgame's [EchoRelay fork](https://github.com/Dualgame/EchoRelay) (`docs/protocol/early-quit.md`) and
+Dualgame's [EchoRelay fork](https://github.com/Dualgame/EchoRelay) (`EchoRelay/docs/protocol/early-quit.md`) and
 [echovr-modkit](https://github.com/Dualgame/echovr-modkit) (`mods/early-quit`) read +0x18 as a stamp, +0x20 as the
-expiry, and bits 1 and 5 as here. The earlier field map in echovr-reconstruction
-`docs/earlyquit_field_analysis.md` is covered by sections 1-4 here.
+expiry, and bits 1 and 5 as here. The earlier field map in
+`echovr-reconstruction/docs/earlyquit_field_analysis.md` is covered by sections 1-4 here.
