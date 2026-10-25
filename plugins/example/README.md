@@ -13,7 +13,7 @@ do I...", the answer is in `plugins/example/src/plugin.cpp`.
 | Concept                             | Implementation                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------- |
 | Plugin metadata (REQUIRED)          | `NvrPluginGetInfo()` -- name, description, semver                                |
-| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 6)   |
+| API versioning (optional, v1+)      | `NvrPluginGetApiVersion()` -- returns `NEVR_PLUGIN_API_VERSION` (currently 7)   |
 | Capability declaration (optional, v3+) | `NvrPluginGetCapabilities()` -- bitmask of what this plugin DOES               |
 | v4 args-aware init (optional)       | `NvrPluginInitEx(ctx, args_json)` -- with ctx_size check and args parsing       |
 | v3 legacy init (optional)           | `NvrPluginInit(ctx)` -- fallback when InitEx absent                             |
@@ -43,7 +43,7 @@ DLL load
      (string literals or global buffers -- not stack variables).
 
 2. NvrPluginGetApiVersion()         OPTIONAL (v1+)
-     Returns NEVR_PLUGIN_API_VERSION (currently 6). Absent = v1
+     Returns NEVR_PLUGIN_API_VERSION (currently 7). Absent = v1
      (pre-versioning). The host uses this to decide whether the
      plugin understands newer context fields.
 
@@ -236,7 +236,7 @@ file and no rate limiting: a plugin that logs per frame keeps its own cap.
 
 ## API version compatibility
 
-NEVR_PLUGIN_API_VERSION is currently **6** (#598).
+NEVR_PLUGIN_API_VERSION is currently **7** (#432).
 
 | Version | Added                                                          | Breaking? |
 | ------- | -------------------------------------------------------------- | --------- |
@@ -246,6 +246,7 @@ NEVR_PLUGIN_API_VERSION is currently **6** (#598).
 | v4      | `NvrPluginInitEx(ctx, args_json)` + config-driven loading (N134 S6) | No       |
 | v5      | `ctx_size` + `get_plugin_count` / `get_plugin_info` query API (N134 S8) | No       |
 | v6      | `plugin_id` + `log`: the host's structured log (N135)          | No        |
+| v7      | `NEVR_RegisterAsset` / `NEVR_DeregisterAssets`: plugin-carried levels and resources (#432); see docs/reference/plugin-assets.md | No |
 
 All additions are tail-extensions -- a plugin compiled against an older version
 loads unchanged on a newer host, and a plugin compiled against a newer version

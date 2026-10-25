@@ -27,6 +27,7 @@
 #include "runtime/ext/plugin_tree.h"            // #741: and every DLL it names from its own directory
 #include "runtime/hook/dll_load_hook.h"         // #741: loads a plugin makes after init
 #include "runtime/ext/plugin_trust.h"           // #741: what the runtime pins, and whether this build enforces it
+#include "runtime/patch/asset_registry.h"      // #432: assets a plugin carries leave with its image
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -1156,11 +1157,30 @@ void LoadPlugins(PluginPhase phase) {
   ShowRefusalNoticeIfDue();  // after the record; once per run, client with graphics only
 }
 
+// Assets a plugin registered point into its image; drop them before the image goes so the engine can never be
+// handed a pointer into freed memory. A well-behaved plugin deregisters its own in shutdown; this is the host's
+// guarantee for one that does not.
+static void ReleaseAssetsOf(HMODULE module) {
+  if (module == nullptr) return;
+  const auto* base = reinterpret_cast<const uint8_t*>(module);
+  const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+  if (dos->e_magic != IMAGE_DOS_SIGNATURE) return;
+  const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+  if (nt->Signature != IMAGE_NT_SIGNATURE) return;
+  const size_t released =
+      nevr::assets::Global().Deregister(base, base + nt->OptionalHeader.SizeOfImage);
+  if (released != 0) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.ASSET] released %zu asset(s) still registered by a plugin at unload", released);
+  }
+}
+
 void UnloadPlugins() {
   for (auto it = g_plugins.rbegin(); it != g_plugins.rend(); ++it) {
     if (it->shutdown) {
       it->shutdown();
     }
+    ReleaseAssetsOf(it->hModule);
     FreeLibrary(it->hModule);
   }
   g_plugins.clear();

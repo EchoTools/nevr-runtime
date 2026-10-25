@@ -44,6 +44,8 @@ set(PATCHES_SOURCES
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "patch/asset_cache.cpp"
+    "patch/asset_registry.cpp"
+    "patch/plugin_assets.cpp"
     "compat/ws_bridge.cpp"
     # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
     "compat/session_router.cpp"
@@ -127,6 +129,8 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/asset_cache.h"
+    "patch/asset_registry.h"
+    "patch/plugin_assets.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
@@ -239,6 +243,8 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #432: asset_registry.cpp builds the login's nevr_assets array with nlohmann-json; same arrangement.
+set_source_files_properties(patch/asset_registry.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
@@ -1086,6 +1092,18 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_session DISCOVERY_MODE PRE_TEST)
 
+    # The plugin asset registry (patch/asset_registry.cpp): std + nlohmann-json only, so it builds and runs on
+    # its own. The hooks that serve it to the engine (patch/plugin_assets.cpp) are in BugSplat64.dll.
+    add_executable(test_asset_registry
+      tests/test_asset_registry.cpp
+      patch/asset_registry.cpp)
+    set_source_files_properties(tests/test_asset_registry.cpp patch/asset_registry.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_asset_registry PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_registry PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_asset_registry DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_social_facade
       tests/test_social_facade.cpp
       patch/social_facade_object.cpp
@@ -1247,6 +1265,8 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       # #60: plugin_loader.cpp builds the login's plugin report through this.
       ext/plugin_manifest.cpp
+      # #432: plugin_loader.cpp and ws_bridge.cpp read the process-wide plugin asset registry.
+      patch/asset_registry.cpp
       # #741: the signature gate StageOne consults, linked as production source.
       ext/plugin_signature.cpp
       ext/plugin_tree.cpp
@@ -1293,6 +1313,7 @@ if(BUILD_TESTING)
       patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
+      patch/asset_registry.cpp
       ext/plugin_signature.cpp
       ext/plugin_tree.cpp
       ext/plugin_trust.cpp
