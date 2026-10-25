@@ -34,6 +34,13 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
 # Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
+# BugSplat64.dll and echovr_server.exe carry a VERSIONINFO resource (cmake/nevr_version_info.cmake, #850): the
+# resource compiler is a language, and enable_language cannot be called from a function.
+if(WIN32)
+  enable_language(RC)
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_version_info.cmake")
+
 # The version is plain semver from the tags: exactly X.Y.Z for a CI build on the tag vX.Y.Z, otherwise
 # X.Y.(Z+1)-dev.<N>+<sha> (set_project_version_from_git.cmake).
 
@@ -310,7 +317,9 @@ endif()
 # =============================================================================
 # Distribution Package Target (stripped, no debug symbols)
 # =============================================================================
-# Creates the one release package, nevr-runtime-v<ver>: binaries run through strip --strip-all.
+# Creates the stripped distribution package, nevr-runtime-v<ver>-windows-server: the BugSplat64.dll and
+# echovr_server.exe that tools/package_release.py puts in the one Windows release zip (nevr-runtime-v<ver>-windows.zip),
+# and the source of the .tar.zst workflow artifact: binaries run through strip --strip-all.
 # Before stripping, the debug info of each shipped PE is split into dist/symbols/<name>/<file>.dbg and
 # the stripped file gets a .gnu_debuglink to it (name and CRC32), so a crash from the field maps to
 # function names through the .dbg's COFF symbol table. The release preset has no -g, so there are no source
@@ -319,7 +328,7 @@ endif()
 # Usage: cmake --build <build_dir> --target dist
 # =============================================================================
 
-set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
+set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
 set(DIST_SYMBOLS_DIR "${CMAKE_SOURCE_DIR}/dist/symbols/${DIST_NAME}")

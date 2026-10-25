@@ -171,7 +171,7 @@ class ReleaseContractTest(unittest.TestCase):
     def test_build_and_distribution_recipes_propagate_cmake_failures(self):
         justfile = (REPO / "justfile").read_text()
         build = justfile.split("# Build all components\n", 1)[1].split("# Build only", 1)[0]
-        dist = justfile.split("# Create the stripped distribution package (nevr-runtime-v<ver>) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
+        dist = justfile.split("# Create the stripped server distribution package (nevr-runtime-v<ver>-windows-server) and its symbol files in dist/symbols/\n", 1)[1].split("# Create distribution with full output", 1)[0]
         self.assertIn("cmake --build --preset {{ preset }}", build)
         self.assertNotIn("|", build)
         self.assertIn("cmake --build --preset {{ preset }} --target dist", dist)
@@ -179,7 +179,7 @@ class ReleaseContractTest(unittest.TestCase):
 
     def test_a_release_carries_one_stripped_dist_package_and_no_lite_or_debug_one(self):
         cmake = (REPO / "CMakeLists.txt").read_text()
-        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")', cmake)
+        self.assertIn('set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}-windows-server")', cmake)
         dist = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         self.assertIn("--strip-all", dist)
         self.assertIn("add_custom_target(dist\n", dist)
@@ -240,26 +240,28 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("- name: Toolchain versions", workflow)
         # The repack job runs on ubuntu-latest (not the builder image) and installs zstd with apt-get
         # there; the build job has no apt-get.
-        build_job = workflow.split("\n  sign:", 1)[0]
+        build_job = workflow.split("\n  seal:", 1)[0]
         self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.73.0", dockerfile)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        # Signing is stubbed until the policy signer (a private repository) exists: no Windows runner, no
-        # cloud login, no signing environment, and the files are passed through UNSIGNED. The release
-        # files get a build-provenance attestation instead (not code signing).
-        self.assertIn('name: "sign: stubbed, policy signer not built yet"', workflow)
-        self.assertIn("PLACEHOLDER: the signer dispatch goes here", workflow)
+        # Nothing here signs, and no job pretends to: no Windows runner, no cloud login, no signing environment.
+        # The release files get a build-provenance attestation (not code signing); the release signer signs the
+        # draft's files afterwards (RELEASING.md).
+        self.assertNotIn("sign: stubbed", workflow)
+        self.assertNotIn("PLACEHOLDER: the signer dispatch goes here", workflow)
         self.assertIn("actions/attest@", workflow)
         self.assertNotIn("azure/", workflow)
         self.assertNotIn("environment: codesign", workflow)
         self.assertNotIn("windows-latest", workflow)
         self.assertNotIn("CODESIGN_PASS", workflow)
         self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
-        self.assertIn("          dist/*.zip", workflow)
-        # Zips only are release assets; the .tar.zst archives are kept as a workflow artifact.
+        # The one release zip is the sealed Windows tree's; the dist zip is not a release asset.
+        self.assertIn("          release-assets/*.zip", workflow)
+        self.assertNotIn("          dist/*.zip", workflow)
+        # The .tar.zst archives are kept as a workflow artifact.
         self.assertNotIn("          dist/*.tar.zst", workflow)
         self.assertIn("name: dist-tar-zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
@@ -310,6 +312,12 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("CMake 4.0+", readme)
         self.assertIn("CMake 4.0+", agents)
         self.assertIn("echovr_server.exe", readme)
+        self.assertRegex(readme, r"Windows zip \(`nevr-runtime-v<ver>-windows\.zip`\)\s+has no entry for\s+it")
+        self.assertNotIn("the release zip has no entry", readme)
+        justfile = (REPO / "justfile").read_text()
+        self.assertIn("is published outside GitHub, never attached to a release", justfile)
+        self.assertNotIn("shared privately", justfile)
+        self.assertNotIn("The distribution package includes an empty `plugins/`", readme)
         self.assertTrue((REPO / "docs/design/2026-09-21-mic-provider-voip-fix.md").is_file())
 
     def test_sample_config_sensor_uses_tracked_fixture_not_ignored_local_state(self):

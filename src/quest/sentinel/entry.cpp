@@ -21,6 +21,7 @@
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
 #include "toast_presenter.h"
+#include "vk_ext_window.h"
 #include "pinned_targets.h"
 #include "quest/integration/entry_hooks.h"
 
@@ -97,10 +98,16 @@ bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(
 bool InstallPermissionWaitHook() noexcept {
     nevr_quest::data_wiring::Options options;
     options.show = &nevr_quest::toast::Show;
+    options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
     options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
+    if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
     nevr_quest::data_wiring::Install(options);
     return nevr_quest::permission_wait::Install();
 }
+
+// The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
+// refused install is logged by GotHook and leaves the game's calls intact.
+bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

@@ -1,0 +1,33 @@
+// VERSIONINFO for a Windows file this project ships (cmake/nevr_version_info.cmake fills the @VARIABLES@).
+// tools/pe_version_info.py pins every field below and reads them back from the built files.
+#include <winver.h>
+#pragma code_page(65001)
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @NEVR_VI_NUMERIC_VERSION@
+PRODUCTVERSION @NEVR_VI_NUMERIC_VERSION@
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS VOS_NT_WINDOWS32
+FILETYPE @NEVR_VI_FILETYPE@
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Andrew Bates"
+      VALUE "FileDescription", "@NEVR_VI_FILE_DESCRIPTION@"
+      VALUE "FileVersion", "@NEVR_VI_VERSION@"
+      VALUE "InternalName", "@NEVR_VI_ORIGINAL_FILENAME@"
+      VALUE "LegalCopyright", "© 2026 Andrew Bates <a@sprock.io>"
+      VALUE "OriginalFilename", "@NEVR_VI_ORIGINAL_FILENAME@"
+      VALUE "ProductName", "nEVR runtime"
+      VALUE "ProductVersion", "@NEVR_VI_VERSION@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

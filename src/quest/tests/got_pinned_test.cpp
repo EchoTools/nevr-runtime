@@ -170,8 +170,11 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15AndroidMain(), "libr15 android_main JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15EnablePageNodeEnter(), "libr15 CR15UIPage2EnablePageNode::Enter JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15RequestPermissions(), "libr15 CSysInfo::RequestPermissions JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15CheckPermission(), "libr15 CSysInfo::CheckPermission JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15MountObb(), "libr15 AStorageManager_mountObb JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15GetMountedObbPath(), "libr15 AStorageManager_getMountedObbPath JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15FindMethod(), "libr15 CSysModule::FindMethod JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15GetDeviceExtensionsVulkan(), "libr15 vrapi_GetDeviceExtensionsVulkan JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
@@ -254,9 +257,9 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
-  // The permission-wait hook (#640): RequestPermissions is defined where the slot's comment says, and
-  // CheckPermission, which the hook calls (not a hook target), is defined at the pinned address with the first four
-  // instructions the install proves before using it.
+  // The permission-wait hook (#640, #758): RequestPermissions is defined where the slot's comment says, and
+  // CheckPermission, which the hook calls and also hooks (its JUMP_SLOT is checked above), is defined at the pinned
+  // address with the first four instructions the install proves before using it.
   if (DynamicSymbolValue(r15, pinned::kRequestPermissionsSymbol) != 0xf873ecULL) {
     std::fprintf(stderr, "libr15 %s: .dynsym value is not 0xf873ec\n", pinned::kRequestPermissionsSymbol);
     QCHECK(false);

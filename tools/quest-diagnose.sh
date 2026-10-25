@@ -160,8 +160,14 @@ if printf '%s' "$start_out" | grep -q 'Error'; then problems+=("The game did not
 elif [ "$running" != yes ]; then problems+=("The game was not running $wait_s s after it started (it ended or crashed).")
 fi
 [ -z "$crash_marker" ] || problems+=("The launch log has a crash marker: $crash_marker")
-[ -n "$obb" ] || problems+=('The launch log has no "OBB mounted at" line: the game did not reach its data step.')
-if [ "${#problems[@]}" -eq 0 ]; then result="No problem found in these facts. Send the zip anyway if the game still misbehaves."
+# #764: a failure is an exit, a death, a crash marker or the game's own Initialization Error. A line a build does not
+# write (the OBB mount line) is never a failure of a game that is still running.
+init_error=$(printf '%s\n' "$logcat" | grep -m1 'Initialization Error' | sed 's/^.*\(Initialization Error\)/\1/' || true)
+init_file=$(printf '%s\n' "$logcat" | grep -m1 -o 'Failed to find package manifest file [^ ]*' || true)
+[ -z "$init_error" ] || problems+=("The game logged: $init_error${init_file:+ ($init_file)}")
+if [ "${#problems[@]}" -eq 0 ] && [ -z "$obb" ] && [ -z "$data_root" ]; then
+  result="No failure seen: running after $wait_s s; this build logged no data-mount line, so the data step can't be confirmed from the log. Send the zip anyway if the game still misbehaves."
+elif [ "${#problems[@]}" -eq 0 ]; then result="No problem found in these facts. Send the zip anyway if the game still misbehaves."
 else result=$(printf '%s\n           ' "${problems[@]}"); result=${result%$'\n           '}; fi
 present() { if [ "$1" = yes ]; then echo present; else echo absent; fi; }
 media_note=""

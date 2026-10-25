@@ -407,6 +407,12 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
     return;
   }
 
+  // The game service has no case for the GameServerSaveLoadout envelope; an unhandled protobuf message makes it
+  // drop the game server's connection, which ends the match (#832). The loadout is read and logged below, not sent.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] [SAVE_LOADOUT] not sent: the game service does not accept this message yet (#772) slot=%u",
+      slot.slot);
+
   // Log player info
   auto* entrant = self->GetContext().GetEntrant(slot.slot);
   if (entrant) {
@@ -492,51 +498,6 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 
           // Output the full JSON (debug)
           Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] JSON: %s", fullJson.c_str());
-
-          // Build protobuf message
-          if (self->GetContext().IsValidForOperations()) {
-            gameservice::v1::Envelope envelope;
-            auto* saveLoadout = envelope.mutable_game_server_save_loadout();
-
-            // Set session and player info
-            auto sessionState = self->GetContext().GetSessionState();
-            saveLoadout->set_lobby_session_id(sessionState.lobbySessionId);
-
-            // Set entrant ID (account ID as string)
-            if (entrant) {
-              saveLoadout->set_entrant_id(std::to_string(entrant->userId.accountId));
-            }
-
-            saveLoadout->set_loadout_slot(static_cast<int32_t>(playerSlot));
-            saveLoadout->set_jersey_number(static_cast<int32_t>(jerseyNumber));
-
-            // Add loadout instances
-            for (uint64_t i = 0; i < instanceCount; i++) {
-              LoadoutInstance* inst = &instances[i];
-              auto* protoInstance = saveLoadout->add_loadout_instances();
-              protoInstance->set_instance_name(inst->instanceName);
-
-              // Add items
-              if (inst->itemsArrayPtr && inst->itemCount > 0 && inst->itemCount < 64) {
-                LoadoutItem* items = reinterpret_cast<LoadoutItem*>(inst->itemsArrayPtr);
-                for (uint64_t j = 0; j < inst->itemCount; j++) {
-                  if (!IsValidSymbolId(items[j].slotType)) continue;
-                  auto* protoItem = protoInstance->add_items();
-                  protoItem->set_slot_type(items[j].slotType);
-                  protoItem->set_equipped_item(items[j].equippedItem);
-                }
-              }
-            }
-
-            // Send via protobuf
-            if (SendProtobufEnvelope(self, envelope)) {
-              Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service slot=%u",
-                  playerSlot);
-            }
-          } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session, slot=%u — loadout not sent", playerSlot);
-          }
         } else {
           Log(EchoVR::LogLevel::Warning,
               "[NEVR.GAMESERVER] [SAVE_LOADOUT] No valid instances found (count=%llu, ptr=%p)", instanceCount,

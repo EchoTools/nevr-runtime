@@ -147,6 +147,19 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "M04"))
 
+    def test_c12_scores_the_loadout_skip_line_and_not_the_removed_round_trip(self):
+        # #832: no loadout save is sent, so C12 scores the skip line the runtime logs; the old
+        # "Not in active session" fail pattern is gone and must not turn a healthy run red.
+        skip = ("[NEVR.GAMESERVER] [SAVE_LOADOUT] not sent: the game service does not accept this message yet "
+                "(#772) slot=3\n")
+        self.assertIn("PASS", row(score(skip, group="client").stdout, "C12"))
+        self.assertIn("ABSENT", row(score("[NEVR.GAMESERVER] [SAVE_SUCCESS] size=12\n", group="client").stdout, "C12"))
+        removed = score(skip + "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session, slot=3 \u2014 loadout not sent\n",
+                        group="client")
+        self.assertIn("PASS", row(removed.stdout, "C12"))
+        base = score("[NEVR.GAMESERVER] [SAVE_LOADOUT] No game base address\n", group="client")
+        self.assertIn("FAIL", row(base.stdout, "C12"))
+
 
 if __name__ == "__main__":
     unittest.main()
