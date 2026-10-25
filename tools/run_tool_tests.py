@@ -5,7 +5,7 @@ A run that is only printed is lost when the terminal scrolls: a one-off failure 
 and no name. Every run therefore writes, under the log directory:
 
 - `<stem>.log`, the stem being `<UTC stamp to the microsecond>-<pid>-<16 random hex>-<sha12>`: a
-  header (UTC start, HEAD, tree clean or DIRTY, pytest's version and plugins, the
+  header (UTC start, HEAD, tree clean, DIRTY or unknown, pytest's version and plugins, the
   pytest-randomly seed, the command), then pytest's full output, also echoed to stdout line by
   line, then an end line with the exit code;
 - `<stem>.xml`: pytest's JUnit XML, one record per test;
@@ -15,8 +15,8 @@ and no name. Every run therefore writes, under the log directory:
   when the XML gives no class, as for a collection error), whether the XML was read
   (`junit_state`: `ok`, `missing` or `unparseable`), the signals received, whether pytest's output
   was read to its end (`output_complete`), whether a process pytest left behind was sent a kill
-  (`stray_kill_sent`), any error writing the log or reading the output, and the paths of the two
-  files.
+  (`stray_kill_sent`), what became of the echo (`echo`), any error writing the log or reading the
+  output, and the paths of the two files.
 
 pytest's short summary (on by default, `-rfE`) names every failure and error even under `-q`; the
 log keeps it whole. When pytest-randomly is installed and loads automatically, and neither the
@@ -34,14 +34,18 @@ not escalated. A signal before pytest is started means it is never started; one 
 it is being started is passed on as soon as it has started. When pytest has exited and something
 it left behind still holds its output open for 10 s ($NEVR_TEST_DRAIN_S), pytest's process group
 is sent a kill (`stray_kill_sent`), and `output_complete` says whether the output then closed. If
-this script is killed outright, pytest is killed with it. When stdout is closed, goes away, or
-cannot encode a line, the echo stops or replaces what it cannot encode, and the log keeps all of
-it.
+this script is killed outright, pytest is killed with it.
+
+The echo. stdout is written from a thread of its own, so a stdout that nobody reads holds up only
+the echo, never the run, the log or the record. `echo` in the end record is `complete`, `closed`
+(stdout went away), `stalled` (stdout stopped taking lines; the echo was dropped, or did not finish
+within $NEVR_TEST_DRAIN_S) or `none` (no stdout). A line stdout cannot encode is echoed with
+replacements; the log keeps it as read.
 
 Exit code: pytest's. Exceptions, each loud on stderr:
-- 2 before pytest runs, when the log directory or the start record cannot be written, or
-  `--junitxml` is passed (the run owns its XML path): a run whose record cannot be kept is
-  refused, never run unrecorded;
+- 2 before pytest runs, when the log directory or the start record cannot be written,
+  `--junitxml` is passed (the run owns its XML path), or a wait above is not a positive number of
+  seconds: a run whose record cannot be kept is refused, never run unrecorded;
 - 128 + the number of the first signal when a signal interrupted the run (130 for SIGINT);
 - when the log or the end record cannot be written, or pytest's output could not be read, pytest's
   exit code if it is non-zero, else 2: a run is never reported green without its record.
@@ -54,8 +58,10 @@ import datetime
 import importlib.metadata
 import importlib.util
 import json
+import math
 import os
 import pathlib
+import queue
 import random
 import re
 import secrets
@@ -74,19 +80,41 @@ DEFAULT_LOG_DIR = "/var/tmp/work-nevr-runtime/test-runs/tools-tests"
 SUMMARY_RE = re.compile(
     r"(\b\d+ (passed|failed|errors?|skipped|deselected|xfailed|xpassed|warnings?)\b|\bno tests ran\b)"
     r".* in [0-9.]+s")
-# Seconds pytest gets after the first signal ($NEVR_TEST_INTERRUPT_GRACE_S), and seconds its output may
-# stay open after it exits, held by a process it left behind ($NEVR_TEST_DRAIN_S).
-INTERRUPT_GRACE_S = float(os.environ.get("NEVR_TEST_INTERRUPT_GRACE_S") or 30)
-DRAIN_S = float(os.environ.get("NEVR_TEST_DRAIN_S") or 10)
+
+
+def seconds_from_env(name: str, default: float):
+    """$name as a positive, finite number of seconds; `default` when unset; None when it is not one."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+# Seconds pytest gets after the first signal, and seconds its output may stay open after it exits, held
+# by a process it left behind (also the most the echo is waited for).
+WAITS = {"NEVR_TEST_INTERRUPT_GRACE_S": seconds_from_env("NEVR_TEST_INTERRUPT_GRACE_S", 30),
+         "NEVR_TEST_DRAIN_S": seconds_from_env("NEVR_TEST_DRAIN_S", 10)}
+INTERRUPT_GRACE_S = WAITS["NEVR_TEST_INTERRUPT_GRACE_S"]
+DRAIN_S = WAITS["NEVR_TEST_DRAIN_S"]
 # A repeat of a signal sooner than this after the one before it is the same event delivered twice.
 REPEAT_S = 1.0
+# Lines the echo may fall behind stdout before it is dropped.
+ECHO_BACKLOG = 10000
 HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 PR_SET_PDEATHSIG = 1
 
 
-def git(*args: str) -> str:
-    out = subprocess.run(["git", *args], capture_output=True, text=True)
-    return out.stdout.strip() if out.returncode == 0 else ""
+def git(*args: str):
+    """git's output, or None when git fails (not a repository, refused, not installed)."""
+    try:
+        out = subprocess.run(["git", *args], capture_output=True, text=True)
+    except OSError:
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
 
 
 def run_stem(start: datetime.datetime, head: str) -> str:
@@ -150,7 +178,7 @@ def randomly_seed(args: list, environ) -> tuple:
         elif tok == "--randomly-seed" and i + 1 < len(tokens):
             given = tokens[i + 1]
     if given is not None:
-        return [], int(given) if given.isdigit() else given
+        return [], int(given) if given.isascii() and given.isdigit() else given
     seed = random.SystemRandom().randrange(2**32)
     return [f"--randomly-seed={seed}"], seed
 
@@ -180,13 +208,69 @@ def die_with_parent() -> None:
         pass
 
 
+class Echo:
+    """Lines to stdout from a thread of its own, straight to the file descriptor: a stdout nobody reads
+    blocks that thread alone, and holds no lock the rest of the process (or its exit) needs."""
+
+    def __init__(self, stream):
+        self.state = "complete"
+        self.fd = None
+        try:
+            self.fd = stream.fileno()
+        except (OSError, ValueError, AttributeError):  # closed, not a file, or None (no stdout)
+            pass
+        if self.fd is None:
+            self.state = "none"
+            return
+        self.encoding = getattr(stream, "encoding", None) or "utf-8"
+        self.lines = queue.Queue(maxsize=ECHO_BACKLOG)
+        threading.Thread(target=self.write_lines, daemon=True).start()
+
+    def put(self, text: str) -> None:
+        if self.state != "complete":
+            return
+        try:
+            self.lines.put_nowait(text)
+        except queue.Full:
+            self.state = "stalled"
+
+    def write_lines(self) -> None:
+        while True:
+            item = self.lines.get()
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
+            if self.state == "closed":
+                continue
+            data = item.encode(self.encoding, errors="replace")
+            try:
+                while data:
+                    data = data[os.write(self.fd, data):]
+            except OSError:
+                self.state = "closed"
+
+    def flush(self, timeout: float) -> str:
+        """Wait up to `timeout` for every line put so far to be written; the echo's state."""
+        if self.fd is None:
+            return self.state
+        mark = threading.Event()
+        try:
+            self.lines.put(mark, timeout=timeout)
+        except queue.Full:
+            mark = None
+        if (mark is None or not mark.wait(timeout)) and self.state == "complete":
+            self.state = "stalled"
+        return self.state
+
+
 class Run:
     """The pytest process, its output and the signals that arrive while it runs."""
 
     def __init__(self, log):
         self.log = log
+        self.log_closed = False
         self.lock = threading.Lock()
-        self.echo = sys.stdout is not None
+        self.echo = Echo(sys.stdout)
         self.log_error = None
         self.read_error = None
         self.summary = ""
@@ -196,47 +280,32 @@ class Run:
         self.escalations = 0
         self.forwarded = 0
         self.stray_kill_sent = False
-        if self.echo:
-            try:
-                sys.stdout.reconfigure(errors="replace")
-            except (AttributeError, ValueError, OSError):
-                pass
 
-    def stop_echo(self) -> None:
-        """stdout is gone: point fd 1 at /dev/null so the interpreter's own flush at exit cannot fail."""
-        self.echo = False
-        try:
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
-            os.close(devnull)
-        except (OSError, ValueError, AttributeError):
-            pass
-
-    def say(self, text: str) -> None:
-        """A line for stdout only, after the log is closed."""
-        with self.lock:
-            if self.echo:
-                try:
-                    sys.stdout.write(text)
-                    sys.stdout.flush()
-                except (OSError, ValueError):
-                    self.stop_echo()
+    def note_log_error(self, exc: Exception) -> None:
+        if self.log_error is None:
+            self.log_error = str(exc)
+            print(f"test-tools: FAIL cannot write the log: {exc}", file=sys.stderr, flush=True)
 
     def emit(self, text: str) -> None:
+        self.echo.put(text)
         with self.lock:
-            if self.echo:
-                try:
-                    sys.stdout.write(text)
-                    sys.stdout.flush()
-                except (OSError, ValueError):
-                    self.stop_echo()
-            if self.log_error is None:
+            if self.log_error is None and not self.log_closed:
                 try:
                     self.log.write(text)
                     self.log.flush()
                 except (OSError, ValueError) as exc:
-                    self.log_error = str(exc)
-                    print(f"test-tools: FAIL cannot write the log: {exc}", file=sys.stderr, flush=True)
+                    self.note_log_error(exc)
+
+    def close_log(self) -> None:
+        """Close the log once; a line read after this (a process pytest left behind) is echoed only."""
+        with self.lock:
+            if self.log_closed:
+                return
+            self.log_closed = True
+            try:
+                self.log.close()
+            except (OSError, ValueError) as exc:
+                self.note_log_error(exc)
 
     def on_signal(self, signum, frame) -> None:
         now = time.monotonic()
@@ -300,6 +369,11 @@ def main(argv: list) -> int:
         print("test-tools: FAIL --junitxml is not accepted: the run writes its own XML beside its log",
               file=sys.stderr)
         return 2
+    for name, value in WAITS.items():
+        if value is None:
+            print(f"test-tools: FAIL ${name}={os.environ.get(name)!r} is not a positive number of seconds",
+                  file=sys.stderr)
+            return 2
 
     log_dir = pathlib.Path(os.environ.get("NEVR_TEST_LOG_DIR") or DEFAULT_LOG_DIR)
     try:
@@ -311,7 +385,8 @@ def main(argv: list) -> int:
         return 2
 
     head = git("rev-parse", "HEAD") or "unknown"
-    tree = "DIRTY" if git("status", "--porcelain") else "clean"
+    status = git("status", "--porcelain")
+    tree = "unknown" if status is None else "DIRTY" if status else "clean"
     start = datetime.datetime.now(datetime.timezone.utc)
     stem = run_stem(start, head)
     log_path = log_dir / f"{stem}.log"
@@ -336,7 +411,6 @@ def main(argv: list) -> int:
             previous[s] = signal.signal(s, run.on_signal)
     try:
         if not append_record(index, {"event": "start", **base}):
-            log.close()
             log_path.unlink()
             return 2
         for line in (f"test-tools: start {start.isoformat()}", f"test-tools: HEAD {head}",
@@ -359,13 +433,14 @@ def main(argv: list) -> int:
         run.emit(f"test-tools: end {end.isoformat()} rc={rc}"
                  + (f" interrupted={run.signals[0]}" if interrupted else "")
                  + ("" if output_complete else " output=incomplete") + "\n")
-        log.close()
+        run.close_log()
+        echo = run.echo.flush(DRAIN_S)
 
         failed, junit_state = failing_ids(xml_path)
         record = {"event": "end", **base, "end": end.isoformat(), "rc": rc, "pytest_rc": pytest_rc,
                   "interrupted": interrupted, "signals": list(run.signals), "summary": run.summary,
                   "failed": failed, "junit_state": junit_state, "output_complete": output_complete,
-                  "stray_kill_sent": run.stray_kill_sent, "log_error": run.log_error,
+                  "stray_kill_sent": run.stray_kill_sent, "echo": echo, "log_error": run.log_error,
                   "read_error": run.read_error}
         recorded = append_record(index, record)
         if run.read_error is not None:
@@ -373,10 +448,11 @@ def main(argv: list) -> int:
                   file=sys.stderr, flush=True)
         if not recorded or run.log_error is not None or run.read_error is not None:
             return rc if rc != 0 else 2
-        run.say(f"test-tools: log {log_path}\n")
+        run.echo.put(f"test-tools: log {log_path}\n")
+        run.echo.flush(DRAIN_S)
         return rc
     finally:
-        log.close()
+        run.close_log()
         for s, h in previous.items():
             signal.signal(s, h)
 

@@ -20,6 +20,7 @@ import threading
 import time
 import types
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -200,6 +201,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertFalse(record["stray_kill_sent"])
         self.assertIsNone(record["read_error"])
         self.assertIsNone(record["log_error"])
+        self.assertEqual(record["echo"], "complete")
         self.assertEqual(record["signals"], [])
 
         log = Path(record["log"]).read_text()
@@ -497,6 +499,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertNotIn("Traceback", stderr)
         record = self.records()[0]
         self.assertEqual(record["rc"], 0)
+        self.assertEqual(record["echo"], "closed")
         self.assertIn("1 passed", Path(record["log"]).read_text())
         self.assertRegex(Path(record["log"]).read_text(), r"\ntest-tools: end \S+ rc=0\n$")
 
@@ -506,8 +509,7 @@ class RunToolTestsRecord(unittest.TestCase):
         result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
                                 capture_output=True, text=True, cwd=REPO, timeout=120,
                                 env=self.env(self.logs, NEVR_TEST_DRAIN_S="1"))
-        # $NEVR_TEST_DRAIN_S is read: the default 10 s would take the run past this.
-        self.assertLess(time.monotonic() - started, 8)
+        self.assertLess(time.monotonic() - started, 60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = self.records()[0]
         self.assertTrue(record["stray_kill_sent"])
@@ -539,36 +541,19 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertIsNotNone(record["log_error"])
 
     def test_a_signal_before_pytest_starts_means_pytest_never_starts(self):
-        # The wrapper's stdout is a pipe already full, so its first header line blocks: the start
-        # record is written and pytest is not yet started. The signal lands there.
-        read_end, write_end = os.pipe()
-        os.set_blocking(write_end, False)
-        try:
-            while True:
-                os.write(write_end, b"x" * 4096)
-        except BlockingIOError:
-            pass
-        os.set_blocking(write_end, True)
+        # The signal lands once the start record is in and before pytest is started.
+        prelude = ("real = m.append_record\n"
+                   "def append_record(index, record):\n"
+                   "    ok = real(index, record)\n"
+                   "    if record['event'] == 'start':\n"
+                   "        os.kill(os.getpid(), signal.SIGINT)\n"
+                   "    return ok\n"
+                   "m.append_record = append_record")
         marker = self.root / "marker"
-        env = self.env(self.logs, RUN_TOOL_TESTS_MARKER=str(marker), RUN_TOOL_TESTS_GO=str(self.root / "go"))
         slow = self.write_suite("slow", SLOW_SUITE)
-        proc = subprocess.Popen([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(slow)],
-                                stdout=write_end, stderr=subprocess.PIPE, text=True, cwd=REPO, env=env,
-                                start_new_session=True)
-        os.close(write_end)
-        self.addCleanup(lambda: proc.poll() is None and os.killpg(proc.pid, signal.SIGKILL))
-        index = self.logs / "runs.jsonl"
-        deadline = time.monotonic() + 60
-        while not (index.exists() and index.read_text()) and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(index.exists(), "the start record never appeared")
-        os.killpg(proc.pid, signal.SIGINT)
-        time.sleep(0.5)
-        drain = threading.Thread(target=lambda: [None for _ in iter(lambda: os.read(read_end, 65536), b"")],
-                                 daemon=True)
-        drain.start()
-        proc.wait(timeout=60)
-        self.assertEqual(proc.returncode, 130, proc.stderr.read())
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(slow),
+                                 RUN_TOOL_TESTS_MARKER=str(marker), RUN_TOOL_TESTS_GO=str(self.root / "go"))
+        self.assertEqual(result.returncode, 130, result.stdout + result.stderr)
         record = self.records()[0]
         self.assertEqual(record["signals"], ["SIGINT"])
         self.assertIsNone(record["pytest_rc"])
@@ -808,6 +793,100 @@ class RunToolTestsRecord(unittest.TestCase):
         module = load_script()
         extra, seed = module.randomly_seed([], {"PYTEST_ADDOPTS": "-k 'unclosed"})
         self.assertEqual(len(extra), 0 if seed is None else 1)
+
+    def test_the_waits_are_read_from_the_environment(self):
+        with mock.patch.dict(os.environ, {"NEVR_TEST_DRAIN_S": "1.5", "NEVR_TEST_INTERRUPT_GRACE_S": "2.5"}):
+            module = load_script()
+        self.assertEqual((module.DRAIN_S, module.INTERRUPT_GRACE_S), (1.5, 2.5))
+
+    def test_a_wait_that_is_not_a_positive_number_of_seconds_refuses_the_run(self):
+        cases = (("NEVR_TEST_DRAIN_S", "inf"), ("NEVR_TEST_DRAIN_S", "0"),
+                 ("NEVR_TEST_INTERRUPT_GRACE_S", "30s"), ("NEVR_TEST_INTERRUPT_GRACE_S", "nan"))
+        for i, (name, value) in enumerate(cases):
+            with self.subTest(name=name, value=value):
+                logs = self.logs / str(i)  # one directory each: a run one case lets through spoils no other
+                result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider",
+                                         str(self.suite)], capture_output=True, text=True, cwd=REPO,
+                                        timeout=120, env=self.env(logs, **{name: value}))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(f"test-tools: FAIL ${name}={value!r} is not a positive number of seconds",
+                              result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse((logs / "runs.jsonl").exists())
+
+    def test_a_stdout_nobody_reads_holds_up_the_echo_not_the_run(self):
+        # More output than a pipe holds, a stdout never read, and an interrupt: the run still ends,
+        # with its end record.
+        loud = SLOW_SUITE.replace("    marker = ", "    for _ in range(2000):\n"
+                                  "        print('y' * 99, flush=True)\n    marker = ")
+        proc = self.start_slow(loud, "-s", NEVR_TEST_INTERRUPT_GRACE_S="2", NEVR_TEST_DRAIN_S="1")
+        time.sleep(1)
+        os.killpg(proc.pid, signal.SIGINT)
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("the runner hung on a stdout nobody reads")
+        self.assertEqual(proc.returncode, 130)
+        record = self.records()[0]
+        self.assertEqual(record["echo"], "stalled")
+        self.assertIn("y" * 99, Path(record["log"]).read_text())
+
+    def test_a_log_whose_short_lines_cannot_be_written_still_gets_its_end_record(self):
+        # Short lines leave unwritten bytes in the log's buffer, so closing it fails too.
+        chatty = self.write_suite("chatty", "def test_prints():\n    for i in range(2000):\n"
+                                  "        print(f'line {i}', flush=True)\n")
+        limit = 10 * 1024
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(chatty)],
+                                capture_output=True, text=True, cwd=REPO, env=self.env(self.logs), timeout=120,
+                                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+        self.assertEqual(result.returncode, 2, result.stdout[-2000:] + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["pytest_rc"], 0)
+        self.assertIsNotNone(record["log_error"])
+
+    def test_an_echo_that_falls_too_far_behind_is_dropped_not_waited_for(self):
+        module = load_script()
+        module.ECHO_BACKLOG = 3
+        read_end, write_end = os.pipe()
+        stream = open(write_end, "w")
+        self.addCleanup(stream.close)
+        self.addCleanup(os.close, read_end)
+        echo = module.Echo(stream)
+
+        def put_all():
+            for _ in range(20):  # the writer blocks on the full pipe; the backlog then fills
+                echo.put("x" * 70_000 + "\n")
+
+        # On a thread of its own, so a put that blocks fails this test instead of hanging the suite
+        # (closing the read end, a cleanup above, then frees it).
+        putter = threading.Thread(target=put_all, daemon=True)
+        putter.start()
+        putter.join(10)
+        self.assertFalse(putter.is_alive(), "put blocked on a stdout nobody reads")
+        self.assertEqual(echo.state, "stalled")
+
+    def test_a_line_read_after_the_log_is_closed_is_not_a_log_error(self):
+        module = load_script()
+        run = module.Run(io.StringIO())
+        run.close_log()
+        run.emit("a line from a process pytest left behind\n")
+        self.assertIsNone(run.log_error)
+
+    @unittest.skipIf(importlib.util.find_spec("pytest_randomly") is None, "pytest-randomly is not installed")
+    def test_a_given_seed_of_other_digits_is_recorded_as_given(self):
+        module = load_script()
+        self.assertEqual(module.randomly_seed(["--randomly-seed=\u00b2"], {}), ([], "\u00b2"))
+
+    def test_outside_a_repository_the_tree_is_unknown(self):
+        elsewhere = self.root / "not-a-repo"
+        elsewhere.mkdir()
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(self.suite)],
+                                capture_output=True, text=True, cwd=elsewhere, timeout=120,
+                                env=self.env(self.logs, GIT_CEILING_DIRECTORIES=str(self.root)))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        record = self.records()[0]
+        self.assertEqual((record["head"], record["tree"]), ("unknown", "unknown"))
 
     def test_the_record_says_whether_the_tree_was_clean(self):
         repo = self.root / "repo"
