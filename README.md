@@ -48,7 +48,7 @@ says how to check each one and which log line proves it.
 ### Crash and exit handling
 - **Crash recovery.** The game's main loop is wrapped, the original crash reporter is blocked, and a crash writes a readable dump and a crash record. (PC)
 - **Clean exit.** Closing the window ends the process; Ctrl+C or a stop signal shuts down with a watchdog. (PC)
-- **Guards.** Null session pointers and entity lookups that used to crash the game are guarded and counted. (PC)
+- **Guards.** Null session pointers and broadcaster listener tables that used to crash the game are guarded and counted. (PC)
 - **Local minidump.** A Quest crash writes a minidump and the maps file locally. (Quest)
 
 ### Diagnostics

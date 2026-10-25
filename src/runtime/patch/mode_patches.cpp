@@ -28,9 +28,9 @@
 
 /// CEngine enables graphics subsystems one by one, each gated, directly or through
 /// a flag derived from it, by a bit in the graphics-enable word at CEngine+0x2cfec.
-/// The gates are in FUN_14154a950 (three), FUN_14154b670 and FUN_14154d6c0;
-/// HEADLESS_GATE_TABLE in hook/addresses.h names each one's function. Each gate
-/// is a conditional jump to the skip taken when the bit is clear (the game's own
+/// The gates are in FUN_14154a950 (three), FUN_14154b670 and FUN_14154d6c0; the
+/// comment on each HEADLESS_* gate constant in hook/addresses.h names its
+/// function. Each gate is a conditional jump to the skip taken when the bit is clear (the game's own
 /// device-free branch). In server mode the bits are set, so the game runs the GPU init and
 /// asserts. Forcing `je`(0x74)->`jmp`(0xEB) — same rel8 displacement — makes the
 /// game take its native graphics-disabled branch. Prologue-VALIDATED: patches
@@ -576,8 +576,8 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
     // This one hook is reached from 5 different game call sites (missing
     // actors, dialogue scenes, etc.) — the caller return address distinguishes
     // which, since exitCode alone does not. Rate-limited the same way as the
-    // other repeat-prone guards in this file (entity lookup / dispatch guard
-    // above): first 3 in full, then a periodic total so a retriggering
+    // other repeat-prone guards in this file (the CBroadcaster::Listen and
+    // ReceiveLocalEvent guards above): first 3 in full, then a periodic total so a retriggering
     // condition doesn't flood identical WARNINGs forever.
     static volatile LONG count = 0;
     const LONG c = InterlockedIncrement(&count);
