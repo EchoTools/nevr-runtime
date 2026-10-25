@@ -828,6 +828,13 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_snapshot_store PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_telemetry_snapshot_store DISCOVERY_MODE PRE_TEST)
 
+    # Telemetry property keys pinned to the CSymbol64 of their names, and the getters' owner and key (#915).
+    add_executable(test_telemetry_game_properties tests/test_telemetry_game_properties.cpp)
+    set_source_files_properties(tests/test_telemetry_game_properties.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_telemetry_game_properties PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_game_properties PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_telemetry_game_properties DISCOVERY_MODE PRE_TEST)
+
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
     target_include_directories(test_parse_endpoint PRIVATE
