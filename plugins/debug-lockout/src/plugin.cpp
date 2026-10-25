@@ -11,8 +11,9 @@
  * survives.
  *
  * ReVault disassembly:
- *   0x1401ae2f0: CMP [RCX + 0x64820], -1 ... JGE 0x1401ae41d — early-exit:
- *                if +0x64820 already holds a timestamp >= the incoming one,
+ *   0x1401ae2e6..0x1401ae2f9: MOV RAX,[RCX + 0x64820]; CMP RAX,-1; JZ;
+ *                CMP RAX,RDX; JGE 0x1401ae41d — early-exit: if +0x64820
+ *                already holds a timestamp (not -1) >= the incoming one,
  *                the function writes NOTHING, so injected state survives.
  *   0x1401ae339: MOV [RCX + 0x64820], RDX   — stores the incoming penalty_ts
  *   0x1401ae372: MOV qword ptr [RCX + 0x64828], -0x1  — stores -1 sentinel

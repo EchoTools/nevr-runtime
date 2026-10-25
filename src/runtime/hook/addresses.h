@@ -164,8 +164,8 @@ constexpr size_t HEADLESS_DINPUT_SIZE = 5;
 
 /// Ground-truth VA 0x14154af7f (RVA 0x154af7f): the ONLY caller of the cgs_dx12
 /// D3D12 device-init fcn.14058e7f0 (verified: single direct E8 call @ 0x14154af86).
-/// The call block, in CEngine init (FUN_14154a950, 0x14154a950..0x14154b3fc), is
-/// gated by graphics-enable bit 0x100 at CEngine+0x2cfec:
+/// The call block, in CEngine init (FUN_14154a950), is gated by graphics-enable
+/// bit 0x100 at CEngine+0x2cfec:
 ///   14154af74: testl $0x100,0x2cfec(%r14)
 ///   14154af7f: je    0x14154afde        ; flag clear -> game's own device-free init
 ///   14154af81: call  0x1405977f0        ; flag set  -> graphics init prelude
