@@ -591,6 +591,26 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"nevr_game_server::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)
 
+    def test_a_collapsed_burst_that_goes_quiet_is_reported_at_the_health_tick_and_at_shutdown(self):
+        # N78 / #894: the limiter only reports a collapsed count when a later line lands on its slot, so
+        # the health tick (windows that expired) and Shutdown (windows still open, before the file closes)
+        # close out the rest. The behaviour of TakePending is test_rate_limiter.cpp's; this pins the wiring.
+        filt = strip_comments((ROOT / "src/runtime/log/builtin_filter.cpp").read_text())
+        helper = extract_braced_function(filt, "static void FlushRateSummaries(")
+        self.assertRegex(helper, r"while\s*\(g_rate\.TakePending\(GetEpochSeconds\(\),\s*all,\s*summary,")
+        self.assertIn("EmitLine(LOG_LEVEL_INFO, summary,", helper)
+        self.assertNotRegex(helper, r"\bLog\s*\(", "a summary goes through the filter's own writer, not Log()")
+        health = extract_braced_function(filt, "static void MaybeEmitHealth(")
+        self.assertIn("FlushRateSummaries(false);", health)
+        self.assertLess(health.index("compare_exchange_strong"), health.index("FlushRateSummaries(false);"),
+                        "one thread flushes per health window")
+        shutdown = extract_braced_function(filt, "void nevr_builtin_log_filter::Shutdown(")
+        self.assertIn("FlushRateSummaries(true);", shutdown)
+        self.assertLess(shutdown.index("FlushRateSummaries(true);"), shutdown.index("ShutdownFileLogging();"),
+                        "the open windows are written before the log file closes")
+        hook = extract_braced_function(filt, "static void __fastcall hook_PrintfImpl(")
+        self.assertIn("g_rate.Check(buf, emit_len, GetEpochSeconds(), summary,", hook)
+
     def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
         # Issue #5: boot and runtime events are one stream. The main log replays this run's
         # nevr-boot.jsonl lines when it first opens; rotation reopens without replaying; the boot file
