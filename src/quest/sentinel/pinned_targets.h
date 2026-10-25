@@ -264,11 +264,42 @@ inline constexpr std::uint64_t kQuitOnErrorVaddr = 0x12713f8;
 inline constexpr std::uint32_t kQuitOnErrorCode[4] = {0xa9bf7bf3, 0xaa0003f3, 0xf9400400, 0xf956d268};
 using QuitOnErrorSig = void(CR15NetGameOpaque* self);
 
+// NRadEngine::NRadGame::CR15NetGame::BeginLogIn(), defined in libr15 at 0x12917b8 (member: `this` in x0, no
+// other argument, no return value). It is the task the RETRY page's script schedules on the NetGame (echovr.exe
+// FUN_140dd9950 passes FUN_140157bd0, the same body, to FUN_140198460): it returns when the state is above 1,
+// so "login failed" (-94) passes; it then calls LogIn ("[NETGAME] Logging in...") and switches to "logging
+// in". Reached like QuitOnError: build ID, first four instructions, then base + this address.
+// str x28, [sp, #-0x40]!; stp x23, x22, [sp, #0x10]; stp x21, x20, [sp, #0x20]; stp x19, x30, [sp, #0x30].
+inline constexpr const char* kBeginLogInSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame10BeginLogInEv";
+inline constexpr std::uint64_t kBeginLogInVaddr = 0x12917b8;
+inline constexpr std::uint32_t kBeginLogInCode[4] = {0xf81c0ffc, 0xa9015bf7, 0xa90253f5, 0xa9037bf3};
+using BeginLogInSig = void(CR15NetGameOpaque* self);
+
+// NRadEngine::CncaGameSpace::SendComponentEvent(CSymbol64 event, SActor actor, CSymbol64 key, uint flag), defined
+// in libr15 at 0x17fb0f8 (`this` = the game space in x0, event in x1, actor in x2, key in x3, flag in w4; no
+// return value; ReVault lists it at 0x18fb0f8, its addresses for this module being 0x100000 above the loaded
+// ones). QuitOnError calls it as (space, 0x60ba106e8f93f286, 0xffffffffffff, ~0, 1). The RETRY button of the
+// login-failed page sends the graph event 0x8f0094c7bb02681c with the key 0x34f99a282ce78d72 (the third handler
+// of script graph 7f2363b8976491aa's event_handler, which forks the BeginLogin and screen-tint timeline); the
+// login prompt hook sends the same event once it has called BeginLogIn, so the page script that would run for
+// the player's select runs (#672). Reached like QuitOnError: build ID, first four instructions, base + address.
+// sub sp, sp, #0x40; mov x8, #-1; stp x8, x30, [sp, #0x28]; ldr x8, [x0, #0x58].
+inline constexpr std::uint64_t kSendComponentEventVaddr = 0x17fb0f8;
+inline constexpr std::uint32_t kSendComponentEventCode[4] = {0xd10103ff, 0x92800008, 0xa902fbe8, 0xf9402c08};
+using SendComponentEventSig = void(void* space, std::uint64_t event, std::uint64_t actor, std::uint64_t key,
+                                   std::uint32_t flag);
+inline constexpr std::uint64_t kRetrySelectEvent = 0x8f0094c7bb02681cULL;
+inline constexpr std::uint64_t kRetrySelectKey = 0x34f99a282ce78d72ULL;
+inline constexpr std::uint64_t kAllActors = 0xffffffffffffULL;  // as QuitOnError passes it
+
 // CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
 namespace game_layout {
 // EState at offset 0: SwitchTo (0x125b8b4) compares `ldr w0, [x0]` with the new state and stores
 // it with `str w20, [x19]` (0x125b9f4). Names from GameStateString (0x124d478).
 inline constexpr std::size_t kStateOffset = 0;
+// The game space QuitOnError sends its event to: *(*(self + 8) + 0x7af0) (null before the game space exists).
+inline constexpr std::size_t kGameOffset = 8;
+inline constexpr std::size_t kGameSpaceOffset = 0x7af0;
 inline constexpr std::int32_t kStateLoggingIn = 2;      // "logging in"
 inline constexpr std::int32_t kStateLoginFailed = -94;  // "login failed"
 inline constexpr std::int32_t kStateLoadingGlobal = 4;  // "loading global" (GameStateString 0x124d478)
