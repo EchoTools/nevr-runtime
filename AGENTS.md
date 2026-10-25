@@ -329,7 +329,7 @@ hand on the tag ref). The steps, in order, from a clone of origin:
 
 ```sh
 just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
-git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's tip and push the tag
+git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's tip with the version `python3 tools/next_release_version.py` prints, and push the tag
 just release-preflight && gh release create v<x.y.z> --title v<x.y.z> --draft --prerelease --verify-tag   # 3. once more, then a draft for the pushed tag
 gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attaches the two files to the draft; it stays a draft
 gh release edit v<x.y.z> --draft=false            # 5. publish, only after the draft's files are checked and signed (RELEASING.md)
