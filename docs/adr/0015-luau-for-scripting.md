@@ -1,4 +1,4 @@
-# ADR 0008: Luau is the scripting VM
+# ADR 0015: Luau is the scripting VM
 
 Status: accepted for the prototype (#440). The binding is `src/scripting/vm/luau/`, pinned to Luau `0.742`.
 
