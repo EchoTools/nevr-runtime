@@ -11,36 +11,45 @@ and no name. Every run therefore writes, under the log directory:
 - `<stem>.xml`: pytest's JUnit XML, one record per test;
 - two JSON lines in `runs.jsonl`: `"event": "start"` before pytest starts (so a run that is
   killed outright still leaves its start), and `"event": "end"` after it exits, with the exit
-  code, the summary line, the failing test ids (`classname::name` from the XML), whether the XML
-  was read (`junit_state`: `ok`, `missing` or `unparseable`), the signal that interrupted the
-  run, whether pytest's output was read to its end, and the paths of the two files.
+  code, the summary line, the failing test ids (`classname::name` from the XML, or the name alone
+  when the XML gives no class, as for a collection error), whether the XML was read
+  (`junit_state`: `ok`, `missing` or `unparseable`), the signals received, whether pytest's output
+  was read to its end (`output_complete`), whether a process pytest left behind was sent a kill
+  (`stray_kill_sent`), any error writing the log or reading the output, and the paths of the two
+  files.
 
 pytest's short summary (on by default, `-rfE`) names every failure and error even under `-q`; the
-log keeps it whole. When pytest-randomly is installed and neither the arguments nor
-`$PYTEST_ADDOPTS` set a seed or disable it (`-p no:randomly`), the run draws a seed and passes it
-as `--randomly-seed`, so an order-dependent failure can be replayed; a seed given there is
-recorded as given.
+log keeps it whole. When pytest-randomly is installed and loads automatically, and neither the
+arguments nor `$PYTEST_ADDOPTS` set a seed or disable it (`-p no:randomly`), the run draws a seed
+and passes it as `--randomly-seed`, so an order-dependent failure can be replayed; a seed given
+there is recorded as given. An ini file's `addopts` is not read: this repo has none.
 
 Signals. pytest runs in its own session, so a terminal's CTRL+C or hangup reaches this script
-alone. SIGINT, SIGTERM and SIGHUP are recorded, never fatal here: the first is passed to pytest's
-process group as SIGINT (pytest stops and prints its summary); a second, or 30 s without an exit
-($NEVR_TEST_INTERRUPT_GRACE_S), kills the group. When pytest has exited and a process it left
-behind still holds its output open for 10 s ($NEVR_TEST_DRAIN_S), that group is killed and the
-end record says so (`stray_killed`). A signal before pytest starts means pytest never starts. Either way the end
-record is written. When stdout goes away (a closed pipe or terminal), the echo stops and the log
-keeps the rest.
+alone. From before the start record until after the end record, SIGINT, SIGTERM and SIGHUP are
+recorded, never fatal here (a signal this script inherited as ignored stays ignored). The first is
+passed to pytest's process group as SIGINT (pytest stops and prints its summary). A later one, at
+least 1 s after the one before it, or 30 s without an exit ($NEVR_TEST_INTERRUPT_GRACE_S), kills
+the group; a repeat within 1 s (`just` passes on a SIGTERM the group also got) is recorded and
+not escalated. A signal before pytest is started means it is never started; one that lands while
+it is being started is passed on as soon as it has started. When pytest has exited and something
+it left behind still holds its output open for 10 s ($NEVR_TEST_DRAIN_S), pytest's process group
+is sent a kill (`stray_kill_sent`), and `output_complete` says whether the output then closed. If
+this script is killed outright, pytest is killed with it. When stdout is closed, goes away, or
+cannot encode a line, the echo stops or replaces what it cannot encode, and the log keeps all of
+it.
 
 Exit code: pytest's. Exceptions, each loud on stderr:
 - 2 before pytest runs, when the log directory or the start record cannot be written, or
   `--junitxml` is passed (the run owns its XML path): a run whose record cannot be kept is
   refused, never run unrecorded;
-- 128 + the signal's number when a signal interrupted the run (130 for SIGINT);
-- when the log or the end record cannot be written, pytest's exit code if it is non-zero, else 2:
-  a run is never reported green without its record.
+- 128 + the number of the first signal when a signal interrupted the run (130 for SIGINT);
+- when the log or the end record cannot be written, or pytest's output could not be read, pytest's
+  exit code if it is non-zero, else 2: a run is never reported green without its record.
 
 Usage: run_tool_tests.py [pytest args...]   (default: -q tools/tests)
 Log directory: $NEVR_TEST_LOG_DIR, else /var/tmp/work-nevr-runtime/test-runs/tools-tests.
 """
+import ctypes
 import datetime
 import importlib.metadata
 import importlib.util
@@ -69,7 +78,10 @@ SUMMARY_RE = re.compile(
 # stay open after it exits, held by a process it left behind ($NEVR_TEST_DRAIN_S).
 INTERRUPT_GRACE_S = float(os.environ.get("NEVR_TEST_INTERRUPT_GRACE_S") or 30)
 DRAIN_S = float(os.environ.get("NEVR_TEST_DRAIN_S") or 10)
+# A repeat of a signal sooner than this after the one before it is the same event delivered twice.
+REPEAT_S = 1.0
 HANDLED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+PR_SET_PDEATHSIG = 1
 
 
 def git(*args: str) -> str:
@@ -83,7 +95,7 @@ def run_stem(start: datetime.datetime, head: str) -> str:
 
 
 def failing_ids(xml_path: pathlib.Path) -> tuple:
-    """(the `classname::name` of every failed or errored test case, junit_state)."""
+    """(the id of every failed or errored test case, junit_state)."""
     if not xml_path.exists():
         return [], "missing"
     try:
@@ -93,7 +105,8 @@ def failing_ids(xml_path: pathlib.Path) -> tuple:
     ids = []
     for case in root.iter("testcase"):
         if case.find("failure") is not None or case.find("error") is not None:
-            ids.append(f"{case.get('classname', '')}::{case.get('name', '')}")
+            classname, name = case.get("classname", ""), case.get("name", "")
+            ids.append(f"{classname}::{name}" if classname else name)
     return ids, "ok"
 
 
@@ -110,25 +123,32 @@ def pytest_environment() -> dict:
     return {"pytest": version, "plugins": dict(sorted(plugins.items()))}
 
 
-def randomly_seed(args: list, addopts: str) -> tuple:
-    """(extra args, seed) for pytest-randomly, from the arguments and $PYTEST_ADDOPTS.
+def randomly_seed(args: list, environ) -> tuple:
+    """(extra args, seed) for pytest-randomly, from the arguments and the environment.
 
-    No plugin, or `-p no:randomly`: nothing added, seed None. A given `--randomly-seed`: nothing
-    added, that value recorded (an integer, or the word given, such as `last`). Otherwise a drawn
-    seed is added.
+    No plugin, plugin autoload off without `-p randomly`, or `-p no:randomly`: nothing added, seed
+    None. A given `--randomly-seed`: nothing added, that value recorded (an integer, or the word
+    given, such as `last`). Otherwise a drawn seed is added.
     """
     if importlib.util.find_spec("pytest_randomly") is None:
         return [], None
-    tokens = shlex.split(addopts) + list(args)
+    try:
+        addopts = shlex.split(environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        addopts = []  # pytest rejects it too, and says so in the log
+    tokens = addopts + list(args)
+    plugin_args = [tokens[i + 1] for i, tok in enumerate(tokens[:-1]) if tok == "-p"]
+    plugin_args += [tok[2:] for tok in tokens if tok.startswith("-p") and len(tok) > 2]
+    if "no:randomly" in plugin_args:
+        return [], None
+    if environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") and not {"randomly", "pytest_randomly"} & set(plugin_args):
+        return [], None
     given = None
     for i, tok in enumerate(tokens):
-        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
-        if tok in ("-pno:randomly",) or (tok == "-p" and nxt == "no:randomly"):
-            return [], None
         if tok.startswith("--randomly-seed="):
             given = tok.split("=", 1)[1]
-        elif tok == "--randomly-seed":
-            given = nxt
+        elif tok == "--randomly-seed" and i + 1 < len(tokens):
+            given = tokens[i + 1]
     if given is not None:
         return [], int(given) if given.isdigit() else given
     seed = random.SystemRandom().randrange(2**32)
@@ -137,13 +157,27 @@ def randomly_seed(args: list, addopts: str) -> tuple:
 
 def append_record(index: pathlib.Path, record: dict) -> bool:
     try:
-        with index.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
+        with index.open("a+b") as f:
+            f.seek(0, os.SEEK_END)
+            lead = b""
+            if f.tell() > 0:
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    lead = b"\n"  # a line an earlier write left cut short stays on its own line
+            f.write(lead + (json.dumps(record) + "\n").encode("utf-8"))
         return True
     except OSError as exc:
         print(f"test-tools: FAIL cannot append the {record['event']} record to {index}: {exc}",
               file=sys.stderr, flush=True)
         return False
+
+
+def die_with_parent() -> None:
+    """In pytest, before exec: a SIGKILL of this script kills pytest too (Linux; elsewhere a no-op)."""
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+    except (OSError, AttributeError):
+        pass
 
 
 class Run:
@@ -152,14 +186,41 @@ class Run:
     def __init__(self, log):
         self.log = log
         self.lock = threading.Lock()
-        self.echo = True
+        self.echo = sys.stdout is not None
         self.log_error = None
+        self.read_error = None
         self.summary = ""
         self.proc = None
         self.signals = []
+        self.signal_times = []
+        self.escalations = 0
         self.forwarded = 0
-        self.first_signal_at = None
-        self.stray_killed = False
+        self.stray_kill_sent = False
+        if self.echo:
+            try:
+                sys.stdout.reconfigure(errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
+
+    def stop_echo(self) -> None:
+        """stdout is gone: point fd 1 at /dev/null so the interpreter's own flush at exit cannot fail."""
+        self.echo = False
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def say(self, text: str) -> None:
+        """A line for stdout only, after the log is closed."""
+        with self.lock:
+            if self.echo:
+                try:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+                except (OSError, ValueError):
+                    self.stop_echo()
 
     def emit(self, text: str) -> None:
         with self.lock:
@@ -167,34 +228,33 @@ class Run:
                 try:
                     sys.stdout.write(text)
                     sys.stdout.flush()
-                except OSError:
-                    # stdout is gone; the log keeps the run. Point fd 1 at /dev/null so the
-                    # interpreter's own flush at exit cannot fail either.
-                    self.echo = False
-                    devnull = os.open(os.devnull, os.O_WRONLY)
-                    os.dup2(devnull, sys.stdout.fileno())
-                    os.close(devnull)
+                except (OSError, ValueError):
+                    self.stop_echo()
             if self.log_error is None:
                 try:
                     self.log.write(text)
                     self.log.flush()
-                except OSError as exc:
+                except (OSError, ValueError) as exc:
                     self.log_error = str(exc)
                     print(f"test-tools: FAIL cannot write the log: {exc}", file=sys.stderr, flush=True)
 
     def on_signal(self, signum, frame) -> None:
+        now = time.monotonic()
+        repeat = bool(self.signal_times) and now - self.signal_times[-1] < REPEAT_S
         self.signals.append(signal.Signals(signum).name)
-        if self.first_signal_at is None:
-            self.first_signal_at = time.monotonic()
+        self.signal_times.append(now)
+        if not repeat:
+            self.escalations += 1
         self.forward()
 
     def forward(self) -> None:
-        """Pass each recorded signal on to pytest's group: SIGINT first, SIGKILL after."""
+        """Pass each escalation on to pytest's group: SIGINT first, SIGKILL after."""
         if self.proc is None or self.proc.poll() is not None:
             return
-        while self.forwarded < len(self.signals):
-            self.kill_group(signal.SIGINT if self.forwarded == 0 else signal.SIGKILL)
+        while self.forwarded < self.escalations:
+            first = self.forwarded == 0
             self.forwarded += 1
+            self.kill_group(signal.SIGINT if first else signal.SIGKILL)
 
     def kill_group(self, sig) -> None:
         try:
@@ -203,10 +263,17 @@ class Run:
             pass
 
     def pump(self) -> None:
-        for line in self.proc.stdout:
-            self.emit(line)
-            if SUMMARY_RE.search(line):
-                self.summary = line.strip().strip("= ")
+        try:
+            for line in self.proc.stdout:
+                try:
+                    self.emit(line)
+                    if SUMMARY_RE.search(line):
+                        self.summary = line.strip().strip("= ")
+                except Exception as exc:  # noqa: BLE001 - any failure here must not stop the draining
+                    if self.read_error is None:
+                        self.read_error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - the end record must say the output was cut short
+            self.read_error = f"{type(exc).__name__}: {exc}"
 
     def wait(self) -> bool:
         """Wait for pytest and its output; True when the output was read to its end."""
@@ -217,15 +284,15 @@ class Run:
                 self.proc.wait(timeout=0.2)
                 break
             except subprocess.TimeoutExpired:
-                if self.first_signal_at is not None and time.monotonic() - self.first_signal_at > INTERRUPT_GRACE_S:
+                if self.signal_times and time.monotonic() - self.signal_times[0] > INTERRUPT_GRACE_S:
                     self.kill_group(signal.SIGKILL)
         reader.join(DRAIN_S)
         if reader.is_alive():
             # pytest has exited and something it started still holds the pipe.
-            self.stray_killed = True
+            self.stray_kill_sent = True
             self.kill_group(signal.SIGKILL)
             reader.join(DRAIN_S)
-        return not reader.is_alive()
+        return not reader.is_alive() and self.read_error is None
 
 
 def main(argv: list) -> int:
@@ -251,7 +318,7 @@ def main(argv: list) -> int:
     xml_path = log_dir / f"{stem}.xml"
     index = log_dir / "runs.jsonl"
     args = argv or ["-q", "tools/tests"]
-    seed_args, seed = randomly_seed(args, os.environ.get("PYTEST_ADDOPTS", ""))
+    seed_args, seed = randomly_seed(args, os.environ)
     cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *seed_args, *args]
     env = pytest_environment()
     base = {"start": start.isoformat(), "head": head, "tree": tree, "cmd": cmd, "pytest": env["pytest"],
@@ -263,8 +330,10 @@ def main(argv: list) -> int:
         print(f"test-tools: FAIL cannot write the log {log_path}: {exc}", file=sys.stderr)
         return 2
     run = Run(log)
-    previous = {s: signal.signal(s, run.on_signal) for s in HANDLED_SIGNALS}
-    output_complete = True
+    previous = {}
+    for s in HANDLED_SIGNALS:
+        if signal.getsignal(s) is not signal.SIG_IGN:
+            previous[s] = signal.signal(s, run.on_signal)
     try:
         if not append_record(index, {"event": "start", **base}):
             log.close()
@@ -275,35 +344,41 @@ def main(argv: list) -> int:
                      f"test-tools: plugins {' '.join(f'{k}={v}' for k, v in env['plugins'].items())}",
                      f"test-tools: randomly-seed {seed}", f"test-tools: cmd {' '.join(cmd)}"):
             run.emit(line + "\n")
+        output_complete = True
         if not run.signals:
             run.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding="utf-8", errors="replace", start_new_session=True)
+                                        encoding="utf-8", errors="replace", start_new_session=True,
+                                        preexec_fn=die_with_parent)
             run.forward()
             output_complete = run.wait()
         pytest_rc = run.proc.returncode if run.proc else None
-        if run.signals:
-            rc = 128 + signal.Signals[run.signals[0]].value
-        else:
-            rc = pytest_rc
+        # A signal from here on is recorded in `signals` but does not change the outcome.
+        interrupted = bool(run.signals)
+        rc = 128 + signal.Signals[run.signals[0]].value if interrupted else pytest_rc
         end = datetime.datetime.now(datetime.timezone.utc)
         run.emit(f"test-tools: end {end.isoformat()} rc={rc}"
-                 + (f" interrupted={run.signals[0]}" if run.signals else "")
+                 + (f" interrupted={run.signals[0]}" if interrupted else "")
                  + ("" if output_complete else " output=incomplete") + "\n")
-    finally:
-        for s, h in previous.items():
-            signal.signal(s, h)
         log.close()
 
-    failed, junit_state = failing_ids(xml_path)
-    record = {"event": "end", **base, "end": end.isoformat(), "rc": rc, "pytest_rc": pytest_rc,
-              "interrupted": bool(run.signals), "signals": run.signals, "summary": run.summary,
-              "failed": failed, "junit_state": junit_state, "output_complete": output_complete,
-              "stray_killed": run.stray_killed, "log_error": run.log_error}
-    if not append_record(index, record) or run.log_error is not None:
-        return rc if rc != 0 else 2
-    if run.echo:
-        print(f"test-tools: log {log_path}", flush=True)
-    return rc
+        failed, junit_state = failing_ids(xml_path)
+        record = {"event": "end", **base, "end": end.isoformat(), "rc": rc, "pytest_rc": pytest_rc,
+                  "interrupted": interrupted, "signals": list(run.signals), "summary": run.summary,
+                  "failed": failed, "junit_state": junit_state, "output_complete": output_complete,
+                  "stray_kill_sent": run.stray_kill_sent, "log_error": run.log_error,
+                  "read_error": run.read_error}
+        recorded = append_record(index, record)
+        if run.read_error is not None:
+            print(f"test-tools: FAIL pytest's output could not be read to its end: {run.read_error}",
+                  file=sys.stderr, flush=True)
+        if not recorded or run.log_error is not None or run.read_error is not None:
+            return rc if rc != 0 else 2
+        run.say(f"test-tools: log {log_path}\n")
+        return rc
+    finally:
+        log.close()
+        for s, h in previous.items():
+            signal.signal(s, h)
 
 
 if __name__ == "__main__":

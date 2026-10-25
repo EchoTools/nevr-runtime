@@ -6,6 +6,7 @@ These tests run the real script, as `just test-tools` does, against small suites
 import datetime
 import importlib.metadata
 import importlib.util
+import io
 import json
 import os
 import resource
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -100,6 +102,40 @@ def pytest_unconfigure(config):
 '''
 
 
+PASS_SUITE = '''
+def test_holds():
+    assert True
+'''
+
+# Exits at once but leaves a process in a session of its own holding pytest's output open (run with
+# -s): a kill of pytest's process group does not reach it. Its pid goes to $RUN_TOOL_TESTS_MARKER.
+SETSID_STRAY_SUITE = '''
+import os, subprocess
+
+def test_leaves_a_child_in_its_own_session():
+    child = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    with open(os.environ["RUN_TOOL_TESTS_MARKER"], "w") as f:
+        f.write(str(child.pid))
+'''
+
+# Runs the script's main() with a change made first ({prelude}), as `python3 tools/run_tool_tests.py` would.
+DRIVER = '''
+import importlib.util, os, signal, subprocess, sys
+spec = importlib.util.spec_from_file_location("run_tool_tests", {script!r})
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+{prelude}
+sys.exit(m.main(sys.argv[1:]))
+'''
+
+
+def kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def load_script():
     spec = importlib.util.spec_from_file_location("run_tool_tests", SCRIPT)
     module = importlib.util.module_from_spec(spec)
@@ -109,6 +145,12 @@ def load_script():
 
 class RunToolTestsRecord(unittest.TestCase):
     def setUp(self):
+        # An ignored signal survives exec, and the script keeps it ignored (as under nohup); a shell's
+        # background job starts with SIGINT ignored. The script under test starts with the defaults.
+        for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            if signal.getsignal(s) is signal.SIG_IGN:
+                signal.signal(s, signal.SIG_DFL)
+                self.addCleanup(signal.signal, s, signal.SIG_IGN)
         self.root = Path(tempfile.mkdtemp(prefix="run-tool-tests-"))
         self.addCleanup(shutil.rmtree, self.root, True)
         self.suite = self.write_suite("suite", SUITE)
@@ -155,7 +197,9 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertRegex(record["head"], r"^[0-9a-f]{40}$")
         self.assertEqual(record["pytest"], importlib.metadata.version("pytest"))
         self.assertTrue(record["output_complete"])
-        self.assertFalse(record["stray_killed"])
+        self.assertFalse(record["stray_kill_sent"])
+        self.assertIsNone(record["read_error"])
+        self.assertIsNone(record["log_error"])
         self.assertEqual(record["signals"], [])
 
         log = Path(record["log"]).read_text()
@@ -342,7 +386,7 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertNotIn("passed", result.stdout)
         self.assertEqual(sorted(p.name for p in self.logs.iterdir()), ["runs.jsonl"])
 
-    def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, **extra_env: str):
+    def start_slow(self, body: str = SLOW_SUITE, *extra_args: str, preexec_fn=None, **extra_env: str):
         """Start the wrapper in its own session on a suite that waits; return it once the test runs."""
         slow = self.write_suite("slow", body)
         self.marker = self.root / "marker"
@@ -351,12 +395,13 @@ class RunToolTestsRecord(unittest.TestCase):
                        **extra_env)
         argv = [sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", *extra_args, str(slow)]
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                cwd=REPO, env=env, start_new_session=True)
+                                cwd=REPO, env=env, start_new_session=True, preexec_fn=preexec_fn)
         self.addCleanup(lambda: proc.poll() is None and os.killpg(proc.pid, signal.SIGKILL))
         deadline = time.monotonic() + 60
         while not self.marker.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertTrue(self.marker.exists(), "the slow test never started")
+        self.addCleanup(kill_group, int(self.marker.read_text().split()[0]))  # pytest's own session
         return proc
 
     @unittest.skipIf(os.geteuid() == 0, "root appends to a read-only file")
@@ -431,7 +476,7 @@ class RunToolTestsRecord(unittest.TestCase):
     def test_a_second_signal_kills_pytest_and_is_still_recorded(self):
         proc = self.start_slow(STUBBORN_SUITE)
         os.killpg(proc.pid, signal.SIGINT)
-        time.sleep(1)
+        time.sleep(1.5)  # further apart than a repeat of the same signal
         self.assertIsNone(proc.poll(), "the stubborn test stopped on the first SIGINT")
         os.killpg(proc.pid, signal.SIGINT)
         record = self.assert_interrupted(proc, "SIGINT", 130, ["SIGINT", "SIGINT"])
@@ -461,10 +506,11 @@ class RunToolTestsRecord(unittest.TestCase):
         result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
                                 capture_output=True, text=True, cwd=REPO, timeout=120,
                                 env=self.env(self.logs, NEVR_TEST_DRAIN_S="1"))
-        self.assertLess(time.monotonic() - started, 60)
+        # $NEVR_TEST_DRAIN_S is read: the default 10 s would take the run past this.
+        self.assertLess(time.monotonic() - started, 8)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = self.records()[0]
-        self.assertTrue(record["stray_killed"])
+        self.assertTrue(record["stray_kill_sent"])
         self.assertTrue(record["output_complete"])
         self.assertIn("1 passed", record["summary"])
 
@@ -475,7 +521,7 @@ class RunToolTestsRecord(unittest.TestCase):
         result = self.run_script(self.logs, "-q", "-s", "-p", "no:cacheprovider", str(late))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = self.records()[0]
-        self.assertFalse(record["stray_killed"])
+        self.assertFalse(record["stray_kill_sent"])
         self.assertIn("LATE-LINE", Path(record["log"]).read_text())
 
     def test_a_log_that_cannot_be_written_is_loud_and_never_green(self):
@@ -528,6 +574,240 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertIsNone(record["pytest_rc"])
         self.assertFalse(marker.exists(), "pytest ran after the signal")
         self.assertIn("interrupted=SIGINT", Path(record["log"]).read_text())
+
+    def run_driver(self, prelude: str, *args: str, preexec_fn=None, **extra_env: str):
+        """Run main() with `prelude` applied to the loaded script first."""
+        driver = self.root / "driver.py"
+        driver.write_text(DRIVER.format(script=str(SCRIPT), prelude=prelude), encoding="utf-8")
+        argv = list(args) if args else ["-q", "-p", "no:cacheprovider", str(self.suite)]
+        return subprocess.run([sys.executable, str(driver), *argv], capture_output=True, text=True, cwd=REPO,
+                              env=self.env(self.logs, **extra_env), timeout=120, preexec_fn=preexec_fn)
+
+    def test_output_stdout_cannot_encode_is_replaced_in_the_echo_and_kept_in_the_log(self):
+        # pytest writes UTF-8 bytes; only the script's own stdout is ASCII.
+        suite = self.write_suite("accents", "import sys\n\ndef test_prints():\n"
+                                 "    sys.stdout.buffer.write('caf\\u00e9 done\\n'.encode())\n"
+                                 "    sys.stdout.flush()\n")
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(suite)],
+                                capture_output=True, cwd=REPO, timeout=120,
+                                env=self.env(self.logs, PYTHONIOENCODING="ascii"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(b"caf? done", result.stdout)
+        record = self.records()[0]
+        self.assertTrue(record["output_complete"])
+        self.assertIsNone(record["read_error"])
+        self.assertIn("caf\u00e9 done", Path(record["log"]).read_text(encoding="utf-8"))
+        self.assertIn("1 passed", record["summary"])
+
+    def test_a_line_that_fails_to_echo_does_not_stop_the_reading(self):
+        module = load_script()
+        run = module.Run(io.StringIO())
+        seen = []
+
+        def emit(text):
+            seen.append(text)
+            if text == "a\n":
+                raise RuntimeError("cannot echo")
+
+        run.emit = emit
+        run.proc = types.SimpleNamespace(stdout=iter(["a\n", "b\n", "1 passed in 0.10s\n"]))
+        run.pump()
+        self.assertEqual(seen, ["a\n", "b\n", "1 passed in 0.10s\n"])
+        self.assertEqual(run.read_error, "RuntimeError: cannot echo")
+        self.assertEqual(run.summary, "1 passed in 0.10s")
+
+    def test_a_signal_that_lands_while_one_is_being_passed_on_is_passed_on_once(self):
+        module = load_script()
+        module.REPEAT_S = 0  # every signal here is a new event
+        run = module.Run(io.StringIO())
+        run.proc = types.SimpleNamespace(pid=0, poll=lambda: None)
+        sent = []
+
+        def kill_group(sig):
+            sent.append(sig)
+            if len(sent) == 1:  # a second signal arrives while the first is being sent
+                run.on_signal(signal.SIGTERM, None)
+
+        run.kill_group = kill_group
+        run.on_signal(signal.SIGINT, None)
+        self.assertEqual(sent, [signal.SIGINT, signal.SIGKILL])
+        self.assertEqual(run.signals, ["SIGINT", "SIGTERM"])
+
+    def test_output_that_could_not_be_read_is_loud_and_never_green(self):
+        suite = self.write_suite("pass", PASS_SUITE)
+        prelude = ("class Boom:\n    def search(self, line):\n        raise RuntimeError('boom')\n"
+                   "m.SUMMARY_RE = Boom()")
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(suite))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL pytest's output could not be read to its end: RuntimeError: boom",
+                      result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["pytest_rc"], 0)
+        self.assertFalse(record["output_complete"])
+        self.assertEqual(record["read_error"], "RuntimeError: boom")
+        log = Path(record["log"]).read_text()
+        self.assertIn("1 passed", log)
+        self.assertIn("output=incomplete", log)
+
+    def test_a_signal_after_pytest_exits_still_leaves_the_end_record(self):
+        prelude = ("real = m.failing_ids\n"
+                   "def failing_ids(path):\n"
+                   "    os.kill(os.getpid(), signal.SIGTERM)\n"
+                   "    return real(path)\n"
+                   "m.failing_ids = failing_ids")
+        result = self.run_driver(prelude)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["rc"], 1)
+        self.assertFalse(record["interrupted"])
+        self.assertEqual(record["signals"], ["SIGTERM"])
+        self.assertEqual(record["failed"], ["test_sample::test_breaks"])
+
+    def test_a_signal_while_pytest_is_being_started_is_passed_on_once_it_has_started(self):
+        prelude = ("class Popen(subprocess.Popen):\n"
+                   "    def __init__(self, *a, **k):\n"
+                   "        super().__init__(*a, **k)\n"
+                   "        if '-m' in a[0] and 'pytest' in a[0]:\n"
+                   "            os.kill(os.getpid(), signal.SIGINT)\n"
+                   "m.subprocess.Popen = Popen")
+        slow = self.write_suite("slow", SLOW_SUITE)
+        started = time.monotonic()
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(slow),
+                                 RUN_TOOL_TESTS_MARKER=str(self.root / "marker"),
+                                 RUN_TOOL_TESTS_GO=str(self.root / "go"))
+        # Not passed on, pytest would run until the 30 s grace kill.
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual(result.returncode, 130, result.stdout + result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["signals"], ["SIGINT"])
+        self.assertIsNotNone(record["pytest_rc"])
+        self.assertNotEqual(record["pytest_rc"], -signal.SIGKILL)
+
+    def test_a_closed_stdout_at_launch_loses_the_echo_not_the_record(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(self.suite)],
+                                stderr=subprocess.PIPE, text=True, cwd=REPO, env=self.env(self.logs),
+                                timeout=120, preexec_fn=lambda: os.close(1))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["failed"], ["test_sample::test_breaks"])
+        self.assertIn("1 failed, 1 passed", Path(record["log"]).read_text())
+
+    def test_a_reader_that_goes_away_after_the_end_record_does_not_change_the_exit_code(self):
+        suite = self.write_suite("pass", PASS_SUITE)
+        prelude = ("real = m.append_record\n"
+                   "def append_record(index, record):\n"
+                   "    ok = real(index, record)\n"
+                   "    if record['event'] == 'end':\n"
+                   "        r, w = os.pipe()\n"
+                   "        os.close(r)\n"
+                   "        os.dup2(w, 1)\n"
+                   "        os.close(w)\n"
+                   "    return ok\n"
+                   "m.append_record = append_record")
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(suite))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(self.records()[0]["rc"], 0)
+
+    def test_an_inherited_ignored_hangup_stays_ignored(self):
+        # As under nohup: SIGHUP is ignored before the script starts.
+        proc = self.start_slow(preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN))
+        proc.send_signal(signal.SIGHUP)
+        time.sleep(0.5)
+        self.assertIsNone(proc.poll())
+        self.go.write_text("")
+        stdout, stderr = proc.communicate(timeout=90)
+        self.assertEqual(proc.returncode, 0, stdout + stderr)
+        record = self.records()[0]
+        self.assertEqual(record["signals"], [])
+        self.assertFalse(record["interrupted"])
+
+    def test_the_exit_code_names_the_first_of_two_different_signals(self):
+        proc = self.start_slow(STUBBORN_SUITE)
+        proc.send_signal(signal.SIGHUP)
+        time.sleep(1.5)
+        self.assertIsNone(proc.poll(), "the stubborn test stopped on the first SIGINT")
+        proc.send_signal(signal.SIGTERM)
+        record = self.assert_interrupted(proc, "SIGHUP", 128 + signal.SIGHUP, ["SIGHUP", "SIGTERM"])
+        self.assertEqual(record["pytest_rc"], -signal.SIGKILL)
+
+    def test_the_same_signal_twice_at_once_is_one_interrupt(self):
+        # `just` passes on a SIGTERM its process group also got: the script sees it twice.
+        proc = self.start_slow(STUBBORN_SUITE, NEVR_TEST_INTERRUPT_GRACE_S="3")
+        sent = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        time.sleep(0.2)  # two pending SIGTERMs would merge into one before delivery
+        proc.send_signal(signal.SIGTERM)
+        record = self.assert_interrupted(proc, "SIGTERM", 128 + signal.SIGTERM, ["SIGTERM", "SIGTERM"])
+        # Not escalated: the stubborn test outlived the second signal and was killed at the grace period.
+        self.assertGreater(time.monotonic() - sent, 2.5)
+        self.assertEqual(record["pytest_rc"], -signal.SIGKILL)
+
+    def test_a_process_out_of_reach_of_the_kill_is_recorded_as_incomplete_output(self):
+        stray = self.write_suite("setsid", SETSID_STRAY_SUITE)
+        marker = self.root / "marker"
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-s", "-p", "no:cacheprovider", str(stray)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, cwd=REPO,
+                                timeout=120,
+                                env=self.env(self.logs, NEVR_TEST_DRAIN_S="1", RUN_TOOL_TESTS_MARKER=str(marker)))
+        self.addCleanup(kill_group, int(marker.read_text()))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = self.records()[0]
+        self.assertTrue(record["stray_kill_sent"])
+        self.assertFalse(record["output_complete"])
+        self.assertIn("output=incomplete", Path(record["log"]).read_text())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the parent-death signal is Linux's")
+    def test_pytest_dies_with_the_script(self):
+        proc = self.start_slow()
+        pytest_pid = int(self.marker.read_text().split()[0])  # pytest leads its own session
+        os.kill(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=30)
+
+        def alive() -> bool:
+            try:
+                state = Path(f"/proc/{pytest_pid}/stat").read_text().rsplit(") ", 1)[1][:1]
+            except (FileNotFoundError, ProcessLookupError):
+                return False
+            return state != "Z"
+
+        deadline = time.monotonic() + 10
+        while alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(alive(), "pytest outlived the script")
+
+    def test_a_collection_error_is_named_by_its_file(self):
+        suite = self.write_suite("broken", "def test_x(:\n    pass\n")
+        result = self.run_script(self.logs, "-q", "-p", "no:cacheprovider", str(suite))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        failed = self.records()[0]["failed"]
+        self.assertEqual(len(failed), 1)
+        self.assertFalse(failed[0].startswith("::"), failed)
+        self.assertIn("test_sample", failed[0])
+
+    def test_a_cut_short_line_in_the_index_keeps_the_next_record_whole(self):
+        self.logs.mkdir()
+        index = self.logs / "runs.jsonl"
+        index.write_text('{"event": "end", "cut sho')
+        self.run_script(self.logs)
+        lines = index.read_text().splitlines()
+        self.assertEqual(lines[0], '{"event": "end", "cut sho')
+        self.assertEqual([json.loads(l)["event"] for l in lines[1:]], ["start", "end"])
+
+    @unittest.skipIf(importlib.util.find_spec("pytest_randomly") is None, "pytest-randomly is not installed")
+    def test_no_seed_when_plugins_do_not_load_automatically(self):
+        module = load_script()
+        off = {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+        self.assertEqual(module.randomly_seed([], off), ([], None))
+        extra, seed = module.randomly_seed(["-p", "randomly"], off)
+        self.assertIsInstance(seed, int)
+        self.assertEqual(extra, [f"--randomly-seed={seed}"])
+
+    def test_unbalanced_pytest_addopts_does_not_crash_the_script(self):
+        module = load_script()
+        extra, seed = module.randomly_seed([], {"PYTEST_ADDOPTS": "-k 'unclosed"})
+        self.assertEqual(len(extra), 0 if seed is None else 1)
 
     def test_the_record_says_whether_the_tree_was_clean(self):
         repo = self.root / "repo"
