@@ -268,6 +268,7 @@ package-dev store_apk="/mnt/games/cache/r15_goldmaster_store.apk":
     just android-repack-apk "{{ store_apk }}" build/android-dev/sentinel/libovrplatformloader.so build/android-dev/repack
     python3 tools/package_release.py --commit "$commit" --out "$out" \
         --dll build/mingw-dev/bin/BugSplat64.dll \
+        --server-exe build/mingw-dev/bin/echovr_server.exe \
         --apk build/android-dev/repack/r15_nevr-sentinel_signed.apk \
         --pc-header build/mingw-dev/generated/nevr_builtin_defaults.h \
         --quest-header build/android-dev/generated/nevr_builtin_defaults.h \
@@ -1111,6 +1112,13 @@ test-quest-hooks:
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/permission_wait_hook_test" -ldl
     timeout 120 "$out/permission_wait_hook_test"
+    # The Vulkan extension window (#868): the real wrapper chain through the thunk entries against a fake driver, with the
+    # Quest 3 driver's 137-entry list as the central case.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/vk_ext_window_test.cpp \
+        src/quest/sentinel/vk_ext_window.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/vk_ext_window_test" -ldl
+    timeout 120 "$out/vk_ext_window_test"
     # The toast presenter against a fake JNI (#807): a Java exception thrown at each JNI call in turn, null or not, is
     # never left pending. jni.h is the NDK's own; the recipe stops when it is absent.
     jni="{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/jni.h"
@@ -2402,6 +2410,10 @@ verify:
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) - game-import cross-check skipped; host export checks still run"
         python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
     fi
+    # #850: both shipped Windows files carry the pinned VERSIONINFO (Details tab), at the version the DLL's
+    # own NEVR-BUILD literal states. Fail-closed: a file without the resource, a changed field or a
+    # version that is not the build's exits 1.
+    python3 tools/pe_version_info.py check --dll "build/{{ preset }}/bin/BugSplat64.dll" --exe "build/{{ preset }}/bin/echovr_server.exe"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.

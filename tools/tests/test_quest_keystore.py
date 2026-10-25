@@ -187,10 +187,18 @@ class QuestKeystoreTest(unittest.TestCase):
         self.assert_shredded(seen.read_text())
         self.assertEqual(self.left_behind(), [])
 
-    def assert_shredded_after_signal(self, sig):
+    def assert_shredded_after_signal(self, sig, parent_ignores_sigint=False):
         self.seed()
+        # A shell starts a background job with SIGINT ignored and the child inherits it, and a non-interactive bash
+        # cannot trap a signal that was ignored on entry. The script is started with the default disposition so the
+        # result does not depend on how the test run was started.
+        if parent_ignores_sigint:
+            previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            self.addCleanup(signal.signal, signal.SIGINT, previous)
         proc = subprocess.Popen([str(SCRIPT), "with", "sleep", "30"], env=self.env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
         deadline = time.time() + 20
         while time.time() < deadline and not [p for p in self.run_dir.rglob("*") if p.is_file()]:
             time.sleep(0.05)
@@ -207,6 +215,9 @@ class QuestKeystoreTest(unittest.TestCase):
 
     def test_shred_is_called_on_sigint(self):
         self.assert_shredded_after_signal(signal.SIGINT)
+
+    def test_shred_is_called_on_sigint_when_the_test_process_ignores_sigint(self):
+        self.assert_shredded_after_signal(signal.SIGINT, parent_ignores_sigint=True)
 
     def test_shred_is_called_on_sighup(self):
         self.assert_shredded_after_signal(signal.SIGHUP)

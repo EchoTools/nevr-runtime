@@ -1,7 +1,7 @@
 """package_release.py: the gate and the assembly, with fake artifacts; install.ps1/uninstall.ps1 under pwsh.
 
 A release is a version plus GitHub's pre-release flag. The packaging path has NO flag input and no word of
-the zip, SHA256SUMS, RELEASE-NOTES.md or SIGNING.txt depends on it: promoting a release changes no byte.
+the zip, its SHA256SUMS, the release notes or SIGNING.txt depends on it: promoting a release changes no byte.
 A local build is a development build (X.Y.(Z+1)-dev.N+sha) and is packaged under a dev name.
 """
 
@@ -20,6 +20,7 @@ TOOL = REPO / "tools" / "package_release.py"
 PACKAGE = REPO / "tools" / "package-release"
 sys.path.insert(0, str(REPO / "tools"))
 import package_release  # noqa: E402
+from pe_version_fixtures import shipped_pe  # noqa: E402
 
 COMMIT = "3a35e0b945456dba8a9b56e8110df330178e7259"
 DEV = "5.0.1-dev.3+3a35e0b"
@@ -49,10 +50,10 @@ def identity(version, commit=COMMIT):
 
 
 def binary(version, commit=COMMIT, literals=1, extra=b"", trust=(b"NEVR-PLUGIN-TRUST signed-only",)):
-    """A fake binary: the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
+    """A fake DLL: a PE with the pinned VERSIONINFO, then the defaults, the identity literal NUL-bounded `literals` times, the plugin-trust
     literal(s) in `trust` (ADR 0010), then `extra`."""
     parts = [v.encode() for v in VALUES.values()] + [identity(version, commit)] * literals + list(trust)
-    return b"MZ" + b"\0" + b"\0".join(parts) + b"\0" + extra
+    return shipped_pe("BugSplat64.dll", version, b"\0" + b"\0".join(parts) + b"\0" + extra)
 
 
 class PackageFixture(unittest.TestCase):
@@ -73,6 +74,8 @@ class PackageFixture(unittest.TestCase):
         self.info.write_text(build_info(self.version))
         self.dll = self.tmp / "BugSplat64.dll"
         self.dll.write_bytes(binary(self.version))
+        self.server = self.tmp / "echovr_server.exe"
+        self.server.write_bytes(shipped_pe("echovr_server.exe", self.version, b"\0the dedicated-server launcher\0"))
         self.apk = self.tmp / "signed.apk"
         self.write_apk(self.version)
         self.out = self.tmp / "out"
@@ -86,7 +89,7 @@ class PackageFixture(unittest.TestCase):
     def run_tool(self, **overrides):
         """The local path (`just package-dev`): no --version, the binaries must carry a dev version."""
         args = {"--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--apk": str(self.apk), "--pc-header": str(self.pc_header),
+                "--server-exe": str(self.server), "--apk": str(self.apk), "--pc-header": str(self.pc_header),
                 "--quest-header": str(self.quest_header), "--quest-build-info": str(self.info),
                 "--defaults": str(self.defaults)}
         args.update(overrides)
@@ -104,13 +107,13 @@ class LocalDevPackageTest(PackageFixture):
     def test_a_clean_local_build_is_packaged_under_a_dev_name_with_checksums_and_notes(self):
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
-        zip_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-windows-player.zip"
+        zip_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-windows.zip"
         apk_path = self.out / "nevr-runtime-v5.0.1-dev.3-3a35e0b-quest.apk"
         self.assertTrue(zip_path.exists() and apk_path.exists(), sorted(p.name for p in self.out.iterdir()))
         with zipfile.ZipFile(zip_path) as z:
             self.assertEqual(sorted(z.namelist()),
-                             ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "install.ps1",
-                              "quest-diagnose.ps1", "uninstall.ps1"])
+                             ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
+                              "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             for name in z.namelist():
                 if name != "SHA256SUMS":
@@ -204,14 +207,15 @@ class ReleaseStagesTest(PackageFixture):
 
     def tree_args(self, **overrides):
         args = {"--version": RELEASE, "--commit": COMMIT, "--out": str(self.out), "--dll": str(self.dll),
-                "--pc-header": str(self.pc_header), "--defaults": str(self.defaults)}
+                "--server-exe": str(self.server), "--pc-header": str(self.pc_header),
+                "--defaults": str(self.defaults)}
         args.update(overrides)
         return [x for kv in args.items() for x in kv]
 
     def make_tree(self):
         result = self.run_stage("tree", *self.tree_args())
         self.assertEqual(result.returncode, 0, result.stderr)
-        return self.out / "nevr-runtime-v5.0.0-windows-player"
+        return self.out / "nevr-runtime-v5.0.0-windows"
 
     def seal_to(self, tree, name="sealed", *extra):
         sealed = self.tmp / name
@@ -222,7 +226,8 @@ class ReleaseStagesTest(PackageFixture):
     def test_tree_holds_the_files_the_signer_signs_and_no_checksums_yet(self):
         tree = self.make_tree()
         self.assertEqual(sorted(p.name for p in tree.iterdir()),
-                         ["BugSplat64.dll", "README.txt", "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
+                         ["BugSplat64.dll", "README.txt", "echovr_server.exe", "install.ps1", "quest-diagnose.ps1",
+                          "uninstall.ps1"])
         info = (self.out / "release.json").read_text()
         self.assertIn('"version": "5.0.0"', info)
         self.assertIn(COMMIT, info)
@@ -257,12 +262,94 @@ class ReleaseStagesTest(PackageFixture):
 
     def test_the_file_names_follow_the_tag_version(self):
         self.dll.write_bytes(binary("5.1.2"))
+        self.server.write_bytes(shipped_pe("echovr_server.exe", "5.1.2", b"\0the dedicated-server launcher\0"))
         result = self.run_stage("tree", *self.tree_args(**{"--version": "5.1.2"}))
         self.assertEqual(result.returncode, 0, result.stderr)
-        tree = self.out / "nevr-runtime-v5.1.2-windows-player"
+        tree = self.out / "nevr-runtime-v5.1.2-windows"
         sealed = self.seal_to(tree)
-        self.assertEqual(sorted(p.name for p in sealed.iterdir()),
-                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.1.2-windows-player.zip"])
+        self.assertEqual(sorted(p.name for p in sealed.iterdir()), ["nevr-runtime-v5.1.2-windows.zip"])
+
+    QUEST = b"\x7fELF the quest sentinel library"
+
+    def release_dir(self, sealed, name="assets", version="5.0.0", quest=True):
+        """What the draft holds: the sealed zip and the Quest library under the names the release gives them."""
+        assets = Path(tempfile.mkdtemp(prefix=name + "-", dir=self.tmp))
+        shutil.copy(sealed / f"nevr-runtime-v{version}-windows.zip", assets)
+        if quest:
+            (assets / f"nevr-runtime-v{version}-quest-libovrplatformloader.so").write_bytes(self.QUEST)
+        return assets
+
+    def notes_for(self, sealed, name="notes", **kw):
+        out = Path(tempfile.mkdtemp(prefix=name + "-", dir=self.tmp)) / "notes.md"
+        result = self.run_stage("notes", "--assets", str(self.release_dir(sealed, name + "-assets", **kw)), "--out", str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return out
+
+    def test_the_release_body_is_the_notes_and_a_sha256_table_of_both_assets(self):
+        sealed = self.seal_to(self.make_tree())
+        notes = self.notes_for(sealed).read_text()
+        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
+        quest = "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"
+        self.assertIn(f"| `{zip_path.name}` | `{hashlib.sha256(zip_path.read_bytes()).hexdigest()}` |", notes)
+        self.assertIn(f"| `{quest}` | `{hashlib.sha256(self.QUEST).hexdigest()}` |", notes)
+        self.assertIn(f"Commit `{COMMIT}`", notes)
+        self.assertRegex(notes, r"\A# \w+ runtime 5\.0\.0\n")
+        self.assertNotRegex(notes, r"@[A-Z_]+@", "every placeholder is filled")
+        self.assertNotIn("SHA256SUMS` | SHA-256 of", notes, "the APK table is not the release's")
+
+    def test_the_body_hashes_the_asset_bytes_as_they_are_so_a_resigned_zip_changes_it(self):
+        tree = self.make_tree()
+        first = self.notes_for(self.seal_to(tree, "one")).read_text()
+        (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, (tree / "BugSplat64.dll").read_bytes()))
+        (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
+        self.sign_scripts(tree)
+        second = self.notes_for(self.seal_to(tree, "two", "--require-signed")).read_text()
+        self.assertNotEqual(first, second)
+
+    def test_the_body_takes_version_and_commit_from_the_dll_inside_the_zip(self):
+        sealed = self.seal_to(self.make_tree())
+        assets = self.release_dir(sealed, "wrong", version="5.0.0")
+        renamed = assets / "nevr-runtime-v5.0.1-windows.zip"
+        (assets / "nevr-runtime-v5.0.0-windows.zip").rename(renamed)
+        (assets / "nevr-runtime-v5.0.1-quest-libovrplatformloader.so").write_bytes(self.QUEST)
+        (assets / "nevr-runtime-v5.0.0-quest-libovrplatformloader.so").unlink()
+        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n.md"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("carries version '5.0.0', not '5.0.1'", result.stderr)
+        self.assertFalse((self.tmp / "n.md").exists())
+
+    def test_the_body_refuses_a_missing_quest_library_a_stray_file_and_an_existing_output(self):
+        sealed = self.seal_to(self.make_tree())
+        assets = self.release_dir(sealed, "a1", quest=False)
+        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n1.md"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no nevr-runtime-v5.0.0-quest-libovrplatformloader.so", result.stderr)
+        assets = self.release_dir(sealed, "a2")
+        (assets / "SHA256SUMS").write_text("x")
+        result = self.run_stage("notes", "--assets", str(assets), "--out", str(self.tmp / "n2.md"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("files that are not release assets: SHA256SUMS", result.stderr)
+        (assets / "SHA256SUMS").unlink()
+        out = self.tmp / "n3.md"
+        out.write_text("kept")
+        result = self.run_stage("notes", "--assets", str(assets), "--out", str(out))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("exists; not overwritten", result.stderr)
+        self.assertEqual(out.read_text(), "kept")
+
+    def test_the_body_refuses_no_zip_two_zips_and_a_zip_without_the_dll(self):
+        empty = self.tmp / "empty"
+        empty.mkdir()
+        result = self.run_stage("notes", "--assets", str(empty), "--out", str(self.tmp / "n.md"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected exactly one nevr-runtime-v<X.Y.Z>-windows.zip, found 0", result.stderr)
+        hollow = self.tmp / "hollow"
+        hollow.mkdir()
+        with zipfile.ZipFile(hollow / "nevr-runtime-v5.0.0-windows.zip", "w") as z:
+            z.writestr("README.txt", "x")
+        result = self.run_stage("notes", "--assets", str(hollow), "--out", str(self.tmp / "n.md"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has no BugSplat64.dll", result.stderr)
 
     def sign_scripts(self, tree):
         """What signing does to a PowerShell script: an Authenticode block is appended."""
@@ -270,25 +357,63 @@ class ReleaseStagesTest(PackageFixture):
             path = tree / name
             path.write_bytes(path.read_bytes() + b"\n# SIG # Begin signature block\n# SIG # End signature block\n")
 
-    def test_a_release_is_the_zip_sums_and_notes_with_no_quest_apk(self):
+    def test_a_release_is_the_one_zip_with_no_top_level_sums_notes_or_quest_apk(self):
         tree = self.make_tree()
         sealed = self.seal_to(tree)
-        self.assertEqual(sorted(p.name for p in sealed.iterdir()),
-                         ["RELEASE-NOTES.md", "SHA256SUMS", "nevr-runtime-v5.0.0-windows-player.zip"])
-        notes = (sealed / "RELEASE-NOTES.md").read_text()
-        self.assertIn("No Quest APK in this release", notes)
-        self.assertNotIn("adb install", notes)
-        self.assertNotIn("Two artifacts", notes)
-        top = (sealed / "SHA256SUMS").read_text()
-        zip_path = sealed / "nevr-runtime-v5.0.0-windows-player.zip"
-        self.assertEqual(top, f"{hashlib.sha256(zip_path.read_bytes()).hexdigest()}  {zip_path.name}\n")
+        self.assertEqual(sorted(p.name for p in sealed.iterdir()), ["nevr-runtime-v5.0.0-windows.zip"])
+        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
+            self.assertEqual(sorted(z.namelist()),
+                             ["BugSplat64.dll", "README.txt", "SHA256SUMS", "SIGNING.txt", "echovr_server.exe",
+                              "install.ps1", "quest-diagnose.ps1", "uninstall.ps1"])
+            sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
+            self.assertEqual(sorted(sums), sorted(n for n in z.namelist() if n != "SHA256SUMS"))
+            for name in sums:
+                self.assertEqual(sums[name], hashlib.sha256(z.read(name)).hexdigest(), name)
+
+    def test_the_tree_stage_refuses_a_missing_or_non_pe_server_exe(self):
+        self.server.write_bytes(b"not a PE")
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: echovr_server.exe is missing or not a PE file", result.stderr)
+        self.assertFalse(self.out.exists())
+        self.server.unlink()
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("echovr_server.exe is missing or not a PE file", result.stderr)
+
+    def test_the_tree_stage_refuses_a_file_without_the_pinned_version_info(self):
+        """#850: the Details tab of both shipped files is part of the gate, at the version the DLL states."""
+        self.server.write_bytes(b"MZ\0the dedicated-server launcher\0")
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: echovr_server.exe:", result.stderr)
+        self.assertFalse(self.out.exists())
+        self.server.write_bytes(shipped_pe("echovr_server.exe", "5.0.1"))
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: echovr_server.exe: FILEVERSION 5.0.1.0 is not 5.0.0.0", result.stderr)
+        self.server.write_bytes(shipped_pe("echovr_server.exe", RELEASE))
+        parts = [v.encode() for v in VALUES.values()] + [identity(RELEASE), b"NEVR-PLUGIN-TRUST signed-only"]
+        self.dll.write_bytes(b"MZ\0" + b"\0".join(parts) + b"\0")  # everything but the VERSIONINFO
+        result = self.run_stage("tree", *self.tree_args())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("windows: BugSplat64.dll:", result.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_seal_refuses_a_tree_without_the_server_exe(self):
+        tree = self.make_tree()
+        (tree / "echovr_server.exe").unlink()
+        result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has no echovr_server.exe", result.stderr)
+        self.assertFalse((self.tmp / "s").exists())
 
     def test_the_texts_state_facts_that_hold_before_and_after_signing_and_use_no_old_model_words(self):
         tree = self.make_tree()
         sealed = self.seal_to(tree)
-        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows-player.zip") as z:
+        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
             texts = {"SIGNING.txt": z.read("SIGNING.txt").decode(), "README.txt": z.read("README.txt").decode()}
-        texts["RELEASE-NOTES.md"] = (sealed / "RELEASE-NOTES.md").read_text()
+        texts["RELEASE-NOTES.md"] = self.notes_for(sealed).read_text()
         for name, text in texts.items():
             self.assertEqual(words_of_the_old_model(text), [], name)
             self.assertNotRegex(text, r"\bUNSIGNED\b", f"{name} must not state a build-time unsigned fact")
@@ -304,9 +429,32 @@ class ReleaseStagesTest(PackageFixture):
             self.assertIn(needle, texts["README.txt"], needle)
         # No sentence may be false in a package built anywhere: not "built by CI", not "UNSIGNED".
         self.assertNotIn("built by CI", package_release.SIGNING_TEXT)
-        self.assertIn("Two zips", texts["RELEASE-NOTES.md"])
-        self.assertIn("nevr-runtime-v5.0.0-windows-server.zip", texts["RELEASE-NOTES.md"])
+        self.assertIn("No Quest APK in this release", texts["RELEASE-NOTES.md"])
+        self.assertNotIn("adb install", texts["RELEASE-NOTES.md"])
+        self.assertNotIn("windows-server", texts["RELEASE-NOTES.md"])
         self.assertNotRegex(texts["RELEASE-NOTES.md"], r"-(lite|debug)\.zip")
+
+    def test_the_zip_readme_tells_an_operator_how_to_start_a_server_and_its_config_uses_keys_the_runtime_reads(self):
+        import yaml
+        sealed = self.seal_to(self.make_tree())
+        with zipfile.ZipFile(sealed / "nevr-runtime-v5.0.0-windows.zip") as z:
+            readme = z.read("README.txt").decode()
+        section = readme.split("Running a dedicated server\n", 1)[1].split("\nUpdate\n", 1)[0]
+        prose = " ".join(section.split())  # the README wraps lines; a phrase may break across one
+        for needle in (r".\echovr_server.exe", "-server -headless -no-console", r"_local\config.yaml",
+                       "services.socket_uri", "issue #843", "auth.password", "never in the socket_uri",
+                       "refresh token", "registration successful", "Graceful shutdown initiated",
+                       "services.allow_offline_server"):
+            self.assertIn(needle, prose, needle)
+        block = [l for l in section.splitlines() if l.startswith("       ") and not l.startswith("       .\\")]
+        config = yaml.safe_load("\n".join(l[7:] for l in block))
+        paths = {f"{top}.{key}" for top, body in config.items() for key in body}
+        self.assertEqual(paths, {"services.socket_uri", "auth.http_uri", "auth.http_key",
+                                 "auth.password", "identity.discord_id"})
+        mapped = set(re.findall(r'\{"[a-z_]+", "([a-z_]+\.[a-z_]+)"\}',
+                                (REPO / "src/runtime/lifecycle/service_map.cpp").read_text(encoding="utf-8")))
+        self.assertEqual(paths - mapped, set(), "the README config names a key service_map.cpp does not map")
+        self.assertNotRegex(config["services"]["socket_uri"], r"[?&]|@", "no credential rides in the URI")
 
     def test_the_repository_readme_that_ships_in_the_dist_zips_makes_no_signing_fact(self):
         # README.md is copied into nevr-runtime-vX.Y.Z.zip, which is attested and never
@@ -321,12 +469,15 @@ class ReleaseStagesTest(PackageFixture):
         before = self.seal_to(tree, "before")
         signed = fake_pe(0x100, (tree / "BugSplat64.dll").read_bytes())  # the signer rewrites the file
         (tree / "BugSplat64.dll").write_bytes(signed)
+        signed_server = fake_pe(0x100, (tree / "echovr_server.exe").read_bytes())
+        (tree / "echovr_server.exe").write_bytes(signed_server)
         self.sign_scripts(tree)
         sealed = self.seal_to(tree, "after", "--require-signed")
-        zip_path = sealed / "nevr-runtime-v5.0.0-windows-player.zip"
-        with zipfile.ZipFile(zip_path) as z, zipfile.ZipFile(before / "nevr-runtime-v5.0.0-windows-player.zip") as zb:
+        zip_path = sealed / "nevr-runtime-v5.0.0-windows.zip"
+        with zipfile.ZipFile(zip_path) as z, zipfile.ZipFile(before / "nevr-runtime-v5.0.0-windows.zip") as zb:
             sums = dict(line.split("  ")[::-1] for line in z.read("SHA256SUMS").decode().splitlines())
             self.assertEqual(sums["BugSplat64.dll"], hashlib.sha256(signed).hexdigest())
+            self.assertEqual(sums["echovr_server.exe"], hashlib.sha256(signed_server).hexdigest())
             self.assertNotEqual(sums["BugSplat64.dll"], unsigned_sha)
             self.assertEqual(z.read("SIGNING.txt"), zb.read("SIGNING.txt"), "the signing text never changes")
             self.assertEqual(z.read("README.txt"), zb.read("README.txt"))
@@ -334,17 +485,19 @@ class ReleaseStagesTest(PackageFixture):
             for name in z.namelist():
                 if name != "SHA256SUMS":
                     self.assertEqual(sums[name], hashlib.sha256(z.read(name)).hexdigest(), name)
-        self.assertEqual((sealed / "RELEASE-NOTES.md").read_bytes(), (before / "RELEASE-NOTES.md").read_bytes())
-        self.assertIn(f"{hashlib.sha256(zip_path.read_bytes()).hexdigest()}  {zip_path.name}",
-                      (sealed / "SHA256SUMS").read_text())
+        self.assertEqual(self.notes_for(sealed, "n-after").read_text().replace(hashlib.sha256(zip_path.read_bytes()).hexdigest(), "ZIP"),
+                         self.notes_for(before, "n-before").read_text().replace(
+                             hashlib.sha256((before / zip_path.name).read_bytes()).hexdigest(), "ZIP"),
+                         "the notes differ only in the zip's SHA-256")
 
     def test_require_signed_is_a_gate_only_and_changes_no_text(self):
         tree = self.make_tree()
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("not signed (no certificate table): BugSplat64.dll", result.stderr)
+        self.assertIn("not signed (no certificate table): BugSplat64.dll, echovr_server.exe", result.stderr)
         self.assertFalse((self.tmp / "s").exists())
         (tree / "BugSplat64.dll").write_bytes(fake_pe(0x100, b"x"))
+        (tree / "echovr_server.exe").write_bytes(fake_pe(0x100, b"y"))
         result = self.run_stage("seal", "--tree", str(tree), "--out", str(self.tmp / "s"), "--require-signed")
         self.assertEqual(result.returncode, 1)
         self.assertIn("not signed (no signature block): install.ps1, quest-diagnose.ps1, uninstall.ps1", result.stderr)
@@ -359,8 +512,9 @@ class ReleaseStagesTest(PackageFixture):
         # ... so sealing the same tree twice gives the same bytes, whatever flag the release carries.
         first = self.seal_to(tree, "first")
         second = self.seal_to(tree, "second")
-        for name in ("nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md"):
+        for name in ("nevr-runtime-v5.0.0-windows.zip",):
             self.assertEqual((first / name).read_bytes(), (second / name).read_bytes(), name)
+        self.assertEqual(self.notes_for(first, "n1").read_bytes(), self.notes_for(second, "n2").read_bytes())
 
     def test_seal_has_no_apk_option(self):
         tree = self.make_tree()
@@ -403,6 +557,66 @@ class ReleaseStagesTest(PackageFixture):
         result = self.stamp("--version", RELEASE, "--commit", "d" * 40)
         self.assertEqual(result.returncode, 1)
         self.assertIn("is not the checked-out commit", result.stderr)
+
+    # --- the Quest library's version and commit (#831) -----------------------------------------------
+
+    def quest_library(self, *strings):
+        """A fake Quest library: NUL-bounded strings, as the compiler lays out kVersion and kCommit."""
+        path = self.out.parent / "libovrplatformloader.so"
+        path.write_bytes(b"\x7fELF\0" + b"\0".join(strings) + b"\0")
+        return path
+
+    def quest_check(self, library, version=RELEASE, commit=COMMIT):
+        return self.run_stage("quest-library", "--lib", str(library), "--version", version, "--commit", commit)
+
+    def test_quest_library_check_accepts_the_exact_version_and_the_commit_prefix(self):
+        library = self.quest_library(b"token_auth_state", RELEASE.encode(), COMMIT[:8].encode(), COMMIT.encode(), b"port")
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"quest library: version {RELEASE} commit {COMMIT[:8]}", result.stdout)
+        # git's short hash is 7 digits or more
+        for short in (COMMIT[:7], COMMIT[:12], COMMIT[:39]):
+            library = self.quest_library(RELEASE.encode(), short.encode(), COMMIT.encode())
+            self.assertEqual(self.quest_check(library).returncode, 0, short)
+
+    def test_quest_library_check_refuses_a_dev_version_that_only_starts_with_the_release_version(self):
+        library = self.quest_library(b"5.0.0-dev.4", COMMIT[:8].encode(), COMMIT.encode())
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"no string equal to the version '{RELEASE}'", result.stderr)
+
+    def test_quest_library_check_refuses_a_version_that_is_only_inside_another_string(self):
+        library = self.quest_library(b"v5.0.0", b"agent/5.0.0 (x)", COMMIT[:8].encode(), COMMIT.encode())
+        result = self.quest_check(library)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"no string equal to the version '{RELEASE}'", result.stderr)
+
+    def test_quest_library_check_refuses_a_commit_that_is_missing_wrong_or_only_inside_another_string(self):
+        full, short, version = COMMIT.encode(), COMMIT[:8].encode(), RELEASE.encode()
+        for strings in ((version,),
+                        (version, b"d" * 8, b"d" * 40),
+                        (version, b"x" + short, b"x" + full),
+                        (version, short + b"zz", full + b"zz"),
+                        (version, COMMIT[:6].encode(), full),
+                        (version, COMMIT[:7].encode() + b"0", full),  # the same first 7 digits, a different 8th
+                        (version, short.upper(), full.upper()),
+                        (version, full),  # the full commit alone is not kCommit
+                        (version, short)):  # kCommit alone, without the build record's commit
+            result = self.quest_check(self.quest_library(*strings))
+            self.assertEqual(result.returncode, 1, strings)
+            self.assertRegex(result.stderr, "no string (of 7 to 39 hex digits that is a prefix of|equal to) the commit")
+
+    def test_quest_library_check_refuses_a_version_argument_that_is_not_x_y_z_and_a_commit_that_is_not_40_hex(self):
+        library = self.quest_library(RELEASE.encode(), COMMIT[:8].encode())
+        self.assertIn("is not X.Y.Z", self.quest_check(library, version="5.0.0-dev.1").stderr)
+        self.assertIn("is not 40 hex", self.quest_check(library, commit=COMMIT[:7]).stderr)
+
+    def test_the_release_workflow_checks_the_quest_library_with_that_command_and_no_bare_grep(self):
+        workflow = (REPO / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        step = workflow.split("- name: Name and check the release asset", 1)[1].split("\n    - ", 1)[0]
+        self.assertIn('python3 tools/package_release.py quest-library --lib "$so" --version "$version" '
+                      '--commit "$GITHUB_SHA"', step)
+        self.assertNotRegex(step, r"\bgrep\b")
 
     # --- the plugin signature gate (ADR 0010, #741) --------------------------------------------------
 

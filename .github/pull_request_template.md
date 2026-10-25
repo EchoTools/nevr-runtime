@@ -4,9 +4,14 @@
 
 ## Linked issue
 
-Closes #
+Closes #<issue>
 
-<!-- If there is no issue, delete the line above and say here why there is none. -->
+<!--
+A PR is opened only for an existing issue: the issue states the problem and its bar, and the PR names it. Replace the
+line above with one `Closes #N` line for each issue this PR resolves. A PR that leaves part of an issue open (a live run
+still owed) uses `Refs #N` and says here what is still open. A fix with no issue gets an issue first. The check fails a
+body that names none (docs/standards/planning.md, "PRs").
+-->
 
 ## How it was verified
 
@@ -22,7 +27,7 @@ See docs/standards/verification.md.
 
 ## Checklist
 
-- [ ] The PR is linked to its issue (`Closes #N`), or says above why there is none
+- [ ] The PR names the issue it resolves (`Closes #N`) or advances (`Refs #N`, with what is still open)
 - [ ] The PR has the same milestone as the issue it resolves
 - [ ] One logical change, with a conventional-prefix commit message (`feat`, `fix`, `docs`, `ci`, ...)
 - [ ] `src/legacy/` is untouched, and no generated protobuf (`gen/cpp/*.pb.*`) was edited by hand

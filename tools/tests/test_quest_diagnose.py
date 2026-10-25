@@ -348,6 +348,19 @@ class DiagnoseCases:
         self.assertIn("No failure seen: running after 0 s", text)
         self.assertIn("this build logged no data-mount line, so the data step can't be confirmed from the log", text)
 
+    # #834: NO GAME DATA is judged from the folders alone. A running game whose log has neither an OBB mount line
+    # nor a data_root event, with no files folder and no _data folder, is still flagged.
+    def test_a_running_game_with_no_data_folders_and_no_mount_or_data_root_line_is_flagged_no_game_data(self):
+        self.logcat.write_text(self.HEALTHY_WITHOUT_THE_MOUNT_LINE)
+        result = self.run_script(FAKE_DIRS=FILES)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        text = result.stdout.split("Privacy:")[0]
+        self.assertIn("running after 0 s: yes", text)
+        self.assertIn("the game mounted data at: (no line)", text)
+        self.assertIn("runtime data_root line: none (this build does not log one)", text)
+        self.assertIn("NO GAME DATA", text)
+        self.assertNotIn("No failure seen", text)
+
     def test_a_runtime_data_root_line_confirms_the_data_step_without_an_obb_line(self):
         self.logcat.write_text(
             f'10-22 00:02:33.000  100  100 I NEVR-Sentinel: {{"event":"data_root","result":"found","source":"legacy","root":"{LEGACY}"}}\n')

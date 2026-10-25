@@ -41,6 +41,8 @@ inline constexpr const char* kNetGameUpdateSymbol = "_ZN10NRadEngine8NRadGame11C
 inline constexpr const char* kMountObbSymbol = "AStorageManager_mountObb";
 inline constexpr const char* kGetMountedObbPathSymbol = "AStorageManager_getMountedObbPath";
 inline constexpr const char* kAndroidMainSymbol = "android_main";
+inline constexpr const char* kFindMethodSymbol = "_ZN10NRadEngine10CSysModule10FindMethodEmPKc";
+inline constexpr const char* kGetDeviceExtensionsVulkanSymbol = "vrapi_GetDeviceExtensionsVulkan";
 inline constexpr const char* kEnablePageNodeEnterSymbol =
     "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
@@ -116,6 +118,22 @@ using LibR15GetMountedObbPathThunk = CallbackThunk<LibR15GetMountedObbPathTag, G
 inline constexpr std::int32_t kObbStateMounted = 1;
 // The data root the game already falls back to when no OBB path was recorded (GetDataRootDir, above).
 inline constexpr const char* kObbFallbackDataRoot = "/storage/emulated/0/readyatdawn";
+
+// NRadEngine::CSysModule::FindMethod(unsigned long module, char const* name), defined in libr15 at 0x2a9e4f8 (72 bytes,
+// exported): `module` is the handle CSysModule::Load returned (0 or a null name returns 0), the body calls dlsym through
+// libr15's own PLT (0x1016c20, JUMP_SLOT 0x36e2cf8) and returns its result. CR15 Vulkan initialisation
+// (Initialize, 0x19dc9d4) reaches vkGetInstanceProcAddr through it: the PLT stub at 0x1008620 loads JUMP_SLOT 0x36db9f8.
+using FindMethodSig = void*(unsigned long module, const char* name);
+struct LibR15FindMethodTag {};
+using LibR15FindMethodThunk = CallbackThunk<LibR15FindMethodTag, FindMethodSig>;
+
+// VrApi_Vulkan.h: ovrResult vrapi_GetDeviceExtensionsVulkan(char* extensionNames, uint32_t* extensionNamesSize).
+// libr15 calls it from one wrapper (GetDeviceExtensionsVK 0x1b73dc0: `str w1, [sp, #0xc]; add x1, sp, #0xc; bl <plt>`,
+// then `strb wzr, [buf, size]`), passing a 0x800-byte buffer and a pointer to its capacity, ignoring the result.
+// Imported (value 0): JUMP_SLOT 0x36dd440.
+using VrapiExtensionsSig = std::int32_t(char* extension_names, std::uint32_t* extension_names_size);
+struct LibR15GetDeviceExtensionsVulkanTag {};
+using LibR15GetDeviceExtensionsVulkanThunk = CallbackThunk<LibR15GetDeviceExtensionsVulkanTag, VrapiExtensionsSig>;
 
 // android_main(android_app*), defined in libr15 at 0xf784c4 and called by the native-activity glue's thread entry
 // through libr15's own PLT (`mov x0, x19; bl 0xf27bc0` at 0xf79a4c; the stub loads JUMP_SLOT 0x36eb4c8). The glue
@@ -328,6 +346,18 @@ inline GotTarget LibR15MountObb() {
 }
 inline GotTarget LibR15GetMountedObbPath() {
   return {kLibR15, kGetMountedObbPathSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36f5b48ULL};
+}
+
+// libr15.so's slot for CSysModule::FindMethod, defined in libr15 itself (JUMP_SLOT 0x36db9f8, `readelf -rW` on the
+// pinned image).
+inline GotTarget LibR15FindMethod() {
+  return {kLibR15, kFindMethodSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36db9f8ULL};
+}
+
+// libr15.so's slot for the VrApi device-extension import (JUMP_SLOT 0x36dd440, `readelf -rW` on the pinned image;
+// imported, value 0).
+inline GotTarget LibR15GetDeviceExtensionsVulkan() {
+  return {kLibR15, kGetDeviceExtensionsVulkanSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36dd440ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

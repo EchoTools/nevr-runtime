@@ -98,7 +98,7 @@ yet. On PC:
 
 1. **Sync the device clock first** (PC: Windows time sync; Quest: automatic time on), so
    PC and Quest logs line up afterwards.
-2. **Windows:** take `nevr-runtime-v<X.Y.Z>-windows-player.zip` from the release (CI builds it from the tag `vX.Y.Z`),
+2. **Windows:** take `nevr-runtime-v<X.Y.Z>-windows.zip` from the release (CI builds it from the tag `vX.Y.Z`),
    close the game, unzip it, and run `install.ps1` from PowerShell
    (`powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`). It checks the package
    against `SHA256SUMS`, copies your original `BugSplat64.dll` to
@@ -206,7 +206,7 @@ From `build/mingw-release/bin/`:
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
 The staged server package and its `.tar.zst` carry an empty `plugins/` directory
-for optional operator plugins; the server zip (`nevr-runtime-v<ver>-windows-server.zip`)
+for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
 has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
 built separately and are not bundled. The community beta install guide covers installing the game client and
 uses only `BugSplat64.dll`.

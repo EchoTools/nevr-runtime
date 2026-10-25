@@ -14,21 +14,23 @@ publish. Nothing about a published release is edited afterwards: a wrong release
 
 ## Assets
 
-One file per audience, with the audience in its name. The list is `release_asset_names` in
-`tools/release_asset_names.sh`; the guard, the draft attach, the workflow and `tools/tests/test_release_assets.py`
-all read or check that one list, so the names below cannot drift from the build.
+Two files. The list is `release_asset_names` in `tools/release_asset_names.sh`; the guard, the draft attach, the
+workflow and `tools/tests/test_release_assets.py` all read or check that one list, so the names below cannot drift
+from the build.
 
 | file | audience | holds |
 |---|---|---|
-| `nevr-runtime-vX.Y.Z-windows-player.zip` | players on Windows | `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
-| `nevr-runtime-vX.Y.Z-windows-server.zip` | people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `README.md`, `INSTALL.md` (the zip has no `plugins/` entry: the staged directory is empty and a zip holds no empty directory) |
+| `nevr-runtime-vX.Y.Z-windows.zip` | players on Windows and people running a dedicated server | `BugSplat64.dll`, `echovr_server.exe` (both stripped, debug info split off), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt` (the install steps and the dedicated-server steps), `SIGNING.txt`, `SHA256SUMS` (the files inside the zip: `install.ps1` and `uninstall.ps1` check `BugSplat64.dll` against it). The zip has no `plugins/` entry: a zip holds no empty directory |
 | `nevr-runtime-vX.Y.Z-quest-libovrplatformloader.so` | Quest packagers | the Quest sentinel library, a loose ELF (attested; not Authenticode) |
-| `SHA256SUMS` | everyone | one line: the SHA-256 of the Windows player zip (what `seal()` in `tools/package_release.py` writes). The server zip and the Quest `.so` are not in it; their integrity is the attestation |
-| `RELEASE-NOTES.md` | everyone | the notes `tools/package_release.py seal` writes from `tools/package-release/RELEASE-NOTES.template.md` |
+
+There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset. The **release body** carries the notes and a table
+of the SHA-256 of each of the two assets, rendered by `python3 tools/package_release.py notes` from
+`tools/package-release/RELEASE-NOTES.template.md` and the asset files as they are after signing ("Write the release
+body"). The attestation stays the machine-checkable proof of the CI bytes.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
-**Signed Windows zips live on the GitHub release.** Quest APKs and dry runs are published outside GitHub.
+**The signed Windows zip lives on the GitHub release.** Quest APKs and dry runs are published outside GitHub.
 
 **Quest APKs never go on GitHub.** They are published outside GitHub, under `nevr-runtime/quest/<file>` with a
 `<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the publishing host
@@ -61,11 +63,11 @@ its files to the draft, and the draft stays a draft until the checks below pass.
 just release-preflight                                    # 1. refuses unless this clone is exactly origin/main
 git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z   # 2. tag origin's tip, push the tag
 just release-preflight && gh release create vX.Y.Z --title vX.Y.Z --draft --prerelease --verify-tag   # 3. the draft
-gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the five files; it stays a draft
+gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft
 ```
 
-`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and none of the
-five names on the draft is built and attached; a draft that already carries any of the five names fails the run red, so a
+`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and neither of the
+two names on the draft is built and attached; a draft that already carries either of the two names fails the run red, so a
 second dispatch never overwrites files. The `quest` job runs only for a draft dispatch or a release event, never for a
 plain dispatch: a green plain dispatch says nothing about the Quest tests.
 
@@ -74,7 +76,7 @@ locked the moment it exists, before the build can attach its files, and can neve
 `gh release create` without `--draft`.
 
 **A draft that fails its checks is deleted and cut again.** A second `gh workflow run build.yml` onto a draft that already
-carries any of the five names fails red, so a bad draft is never rebuilt in place. Delete it (`gh release delete vX.Y.Z
+carries either of the two names fails red, so a bad draft is never rebuilt in place. Delete it (`gh release delete vX.Y.Z
 --yes`; this leaves the tag) and, when the fault is in the files only, create the draft again from step 3. When the fault
 is in the tree, also delete the tag (`git push origin --delete vX.Y.Z`, `git tag -d vX.Y.Z`), fix `main`, and start again at
 "Before the tag". A tag with no published release may be removed; the rule that a tag name is never reused applies once a
@@ -85,14 +87,19 @@ release is published ("When a published release is wrong").
 All of these on the draft, before anything is signed or published. Read the output; do not trust a green run.
 
 ```sh
-gh release view vX.Y.Z --json assets --jq '.assets[].name'          # exactly the five names above
+gh release view vX.Y.Z --json assets --jq '.assets[].name'          # exactly the two names above
 mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, empty directory
-(cd "$S" && sha256sum -c SHA256SUMS)                                  # the player zip line: OK (the only line)
 for f in "$S"/*; do gh attestation verify "$f" -R EchoTools/nevr-runtime; done   # each exits 0
-(cd "$S" && unzip -p nevr-runtime-vX.Y.Z-windows-player.zip BugSplat64.dll | strings -a | grep -a '^NEVR-BUILD')
+mkdir -p "$S.unzipped" && unzip -q "$S"/nevr-runtime-vX.Y.Z-windows.zip -d "$S.unzipped"   # a new, empty directory
+(cd "$S.unzipped" && sha256sum -c SHA256SUMS)                         # every file but SHA256SUMS: OK
+(cd "$S.unzipped" && strings -a BugSplat64.dll | grep -a '^NEVR-BUILD')
+python3 tools/pe_version_info.py check --dll "$S.unzipped/BugSplat64.dll" --exe "$S.unzipped/echovr_server.exe"   # exits 0
 ```
 
-The last line must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
+The `NEVR-BUILD` line must be exactly `NEVR-BUILD X.Y.Z <the tag's commit, 40 hex>` (one literal; `git rev-parse vX.Y.Z^{commit}`).
+The last line reads the VERSIONINFO of both files (the Details tab: description, product name, copyright, company, original
+file name and the file and product version `X.Y.Z`, numeric `X.Y.Z.0`) and compares every field with the pinned values and
+with the version in the DLL's `NEVR-BUILD` literal; `python3 tools/pe_version_info.py show <file>` prints them.
 
 ## Sign
 
@@ -110,7 +117,7 @@ asset's unsigned and signed SHA-256. `dry_run=false` also replaces the assets of
 published release and never flips the pre-release flag); it needs the signer's GitHub App to be installed on this repository.
 That installation, and the signing credentials, are the owner's.
 
-Check a signed file as `SIGNING.txt` in the player zip says: `Get-AuthenticodeSignature` status `Valid`, or
+Check a signed file as `SIGNING.txt` in the Windows zip says: `Get-AuthenticodeSignature` status `Valid`, or
 `osslsigncode verify` with both `-CAfile` and `-TSA-CAfile` set to the Microsoft Identity Verification Root 2020
 certificate. The CI attestation covers the bytes CI built; for a file the signer replaced, the Authenticode signature and
 the signer's decision record are the evidence for the new bytes.
@@ -118,12 +125,33 @@ the signer's decision record are the evidence for the new bytes.
 After the signer has replaced assets (a `dry_run=false` pass), run the checks above again on the draft before publishing,
 read this way:
 
-- The signer rewrites **both** checksum files. The top-level `SHA256SUMS` gets the line of the signed player zip, so
-  `sha256sum -c SHA256SUMS` on it checks the signed zip. The `SHA256SUMS` inside the player zip lists the signed files in
-  it, so run `sha256sum -c SHA256SUMS` again inside the unzipped player zip to check them.
-- `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. For a replaced
-  file the evidence is the Authenticode check above and the signer's decision record.
-- The same five names must still be on the draft.
+- The signer replaces the zip. The `SHA256SUMS` inside it lists the signed files in it, so unzip the signed zip into a
+  new directory and run `sha256sum -c SHA256SUMS` there.
+- `gh attestation verify` covers the unsigned build output CI attested, not the bytes the signer replaced. The loop under
+  "Check the draft" exits non-zero for the signed zip (`HTTP 404: Not Found` from the attestations API) and still exits 0
+  for the Quest library, which the signer does not replace; that failure is the signer's work, not a bad draft. For a
+  replaced file the evidence is the Authenticode check above and the signer's decision record.
+- The same two names must still be on the draft.
+- Run `python3 tools/pe_version_info.py check` on the signed files too (the command under "Check the draft"): signing
+  must leave the VERSIONINFO as the build wrote it.
+- Write the release body next (below) from these final bytes.
+
+## Write the release body
+
+The release body is the notes and a SHA-256 table of the two assets as they are on the draft after signing. Render it
+from the draft's own files, put it on the draft, and read it back against the files:
+
+```sh
+mkdir -p "$S" && gh release download vX.Y.Z -D "$S"                  # a new, empty directory
+python3 tools/package_release.py notes --assets "$S" --out "$N"      # $N: a new file outside $S; refuses unless $S holds exactly the two assets
+gh release edit vX.Y.Z --notes-file "$N"
+gh release view vX.Y.Z --json body --jq .body                         # the table's two SHA-256 values
+(cd "$S" && sha256sum nevr-runtime-vX.Y.Z-*)                          # the same two values
+```
+
+`notes` takes the version and the commit from the `BugSplat64.dll` inside the zip, so the body cannot describe another
+build. The table must be written after the last signing pass: each pass signs with a fresh timestamp and changes the
+zip's bytes. The body of a published release stays editable ("Immutable releases"); the assets do not.
 
 ## Publish
 
@@ -133,7 +161,7 @@ Only from the checked draft:
 gh release edit vX.Y.Z --draft=false          # publish; the pre-release flag is untouched
 ```
 
-Publishing fires the `published` event; `tools/release_already_built.sh` sees the five names and the workflow does
+Publishing fires the `published` event; `tools/release_already_built.sh` sees the two names and the workflow does
 nothing. Then:
 
 ```sh

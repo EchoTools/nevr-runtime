@@ -274,6 +274,12 @@ set_target_properties(nevr_runtime PROPERTIES
   PREFIX ""
 )
 
+# The Details tab of BugSplat64.dll (cmake/nevr_version_info.cmake; tools/pe_version_info.py reads it back).
+nevr_add_version_info(nevr_runtime
+  FILE_DESCRIPTION "nEVR runtime for Echo VR"
+  ORIGINAL_FILENAME "BugSplat64.dll"
+  TYPE DLL)
+
 # Disable specific warnings (MSVC only)
 if(MSVC)
   target_compile_options(nevr_runtime PRIVATE /wd4251)
