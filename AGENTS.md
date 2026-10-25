@@ -660,8 +660,11 @@ your seat name, for example `claude-main` or `codex`.
   `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
   `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
   the count and says in its body which tests went and why. Every PR, whatever it touches, also runs
-  `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` (run `just worktree-setup` first in a
-  fresh worktree: the doc-path check reads `extern/`). Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
+  `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
+  first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
+  JUnit XML and a line in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
+  `/var/tmp/work-nevr-runtime/test-runs/tools-tests`). A failure is reported by the test ids that run's record
+  names, never by a count alone. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
   not run is named as not run.
   CI runs only when started by hand.
 - **`just verify` runs only on main, when prepping a release, once per tip.** A PR does not run it and a

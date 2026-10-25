@@ -300,6 +300,12 @@ quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.ap
 
 # --- Tests ---
 
+# The Python tool suite, kept: full output, JUnit XML and one JSON line in runs.jsonl per run, under
+# $NEVR_TEST_LOG_DIR (default /var/tmp/work-nevr-runtime/test-runs/tools-tests). Failure names are in
+# pytest's short summary. Exit code is pytest's. Args replace the default `-q tools/tests` (#913).
+test-tools *ARGS:
+    python3 tools/run_tool_tests.py {{ ARGS }}
+
 # Run all system tests
 test-system:
     cd tests/system && go test -v ./...

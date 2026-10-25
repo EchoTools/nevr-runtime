@@ -65,7 +65,7 @@ feels risky":
 > test for runtime and auth changes") when the change touches runtime or auth code. A PR that adds or removes
 > GTest declarations in `src/runtime/tests/*.cpp` [...] runs
 > `python3 -m pytest tools/tests/test_verify_gtest_floor.py`. [...] Every PR, whatever it touches, also runs
-> `python3 -m pytest -q tools/tests` and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
+> `just test-tools` (the `tools/tests` suite, every run kept) and `python3 tools/verify_doc_paths.py` [...]. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
 > not run is named as not run.
 
 Because `just build` greps its own output and always exits 0, the build item is
