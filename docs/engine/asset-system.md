@@ -246,7 +246,7 @@ archives and lists 2076 assets (758 textures, 197 materials,
 139 physics, 68 script DLLs, …; 85 of them share the level's own name). `r14_glb_global_mp` depends on six
 archives, including `r14gamedata` and `engine_assets`.
 
-`CArchiveLoader` (`carchiveloader.cpp`):
+`CArchiveLoader` (source file carchiveloader.cpp, a name in the binary's strings):
 
 1. `LoadArchiveAsync` (`0x1401feb90`, libr15.so `0x133fee8`) checks the cache (`0x1401fcb30`) and the loaded
    archives (`0x1401fe350`), else builds the archive's two on-disk ids and calls `StartAsyncLoad`
