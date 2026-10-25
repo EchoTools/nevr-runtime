@@ -220,6 +220,8 @@ constexpr uint64_t PRE_MATCH_3 = 0xD69CC3ED9F1E31BF;
 constexpr uint64_t ROUND_START_1 = 0xDAD765F3754F6262;
 constexpr uint64_t ROUND_START_2 = 0x37756D8877ED5768;
 constexpr uint64_t ROUND_START_3 = 0x7B54C48FED3ECD93;
+constexpr uint64_t ROUND_START_4 = 0xE1C16321DEF4CC6C;  // team_room_wait_enter
+constexpr uint64_t ROUND_START_5 = 0xFBC46082C080FBCF;  // team_room_wait_update
 // PLAYING
 constexpr uint64_t PLAYING_1 = 0x3B529C356A118CC6;
 constexpr uint64_t PLAYING_2 = 0xAB08D245B707B56B;
@@ -232,6 +234,9 @@ constexpr uint64_t ROUND_OVER_2 = 0x67E1E232F03BE11D;
 // POST_MATCH
 constexpr uint64_t POST_MATCH_1 = 0x9567032E22CDC734;
 constexpr uint64_t POST_MATCH_2 = 0xF83FCDBB25BA6F07;
+constexpr uint64_t POST_MATCH_3 = 0x344D080EA700B7EA;  // post_match_celebration_personal_stats_enter
+constexpr uint64_t POST_MATCH_4 = 0x3EDA28AAE966FA2D;  // post_match_celebration_personal_stats_update
+constexpr uint64_t POST_MATCH_5 = 0xFC6140CC02F9C63D;  // waiting_to_return_to_lobby
 // PRE_SUDDEN_DEATH
 constexpr uint64_t PRE_SUDDEN_DEATH_1 = 0xE1C684082C60875C;
 constexpr uint64_t PRE_SUDDEN_DEATH_2 = 0xFC23497054CBCBCF;

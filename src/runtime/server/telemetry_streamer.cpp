@@ -16,6 +16,7 @@
 #include "telemetry/v2/echo_arena.pb.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/server/telemetry_game_status.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -752,40 +753,7 @@ void TelemetryStreamer::Run() {
 // ============================================================================
 
 int32_t TelemetryStreamer::MapGameStatus(uint64_t hash) {
-  using namespace nevr_game_status_hash;
-  switch (hash) {
-    case PRE_MATCH_1:
-    case PRE_MATCH_2:
-    case PRE_MATCH_3:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PRE_MATCH);
-    case ROUND_START_1:
-    case ROUND_START_2:
-    case ROUND_START_3:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_START);
-    case PLAYING_1:
-    case PLAYING_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PLAYING);
-    case SCORE_1:
-    case SCORE_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_SCORE);
-    case ROUND_OVER_1:
-    case ROUND_OVER_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_OVER);
-    case POST_MATCH_1:
-    case POST_MATCH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_MATCH);
-    case PRE_SUDDEN_DEATH_1:
-    case PRE_SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_PRE_SUDDEN_DEATH);
-    case SUDDEN_DEATH_1:
-    case SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_SUDDEN_DEATH);
-    case POST_SUDDEN_DEATH_1:
-    case POST_SUDDEN_DEATH_2:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_SUDDEN_DEATH);
-    default:
-      return static_cast<int32_t>(telemetry::v2::GAME_STATUS_UNSPECIFIED);
-  }
+  return static_cast<int32_t>(GameStatusFromSymbol(hash));
 }
 
 void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
