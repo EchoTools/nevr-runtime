@@ -57,13 +57,13 @@ MANIFEST = REPO / "tools" / "hook_identity_manifest.json"
 KNOWN_SELF_COLLISIONS = {
     0x140F87AA0: ("N83", "CBroadcaster::ReceiveLocalEvent — called via "
                          "EchoVR::BroadcasterReceiveLocalEvent AND "
-                         "detoured as ENGINE_ENTITY_PROP_DISPATCH (mode_patches.cpp). "
+                         "detoured as BROADCASTER_RECEIVE_LOCAL_EVENT (mode_patches.cpp). "
                          "ACCEPTED: since 2026-07-26 the hook is a pass-through null-guard, not "
                          "an early return, so a re-entering call is checked and then dispatched. "
                          "Our own injections get the same guard, which is arguably correct. "
                          "Re-evaluate if that hook ever regains an unconditional return path."),
     0x140F80ED0: ("N83", "CBroadcaster::Listen — called via EchoVR::BroadcasterListen "
-                         "AND detoured as ENGINE_ENTITY_LOOKUP (mode_patches.cpp)."),
+                         "AND detoured as BROADCASTER_LISTEN (mode_patches.cpp)."),
 }
 
 KNOWN_DOUBLE_DETOURS = {
@@ -77,7 +77,7 @@ KNOWN_DOUBLE_DETOURS = {
                          "the collision at ERROR if the plugin's install actually overwrites ours."),
     # 0x140F87AA0 is not registered here: broadcaster_bridge (a plugin outside this
     # repo) hooks it as VA_BROADCASTER_RECEIVE_LOCAL and gamepatches does not detour
-    # it as ENGINE_ENTITY_PROP_DISPATCH, so the plugin is its sole owner. If a second
+    # it as BROADCASTER_RECEIVE_LOCAL_EVENT, so the plugin is its sole owner. If a second
     # owner reappears, that is a NEW violation and fails hard.
 }
 
@@ -521,10 +521,8 @@ def write_manifest():
     # ReVault-verified identities. Where a local constant name disagrees with
     # ReVault, ReVault wins and the disagreement is recorded in `note`.
     revault_names = {
-        0x140F80ED0: ("BroadcasterListen (CBroadcaster::Listen)",
-                      "patch_addresses.h calls this ENGINE_ENTITY_LOOKUP — wrong (N83)"),
-        0x140F87AA0: ("CBroadcaster::ReceiveLocalEvent",
-                      "patch_addresses.h calls this ENGINE_ENTITY_PROP_DISPATCH — wrong (N83)"),
+        0x140F80ED0: ("BroadcasterListen (CBroadcaster::Listen)", ""),
+        0x140F87AA0: ("CBroadcaster::ReceiveLocalEvent", ""),
     }
 
     targets = {}

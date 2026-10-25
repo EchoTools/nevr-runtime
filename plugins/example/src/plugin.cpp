@@ -206,14 +206,14 @@ NEVR_DEFINE_PLUGIN_LOG("[nevr_example]")
  */
 
 /*
- * Hook target: CMatSym::Hash (CSymbol64_Hash) at 0x140107F80.
+ * Hook target: CMatSym::Hash at 0x140107F80.
  *
  * This is a pure query function (no side effects) with a clean, stable
  * prologue: PUSH RBX; SUB RSP, 0x20.  Six bytes, MinHook-safe — no
  * RIP-relative offsets in the prologue that would change across builds.
  *
  * The detour logs the first N calls then passes through silently to the
- * original, so even a frequently-called target (CSymbol64_Hash is used
+ * original, so even a frequently-called target (CMatSym::Hash is used
  * by the game's string interning) won't flood the log.
  *
  * The VA and prologue bytes are sourced from ReVault and validated at

@@ -18,8 +18,10 @@ udp_recvfrom_sockaddr_storageFunc* udp_recvfrom_sockaddr_storage = nullptr;
 typedef void CleanupPingsFunc(long long* in_RCX, long long* in_R8);
 CleanupPingsFunc* CleanupPings = nullptr;
 
-typedef unsigned int udp_protocol_lookup_or_dispatchFunc(long long, unsigned long long, int);
-udp_protocol_lookup_or_dispatchFunc* udp_protocol_lookup_or_dispatch = nullptr;
+// Peer_LookupByAddrOrID: looks a peer up by id (int != 0) or by address (64-bit key) and returns a
+// float field of the peer, 0.0 when none is found. It dispatches nothing.
+typedef float Peer_LookupByAddrOrIDFunc(long long, unsigned long long, int);
+Peer_LookupByAddrOrIDFunc* Peer_LookupByAddrOrID = nullptr;
 
 typedef unsigned long long* udp_protocol_get_stateFunc(long long, unsigned long long*, unsigned long long, int);
 udp_protocol_get_stateFunc* udp_protocol_get_state = nullptr;
@@ -75,7 +77,7 @@ void InitializeFunctionPointers() {
   ListenProxy = (ListenProxyFunc*)(g_GameBaseAddress + 0x600f90);
   udp_recvfrom_sockaddr_storage = (udp_recvfrom_sockaddr_storageFunc*)(g_GameBaseAddress + 0x1f8d90);
   CleanupPings = (CleanupPingsFunc*)(g_GameBaseAddress + 0x1071000);
-  udp_protocol_lookup_or_dispatch = (udp_protocol_lookup_or_dispatchFunc*)(g_GameBaseAddress + 0x4fc170);
+  Peer_LookupByAddrOrID = (Peer_LookupByAddrOrIDFunc*)(g_GameBaseAddress + 0x4fc170);
   udp_protocol_get_state = (udp_protocol_get_stateFunc*)(g_GameBaseAddress + 0x4fc240);
   udp_protocol_get_peer_id = (udp_protocol_get_peer_idFunc*)(g_GameBaseAddress + 0x4fc300);
   udp_protocol_find_peer = (udp_protocol_find_peerFunc*)(g_GameBaseAddress + 0x5ec330);
@@ -88,14 +90,14 @@ void InitializeFunctionPointers() {
   TcpBroadcasterListen = (TcpBroadcasterListenFunc*)(g_GameBaseAddress + 0xF81100);
   BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress + 0xF89AF0);
   // !! N83 — THESE TWO RVAs ARE ALSO DETOURED (mode_patches.cpp, as
-  // !! nevr_patch_addresses::ENGINE_ENTITY_LOOKUP / ENGINE_ENTITY_PROP_DISPATCH).
+  // !! nevr_patch_addresses::BROADCASTER_LISTEN / BROADCASTER_RECEIVE_LOCAL_EVENT).
   //
   // MinHook writes a JMP at the function entry, so these pointers do NOT reach
   // the game's code — they reach our own hooks. On a dedicated server
-  // EngineEntityPropDispatchHook null-guards the listener table: it drops the
+  // CBroadcasterReceiveLocalEventHook null-guards the listener table: it drops the
   // event only when that table is not ready, and otherwise calls through to the
   // game's dispatcher, so a call through EchoVR::BroadcasterReceiveLocalEvent
-  // is delivered. EngineEntityLookupHook guards EchoVR::BroadcasterListen the
+  // is delivered. CBroadcasterListenHook guards EchoVR::BroadcasterListen the
   // same way, but a tripped guard there returns -1, a failed listener
   // registration that the callers do not check (see mode_patches.cpp).
   //

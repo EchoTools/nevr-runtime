@@ -43,8 +43,9 @@ static constexpr uint64_t VA_VOIP_ROUTER = 0x140132dc0;
 // Source: GameStateAPI.h in echovr-reconstruction
 static constexpr uint64_t VA_HTTP_EXPORT_GAME_STATE = 0x140155c80;
 
-// Source: src/NRadEngine/Game/CR15NetReplicatedEventFire.cpp in echovr-reconstruction
-static constexpr uint64_t VA_CSYMBOL64_FROM_STRING = 0x140107F80;
+// CMatSym::Hash (ReVault): seed 0x8040201008040201 and MATSYM_CHAR_TABLE. It is not CSymbol64, a
+// CRC-64 seeded with all ones (src/abi/symbol_hash.h).
+static constexpr uint64_t VA_CMATSYM_HASH = 0x140107F80;
 
 // Source: src/NRadEngine/Game/CR15NetWeaponTypeChange.cpp in echovr-reconstruction
 static constexpr uint64_t VA_WEAPON_TYPE_TABLE = 0x1420D3850;
@@ -87,13 +88,9 @@ static constexpr uint64_t VA_PRECISION_SLEEP_WAIT = 0x1401CE0B0;
 
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 
-// Source: objdump disassembly, echovr-reconstruction/src/NRadEngine/Core/CTiming.h
-// SwitchToThread IAT thunk — indirect jump to kernel32!SwitchToThread.
-// 10 call sites, all yield/wait/backoff paths (none per-work-item):
-//   DrainWorkQueue idle poll, SRWLock contention, spinlock backoff,
-//   fence sync, fiber scheduler, memory allocator contention.
-// On Wine, maps to sched_yield() which returns immediately → spin loops.
-static constexpr uint64_t VA_SWITCH_TO_THREAD = 0x1401CE4B0;
+// The KERNEL32!Sleep import thunk (ReVault). The SwitchToThread import thunks are 0x141512A7C and
+// 0x141501918.
+static constexpr uint64_t VA_SLEEP_THUNK = 0x1401CE4B0;
 
 // Source: src/runtime/hook/addresses.h in nevr-runtime
 // Delta time comparison — signed JLE should be unsigned JAE
