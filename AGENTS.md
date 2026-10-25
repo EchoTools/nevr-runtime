@@ -662,7 +662,7 @@ your seat name, for example `claude-main` or `codex`.
   the count and says in its body which tests went and why. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
-  JUnit XML and a line in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
+  JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default
   `/var/tmp/work-nevr-runtime/test-runs/tools-tests`). A failure is reported by the test ids that run's record
   names, never by a count alone. Run the quick check on the PR's tip, in the build slice, and report each item with its result; an item
   not run is named as not run.
