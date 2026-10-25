@@ -17,7 +17,8 @@ and no name. Every run therefore writes, under the log directory:
   to its end (`output_complete`), whether a process pytest left behind was sent a kill
   (`stray_kill_sent`), what became of the echoes (`echo` for stdout, `stderr_echo`), any error
   writing the log, reading the output or starting pytest, and the paths of the two files. Both
-  records name the checkout the run was started in (`cwd`) and the user who ran it (`user`).
+  records name the checkout (`checkout`, git's top level; None outside a repository), the directory
+  the run was started in (`cwd`; None when it no longer exists) and the user who ran it (`user`).
 
 pytest's short summary (on by default, `-rfE`) names every failure and error even under `-q`; the
 log keeps it whole. When pytest-randomly is installed and loads automatically, and neither the
@@ -42,7 +43,7 @@ The echo. stdout, and stderr while pytest runs, are each written from a thread o
 stdout or stderr that nobody reads holds up only that echo, never the run, the log or the record.
 `echo` in the end record is `complete`, `closed` (stdout went away), `stalled` (stdout stopped
 taking lines; the echo was dropped, or did not finish within $NEVR_TEST_DRAIN_S in all) or `none`
-(no stdout); `stderr_echo` says the same of stderr. When the echo to stdout is not complete, a
+(no stdout); `stderr_echo` says the same of stderr, up to the end record. When the echo to stdout is not complete, a
 line on stderr names the log, which holds the whole output. A line stdout cannot encode is echoed
 with replacements; the log keeps it as read.
 
@@ -135,6 +136,14 @@ def user():
     try:
         return getpass.getuser()
     except (OSError, KeyError):
+        return None
+
+
+def cwd():
+    """The directory the run was started in, or None when it no longer exists."""
+    try:
+        return os.getcwd()
+    except OSError:
         return None
 
 
@@ -455,7 +464,8 @@ def main(argv: list) -> int:
     seed_args, seed = randomly_seed(args, os.environ)
     cmd = [sys.executable, "-m", "pytest", f"--junitxml={xml_path}", *seed_args, *args]
     env = pytest_environment()
-    base = {"start": start.isoformat(), "cwd": os.getcwd(), "user": user(), "head": head, "tree": tree,
+    base = {"start": start.isoformat(), "checkout": git("rev-parse", "--show-toplevel"), "cwd": cwd(),
+            "user": user(), "head": head, "tree": tree,
             "cmd": cmd, "pytest": env["pytest"],
             "plugins": env["plugins"], "randomly_seed": seed, "log": str(log_path), "junit": str(xml_path)}
 

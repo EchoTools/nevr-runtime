@@ -1101,6 +1101,17 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertEqual(record["pytest_rc"], -signal.SIGKILL)
         self.assertFalse(record["interrupted"])
 
+    def test_a_run_started_in_a_directory_that_is_gone_is_still_recorded(self):
+        gone = self.root / "gone"
+        gone.mkdir()
+        result = subprocess.run([sys.executable, str(SCRIPT), "-q", "-p", "no:cacheprovider", str(self.suite)],
+                                capture_output=True, text=True, cwd=gone, env=self.env(self.logs), timeout=120,
+                                preexec_fn=lambda: os.rmdir(gone))
+        self.assertNotIn("Traceback (most recent call last):\n  File \"" + str(SCRIPT), result.stderr)
+        record = self.records()[0]
+        self.assertIsNone(record["cwd"])
+        self.assertIsNone(record["checkout"])
+
     def test_a_signal_with_no_name_is_named_by_its_number(self):
         module = load_script()
         self.assertEqual(module.signal_name(9), "SIGKILL")
@@ -1112,9 +1123,10 @@ class RunToolTestsRecord(unittest.TestCase):
             self.assertIsNone(module.user())
 
     def test_the_records_name_the_checkout_the_user_and_the_stderr_echo(self):
-        self.run_script(self.logs)
+        self.run_script(self.logs, "-q", "-p", "no:cacheprovider", str(self.suite), cwd=REPO / "tools")
         for record in self.records("start") + self.records():
-            self.assertEqual(record["cwd"], str(REPO))
+            self.assertEqual(record["checkout"], str(REPO))
+            self.assertEqual(record["cwd"], str(REPO / "tools"))
             self.assertEqual(record["user"], getpass.getuser())
         self.assertEqual(self.records()[0]["stderr_echo"], "complete")
 
