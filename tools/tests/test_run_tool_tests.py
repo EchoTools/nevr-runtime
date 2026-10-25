@@ -4,6 +4,7 @@ These tests run the real script, as `just test-tools` does, against small suites
 """
 
 import datetime
+import getpass
 import importlib.metadata
 import importlib.util
 import io
@@ -833,6 +834,8 @@ class RunToolTestsRecord(unittest.TestCase):
         record = self.records()[0]
         self.assertEqual(record["echo"], "stalled")
         self.assertIn("y" * 99, Path(record["log"]).read_text())
+        self.assertIn(f"test-tools: the echo to stdout is stalled; the whole output is in {record['log']}",
+                      proc.stderr.read())
 
     def test_a_log_whose_short_lines_cannot_be_written_still_gets_its_end_record(self):
         # Short lines leave unwritten bytes in the log's buffer, so closing it fails too.
@@ -1041,23 +1044,125 @@ class RunToolTestsRecord(unittest.TestCase):
         self.assertIn("BlockingIOError", record["start_error"])
 
     def test_a_failure_line_still_queued_at_exit_is_written_before_the_run_ends(self):
-        # The stderr writer takes a second per write, so the failure line is still on its way when
-        # main() returns; the run waits for it rather than exiting with it unwritten.
-        prelude = ("real = subprocess.Popen\n"
-                   "def Popen(*a, **k):\n"
-                   "    if '-m' in a[0] and 'pytest' in a[0]:\n"
-                   "        raise BlockingIOError(11, 'Resource temporarily unavailable')\n"
-                   "    return real(*a, **k)\n"
-                   "m.subprocess.Popen = Popen\n"
+        # The stderr writer takes a second per write, so the failure line written after the end
+        # record is still on its way when main() returns; the run waits for it.
+        suite = self.write_suite("pass", PASS_SUITE)
+        prelude = ("class Boom:\n    def search(self, line):\n        raise RuntimeError('boom')\n"
+                   "m.SUMMARY_RE = Boom()\n"
                    "real_write = m.os.write\n"
                    "def write(fd, data):\n"
                    "    if fd == 2:\n"
                    "        m.time.sleep(1)\n"
                    "    return real_write(fd, data)\n"
                    "m.os.write = write")
-        result = self.run_driver(prelude, NEVR_TEST_DRAIN_S="10")
+        result = self.run_driver(prelude, "-q", "-p", "no:cacheprovider", str(suite), NEVR_TEST_DRAIN_S="10")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("test-tools: FAIL pytest could not be started", result.stderr)
+        self.assertIn("test-tools: FAIL pytest's output could not be read to its end", result.stderr)
+
+    def test_a_full_stderr_is_recorded_as_a_stalled_stderr_echo(self):
+        # stderr is a pipe filled before the run starts and read only after it ends; the failure
+        # line cannot be written, and the record says so.
+        prelude = ("real = subprocess.Popen\n"
+                   "def Popen(*a, **k):\n"
+                   "    if '-m' in a[0] and 'pytest' in a[0]:\n"
+                   "        raise BlockingIOError(11, 'Resource temporarily unavailable')\n"
+                   "    return real(*a, **k)\n"
+                   "m.subprocess.Popen = Popen")
+        driver = self.root / "driver.py"
+        driver.write_text(DRIVER.format(script=str(SCRIPT), prelude=prelude), encoding="utf-8")
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        os.set_blocking(write_end, False)
+        try:
+            while True:
+                os.write(write_end, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        os.set_blocking(write_end, True)
+        try:
+            result = subprocess.run([sys.executable, str(driver), "-q", "-p", "no:cacheprovider", str(self.suite)],
+                                    stdout=subprocess.PIPE, stderr=write_end, text=True, cwd=REPO,
+                                    env=self.env(self.logs, NEVR_TEST_DRAIN_S="1"), timeout=120)
+        finally:
+            os.close(write_end)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        record = self.records()[0]
+        self.assertEqual(record["stderr_echo"], "stalled")
+        self.assertIsNotNone(record["start_error"])
+
+    def test_pytest_killed_by_a_signal_the_runner_did_not_send_exits_128_plus_it(self):
+        suite = self.write_suite("killed", "import os, signal\n\ndef test_dies():\n"
+                                 "    os.kill(os.getpid(), signal.SIGKILL)\n")
+        result = self.run_script(self.logs, "-q", "-p", "no:cacheprovider", str(suite))
+        self.assertEqual(result.returncode, 128 + signal.SIGKILL, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL pytest was killed by SIGKILL", result.stderr)
+        record = self.records()[0]
+        self.assertEqual(record["rc"], 128 + signal.SIGKILL)
+        self.assertEqual(record["pytest_rc"], -signal.SIGKILL)
+        self.assertFalse(record["interrupted"])
+
+    def test_a_signal_with_no_name_is_named_by_its_number(self):
+        module = load_script()
+        self.assertEqual(module.signal_name(9), "SIGKILL")
+        self.assertEqual(module.signal_name(35), "signal 35")  # between SIGRTMIN and SIGRTMAX
+
+    def test_a_user_the_system_cannot_name_is_recorded_as_none(self):
+        module = load_script()
+        with mock.patch.object(module.getpass, "getuser", side_effect=OSError("no user")):
+            self.assertIsNone(module.user())
+
+    def test_the_records_name_the_checkout_the_user_and_the_stderr_echo(self):
+        self.run_script(self.logs)
+        for record in self.records("start") + self.records():
+            self.assertEqual(record["cwd"], str(REPO))
+            self.assertEqual(record["user"], getpass.getuser())
+        self.assertEqual(self.records()[0]["stderr_echo"], "complete")
+
+    def test_a_refused_run_whose_log_cannot_be_removed_still_exits_2(self):
+        prelude = ("def start(self):\n"
+                   "    raise RuntimeError(\"can't start new thread\")\n"
+                   "m.threading.Thread.start = start\n"
+                   "def unlink(self, missing_ok=False):\n"
+                   "    raise PermissionError(13, 'Permission denied')\n"
+                   "m.pathlib.Path.unlink = unlink")
+        result = self.run_driver(prelude)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("test-tools: FAIL cannot remove the refused run's log", result.stderr)
+        self.assertIn("test-tools: FAIL cannot start the run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    @unittest.skipIf(importlib.util.find_spec("pytest_randomly") is None, "pytest-randomly is not installed")
+    def test_randomly_disabled_or_named_in_the_joined_spelling_is_honoured(self):
+        module = load_script()
+        self.assertEqual(module.randomly_seed(["-pno:randomly"], {}), ([], None))
+        extra, seed = module.randomly_seed(["-p", "pytest_randomly"], {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+        self.assertIsInstance(seed, int)
+        self.assertEqual(extra, [f"--randomly-seed={seed}"])
+
+    def test_a_signal_is_a_repeat_only_within_a_second_of_the_one_before_it(self):
+        # At 0, 0.8 and 1.6 s: the second is a repeat of the first; the third is 0.8 s after the
+        # second, so a repeat too, though 1.6 s after the first.
+        module = load_script()
+        times = iter([100.0, 100.8, 101.6])
+        module.time = types.SimpleNamespace(monotonic=lambda: next(times))
+        with open(os.devnull, "w") as log:
+            run = module.Run(log)
+            for _ in range(3):
+                run.on_signal(signal.SIGINT, None)
+        self.assertEqual(run.escalations, 1)
+
+    def test_the_grace_period_runs_from_the_first_signal_not_the_last(self):
+        # Repeats every 0.6 s never escalate; pytest, which ignores SIGINT, is still killed once
+        # the grace period has passed since the first signal.
+        proc = self.start_slow(STUBBORN_SUITE, NEVR_TEST_INTERRUPT_GRACE_S="3")
+        started = time.monotonic()
+        while proc.poll() is None and time.monotonic() - started < 10:
+            os.kill(proc.pid, signal.SIGINT)
+            time.sleep(0.6)
+        proc.communicate(timeout=60)
+        self.assertLess(time.monotonic() - started, 6, "the grace period restarted with each repeat")
+        self.assertEqual(proc.returncode, 130)
+        self.assertEqual(self.records()[0]["pytest_rc"], -signal.SIGKILL)
 
     def test_a_run_whose_threads_cannot_start_is_refused_and_leaves_nothing(self):
         prelude = ("def start(self):\n"
