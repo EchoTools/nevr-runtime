@@ -27,11 +27,12 @@ label name itself does not hash to the stored value.
 Re-run this script whenever the game binary is updated to refresh the string pool.
 """
 
+import io
 import sys
 import os
 import re
 import argparse
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Union
 
 # ============================================================================
 # CSymbol64 Hash (CRC64 with polynomial 0x95ac9329ac4bc9b5)
@@ -60,11 +61,27 @@ def gen_cs64_table() -> List[int]:
 CS64_TABLE = gen_cs64_table()
 
 
-def csymbol64_hash(s: str, seed: int = 0xFFFFFFFFFFFFFFFF) -> int:
-    for ch in s:
-        c = ord(ch)
+def csymbol64_hash(s: Union[str, bytes], seed: int = 0xFFFFFFFFFFFFFFFF) -> int:
+    """CSymbol64 of a byte string (src/abi/symbol_hash.h).
+
+    The game hashes bytes and sign-extends each one to 64 bits before the table XOR (echovr.exe 0x1400ce199
+    MOVSX; libr15.so 0x11cc760 sxtb). A str is hashed as its UTF-8 bytes; it used to be hashed per code point
+    with no sign extension, which gave the service's value, not the game's, for any non-ASCII name (#657).
+    The game and src/abi/symbol_hash.h read a NUL-terminated string, so the hash stops at the first NUL byte.
+    Anything but str and bytes raises TypeError (bytes(3) would be three NULs).
+    """
+    if isinstance(s, str):
+        data = s.encode("utf-8")
+    elif isinstance(s, bytes):
+        data = s
+    else:
+        raise TypeError("csymbol64_hash takes str or bytes, not %s" % type(s).__name__)
+    data = data.split(b"\0", 1)[0]
+    for c in data:
         if 0x41 <= c <= 0x5A:
             c += 0x20
+        if c >= 0x80:
+            c |= 0xFFFFFFFFFFFFFF00
         seed = c ^ CS64_TABLE[(seed >> 56) & 0xFF] ^ ((seed << 8) & 0xFFFFFFFFFFFFFFFF)
     return seed
 
@@ -396,10 +413,11 @@ def main():
 
     # Read candidates
     if args.candidates:
-        with open(args.candidates) as f:
+        with open(args.candidates, encoding="utf-8") as f:
             raw_lines = f.readlines()
     else:
-        raw_lines = sys.stdin.readlines()
+        # UTF-8 under any locale: the names are hashed as their UTF-8 bytes (#657).
+        raw_lines = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8").readlines()
 
     precomputed, strings = parse_candidates(raw_lines)
 
@@ -455,9 +473,9 @@ def main():
 
     if args.split_dir:
         os.makedirs(args.split_dir, exist_ok=True)
-        with open(os.path.join(args.split_dir, 'symbol_corpus.h'), 'w') as f:
+        with open(os.path.join(args.split_dir, 'symbol_corpus.h'), 'w', encoding='utf-8') as f:
             f.write(H_HEADER)
-        with open(os.path.join(args.split_dir, 'symbol_corpus.cpp'), 'w') as f:
+        with open(os.path.join(args.split_dir, 'symbol_corpus.cpp'), 'w', encoding='utf-8') as f:
             f.write(cpp_content)
         print(f"Wrote {args.split_dir}/symbol_corpus.{{h,cpp}} "
               f"({len(sorted_entries)} entries)", file=sys.stderr)
@@ -466,7 +484,10 @@ def main():
             print(f"Audit log coverage: {resolved}/{len(audit_hashes)} "
                   f"({100.0*resolved/len(audit_hashes):.1f}%)", file=sys.stderr)
     else:
-        # Output combined
+        # Output combined. UTF-8 under any locale, as the files above and the readers are (#663);
+        # a stdout without reconfigure() (an in-memory buffer) takes any text as it is.
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
         print(f"/* {len(sorted_entries)} entries */")
         print(H_HEADER)
         print()

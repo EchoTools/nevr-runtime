@@ -502,10 +502,17 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
             auto sessionState = self->GetContext().GetSessionState();
             saveLoadout->set_lobby_session_id(sessionState.lobbySessionId);
 
-            // Set entrant ID (account ID as string)
-            if (entrant) {
-              saveLoadout->set_entrant_id(std::to_string(entrant->userId.accountId));
+            // entrant_id is the entrant's client session UUID, the same GUID
+            // AcceptPlayerSessions reports and nakama holds in its entrant
+            // streams. It is not the account id: the save is gated by the
+            // sender's match and that session's presence.
+            GUID entrantSessionGuid{};
+            if (!self->GetContext().TryGetEntrantSessionGuid(playerSlot, &entrantSessionGuid)) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.GAMESERVER] [SAVE_LOADOUT] No accepted client session for slot=%u; not sending", playerSlot);
+              return;
             }
+            saveLoadout->set_entrant_id(GuidToUuidString(entrantSessionGuid));
 
             saveLoadout->set_loadout_slot(static_cast<int32_t>(playerSlot));
             saveLoadout->set_jersey_number(static_cast<int32_t>(jerseyNumber));
@@ -754,58 +761,62 @@ void GameServerLib::RegisterTcpCallbacks() {
   // and nakama may time out and close the connection. ixwebsocket auto-reconnects but
   // we must re-register to receive new session assignments.
   m_wsClient->SetConnectionHandler([this](BOOL connected) {
-    if (!connected) return;
-
-    // Only re-register if we were previously registered (not on first connect)
-    if (!m_context->IsRegistered()) return;
-
-    // End any stale session state from before the disconnect
-    m_context->EndSession();
-
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu",
-        static_cast<unsigned long long>(m_context->GetSessionState().serverId));
-
-    SessionState state = m_context->GetSessionState();
-
-    auto* broadcaster = m_context->GetBroadcaster();
-    if (!broadcaster || !broadcaster->data) {
-      Log(EchoVR::LogLevel::Error,
-          "[NEVR.GAMESERVER] broadcaster unavailable — re-registration aborted, will retry on next reconnect");
-      return;
-    }
-
-    // Resolve IP the same way as initial registration: prefer UPnP/config external IP,
-    // fall back to raw socket address. The "internal_ip_address" protobuf field is a
-    // legacy misnomer — ServerDB expects the public-facing IP here.
-    std::string internalIp = Ipv4ToString(
-        reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr)->sin_addr.S_un.S_addr);
-    std::string externalIp;
-    uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
-
-    NevrUPnPConfig upnpCfg = {};
-    if (ReadUPnPConfig(upnpCfg)) {
-      if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
-      if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;
-      if (upnpCfg.enabled && upnpCfg.port != 0) broadcasterPort = upnpCfg.port;
-    }
-    if (externalIp.empty()) externalIp = internalIp;
-
-    const nevr_build_identity::Info& buildId = nevr_build_identity::Get();  // N112: commit hash and build type in the version
-    nevr_game_server::RegistrationParams params;
-    params.loginSessionId = GuidToUuidString(nevr_login_session::Get());
-    params.serverId = static_cast<uint64_t>(state.serverId);
-    params.externalIp = externalIp;
-    params.port = static_cast<uint32_t>(broadcasterPort);
-    params.regionId = state.regionId;
-    params.versionLock = state.versionLock;
-    params.timeStepUsecs = state.defaultTimeStepUsecs;
-    params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
-    const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
-
-    if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for re-registration");
-    }
+    if (!connected || !m_reconnectRegistrationEnabled.load(std::memory_order_acquire)) return;
+    // IsRegistered holds ServerContext's state lock; no game object is read here.
+    if (m_context->IsRegistered()) m_reconnectPending.store(true, std::memory_order_release);
   });
+}
+
+void GameServerLib::ProcessPendingReconnect() {
+  // Only re-register if we were previously registered (not on first connect)
+  if (!m_context->IsRegistered()) return;
+
+  // End any stale session state from before the disconnect
+  m_context->EndSession();
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu",
+      static_cast<unsigned long long>(m_context->GetSessionState().serverId));
+
+  SessionState state = m_context->GetSessionState();
+
+  auto* broadcaster = m_context->GetBroadcaster();
+  if (!broadcaster || !broadcaster->data) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.GAMESERVER] broadcaster unavailable — re-registration aborted, will retry on next reconnect");
+    return;
+  }
+
+  // Resolve IP the same way as initial registration: prefer UPnP/config external IP,
+  // fall back to raw socket address. The "internal_ip_address" protobuf field is a
+  // legacy misnomer — ServerDB expects the public-facing IP here.
+  std::string internalIp = Ipv4ToString(
+      reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr)->sin_addr.S_un.S_addr);
+  std::string externalIp;
+  uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
+
+  NevrUPnPConfig upnpCfg = {};
+  if (ReadUPnPConfig(upnpCfg)) {
+    if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
+    if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;
+    if (upnpCfg.enabled && upnpCfg.port != 0) broadcasterPort = upnpCfg.port;
+  }
+  if (externalIp.empty()) externalIp = internalIp;
+
+  const nevr_build_identity::Info& buildId = nevr_build_identity::Get();  // N112: commit hash and build type in the version
+  nevr_game_server::RegistrationParams params;
+  params.loginSessionId = GuidToUuidString(nevr_login_session::Get());
+  params.serverId = static_cast<uint64_t>(state.serverId);
+  params.externalIp = externalIp;
+  params.port = static_cast<uint32_t>(broadcasterPort);
+  params.regionId = state.regionId;
+  params.versionLock = state.versionLock;
+  params.timeStepUsecs = state.defaultTimeStepUsecs;
+  params.version = nevr_game_server::FormatRegistrationVersion(buildId.git_describe, buildId.git_commit, buildId.build_type);
+  const gameservice::v1::Envelope envelope = nevr_game_server::BuildRegistrationEnvelope(params);
+
+  if (!SendProtobufEnvelope(this, envelope)) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for re-registration");
+  }
 }
 
 void GameServerLib::UnregisterAllCallbacks() {

@@ -16,7 +16,7 @@ struct SignInDialogContent {
   bool closes_by_itself = false;  // true: shown only for a moment (signed in); false: stays for the player
 };
 
-// "https://echovrce.com/login/device" -> "echovrce.com/login/device": what a player types.
+// "https://echovrce.com/device" -> "echovrce.com/device": what a player types.
 inline std::string SignInDisplayUrl(const std::string& url) {
   for (const char* scheme : {"https://", "http://"}) {
     const std::string s(scheme);

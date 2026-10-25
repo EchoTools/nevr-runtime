@@ -1,5 +1,6 @@
 #include "runtime/hook/hook_liveness.h"
 
+#include <winsock2.h>
 #include <windows.h>
 
 #include "core/logging.h"

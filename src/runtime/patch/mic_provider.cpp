@@ -32,6 +32,8 @@
 #include "core/mic_capture_drain.h"
 #include "core/mic_lifecycle.h"
 #include "core/mic_owner_thread.h"
+#include "core/system_info.h"
+#include "runtime/patch/mic_device_choice.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -41,8 +43,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 // The precompiled header already pulled in <mmdeviceapi.h>/<audioclient.h>
 // (via core/pch.h -> windows.h) without INITGUID, so their DEFINE_GUID
@@ -62,6 +66,11 @@ extern "C" const IID IID_IAudioClient = {
 extern "C" const IID IID_IAudioCaptureClient = {
     0xC8ADBD64, 0xE71E, 0x48A0, {0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17}};
 
+// PKEY_Device_FriendlyName (functiondiscoverykeys_devpkey.h) — defined here for the same reason as the GUIDs
+// above: the header only declares it. Microsoft's published value {a45c254e-df1c-4efd-8020-67d146a850e0}, 14.
+static const PROPERTYKEY kPkeyDeviceFriendlyName = {
+    {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+
 namespace {
 
 // Matches pnsrad.dll's own (real, unmodified) MicSampleRate/MicBufferSize —
@@ -77,12 +86,23 @@ constexpr uint32_t kRingCapacitySamples = 9600;
 // unit-tested directly in tests/test_mic_dsp.cpp. This file only adapts real
 // WASAPI packets into it.
 MicRingBuffer g_ring(kRingCapacitySamples);
-bool g_ringOverflowLogged = false;
+// Overflow after the game started reading is logged with a count, at most once per interval (#95).
+constexpr uint64_t kOverflowLogIntervalMs = 5000;
+MicOverflowLogGate g_overflowGate(kOverflowLogIntervalMs);
 // How often the game actually reads the microphone (#95): the ring overflows when the game does not
 // drain MicRead, and nothing else says whether it ever calls MicAvailable/MicRead.
 std::atomic<uint64_t> g_availableCalls{0};
 std::atomic<uint64_t> g_readCalls{0};
 std::atomic<uint64_t> g_samplesRead{0};
+// The capture side of the same question (#95): whether samples stopped arriving or the game stopped
+// reading them. Cumulative for the process, like the reader-side counters above.
+std::atomic<uint64_t> g_capturePackets{0};
+std::atomic<uint64_t> g_captureSilentPackets{0};
+std::atomic<uint64_t> g_captureDiscontinuities{0};
+std::atomic<uint64_t> g_samplesPushed{0};
+// The longest gap between two MicAvailable polls (the game's tick) since the last periodic line.
+std::atomic<int64_t> g_lastPollNs{0};
+std::atomic<uint64_t> g_maxPollGapMs{0};
 
 // --- WASAPI state ------------------------------------------------------
 // Every public create/start/stop/destroy call is marshalled onto
@@ -146,13 +166,27 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
     const auto now = std::chrono::steady_clock::now();
     if (now - lastReport >= std::chrono::seconds(30)) {
       lastReport = now;
-      Log(EchoVR::LogLevel::Info, "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu",
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.MIC] game reads so far: MicAvailable=%llu MicRead=%llu samples_read=%llu | capture side: "
+          "packets=%llu silent=%llu discontinuities=%llu samples_pushed=%llu samples_dropped=%llu "
+          "max_poll_gap_ms=%llu",
           static_cast<unsigned long long>(g_availableCalls.load()),
           static_cast<unsigned long long>(g_readCalls.load()),
-          static_cast<unsigned long long>(g_samplesRead.load()));
+          static_cast<unsigned long long>(g_samplesRead.load()),
+          static_cast<unsigned long long>(g_capturePackets.load()),
+          static_cast<unsigned long long>(g_captureSilentPackets.load()),
+          static_cast<unsigned long long>(g_captureDiscontinuities.load()),
+          static_cast<unsigned long long>(g_samplesPushed.load()),
+          static_cast<unsigned long long>(g_ring.DroppedSamples()),
+          static_cast<unsigned long long>(g_maxPollGapMs.exchange(0)));
     }
   }
   const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+  g_capturePackets.fetch_add(1, std::memory_order_relaxed);
+  if (silent) g_captureSilentPackets.fetch_add(1, std::memory_order_relaxed);
+  if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+    g_captureDiscontinuities.fetch_add(1, std::memory_order_relaxed);
+  }
   const size_t bytes = silent ? 0 : static_cast<size_t>(frameCount) * fmt->nBlockAlign;
   const MicCapturePacketResult result = g_captureAdapter.Process(
       data, frameCount, bytes, fmt->nChannels, fmt->nBlockAlign,
@@ -163,16 +197,39 @@ void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVE
         "[NEVR.MIC] capture packet rejected (status=%u consumed=%u/%u frames)",
         static_cast<unsigned>(result.status), result.consumedFrames, frameCount);
   }
+  g_samplesPushed.fetch_add(result.producedSamples, std::memory_order_relaxed);
   // A full ring before the game's first read of this stream is expected (nobody is listening yet,
-  // the oldest audio is simply not wanted); the warning is for a game that read and then stopped.
-  if (result.ringOverflow && g_ring.ReaderActive() && !g_ringOverflowLogged) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped "
-        "(game calls so far: MicAvailable=%llu MicRead=%llu samples_read=%llu)",
-        static_cast<unsigned long long>(g_availableCalls.load()),
-        static_cast<unsigned long long>(g_readCalls.load()),
-        static_cast<unsigned long long>(g_samplesRead.load()));
-    g_ringOverflowLogged = true;
+  // the oldest audio is simply not wanted); the warning is for a game that read and then fell behind.
+  // It is counted: the first overflow logs at once, later ones at most every kOverflowLogIntervalMs,
+  // with everything measured over that window: whether the game read at all (a stalled reader) or read
+  // less than capture produced (a slow one), and how much of each.
+  const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+  MicFlowCounters flow;
+  flow.droppedTotal = g_ring.DroppedSamples();
+  flow.readCalls = g_readCalls.load();
+  flow.samplesRead = g_samplesRead.load();
+  flow.samplesPushed = g_samplesPushed.load();
+  if (!g_ring.ReaderActive()) {
+    g_overflowGate.Rebase(flow, nowMs);
+  } else {
+    const MicOverflowReport report = g_overflowGate.Poll(flow, nowMs);
+    if (report.dropped > 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] ring overflow reader=%s: in %llu ms the game made %llu MicRead call(s) and read %llu of "
+          "%llu captured samples; dropped %llu (%llu in total; game calls so far: MicAvailable=%llu "
+          "MicRead=%llu samples_read=%llu)",
+          report.readerStalled ? "stalled" : "slow",
+          static_cast<unsigned long long>(report.windowMs),
+          static_cast<unsigned long long>(report.readCalls),
+          static_cast<unsigned long long>(report.samplesRead),
+          static_cast<unsigned long long>(report.samplesPushed),
+          static_cast<unsigned long long>(report.dropped),
+          static_cast<unsigned long long>(flow.droppedTotal),
+          static_cast<unsigned long long>(g_availableCalls.load()),
+          static_cast<unsigned long long>(flow.readCalls),
+          static_cast<unsigned long long>(flow.samplesRead));
+    }
   }
 }
 
@@ -298,7 +355,155 @@ DWORD WINAPI CaptureThreadProc(LPVOID) {
 
 namespace {
 
-// Acquires the current default capture endpoint and makes it ready to Start: the audio client, its
+// --- Capture device choice (mic_device_choice.h) -------------------------------------------------
+std::string Utf8(const std::wstring& w) {
+  if (w.empty()) return std::string();
+  const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) return std::string();
+  std::string out(static_cast<size_t>(n), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), &out[0], n, nullptr, nullptr);
+  return out;
+}
+
+// LibOVR's headset microphone as an IMMDevice endpoint id: ovr_GetAudioDeviceInGuidStr from the runtime the
+// game itself loaded (echovr.exe resolves it by name from LibOVRRT, va 0x141d0cca8). Empty when the runtime
+// is not loaded, lacks the export, or the answer is not an endpoint id; `code` is the ovrResult (0 when not
+// called). The buffer size is not known from a header on this host (OVR_CAPI_Audio.h is absent; the public
+// analog xrGetAudioInputDeviceGuidOculus takes a wchar_t buffer of an unstated size), so the buffer is far
+// larger than any plausible size and the answer is accepted only when it is IMMDevice::GetId-shaped: the call
+// returns >= 0, the string is non-empty, terminated well inside the buffer and starts with '{'. A wrong size
+// is then harmless, and anything else is logged (code + first 64 chars) and falls to the name match.
+constexpr size_t kLibOvrDeviceBufferChars = 1024;
+constexpr size_t kLibOvrDeviceMaxIdChars = 256;
+
+// First 64 chars of a wide string as UTF-8, for rejection log lines.
+std::string Prefix64(const std::wstring& text) {
+  return Utf8(text.substr(0, 64));
+}
+
+// `log` is false for the presence probe, which asks the same question without repeating the lines.
+std::wstring LibOvrCaptureEndpointId(long* code, bool log) {
+  *code = 0;
+  HMODULE runtime = GetModuleHandleW(L"LibOVRRTImpl64_1.dll");
+  if (runtime == nullptr) runtime = GetModuleHandleW(L"LibOVRRT64_1.dll");
+  if (runtime == nullptr) {
+    *code = -1;
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR code=-1: LibOVRRTImpl64_1.dll / LibOVRRT64_1.dll not loaded in this process; falling to the name match");
+    }
+    return std::wstring();
+  }
+  using GetInGuidStrFn = int(__cdecl*)(wchar_t*);
+  const auto fn = reinterpret_cast<GetInGuidStrFn>(
+      reinterpret_cast<void*>(GetProcAddress(runtime, "ovr_GetAudioDeviceInGuidStr")));
+  if (fn == nullptr) {
+    *code = -2;
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR code=-2: ovr_GetAudioDeviceInGuidStr is not exported by the loaded runtime; falling to the name match");
+    }
+    return std::wstring();
+  }
+  std::vector<wchar_t> buffer(kLibOvrDeviceBufferChars, L'\0');
+  const int result = fn(buffer.data());
+  *code = result;
+  buffer[kLibOvrDeviceBufferChars - 1] = L'\0';
+  const size_t length = wcsnlen(buffer.data(), kLibOvrDeviceBufferChars);
+  const bool shaped =
+      nevr_mic_device::LooksLikeEndpointId(result, buffer.data(), length, kLibOvrDeviceMaxIdChars);
+  if (!shaped) {
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] LibOVR ovr_GetAudioDeviceInGuidStr code=%d length=%zu is not an endpoint id; first 64 chars=\"%s\"",
+          result, length, Utf8(std::wstring(buffer.data(), length < 64 ? length : 64)).c_str());
+    }
+    return std::wstring();
+  }
+  return std::wstring(buffer.data(), length);
+}
+
+std::vector<nevr_mic_device::Endpoint> EnumerateActiveCaptureEndpoints(IMMDeviceEnumerator* enumerator) {
+  std::vector<nevr_mic_device::Endpoint> endpoints;
+  IMMDeviceCollection* collection = nullptr;
+  if (FAILED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection)) || collection == nullptr) {
+    return endpoints;
+  }
+  UINT count = 0;
+  collection->GetCount(&count);
+  for (UINT i = 0; i < count; ++i) {
+    IMMDevice* device = nullptr;
+    if (FAILED(collection->Item(i, &device)) || device == nullptr) continue;
+    nevr_mic_device::Endpoint endpoint;
+    LPWSTR id = nullptr;
+    if (SUCCEEDED(device->GetId(&id)) && id != nullptr) {
+      endpoint.id = id;
+      CoTaskMemFree(id);
+    }
+    IPropertyStore* store = nullptr;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store != nullptr) {
+      PROPVARIANT name;
+      PropVariantInit(&name);
+      if (SUCCEEDED(store->GetValue(kPkeyDeviceFriendlyName, &name)) && name.vt == VT_LPWSTR && name.pwszVal != nullptr) {
+        endpoint.name = name.pwszVal;
+      }
+      PropVariantClear(&name);
+      store->Release();
+    }
+    device->Release();
+    if (!endpoint.id.empty()) endpoints.push_back(std::move(endpoint));
+  }
+  collection->Release();
+  return endpoints;
+}
+
+// Opens the capture endpoint the policy picks, falling back to the OS default when the pick is the default,
+// or when opening the picked endpoint fails (a stale id must not leave the player silent). `log` is false for
+// the presence probe, which asks the same question without repeating the line.
+HRESULT OpenChosenCaptureDevice(IMMDeviceEnumerator* enumerator, IMMDevice** device, bool log) {
+  long libovrCode = 0;
+  const bool isWine = nevr_system_info::Get().IsWine();
+  std::wstring libovrId;
+  std::vector<nevr_mic_device::Endpoint> active;
+  if (nevr_mic_device::ShouldChooseHeadsetDevice(isWine)) {
+    libovrId = LibOvrCaptureEndpointId(&libovrCode, log);
+    active = EnumerateActiveCaptureEndpoints(enumerator);
+  }
+  nevr_mic_device::Pick pick = nevr_mic_device::Choose(isWine, libovrId, libovrCode, active);
+  if (log && !libovrId.empty() && pick.choice != nevr_mic_device::Choice::LibOvr) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] LibOVR code=%ld answered id=\"%s\" which is not an active capture endpoint; falling to the name match",
+        libovrCode, Prefix64(libovrId).c_str());
+  }
+  if (pick.choice != nevr_mic_device::Choice::OsDefault) {
+    const HRESULT hr = enumerator->GetDevice(pick.endpoint.id.c_str(), device);
+    if (SUCCEEDED(hr)) {
+      if (log) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture device: \"%s\" id=%s choice=%s reason=\"%s\" libovr_code=%ld",
+            Utf8(pick.endpoint.name).c_str(), Utf8(pick.endpoint.id).c_str(),
+            nevr_mic_device::ChoiceName(pick.choice), pick.reason.c_str(), libovrCode);
+      }
+      return hr;
+    }
+    if (log) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.MIC] chosen capture endpoint \"%s\" (choice=%s, libovr_code=%ld, libovr_id=\"%s\") could not be opened "
+          "(HRESULT 0x%lx); using the OS default",
+          Utf8(pick.endpoint.name).c_str(), nevr_mic_device::ChoiceName(pick.choice), libovrCode,
+          Prefix64(libovrId).c_str(), static_cast<unsigned long>(hr));
+    }
+    pick = nevr_mic_device::Pick{};
+    pick.reason = "the chosen endpoint could not be opened";
+  }
+  const HRESULT hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, device);
+  if (log && SUCCEEDED(hr)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture device: OS default choice=%s reason=\"%s\" libovr_code=%ld",
+        nevr_mic_device::ChoiceName(nevr_mic_device::Choice::OsDefault), pick.reason.c_str(), libovrCode);
+  }
+  return hr;
+}
+
+// Acquires the chosen capture endpoint (OpenChosenCaptureDevice) and makes it ready to Start: the audio client, its
 // event, the worker's startup event and the capture client. `balanceComOnFailure` is true for the first
 // acquisition (a failure undoes the COM initialization MicCreate just made); a re-acquisition keeps
 // the owner thread's COM initialization, which MicDestroy balances.
@@ -319,8 +524,8 @@ bool AcquireEndpoint(bool balanceComOnFailure) {
   HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator,
                                 reinterpret_cast<void**>(&g_enumerator));
   if (FAILED(hr)) return fail("CoCreateInstance(MMDeviceEnumerator)", hr, EchoVR::LogLevel::Error);
-  hr = g_enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &g_device);
-  if (FAILED(hr)) return fail("GetDefaultAudioEndpoint", hr, EchoVR::LogLevel::Warning);
+  hr = OpenChosenCaptureDevice(g_enumerator, &g_device, /*log=*/true);
+  if (FAILED(hr)) return fail("capture endpoint open", hr, EchoVR::LogLevel::Warning);
   hr = g_device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr,
                           reinterpret_cast<void**>(&g_audioClient));
   if (FAILED(hr)) return fail("IAudioClient activation", hr, EchoVR::LogLevel::Error);
@@ -494,7 +699,7 @@ void ReleaseWasapiResources(void*) {
 void ResetCaptureStream(void*) {
   g_captureAdapter.Reset();
   g_ring.Reset();
-  g_ringOverflowLogged = false;
+  g_overflowGate.Reset();
 }
 
 const MicLifecycleOperations kMicLifecycleOperations = {
@@ -649,6 +854,17 @@ static void NoteGameReader() {
 
 uint64_t nevr_mic_provider::MicAvailable() {
   g_availableCalls.fetch_add(1, std::memory_order_relaxed);
+  {
+    const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t previousNs = g_lastPollNs.exchange(nowNs, std::memory_order_relaxed);
+    if (previousNs != 0) {
+      const uint64_t gapMs = static_cast<uint64_t>((nowNs - previousNs) / 1000000);
+      uint64_t seen = g_maxPollGapMs.load(std::memory_order_relaxed);
+      while (gapMs > seen && !g_maxPollGapMs.compare_exchange_weak(seen, gapMs, std::memory_order_relaxed)) {
+      }
+    }
+  }
   return static_cast<uint64_t>(g_ring.Available());
 }
 
@@ -679,7 +895,7 @@ uint64_t nevr_mic_provider::MicDetected() {
   if (SUCCEEDED(CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL,
                                  IID_IMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator)))) {
     IMMDevice* device = nullptr;
-    if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device))) {
+    if (SUCCEEDED(OpenChosenCaptureDevice(enumerator, &device, /*log=*/false))) {
       detected = 1;
       device->Release();
     }

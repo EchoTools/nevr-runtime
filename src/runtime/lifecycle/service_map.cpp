@@ -60,6 +60,11 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"upnp_port", "network.upnp_port"},
       // #58 — seconds an empty server holds its return to lobby; 0 (default) holds nothing.
       {"nevr_empty_server_ttl_s", "network.empty_server_ttl_seconds"},
+      // #595 — a server's tick rate in Hz (config.cpp ApplyServerTimestep): default 120, range-checked,
+      // 0 keeps the game's own step.
+      {"nevr_tick_rate_hz", "network.tick_rate_hz"},
+      // #708 — which game sockets the PC bridge hands to nevr_session_router: legacy (default), config, all.
+      {"nevr_session_router", "network.session_router"},
       // S4b — nevr_regions: registration metadata appended to the ServerDB dial
       // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
       // had no regions home; network.regions is the S4b choice (no new top-level
@@ -80,7 +85,7 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"arena_celebration_time", "arena.celebration_time"},
       {"arena_mercy_score", "arena.mercy_score"},
       // misc — deprecated + inert (default TRUE, config only ever sets TRUE;
-      // -noexitonerror is the live control). No first-class section is invented
+      // -no-exit-on-error is the live control). No first-class section is invented
       // for a deprecated flag: it rides the schema's x- extension namespace.
       {"exitonerror", "x-exitonerror"},
   };

@@ -1,5 +1,5 @@
 /*
- * asset-test — proves plugin-carried assets (#432, plugin API v6).
+ * asset-test — proves plugin-carried assets (#432, plugin API v7).
  *
  * Carries a clone of a shipped level (the CGameLevelInfoResource and CGameLevelResource of one level, under a
  * new name) inside this DLL, registers both at init, then asks the engine's resource manager to load them

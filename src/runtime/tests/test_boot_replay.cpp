@@ -34,6 +34,41 @@ TEST(BootLines, RecordIsOneJsonLineWithATimestamp) {
   EXPECT_EQ(json.at("msg"), "hooks \"ok\"\n");
 }
 
+// #664: the record's level is the level the message states after its tag (Rule 12), so a warn; or error; boot
+// line is found by level. A message that states none is info.
+TEST(BootLines, TheRecordsLevelIsTheOneTheMessageStates) {
+  const struct { const char* msg; const char* level; } cases[] = {
+      {"[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryW", "warn"},
+      {"[NEVR.XPID] error; validation FAILED", "error"},
+      {"[NEVR.BOOT] debug; detail", "debug"},
+      {"[NEVR.BOOT] info; installing", "info"},
+      {"warn; no tag at all", "warn"},
+      {"[NEVR.PATCH] boot log opened run=x", "info"},
+      {"[NEVR.PATCH] warning; not a level word", "info"},
+      {"[NEVR.PATCH] warn without the semicolon", "info"},
+      {"[NEVR.PATCH]warn; no space after the tag", "info"},
+      {"[NEVR.PATCH]xwarn; glued to the tag", "info"},
+      {"[NEVR.PATCH] warn;glued", "info"},
+      {"[NEVR.PATCH] information about the boot", "info"},
+      {"[NEVR.PATCH] warn  two spaces, no semicolon", "info"},
+      {"[NEVR.PATCH] text that says warn; later", "info"},
+      {"", "info"},
+  };
+  for (const auto& c : cases) {
+    const auto json = nlohmann::json::parse(Record("2026-10-09T01:02:03.004Z", "run-1", c.msg));
+    EXPECT_EQ(json.at("level"), c.level) << c.msg;
+  }
+}
+
+TEST(BootReplay, AReplayedWarnLineKeepsItsLevel) {
+  const std::string file = Record("2026-10-09T02:00:00.001Z", "run-2", "[NEVR.DLLHOOK] warn; hook FAILED") +
+                           Record("2026-10-09T02:00:00.002Z", "run-2", "[NEVR.BOOT] info; fine");
+  const auto lines = nevr_boot_replay::ParseRun(file, "run-2");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_EQ(lines[0].level, "warn");
+  EXPECT_EQ(lines[1].level, "info");
+}
+
 TEST(BootLines, BuildReportsATooSmallBuffer) {
   char tiny[16];
   EXPECT_EQ(nevr_boot_lines::Build(tiny, sizeof(tiny), "2026-10-09T01:02:03.004Z", "run-1", "x"), -1);

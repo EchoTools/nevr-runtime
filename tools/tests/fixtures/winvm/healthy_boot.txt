@@ -1,4 +1,5 @@
-[NEVR.PATCH] boot log opened run=c4-1dd49e787338f75[NEVR.PATCH] Initializing v3.2.0+678.9af607a base=00007ff6ebd40000
+[NEVR.PATCH] boot log opened run=c4-1dd49e787338f75
+[NEVR.PATCH] Initializing v3.2.0+678.9af607a base=00007ff6ebd40000
 [NEVR.PATCH] function pointers resolved
 [NEVR.BOOT] initializing hooking engine...
 [NEVR.PATCH] minhook initialized

@@ -25,7 +25,7 @@ have it, so please report anything odd (see "Report a bug").
 
 The first time, the game needs you to sign in:
 
-- Your browser opens the community sign-in page (`https://echovrce.com/login/device`). Sign in with
+- Your browser opens the community sign-in page (`https://echovrce.com/device`). Sign in with
   Discord there.
 - While it waits, the game window is titled **"Echo VR - sign in with Discord in your browser to
   continue"**. It waits up to 5 minutes.
@@ -46,7 +46,6 @@ Close Echo VR, delete `bin\win10\BugSplat64.dll`, and rename `BugSplat64.dll.ori
 
 You do not need to report these:
 
-- No in-game voice chat yet ([#15](https://github.com/EchoTools/nevr-runtime/issues/15)).
 - A friend's status (in a menu, a lobby or a match) is not live: it is what it was when your friends list
   last refreshed ([nakama#663](https://github.com/EchoTools/nakama/issues/663)).
 - A friend added on the website only appears after you restart the game

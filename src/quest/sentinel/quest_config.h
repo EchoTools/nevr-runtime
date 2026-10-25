@@ -1,13 +1,23 @@
 // Quest client configuration and feature activation: pure, no Android or game headers, so the
 // host test and the NDK build compile this one source.
 //
-// Precedence per key: file value, else the value embedded at build time, else absent. The file is
-// `nevr-quest.json` in the app's external files directory; it is never `config.json`, never a
-// `.env`, and nothing here reads the environment. Features (redirect, bridge, login, social) are off
-// unless the file turns them on, and a feature whose prerequisite is off or missing is forced off
-// with a logged reason. A value in the file that is invalid (including the empty string) is
-// rejected and the embedded default stays: the file cannot clear a default. A key that appears
-// twice in one object takes its last value and logs a warning.
+// The file is `config.yaml` in the app's external files directory: the same file format and parser as the PC
+// (nevr_config, src/core/nevr_config.cpp), so the keys are the PC's keys (docs/reference/example-config.yaml).
+// It is never `config.json`, never a `.env`, and nothing here reads the environment (the `${VAR}`
+// interpolation in a value is nevr_config's, as on the PC).
+//
+// Precedence per key: file value, else the value embedded at build time, else absent. A value in the file that
+// is invalid (including the empty string) is rejected and the embedded default stays: the file cannot clear a
+// default. A file that is unusable as a whole (a YAML error, an unknown top-level key, a top level that is not a
+// mapping, a malformed `plugins` list, an unset `${VAR:?}`, nesting or alias expansion past nevr_config's bounds,
+// too large) contributes nothing: the embedded defaults stay and one Error line names the file and why.
+//
+// Features have no switch of their own except where the PC has a key. Redirect is on when a target resolves
+// (`services.socket_uri` or `auth.http_uri`), the bridge when the redirect is on and `services.socket_uri`
+// resolves, login when the bridge is on and `auth.server_key` resolves; the social facade is on unless
+// `social.facade` is false (PC's key and default) and still needs login here; its status names ride with it.
+// `social.send_presence_to_meta: false` answers the rich presence locally; `diagnostics.hardware_dump: true`
+// turns the hardware dump on, `diagnostics.ui_event_probe: true` the invite/party UI probe. A feature whose prerequisite is off or missing is forced off with a logged reason.
 #pragma once
 
 #include <cstddef>
@@ -17,10 +27,12 @@
 
 namespace nevr_quest {
 
-inline constexpr const char* kConfigFileName = "nevr-quest.json";
+inline constexpr const char* kConfigFileName = "config.yaml";
+// A file of this name in the files directory is not read; the sentinel reports once that it is present and ignored.
+inline constexpr const char* kLegacyConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kObbSkip, kPresenceNames, kPresenceLocal };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial, kHwDump, kPresenceNames, kPresenceLocal, kUiEventProbe };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -44,20 +56,22 @@ struct Features {
   bool bridge = false;
   bool login = false;
   bool social = false;
-  // The hardware/environment dump (#335): a diagnostic build only, never on unless the file asks for it.
+  // The hardware/environment dump (#335): `diagnostics.hardware_dump`, never on unless the file asks for it.
   bool hwdump = false;
-  // Report the OBB mount as done and use the data root the game falls back to (#319): no ~30 s wait in
-  // CSysFile::Init. Off until a headset run confirms it; independent of every other feature.
-  bool obbSkip = false;
   // Answer the rich presence's destination lookup from a built-in table ("Social Lobby", "Arena", ...) when
   // Meta's GetDestinations failed (#393): the status under the player's name stops reading the game's second
-  // field. Off until a headset run confirms it; needs the social facade (the status travels in its member data).
+  // field. On whenever the social facade is (it has no key); needs the facade (the status travels in its member
+  // data).
   bool presenceNames = false;
   // Rich presence is not sent to Meta's platform service (#396, option b of #393): the presence object's
   // ShareData, RefreshDestinations and Clear are answered locally, so no group_presence request leaves (they
   // fail for this APK's identity anyway). Friends' status comes from the game service, which derives it from
-  // the match. Off until a headset run confirms it; needs the social facade.
+  // the match. `social.send_presence_to_meta: false` turns it on; needs the social facade.
   bool presenceLocal = false;
+  // The invite/party UI probe (#391, #318): the Invite Members and own-id Party slots also post the friends script
+  // event, to see whether the tablet switches to its Friends list. `diagnostics.ui_event_probe: true` turns it on;
+  // never on unless the file asks, and it needs the social facade.
+  bool uiEventProbe = false;
 };
 
 struct LogEvent {
@@ -70,7 +84,7 @@ struct ResolvedConfig {
   Value httpUri;
   Value httpKey;
   Value serverKey;
-  Features requested;  // what the file asked for (all off without a file)
+  Features requested;  // what the file and the defaults ask for
   Features effective;  // requested, after prerequisite checks
 };
 
@@ -80,17 +94,14 @@ struct LoadResult {
   std::vector<LogEvent> events;
 };
 
-// `fileText` is null when the file does not exist. Never throws on malformed input.
-LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText);
+// `fileText` is null when the file does not exist. `filePath` is only what the log lines name. Never throws:
+// every exception the YAML parser raises is caught here, by name, and becomes a rejected file.
+LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText,
+                         const std::string& filePath = kConfigFileName);
 
-const char* LevelName(LogLevel level);
-
-// One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8
-// (invalid bytes in `message` are replaced).
-std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message);
-
-// `<filesDir>/nevr-quest.json`, tolerant of a trailing slash.
+// `<filesDir>/config.yaml` and `<filesDir>/nevr-quest.json`, tolerant of a trailing slash.
 std::string ConfigFilePath(const std::string& filesDir);
+std::string LegacyConfigFilePath(const std::string& filesDir);
 
 bool FeatureEnabled(const ResolvedConfig& config, Feature feature);
 const char* FeatureName(Feature feature);

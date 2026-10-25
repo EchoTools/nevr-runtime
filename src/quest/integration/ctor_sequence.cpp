@@ -28,6 +28,9 @@ const char* StepName(StepId id) {
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kInstallObbSkip: return "install_obb_skip";
+    case StepId::kInstallProcessEnd: return "install_process_end";
+    case StepId::kInstallPermissionWait: return "install_permission_wait";
+    case StepId::kInstallVkExtWindow: return "install_vk_ext_window";
     case StepId::kStartTokenAuth: return "start_token_auth";
     case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
@@ -134,21 +137,15 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterLoginPromptCounters, "bridge_and_login_off");
     }
-    // The OBB-mount skip (#319) is independent of every feature above.
-    bool obbCounters = false;
-    if (want.obbSkip) {
-      obbCounters = r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
-    } else {
-      r.Skip(StepId::kRegisterObbSkipCounters, "obb_skip_off");
-    }
+    // The OBB-mount skip (#319, #572) runs on every launch: no feature and no configuration turns it off.
+    const bool obbCounters =
+        r.Run(StepId::kRegisterObbSkipCounters, [&] { return steps.RegisterObbSkipCounters(); });
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
 
     // Before token auth and the bridge: those take time, and libr15's CSysFile::Init is what this beats.
-    if (!want.obbSkip) {
-      r.Skip(StepId::kInstallObbSkip, "obb_skip_off");
-    } else if (!obbCounters) {
+    if (!obbCounters) {
       try {
         steps.InstallObbSkip(false);  // the hook's own rule logs that it installs nothing
       } catch (const std::exception&) {
@@ -158,6 +155,17 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Run(StepId::kInstallObbSkip, [&] { return steps.InstallObbSkip(true); });
     }
+
+    // The process ends when the game's android_main returns (#621): every launch, no feature, no counters.
+    r.Run(StepId::kInstallProcessEnd, [&] { return steps.InstallProcessEnd(); });
+
+    // The game waits for the storage permission it just asked for (#640): every launch, no feature, no counters.
+    // Before token auth and the bridge: the request is made when libr15 starts the game, soon after the constructor.
+    r.Run(StepId::kInstallPermissionWait, [&] { return steps.InstallPermissionWait(); });
+
+    // The device extensions libr15 requires stay inside the 128 entries it reads (#868): every launch, no feature, no
+    // counters. libr15 resolves its Vulkan functions when it starts the game, after the constructor.
+    r.Run(StepId::kInstallVkExtWindow, [&] { return steps.InstallVkExtWindow(); });
 
     bool tokenOk = false;
     if (wantTokenAuth) {

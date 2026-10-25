@@ -36,6 +36,7 @@ Operational procedures and testing protocols.
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
+| `testing/smoke-checklist.md` | Every feature a tester can check on a PC game client, a Quest game client or a game server, with the player action and the log line that proves it | Testers and release managers |
 | *(see `just --list` for automated test and verification recipes)* | | |
 
 ## Standards
@@ -47,6 +48,14 @@ Coding and verification standards that bind all work in this repo.
 | `logging.md` | Structured logging format, noise suppression rules, and identity-on-login requirements | All developers |
 | `verification.md` | Evidence ladder (rank 1–5), falsification discipline, and gate contract | All developers and agents |
 | `planning.md` | Release milestones by outcome, Fibonacci points, sprints by work, story states, and the hygiene rules for issues, PRs, branches and milestones | All developers and agents |
+
+## Engine
+
+How echovr.exe itself works, traced from the decompilation.
+
+| File | Description | Audience |
+| ---- | ----------- | -------- |
+| `engine/asset-system.md` | How the engine names, finds, requests, reads and builds an asset (manifests, packages, archives, levels, script DLLs), what triggers each step, the order things become ready, and the predicted log trace of a plugin-carried asset on the normal path | Runtime and plugin developers |
 
 ## References
 

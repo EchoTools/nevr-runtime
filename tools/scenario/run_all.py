@@ -32,6 +32,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--dll", type=pathlib.Path, default=run_scenario.DEFAULT_DLL)
     parser.add_argument("--out", type=pathlib.Path)
+    parser.add_argument("--config", type=pathlib.Path,
+                        help="passed to every scenario run: a config.json whose directory holds config.yaml (#708)")
     args = parser.parse_args(argv)
 
     scenarios = sorted(SCENARIOS.glob("*.yaml"))
@@ -49,7 +51,10 @@ def main(argv: list[str]) -> int:
         folder = out / name
         print(f"suite: running {name}", flush=True)
         started = time.monotonic()
-        code = run_scenario.main([str(path), "--dll", str(args.dll), "--out", str(folder)])
+        scenario_args = [str(path), "--dll", str(args.dll), "--out", str(folder)]
+        if args.config is not None:
+            scenario_args += ["--config", str(args.config)]
+        code = run_scenario.main(scenario_args)
         seconds = time.monotonic() - started
         result_file = folder / "result.json"
         passed = False

@@ -2,18 +2,19 @@
 # Make a fresh `git worktree add` checkout buildable.
 #
 # A new worktree has empty extern/{minhook,breakpad,lss} (submodules) and no gen/ (gitignored,
-# generated), so `cmake --preset ...` fails on the first missing file. This fills those, and the
-# gitignored .env the build embeds the service endpoints from, from the main checkout.
+# generated), so `cmake --preset ...` fails on the first missing file. This fills those from the main
+# checkout, and the git-ignored config/public-defaults.env (the public client defaults the build embeds).
+# .env is runtime-only and is never copied here.
 #
 # What it will and will not do:
 #   - It runs only inside a LINKED worktree (never the main checkout), whatever env or arguments say.
 #   - It writes only where the destination is absent or an empty directory. It never deletes or
-#     replaces anything that has content: an initialised submodule, an existing gen/ or .env is kept
+#     replaces anything that has content: an initialised submodule or an existing gen/ is kept
 #     (to refresh gen/, remove it and run this again). A gen/ that has other content but no
 #     generated source is refused, not overwritten.
 #   - It copies the main checkout's submodule CONTENT: a worktree on a branch that pins different
 #     submodule commits should run `git submodule update --init` instead.
-#   - It never touches the main checkout and never prints .env. Copies are made in
+#   - It never touches the main checkout and never reads or copies .env. Copies are made in
 #     `.nevr-worktree-setup/` at the worktree root (the same filesystem as the destinations, so a
 #     move is an atomic rename, and a name nothing else uses) and moved into place, under a lock.
 #
@@ -73,7 +74,7 @@ fi
 
 # Destinations must be real directories inside this worktree (a symlink, even a dangling one, would
 # send a copy into another tree).
-for p in extern gen .env extern/minhook extern/breakpad extern/lss; do
+for p in extern gen config/public-defaults.env extern/minhook extern/breakpad extern/lss; do
   if [[ -L "$p" ]]; then echo "error: $p is a symlink; remove it first" >&2; exit 2; fi
 done
 mkdir -p extern
@@ -131,15 +132,18 @@ elif is_fillable gen; then
 else
   refused+=("gen/ (has other content but no generated source: move it away, then run again)")
 fi
-if [[ -e .env ]]; then
-  kept+=(.env)
-elif [[ -f "$main/.env" ]]; then
-  (umask 077; cp "$main/.env" "$scratch/tmp/env")
-  mv -T -n "$scratch/tmp/env" .env
-  # `mv -n` skips silently when .env appeared meanwhile: believe the filesystem, not the exit status.
-  if [[ -e "$scratch/tmp/env" ]]; then kept+=(.env); else filled+=(.env); fi
+# The public client defaults the build embeds (git-ignored): copied when this worktree has none.
+defaults=config/public-defaults.env
+if [[ -e "$defaults" ]]; then
+  kept+=("$defaults")
+elif [[ -f "$main/$defaults" ]]; then
+  mkdir -p config
+  cp "$main/$defaults" "$scratch/tmp/public-defaults.env"
+  mv -T -n "$scratch/tmp/public-defaults.env" "$defaults"
+  # `mv -n` skips silently when the file appeared meanwhile: believe the filesystem, not the exit status.
+  if [[ -e "$scratch/tmp/public-defaults.env" ]]; then kept+=("$defaults"); else filled+=("$defaults"); fi
 else
-  echo "warning: no .env in $main: the build will embed no service endpoints (launch-client.sh refuses such a DLL)" >&2
+  echo "warning: no $defaults in $main: copy config/public-defaults.env.example to it and fill the four values; the build fails without it" >&2
 fi
 # Warn when what was just copied is not the commit this branch pins (only for what this run filled).
 for f in "${filled[@]:-}"; do

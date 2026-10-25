@@ -1,0 +1,8 @@
+{
+  "name": "nevr-quest-host-deps",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "yaml-cpp",
+    "zlib"
+  ]
+}

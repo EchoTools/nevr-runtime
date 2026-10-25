@@ -35,6 +35,8 @@ std::atomic<std::uint64_t> g_calls{0};
 std::atomic<std::uint64_t> g_attempts{0};
 std::atomic<bool> g_sawPnsovr{false};
 std::atomic<bool> g_sawMatchmaking{false};
+std::atomic<std::uint64_t> g_matchmakingImages{0};
+std::atomic<void*> g_lastMatchmakingHandle{nullptr};
 
 const char* Basename(const char* path) {
   if (path == nullptr) return "(null)";
@@ -71,11 +73,15 @@ void SetPostLoadActions(const PostLoadActions& actions) {
   g_calls.store(0);
   g_sawPnsovr.store(false);
   g_sawMatchmaking.store(false);
+  g_matchmakingImages.store(0);
+  g_lastMatchmakingHandle.store(nullptr);
   g_attempts.store(0);
   g_pending.store(AnyUnsettled(), std::memory_order_release);
 }
 
 bool PostLoadPending() noexcept { return g_pending.load(std::memory_order_acquire); }
+
+std::uint64_t MatchmakingImages() noexcept { return g_matchmakingImages.load(std::memory_order_acquire); }
 
 PostLoadStats PostLoadStatsView() noexcept {
   PostLoadStats s;
@@ -94,6 +100,11 @@ NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept
   // Stage lines (stage_log.h): the game mapped the libraries the later installs need. Once each.
   if (name != nullptr) {
     if (std::strstr(name, "pnsradmatchmaking") != nullptr) {
+      // A handle that differs from the last one is another mapping of the library (the game closed it and
+      // opened it again): the redirect installed on the first one does not cover it.
+      if (g_lastMatchmakingHandle.exchange(handle) != handle) {
+        g_matchmakingImages.fetch_add(1, std::memory_order_release);
+      }
       if (!g_sawMatchmaking.exchange(true)) {
         sentinel::LogFields(sentinel::LogLevel::kInfo, "libpnsradmatchmaking_loaded", {{"status", "ok"}});
       }

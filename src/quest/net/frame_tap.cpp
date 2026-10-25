@@ -18,7 +18,7 @@ std::uint64_t ReadLe64(const std::uint8_t* p) {
 }
 }  // namespace
 
-bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) noexcept {
+bool FindLoginSuccessUser(std::string_view frame, std::uint64_t* platformCode, std::uint64_t* accountId) noexcept {
   try {
     const std::string copy(frame);  // ReadMessage takes a std::string
     std::size_t offset = 0;
@@ -26,6 +26,7 @@ bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) n
       nevr_evr_codec::Message message;
       if (nevr_evr_codec::ReadMessage(copy, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return false;
       if (message.symbol == nevr_evr_codec::kSymLoginSuccess && message.length >= kLoginSuccessMinPayload) {
+        *platformCode = ReadLe64(message.payload + kLoginSuccessAccountOffset - 8);
         *accountId = ReadLe64(message.payload + kLoginSuccessAccountOffset);
         return true;
       }
@@ -36,6 +37,11 @@ bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) n
   }
 }
 
+bool FindLoginSuccessAccount(std::string_view frame, std::uint64_t* accountId) noexcept {
+  std::uint64_t platform = 0;
+  return FindLoginSuccessUser(frame, &platform, accountId);
+}
+
 void FrameTap::Handle(bool serverToGame, std::string_view frame) noexcept {
   try {
     if (sinks_.observe) {
@@ -44,11 +50,13 @@ void FrameTap::Handle(bool serverToGame, std::string_view frame) noexcept {
   } catch (const std::exception&) {
     // A consumer that throws loses this frame only.
   }
-  if (!serverToGame || !sinks_.onLoginSuccess) return;
+  if (!serverToGame || (!sinks_.onLoginSuccess && !sinks_.onLoginUser)) return;
+  std::uint64_t platform = 0;
   std::uint64_t account = 0;
-  if (!FindLoginSuccessAccount(frame, &account)) return;
+  if (!FindLoginSuccessUser(frame, &platform, &account)) return;
   try {
-    sinks_.onLoginSuccess(account);
+    if (sinks_.onLoginUser) sinks_.onLoginUser(platform, account);
+    if (sinks_.onLoginSuccess) sinks_.onLoginSuccess(account);
   } catch (const std::exception&) {
     // Same.
   }

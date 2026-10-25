@@ -15,8 +15,8 @@ When the game cannot log in yet, its login error screen shows:
 
 ```
 Sign in to play: on a phone or computer, open
-echovrce.com/login/device
-and enter the code XXXX-XXXX
+echovrce.com/device
+and enter the code XXXX
 Each code lasts 5 minutes, then a new one is issued.
 ```
 
@@ -27,7 +27,7 @@ or with `adb pull`.
 
 ## What to do
 
-1. On a phone or computer, open `https://echovrce.com/login/device` and sign in with Discord.
+1. On a phone or computer, open `https://echovrce.com/device` and sign in with Discord.
 2. Enter the code shown in the headset.
 3. When the headset says "Signed in to EchoVRCE. Select RETRY to finish.", select RETRY. The game
    logs in with the saved sign-in, now and every time it starts. If the screen does not change,

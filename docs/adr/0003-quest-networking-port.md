@@ -225,7 +225,7 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   The hook skips (a plain return) the enable of the error pages while the latch is armed, and the enable of
   the logging-in page while the latch is armed and the login may not proceed. "May proceed" is one
   process-wide word (`quest/login/login_attempt_gate.h`) that the token-auth source publishes and that
-  both this hook and the login prerequisites (`IdentitySource::Ready`) read, so they cannot disagree: the
+  both this hook and the login prerequisites (`IdentitySource::Ready`, `IdentitySource::HoldsAnswers`) read, so they cannot disagree: the
   skip stops in the same instant the login may proceed, and an attempt whose logging-in page was skipped is
   poisoned and fails its prerequisites until the game leaves "logging in", even if the gate turns ready
   meanwhile (otherwise the login would succeed on a screen that cannot show it). The signed-in notice is
@@ -424,23 +424,29 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    auth inputs; platform adapters supply the environment and embedded defaults. The first
    Quest use is the shared URL policy at the config-string lookup below. It neither adds nor
    depends on a game `config.json`, and a test shows the Quest config path never names one.
-   `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
+   `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `config.yaml` in
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
-   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
-   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
-   `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
-   is off unless the file turns it on, and is forced off while its prerequisite is missing
-   (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
-   non-object or oversized (64 KiB) file is rejected whole: embedded values, all features off.
+   time (`cmake/nevr_builtin_defaults.cmake`, read from `config/public-defaults.env`, which CI writes
+   from the repository's Actions variables, at configure time only), else absent. The file is parsed by the PC's
+   `nevr_config` (`src/core/nevr_config.cpp`, yaml-cpp), so the keys are the PC's: `services.socket_uri`,
+   `auth.http_uri`, `auth.http_key`, `auth.server_key` and `social.facade`, plus the Quest-only
+   `social.send_presence_to_meta` and `diagnostics.hardware_dump` (`docs/reference/example-config.yaml`
+   documents each). No key switches the redirect, the bridge or the login: the redirect is on when a target
+   (`services.socket_uri` or `auth.http_uri`) resolves, the bridge when the redirect is on and a socket URI resolves,
+   login when the bridge is on and a server key resolves, and social (default on, the status names with it) needs
+   login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it
+   down with it, and each logs `forced off reason=<name>`. A YAML error, an unknown top-level key, a top level that
+   is not a mapping, a malformed `plugins` list, an unset `${VAR:?}`, nesting deeper than 64 levels, more than
+   100,000 nodes once aliases are expanded, or a file over 64 KiB rejects the file whole: embedded values, the default
+   features, one Error line `config file=<path> rejected reason=<token> (embedded defaults stay)` where the token is
+   `nevr_config`'s class of failure (`ReasonToken`), never the parser's text.
    Every key source, requested and effective feature state, and rejection is logged by key or
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
-   same directory, as one JSON object per line. A value the file gives as the empty string is
-   rejected and cannot clear an embedded default; a key given twice in one object takes the
-   last value and logs a warning. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
-   limits). Warnings about the file are capped at 32 lines plus one suppression line, and
-   repeated duplicate keys collapse to one line per name. A name taken from the file is logged
-   only when it is one of the keys or features above; any other name is counted ("unknown key
-   #N"), never echoed. `sentinel_host_test` runs
+   same directory, as one JSON object per line, and the log names the file it read
+   (`config file=<path> loaded`, or `absent, using embedded defaults`). A value the file gives as the empty
+   string is rejected and cannot clear an embedded default. A `nevr-quest.json` in the
+   same directory is not read; the log says once that it is present and ignored. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
+   limits). `sentinel_host_test` runs
    the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
    host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
@@ -453,8 +459,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
    no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
-   events go in; the router owns connection identity (config, login, matchmaker; matchmakers
-   attached to the login session, at most `Limits::maxMatchmakerConnections` live), frame order,
+   events go in; the router owns connection identity (config, login and matchmaker connections sharing one
+   session remote, at most `Limits::maxMatchmakerConnections` matchmakers live), frame order,
    size limits, bounded queues and
    backpressure, and, when a remote session ends, the close of every game socket on it plus
    forgetting the session so the next connection is a new login. The game transport, the remote
@@ -466,14 +472,32 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `SNSLobbyMatchmakerStatusRequest`, `FindSessionRequestv11`, `CreateSessionRequestv9`,
    `JoinSessionRequestv7`, `DirectoryRequestJsonv2`, `PendingSessionCancelv2`,
    `PlayerSessionsRequestv5` or `PingResponse`; the login connection sends nothing until
-   `LogInRequestv2`. Until that frame the role is provisional, by connection order (0 config, 1 login,
-   later ones matchmaker), so the remote can open before the game has spoken. A first frame that
-   contradicts the provisional role moves the connection to the remote its real role uses; only
-   `LogInRequestv2` moves a connection to login (an unlisted message never takes the login role). The
-   game opens a new config connection after login, and by order that connection is a matchmaker: the
-   first frame is what makes it a config connection with a remote of its own.
+   `LogInRequestv2`. When the adapter knows a connection's role at open it says so (`OpenHint`; the PC
+   bridge reads the request target and the listener): a hinted role is final, and a first frame that
+   contradicts it is logged once at Warning and not acted on. Without a hint (Quest) the role is
+   provisional until that frame, by connection order (0 config, 1 login, later ones matchmaker), so the
+   session can open before the game has spoken. A first frame that contradicts the provisional role
+   relabels the connection in place on the session it shares: the role, the login connection and the idle
+   exemption move with it, and no remote is opened, closed or re-attached. Only `LogInRequestv2` moves a
+   connection to login (an unlisted message never takes the login role); a connection relabelled to
+   matchmaker is counted against `Limits::maxMatchmakerConnections`. The game opens a new config
+   connection after login, and by order that connection is a matchmaker: the first frame makes it a
+   config connection on the same session.
 
-   **Frames from the login session's remote are routed by role**, never to the socket that spoke
+   **One session remote.** Config, login and matchmaker connections share one remote
+   (`RemoteOpenRequest::session`), opened by the first config or login connection. A matchmaker attaches
+   to it once a login connection has been attached; a matchmaker that arrives before that, or with no
+   session, keeps a remote of its own (`standaloneMatchmaker`), which is never the session. A connection
+   closing never ends the session: it ends when its remote ends, and then every connection on it, config
+   included, is closed and the next connection is a new login. When a connection becomes the login connection
+   the previous one, if still open, rides the session as a matchmaker if the adapter did not name its role
+   and the matchmaker cap has room; otherwise (a hinted role is final) it is closed. A connection's queued frames
+   (`Remote::pending`, never the outbox) leave the queue when it closes. With `Options::buildLogin` set,
+   the login is injected when a login connection is attached to an open session that has sent none, at
+   attach or at open, whichever comes second; the other connections' frames wait behind it, a config
+   connection's do not.
+
+   **Frames from the session remote are routed by role**, never to the socket that spoke
    last. libpnsovr drops a reply to a login-connection request that arrives on another peer
    (`CNSUser::ProfileSuccessCB` and the other login-peer checks), so login and profile replies,
    document and other-user-profile replies and the login settings (`IsLoginSessionReply`) go to the
@@ -500,32 +524,54 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    so frames interleave and the router queues, per paired message, the connection that message went to and
    gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,
    Unrequire, `SNSLoginSettings`], delivered whole to the login connection; an Unrequire inside a frame lowers
-   the count of the connection the frame goes to. `ChannelInfoResponse` goes to the login connection (the
+   the count of the connection the frame goes to. `SNSConfigSuccessv2` and `SNSConfigFailurev2` go to the connection that sent the oldest open config
+   request with the reply's type and id: the service echoes the request's two strings (the success as two
+   symbols, the failure as the strings), so a request the service never answers (nakama drops a rate-limited
+   message without a reply) does not shift the replies after it. The Unrequire after a reply goes to the same
+   connection. When the oldest open request for that key belongs to a connection that has closed, a live
+   connection's open request for the same key takes the reply and both entries go: the key already guarantees a
+   reply never reaches a connection that asked for another resource, so a closed connection's stale entry (a
+   request the service dropped) must not starve a replacement that asks for the same resource. If the closed
+   connection's reply was really in flight, the replacement has what it asked for, and the reply to its own
+   request finds no open request and is dropped like any reply nobody asked for (the Unrequires stay
+   consistent: the first reply's Unrequire lowers the replacement's count, the second is owed to nobody and is
+   dropped). With no live connection waiting on that key, or no open request of that key, the reply is dropped,
+   counted (`Stats::configRepliesOrphaned`, `Stats::configRepliesUnmatched`) and logged each time. Open
+   requests are kept per session up to 256; past that the oldest unanswered one is forgotten, counted
+   (`Stats::configRequestsEvicted`) and logged. A request payload that is not a pad byte and a JSON object with
+   string `type` and `id` has no key, and matches only a reply with no key.
+   `nevr_evr_codec::ConfigSymbol` reproduces the service's `ToSymbol` (nakama `server/evr/core_packet.go`), zero
+   extension of bytes included, because the service computes the reply symbols: it is not `EchoVR::CSymbol64Hash`,
+   which differs for the empty string (0 here, its seed there), for an 18-character `0x` + 16 hex digits string
+   (parsed here) and for bytes >= 0x80 (sign extension there; issue #657). If the service's hash changes to match
+   the game, `ConfigSymbol` changes in the same release.
+   `ChannelInfoResponse` goes to the login connection (the
    game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
    to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery
    sends one on the login session right after the login. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
    `TestServerFramesRouteByRole` pin this.
 
-   **A held login.** Before the player signs in there is no account token, and the login
+   **A held session.** Before the player signs in there is no account token, and the login
    connection (silent, long-lived: the game fails over to "service unavailable" after three failed
    connects) must not fail. `Options::loginGate` answers Awaiting, Ready or Refused
    (`TokenIdentitySource::GateFor`, kept current by the token-auth poll as a lock-free atomic).
    Awaiting covers every state in which a token is still to come, including a failure the session
    retries every recovery period (`Snapshot::will_retry`) and an expired token being replaced; only a
    final failure, a stopped session or a token without an account is Refused.
-   While it answers Awaiting the router creates the login session's record but does not open its
-   remote (`Stats::heldRemotes`), and queues what the
-   game sends in order. The login connection is silent until the game's `LogInRequestv2` (the game
-   sends none before the player has signed in, however long that takes), so the router tells the
-   transport (`GameTransport::SetIdleExempt`) that it is never to be closed for sending nothing, held
-   or released, for as long as it is the login connection; `LoopbackGameServer` then exempts it from
-   `idleFirstFrameMs` (pings are still answered). Config, matchmaker and unclassified connections
-   keep the idle close. `ReevaluateHeldLogins`
+   While it answers Awaiting the router creates the session's record, when the login connection opened it
+   (a config connection opens its remote at once and is refused when there is no account),
+   but does not open its remote (`Stats::heldRemotes`), and queues what the connections on it send in
+   order: a config connection waits with the session until the player has signed in. The login
+   connection is silent until the game's `LogInRequestv2` (the game sends none before the player has
+   signed in, however long that takes), so the router tells the transport
+   (`GameTransport::SetIdleExempt`) that it is never to be closed for sending nothing, held or released,
+   for as long as its role is login, provisional or confirmed; a relabel moves the exemption with the
+   role. `LoopbackGameServer` then exempts it from `idleFirstFrameMs` (pings are still answered).
+   Config, matchmaker and unclassified connections keep the idle close. `ReevaluateHeldLogins`
    (via `SessionBridge::ReevaluateLoginGate`, called when the gate changes) opens the remote on
-   Ready and closes the connection with 1011 on Refused. Config and matchmaker connections are
-   never held: with no token their remote cannot start and they close with 1011 at once. A
-   connection opened while the login session has no live login connection is the login connection of
-   that session (held again if the account is still awaited).
+   Ready and closes every connection on the session with 1011 on Refused. A standalone matchmaker is
+   never held: with no token its remote cannot start and it closes with 1011 at once. A connection
+   opened while the session has no live login connection is the login connection of that session.
 
    **Login injection is mutually exclusive with the game's own login.** The router injects a
    LoginRequest (and, separately, a friend-list subscribe after LoginSuccess) only when the
@@ -638,7 +684,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      16 KiB), installs handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, `SIGILL`, `SIGBUS` and `SIGTRAP`
      (`InstallHandlersLocked`, `kExceptionSignals`), and creates a dump GUID from `getrandom`
      (`GRND_NONBLOCK`) or, failing that, `/dev/urandom` (`extern/breakpad/src/common/linux/guid_creator.cc`);
-   - `InitActivation()`: opens `nevr-quest.json` read-only and `nevr-sentinel.log` read-write in
+   - `InitActivation()`: opens `config.yaml` read-only and `nevr-sentinel.log` read-write in
      append mode in the app's external files directory. Both opens are non-blocking, the log open
      does not follow symlinks, and each target must be a regular file (a FIFO or device is
      refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open (a
@@ -1067,24 +1113,44 @@ The four user requests are answered without Meta either (local answers, `login_p
 `local`). Once every hook they depend on is in (all four callbacks, eight accessors with `ovr_Message_IsError`,
 the four request imports and `ovr_PopMessage`, `ovr_Message_GetType`, `ovr_Message_GetRequestID`,
 `ovr_FreeMessage`), a request hook returns a local request id (`0x4E45565200000000 | n`, no SDK id) and queues
-it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array) once
-`IdentitySource::Ready`, so a login that sign-in would complete waits where it already waits for the sign-in
-code. The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
+it; the pump's `ovr_PopMessage` then returns a **synthetic message handle** (a pointer into a static array)
+unless `IdentitySource::HoldsAnswers` holds the answers. They are held only while token auth has a token coming
+without the player (starting, refreshing, expired, a failure it retries, a token that ran out), so a login that
+token auth will complete waits where it already waits. While the player is awaited, or when no token will come, they
+are delivered; the identity is not ready, so the not-ready reset (`ResetHeldStandIns`) withdraws the stand-ins after
+each synthetic callback and the game's own `UpdateInternal` fails the login with "One or more prerequisites are
+missing", the local failure the sign-in code is written onto (`IsLocalLoginFailure`). The game's own `FulfillRequest` runs the delegate registered under that id; the callback handler treats
 the handle as an Oculus error with stand-ins and never consults the real `ovr_Message_GetError` /
 `ovr_Error_Get*`; the accessor hooks answer by address; `ovr_Message_GetType` / `GetRequestID` / `FreeMessage`
 are answered locally. `tools/pinned_ovr_import_walk.py` walks the pinned library's direct call graph from the
 pump, the four callbacks, `FulfillRequest` and the delegate proxies, and `just test-quest-hooks-pinned` fails
 when an `ovr_*` import is reachable and not listed in `tools/pinned_ovr_imports.txt` (hooked or guarded), so a
 new SDK call on those paths cannot silently see a fake handle. `prereq_pop_message_calls`,
-`prereq_local_delivered` and `prereq_local_dropped` (a full table of 32 slots: the request still gets a local
-id and never reaches Meta, nothing is queued behind it, and its callback does not run) are the counters.
+`prereq_local_delivered`, `prereq_local_deferred` (a pop that had an answer ready while the game still held
+all eight handles: the answer waits) and `prereq_local_id_collisions` (an SDK request id in the local range)
+are the counters. A pending answer takes no storage: local ids are sequential, so the pending set is the id
+range not yet popped and a request can neither fail nor reach Meta; a handle exists only while the pump holds
+the message. The SDK's own request ids are small per-process counts (recorded device runs: 5, 6, 7 for user,
+org id and token, 13-16 for the proof requests), which is why the high word `0x4E455652` is free; an id the
+SDK returns there is counted.
 
 `ovr_User_GetOrgScopedID` is also called by `CNSOVRSocial` (`SUserList::Add`, `JoinedCB`, `SyncRoom` twice,
 `GotRemoteOrgIdCB`, `AddInvitableUser`, `GotInvitableUserOrgIdCB`, `GotFriendOrgIdCB`,
 `GotRecentlyMetUserOrgIdCB`) about other users, with callbacks that are not the login's. Its thunk is a
 `CallbackThunk` with `kCaller`: the handler receives the game's return address and answers locally only for
 the login's three call sites (`LogInInternal`, the `GotLoggedInUserOrgIdCb` re-request, `RadPluginMain`;
-`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`); every other caller goes to the SDK. The other
+`kOrgRequestLoginReturns` in `login_prerequisite_targets.h`). The nine `CNSOVRSocial` sites
+(`kOrgRequestSocialReturns`, compared with `tools/pinned_ovr_sites.txt` by `pinned_ovr_import_walk.py --sites`) are
+refused locally once the Social() hook has selected the facade (`quest_social::Counters().selected`, read through
+`local::SetSocialSelectedProbe`; independent of local answers being on): the game then drives the facade, not
+`CNSOVRSocial` (`Update`, `Initialize` and the Refresh* slots are the only ways into those nine sites), so the lookup
+is one nobody asked for and a Meta user id has no NEVR account id to answer it with. A refused request gets an id from its own space (bit 31 of the local id
+range, `local::Refuse`), no handle, no queued answer and never reaches the SDK; it is counted as a fault
+(`prereq_social_org_refused`) and logged once per call site (`quest_social_org_request_refused`, the offset in
+libpnsovr). If one ever ran, its callback would never run: the original object's friend or room batch would wait for
+that entry (`GotFriendOrgIdCB` collects a batch), so the refresh would stay "refreshing"; nothing on the facade path
+waits on it. With the facade not selected (stock Meta social), and for any caller this build does not know, the
+request goes to the SDK as before. The other
 three requests have no Social caller. `tools/pinned_ovr_sites.txt` lists every call site of the four requests
 in the pinned library and which kind it is; `pinned_ovr_import_walk.py --sites` compares that with the library
 and with the header, so a new caller fails `just test-quest-hooks-pinned` until it is classified. Not followed
@@ -1093,10 +1159,13 @@ by the walk: `blr`/`br` and a PLT stub into the library's own exports.
 its flag first, so one `GotUserProofCB` runs per `LogIn` call.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
-`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one
+`reason`, `accessor`, `ovr_error`, `error_code`, `http_code`; a locally answered one also carries `ready`, 0 when the
+not-ready reset withdraws the stand-in it gave) and each request one
 `quest_login_prerequisite_request` record (the request id; the first eight per call), so a request
 that is never answered shows as a request with no callback. No record carries a token, nonce, user
-name or id value. The install logs one `quest_login_prerequisites_install` summary. Measured on the
+name or id value. The install logs one `quest_login_prerequisites_install` summary, and the token-auth poll logs one
+`quest_login_answers` record (`mode` held or answered, `status` the readiness) on its first pass and each time the
+hold changes. Measured on the
 host against a fake Platform SDK (`src/quest/tests/login_prerequisites_test.cpp`); not run on a
 device.
 
@@ -1606,13 +1675,11 @@ What the integration commit calls, and when:
    `social_game_calls.cpp` are `-fno-exceptions` (CMake source properties); the sentinel's link must not
    change that.
 
-The social switch (for `quest_config.*`, owned by the config package; not edited here): a fourth
-`Feature`, `kSocial`, named `social`, read from `features.social` in `nevr-quest.json`, off unless the file
-turns it on, like the others. Its prerequisite is the login feature being effective (the facade is only
-meaningful with an account and the service connection behind it); otherwise it is forced off with the
-logged reason `login_not_enabled`. `Features` gains a `social` flag, `kFeatures` a fourth entry, and the
-config test vectors cover: social alone forced off; social with login, bridge and redirect on; social
-absent from the file. The only consumer is the install call above.
+The social switch (`quest_config.*`): the feature `social`, read from `social.facade` in `config.yaml` (the PC's key and
+default, true). Its prerequisite is the login feature being effective (the facade is only meaningful with an account
+and the service connection behind it); otherwise it is forced off with the logged reason `login_not_enabled`. The
+config test vectors cover: login without its server key forcing social off, the chain from a missing socket URI, and
+`social.facade: false`. The only consumer is the install call above.
 
 ### Risks
 
@@ -1687,7 +1754,9 @@ slots (`integration_hooks_test` runs the sequence against the real registration 
 `IdentitySource::Ready()` from a lock-free `nevr_quest_login::ReadyFlag` (one atomic load, no allocation): the
 token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
 (token auth Ready with an access token and a NEVR account) and clear it in every other state, so a
-stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). It can trail a state
+stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). The same observation publishes
+the hold (`IdentitySource::HoldsAnswers`, `TokenIdentitySource::HoldsFor`) in the same store of the attempt gate;
+the local answers are held only while it is set and the gate is neither ready nor poisoned. Both can trail a state
 change by up to one poll period (2 s).
 
 **Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth
@@ -1701,7 +1770,8 @@ is the loopback listener, because the redirect needs its port before the game re
 **Login.** The router is built without a login builder. The Quest game sends its own `LoginRequest`
 through `CNSUser::SendLogInRequest`, and the login rewrite has already put the NEVR token, the NEVR
 account id (the id the token carries), platform code 4 and the game's own HMD serial into it; the
-router relays it as the first frame of the login session. A second, injected `LoginRequest` would give
+router relays it in the order the game sent it (a config request sent earlier goes ahead of it). A second,
+injected `LoginRequest` would give
 the service two logins on one session while the game still waits for its reply. The remote upgrade
 carries the token session's JWT as its Bearer; with no JWT the remote session is not started.
 

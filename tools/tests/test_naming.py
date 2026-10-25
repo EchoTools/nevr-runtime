@@ -59,13 +59,26 @@ BRAND_PROSE_SPELLINGS = {
     "CONTRIBUTING.md": {"nEVR"},
     "README.md": {"nEVR"},
     "docs/README.md": {"nEVR"},
+    "RELEASING.md": {"nEVR"},
+    "docs/engine/asset-system.md": {"nEVR"},
     "docs/adr/0003-quest-networking-port.md": {"nEVR"},
     "docs/adr/0004-quest-verification-regime.md": {"nEVR"},
+    "docs/adr/0010-signed-plugins-only.md": {"nEVR"},
+    "docs/adr/0012-static-install-root.md": {"nEVR"},
     "docs/design/2026-09-21-mic-provider-voip-fix.md": {"nEVR"},
     "docs/reference/example-config.yaml": {"nEVR"},
     "docs/standards/logging.md": {"nEVR"},
+    "cmake/nevr_version_info.rc.in": {"nEVR"},  # ProductName and FileDescription are brand prose
     "docs/standards/verification.md": {"nEVR"},
     "plugins/example/README.md": {"nEVR"},
+    "src/launcher/CMakeLists.txt": {"nEVR"},  # the exe's FileDescription
+    "src/runtime/CMakeLists.txt": {"nEVR"},  # the DLL's FileDescription
+    "src/runtime/ext/plugin_refusal_notice.h": {"nEVR"},
+    "src/runtime/tests/test_behavioral.cpp": {"nEVR"},  # asserts the refusal dialog's player prose
+    "tools/package-release/README.template.txt": {"nEVR"},
+    "tools/pe_version_info.py": {"nEVR"},  # the pinned ProductName and FileDescription
+    "tools/tests/test_pe_version_info.py": {"nEVR"},  # the same pins, read back from built files
+    "tools/package-release/RELEASE-NOTES.template.md": {"nEVR"},
     "tools/winvm/README.md": {"nEVR"},
 }
 
@@ -162,15 +175,19 @@ class NamingTest(unittest.TestCase):
                 i += 1
             return quotes % 2 == 1
 
+        # One pattern for every old name, tried only on lines that hold `::` or `namespace`.
+        olds = "|".join(re.escape(old) for old in RENAMED_NAMESPACES)
+        pattern = re.compile(r"(?<![A-Za-z0-9_:])(" + olds + r")::|\bnamespace\s+(" + olds + r")\b")
         stray = {}
         for path, text in project_files():
             if not path.endswith((".h", ".hpp", ".cpp", ".cc", ".inc")):
                 continue
             for n, line in enumerate(text.split("\n"), start=1):
-                for old in RENAMED_NAMESPACES:
-                    for m in re.finditer(r"(?<![A-Za-z0-9_:])" + old + r"::|\bnamespace\s+" + old + r"\b", line):
-                        if not in_string(line, m.start()):
-                            stray.setdefault(path, []).append("%d:%s" % (n, old))
+                if "::" not in line and "namespace" not in line:
+                    continue
+                for m in pattern.finditer(line):
+                    if not in_string(line, m.start()):
+                        stray.setdefault(path, []).append("%d:%s" % (n, m.group(1) or m.group(2)))
         self.assertEqual(stray, {}, "these namespaces are nevr_<area> now (docs/standards/naming.md)")
 
     def test_every_namespace_is_nevr_or_the_games(self):

@@ -249,6 +249,143 @@ TEST(MicRingBuffer, StalledReaderIsBoundedByTheCapacityKeepingTheNewest) {
   EXPECT_EQ(std::vector<int16_t>(out, out + 4), (std::vector<int16_t>{3, 4, 5, 6}));
 }
 
+// #95: the ring reports how many samples it overwrote, so a slow reader and a slow capture can be told
+// apart in the log. The total is cumulative: a new stream (Reset) does not zero it.
+TEST(MicRingBuffer, DroppedSamplesCountsEveryOverwrittenSampleAndSurvivesReset) {
+  MicRingBuffer ring(4);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t three[] = {1, 2, 3};
+  ring.Push(three, 3);
+  EXPECT_EQ(ring.DroppedSamples(), 0u);
+  const int16_t five[] = {1, 2, 3, 4, 5};
+  EXPECT_TRUE(ring.Push(five, 5));  // 1 free slot, 4 overwritten
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  ring.Reset();
+  EXPECT_EQ(ring.DroppedSamples(), 4u);
+  const int16_t six[] = {1, 2, 3, 4, 5, 6};
+  ring.Push(six, 6);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // 4 fit, 2 overwritten
+  int16_t out[4] = {};
+  EXPECT_EQ(ring.Pop(out, 4), 4u);
+  EXPECT_EQ(ring.DroppedSamples(), 6u);  // reading drops nothing
+}
+
+TEST(MicRingBuffer, AZeroCapacityRingDropsEverythingItIsGiven) {
+  MicRingBuffer ring(0);
+  const int16_t three[] = {1, 2, 3};
+  EXPECT_TRUE(ring.Push(three, 3));
+  EXPECT_EQ(ring.DroppedSamples(), 3u);
+}
+
+namespace {
+MicFlowCounters Flow(uint64_t dropped, uint64_t reads, uint64_t samplesRead, uint64_t pushed) {
+  MicFlowCounters flow;
+  flow.droppedTotal = dropped;
+  flow.readCalls = reads;
+  flow.samplesRead = samplesRead;
+  flow.samplesPushed = pushed;
+  return flow;
+}
+}  // namespace
+
+// The warning line is counted instead of once per stream: the first overflow logs at once and carries the
+// samples dropped since the last line; later ones wait the interval and then carry what piled up.
+TEST(MicOverflowLogGate, FirstOverflowLogsThenWaitsTheIntervalAndCarriesTheAccumulatedCount) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 1000);
+  EXPECT_EQ(gate.Poll(Flow(0, 0, 0, 0), 1000).dropped, 0u);     // nothing dropped: nothing to say
+  EXPECT_EQ(gate.Poll(Flow(480, 1, 100, 580), 1010).dropped, 480u);  // first overflow logs immediately
+  EXPECT_EQ(gate.Poll(Flow(960, 1, 100, 1060), 1020).dropped, 0u);  // inside the interval
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 5999).dropped, 0u);  // 4989 ms after the line: inside
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 6010).dropped, 1440u);  // 5000 ms: 1920 - 480
+  EXPECT_EQ(gate.Poll(Flow(1920, 2, 200, 2120), 20000).dropped, 0u);  // nothing new: silent
+}
+
+TEST(MicOverflowLogGate, RebaseHidesDropsFromBeforeTheGameWasReadingAndResetLogsTheNextStreamAtOnce) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(9600, 0, 0, 9600), 50);  // dropped while nobody was listening
+  EXPECT_EQ(gate.Poll(Flow(9600, 0, 0, 9600), 100).dropped, 0u);
+  EXPECT_EQ(gate.Poll(Flow(10080, 1, 480, 10080), 110).dropped, 480u);  // only the drop after reading began
+  gate.Reset();                             // a new stream: its first overflow is not held back
+  gate.Rebase(Flow(10080, 1, 480, 10080), 150);
+  EXPECT_EQ(gate.Poll(Flow(10560, 2, 960, 10560), 200).dropped, 480u);  // inside the old interval
+}
+
+// #95: the line says what the game did in the window. A game that read, but less than capture produced, is
+// a slow reader; one that made no MicRead call is a stalled one. The old wording called both "not draining".
+TEST(MicOverflowLogGate, AReaderThatReadSomethingIsSlowAndOneThatReadNothingIsStalled) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 1000);
+  const MicOverflowReport slow = gate.Poll(Flow(211680, 3, 28800, 240480), 6016);
+  EXPECT_EQ(slow.dropped, 211680u);
+  EXPECT_EQ(slow.readCalls, 3u);
+  EXPECT_EQ(slow.samplesRead, 28800u);
+  EXPECT_EQ(slow.samplesPushed, 240480u);
+  EXPECT_FALSE(slow.readerStalled);
+  const MicOverflowReport stalled = gate.Poll(Flow(400000, 3, 28800, 428800), 11016);
+  EXPECT_EQ(stalled.dropped, 188320u);
+  EXPECT_EQ(stalled.readCalls, 0u);
+  EXPECT_TRUE(stalled.readerStalled);
+}
+
+// Spritz's review of #682: a game that read cleanly for a minute and then stalled must be reported as
+// stalled by the FIRST line. The gate is polled on every capture packet; while nothing is waiting to be
+// reported the window slides forward, so the healthy minute is not counted in the line that follows.
+TEST(MicOverflowLogGate, CleanReadsThenAStallAreReportedAsStalledByTheFirstLine) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 0);
+  uint64_t reads = 0;
+  uint64_t samplesRead = 0;
+  uint64_t pushed = 0;
+  for (uint64_t t = 1000; t <= 60000; t += 1000) {  // a minute of reads that keep up: nothing dropped
+    ++reads;
+    samplesRead += 48000;
+    pushed += 48000;
+    EXPECT_EQ(gate.Poll(Flow(0, reads, samplesRead, pushed), t).dropped, 0u);
+  }
+  pushed += 480;  // the reader stops: the ring fills and the next packet overflows
+  const MicOverflowReport first = gate.Poll(Flow(480, reads, samplesRead, pushed), 60010);
+  EXPECT_EQ(first.dropped, 480u);
+  EXPECT_EQ(first.readCalls, 0u) << "the healthy minute before the stall is counted in the stall's line";
+  EXPECT_TRUE(first.readerStalled);
+  EXPECT_LT(first.windowMs, 1000u) << "the window must start where the overflow started";
+}
+
+// While overflow is pending the window stays put, even when a read in between frees the ring for a moment:
+// a slow reader is reported with all of its reads in the window, not just the ones after the last clean packet.
+TEST(MicOverflowLogGate, APendingOverflowKeepsItsWindowOpenAcrossACleanPacket) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(0, 0, 0, 0), 0);
+  EXPECT_EQ(gate.Poll(Flow(480, 0, 0, 480), 100).dropped, 480u);  // first line at once
+  EXPECT_EQ(gate.Poll(Flow(960, 0, 0, 960), 200).dropped, 0u);    // inside the interval
+  EXPECT_EQ(gate.Poll(Flow(960, 1, 9600, 10560), 1000).dropped, 0u);  // a read, a clean packet: drops still pending
+  EXPECT_EQ(gate.Poll(Flow(1440, 1, 9600, 11040), 2000).dropped, 0u);
+  const MicOverflowReport report = gate.Poll(Flow(2400, 5, 48000, 40000), 5100);
+  EXPECT_EQ(report.dropped, 1920u);  // 2400 - 480
+  EXPECT_EQ(report.readCalls, 5u);   // every read since the first line
+  EXPECT_FALSE(report.readerStalled);
+  EXPECT_EQ(report.windowMs, 5000u);
+}
+
+// Every figure covers only the window since the previous line (or since the game started reading), so
+// the read counts and the window length can be compared with the drops beside them.
+TEST(MicOverflowLogGate, EachReportCoversOnlyTheWindowSinceTheLastLineOrTheRebase) {
+  MicOverflowLogGate gate(5000);
+  gate.Rebase(Flow(9600, 7, 6000, 15600), 2000);  // the game had already read 7 times before the window
+  const MicOverflowReport first = gate.Poll(Flow(9700, 8, 6100, 15800), 2400);
+  EXPECT_EQ(first.windowMs, 400u);
+  EXPECT_EQ(first.dropped, 100u);
+  EXPECT_EQ(first.readCalls, 1u);
+  EXPECT_EQ(first.samplesRead, 100u);
+  EXPECT_EQ(first.samplesPushed, 200u);
+  const MicOverflowReport second = gate.Poll(Flow(20000, 10, 6300, 26300), 7400);
+  EXPECT_EQ(second.windowMs, 5000u);
+  EXPECT_EQ(second.dropped, 10300u);
+  EXPECT_EQ(second.readCalls, 2u);
+  EXPECT_EQ(second.samplesRead, 200u);
+  EXPECT_EQ(second.samplesPushed, 10500u);
+}
+
 TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
   struct RatePair { uint32_t source; uint32_t target; size_t frames; };
   const RatePair rates[] = {

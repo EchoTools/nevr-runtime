@@ -98,7 +98,8 @@ func TestMatchmakerListenerBound(t *testing.T) {
 }
 
 // TestMatchmakerClientConnects requires conn=2, rather than any generic
-// connection, because conn=0 and conn=1 are the config and login connections.
+// connection, because conn=0 and conn=1 are the slots of the config and login
+// sockets (a socket's slot comes from the request target it asked for).
 // The conn=2 branch is the matchmaker path that reuses the authenticated login
 // session.
 func TestMatchmakerClientConnects(t *testing.T) {
@@ -138,7 +139,7 @@ func TestWindowedClientAvoidsOvrAndSpectatorStream(t *testing.T) {
 	for _, forbidden := range []string{
 		"Failed to initialize OVR library",
 		"Unable to load LibOVRRT",
-		"[NEVR.PATCH] Spectator-stream check NOP'd",
+		"spectatorstream_check",
 	} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("windowed client emitted forbidden %q\n%s", forbidden, output)

@@ -58,10 +58,40 @@ FATAL_PATTERNS = [
     r"\[NEVR\.FATAL\]",
     r"NetGame switching state \(from [^)]*, to (login failed|service unavailable|logged out)\)",
     r"Lost connection to the login service",
+    # The client was dropped by its lobby host: it leaves the session and no scenario step can
+    # continue (2026-10-18, suite 20261018T065159, party_data_receive: "R14NetClient: Destroy Peer
+    # 0 [...] (communication timeout)" then "Disconnected from server due to timeout"). Without
+    # this the first step's timeout-free wait hung the whole suite for 38 minutes (#674).
+    r"NetClientLobby switching state \(from [^)]*, to timed out\)",
+    r"Disconnected from server due to timeout",
 ]
 FATAL = re.compile("|".join(FATAL_PATTERNS))
 STATE = re.compile(r"NetGame switching state \(from [^)]*, to [^)]*\)")
+STATE_LINE = re.compile(
+    r"^(?:(?P<ts>\d{4}-\d\d-\d\dT[\d:.]+Z)\s.*?)?NetGame switching state \(from (?P<from>[^,)]*), to (?P<to>[^)]*)\)",
+    re.MULTILINE)
 NOTABLE = re.compile(r"\b(warn|error)\b.*")
+
+
+def state_timeline(text: str) -> list[dict]:
+    """Every NetGame state change in the console text, in order, with the timestamp of its line
+    (None when the line carries none). A slow run is read from these: where the time went."""
+    return [{"from": m["from"], "to": m["to"], "ts": m["ts"]} for m in STATE_LINE.finditer(ANSI.sub("", text))]
+
+
+def read_loadavg(path: pathlib.Path = pathlib.Path("/proc/loadavg")) -> str | None:
+    """The 1, 5 and 15 minute load averages as the kernel prints them; None when unreadable."""
+    try:
+        return " ".join(path.read_text().split()[:3])
+    except OSError:
+        return None
+
+
+def build_report(name: str, dll: pathlib.Path, passed: bool, restored: bool, loadavg_start: str | None,
+                 console_text: str, results: list[dict]) -> dict:
+    """The run's result.json: the verdict, the steps, the load at the start and every state change."""
+    return {"scenario": name, "dll": str(dll), "passed": passed, "dll_restored": restored,
+            "loadavg_start": loadavg_start, "states": state_timeline(console_text), "steps": results}
 
 
 class StepFailed(Exception):
@@ -149,9 +179,15 @@ class ConsoleLog:
         return f"last state: {states[-1] if states else 'none logged'}; last warnings/errors: {notable or 'none'}"
 
 
+# A fire's reply waits for the game's next frame. One frame can last a minute or more while the
+# client loads the social lobby (a 98 s level load was measured on 2026-10-18), so the reply wait is
+# generous: a false "no tick" aborts a scenario that would have passed (#674).
+REPLY_TIMEOUT_SECONDS = 130
+
+
 class Control:
     def __init__(self, port: int):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=REPLY_TIMEOUT_SECONDS)
         self.buffer = b""
 
     def call(self, command: dict) -> dict:
@@ -278,6 +314,30 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
+# The launcher's own pattern (tools/lib/game_install.sh ECHOVR_CMDLINE).
+GAME_CMDLINE = r"(^|[/\\])echovr\.exe( |$)"
+
+
+def game_pids() -> list[str]:
+    out = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", GAME_CMDLINE],
+                         capture_output=True, text=True)
+    return out.stdout.split()
+
+
+def wait_for_game_exit(timeout: float = 30.0) -> bool:
+    """The client can outlive the Wine server by a moment, and launch-client.sh refuses to start
+    beside a live echovr.exe (exit 4). Suite 20261018T061805 lost its invite scenario to exactly
+    that: the previous scenario's client was still up when the next launch ran (#674)."""
+    deadline = time.monotonic() + timeout
+    pids = game_pids()
+    while pids and time.monotonic() < deadline:
+        time.sleep(0.5)
+        pids = game_pids()
+    for pid in pids:
+        subprocess.run(["kill", "-9", pid], capture_output=True)
+    return not pids
+
+
 def wait_for_wineserver_exit() -> None:
     """Block until the prefix's wineserver has exited (`wineserver -w`). `-k` only signals it; a
     client launched while the old server is still going down started with a broken socket layer
@@ -292,8 +352,8 @@ def wait_for_wineserver_exit() -> None:
 
 
 class Run:
-    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path):
-        self.scenario, self.dll, self.out = scenario, dll, out
+    def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path, config: pathlib.Path | None = None):
+        self.scenario, self.dll, self.out, self.config = scenario, dll, out, config
         self.results: list[dict] = []
         self.console: ConsoleLog | None = None
         self.control: Control | None = None
@@ -325,7 +385,14 @@ class Run:
 
     def launch(self):
         launcher_out = self.out / "launch-client.out"
-        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
+        # -mp is the game's own multiplayer flag: with -windowed alone a client reaches the menu
+        # and waits for a hand on Play, so no scenario waiting for "in game" can ever pass (#674).
+        # --require-in-game arms launch-client.sh's own gate so the launcher also fails (in its log
+        # and exit code) if the client never entered multiplayer, not only if it never logged in.
+        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll), "--game-arg", "-mp",
+                   "--require-in-game"]
+        if self.config is not None:
+            command += ["--config", str(self.config)]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -346,6 +413,8 @@ class Run:
         env = dict(os.environ, WINEPREFIX=str(wineprefix()))
         subprocess.run(["wineserver", "-k"], env=env, capture_output=True)
         wait_for_wineserver_exit()
+        if not wait_for_game_exit():
+            print("scenario: killed a client that outlived its Wine server", flush=True)
         if self.launcher:
             try:
                 self.launcher.wait(timeout=90)
@@ -461,6 +530,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("scenario", type=pathlib.Path)
     parser.add_argument("--dll", type=pathlib.Path, default=DEFAULT_DLL)
     parser.add_argument("--out", type=pathlib.Path)
+    parser.add_argument("--config", type=pathlib.Path,
+                        help="a config.json whose directory holds the run's config.yaml (launch-client.sh --config), "
+                             "e.g. to run the suite with network.session_router: all (#708)")
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
@@ -472,21 +544,22 @@ def main(argv: list[str]) -> int:
     out = args.out or SCRATCH / f"{stamp}-{scenario['name']}"
     out.mkdir(parents=True, exist_ok=True)
 
-    run = Run(scenario, args.dll, out)
+    loadavg_start = read_loadavg()
+    run = Run(scenario, args.dll, out, args.config)
     try:
         passed = run.execute()
     finally:
         run.teardown()
     if run.console and run.console.path.exists():
         shutil.copy(run.console.path, out / "console.log")
+    console_text = (out / "console.log").read_text(errors="replace") if (out / "console.log").exists() else ""
     launcher_text = (out / "launch-client.out").read_text() if (out / "launch-client.out").exists() else ""
     game_log = re.search(r"=== game log: (\S+) ===", launcher_text)
     if game_log and pathlib.Path(game_log.group(1)).exists():
         shutil.copy(game_log.group(1), out / "game.jsonl")
     restored = "original BugSplat64.dll restored and verified" in launcher_text
 
-    report = {"scenario": scenario["name"], "dll": str(args.dll), "passed": passed,
-              "dll_restored": restored, "steps": run.results}
+    report = build_report(scenario["name"], args.dll, passed, restored, loadavg_start, console_text, run.results)
     (out / "result.json").write_text(json.dumps(report, indent=2))
     md = f"# scenario {scenario['name']}: {'PASS' if passed else 'FAIL'}\n\n{table(run.results)}\n"
     md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll restored: {restored}\n"

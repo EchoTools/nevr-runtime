@@ -1,5 +1,10 @@
 # Planning: releases by outcome, sprints by work
 
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+"NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14
+([RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174)) when, and only
+when, they appear in all capitals, as shown here.
+
 How work in this repo is planned and tracked on GitHub. It binds issues, PRs, branches and milestones. Planning
 drifts; the hygiene rules at the end are how it gets corrected, on a schedule, the same way every time.
 
@@ -57,13 +62,13 @@ Remaining points in a milestone divided by velocity is the number of sprints lef
 | Icebox | not scheduled | none |
 | Backlog | in the active milestone, not started | pointed |
 | Started | being worked | an owner is named |
-| Finished | PR open | capped `just verify` green on the PR head, output in the PR body |
-| Delivered | merged | `just verify` passes on `main` right after the merge, output recorded |
+| Finished | PR open | the quick check (AGENTS.md, "Builds") green on the PR head, output in the PR body |
+| Delivered | merged | merged to `main`; `just verify` runs on `main` when prepping a release, once per tip, output recorded |
 | Accepted | proven in real use | the owner or a tester confirmed it working, or the end-to-end check passed |
 | Rejected | failed acceptance | back to Started, with the failure quoted |
 
-No workflow runs on a pull request or a push, so the Finished and Delivered gates are the local capped
-`just verify`, not a CI status. CI runs by hand: `gh workflow run <file> --ref <branch>`.
+No workflow runs on a pull request or a push, so the Finished gate is the local capped quick check and the
+release-prep `just verify` on `main` is a local run, not a CI status. CI runs by hand: `gh workflow run <file> --ref <branch>`.
 
 Only Accepted points count toward velocity. Delivered is not done: merged code that nobody has seen work is not yet
 value.
@@ -79,7 +84,16 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 - An issue that a merged PR fixed is closed, with the PR linked.
 
 **PRs**
-- A PR links the issue it resolves (`Closes #N`), or says in its body why there is none.
+- A PR is opened only for an existing issue, and its body names it. The issue states the problem and its done-bar. The
+  body links the issue it resolves with a closing keyword (`Closes #N`, `Fixes #N` or `Resolves #N`), one line for each
+  issue. There is no "no issue" form: a fix that has no issue gets an issue first.
+  `.github/workflows/pr-issue-link-check.yml` (`tools/check_pr_issue_link.py`) fails a body that names none.
+  GitHub copies the body into the squash commit, so the issue closes when the PR merges.
+- `Refs #N` (or `Part of #N`, `Completes #N`) is only for a PR that leaves a named live check owed (a headset run, a
+  server run), and the body says what is still open. That check is a task line on the issue, and whoever does it closes
+  the issue with the evidence. A merged PR never leaves its issue open silently.
+- The review confirms that each linked issue is resolved by the diff; the body check only sees that a reference
+  exists.
 - A PR carries the same milestone as the issue it resolves.
 - A PR with no activity across a sprint is either picked up, rebased, or closed with the reason. A PR that is far behind
   `main` or conflicting is replaced by a focused PR rather than rebased wholesale.

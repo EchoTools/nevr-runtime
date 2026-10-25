@@ -54,6 +54,12 @@ struct PostLoadStats {
 };
 PostLoadStats PostLoadStatsView() noexcept;
 
+// How many distinct libpnsradmatchmaking images the game's dlopen has returned (a handle that differs from the
+// last one counts): 1 after the library loads once, 2 when the game unloaded it and mapped it again at another
+// address. The redirect hook installs once per process, so this is what the self-check compares it against
+// (src/quest/integration/production_steps.cpp, "matchmaking_reload_redirect").
+std::uint64_t MatchmakingImages() noexcept;
+
 }  // namespace nevr_quest::integration
 
 // Declared where the hook TU (built -fno-exceptions) can see it without pulling in exceptions

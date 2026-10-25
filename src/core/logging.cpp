@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <iomanip>
 #include <sstream>
 
@@ -83,10 +84,19 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
 // Log filtering, timestamps, and noise suppression are handled by the
 // log_filter plugin via the CLog::PrintfImpl hook, not here.
 
+// Set from nevr_boot_log_tee::Init() to Close(); read by every Log() call on any thread.
+static std::atomic<BootLogSink> g_bootLogSink{nullptr};
+
+void SetBootLogSink(BootLogSink sink) { g_bootLogSink.store(sink, std::memory_order_release); }
+
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  if (EchoVR::WriteLog != nullptr) {
+  if (const BootLogSink sink = g_bootLogSink.load(std::memory_order_acquire)) {
+    // The boot phase: the game's CLog does not exist yet (#495). A stack buffer, no heap.
+    char message[2048];
+    if (vsnprintf(message, sizeof(message), format, args) >= 0) sink(level, message);
+  } else if (EchoVR::WriteLog != nullptr) {
     EchoVR::WriteLog(level, 0, format, args);
   } else {
     // Game logging not available yet (early DllMain init) — fall back to stderr

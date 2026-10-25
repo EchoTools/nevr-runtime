@@ -106,6 +106,22 @@ extern NetGameSwitchStateFunc* NetGameSwitchState;
 typedef VOID NetGameScheduleReturnToLobbyFunc(PVOID pGame);
 extern NetGameScheduleReturnToLobbyFunc* NetGameScheduleReturnToLobby;
 
+/// A call for the game's own thread: fn(arg) runs after the net game state switch in progress.
+struct GameThreadCall {
+  PVOID arg;
+  VOID (*fn)(PVOID arg);
+};
+
+/// Queues a copy of `call` on the game's call queue at `queue`, the game object + 8 (echovr.exe
+/// 0x140104e70). NetGameScheduleReturnToLobby queues its callback through it.
+typedef VOID QueueGameThreadCallFunc(PVOID queue, GameThreadCall* call);
+extern QueueGameThreadCallFunc* QueueGameThreadCall;
+
+/// Begins multiplayer with the lobby request (echovr.exe 0x1400fddd0), what the main menu does after
+/// the login. `game` is the game object, the net game's second field.
+typedef VOID BeginMultiplayerLobbyFunc(PVOID game);
+extern BeginMultiplayerLobbyFunc* BeginMultiplayerLobby;
+
 /// The game's definition for GetProcAddress.
 /// Reference: https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getprocaddress
 typedef FARPROC GetProcAddressFunc(HMODULE hModule, LPCSTR lpProcName);

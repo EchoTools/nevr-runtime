@@ -20,12 +20,25 @@
 
 #include "runtime/patch/resource_override.h"
 #include "runtime/hook/symbol_corpus.h"
+#include "runtime/hook/hook_guard.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <utility>
 #include <vector>
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
+
+// After winsock2.h: asset_cache.h includes windows.h.
+#include "runtime/patch/asset_cache.h"
 
 #include "core/globals.h"
 #include "core/logging.h"
@@ -43,12 +56,29 @@ struct ResourceOverride {
     const void* data;       /* embedded data (not owned) or VirtualAlloc'd (owned) */
     uint64_t size;
     bool owned;             /* true if data was allocated and should be freed */
-    const char* label;      /* for logging */
+    std::string label;      /* for logging; owned: a caller's buffer may be gone by the time the game loads the resource (#703) */
     bool applied;           /* set to true after first replacement */
+    uint32_t in_flight;     /* game callbacks still using this replacement */
 };
 
-static std::vector<ResourceOverride>* g_overrides = nullptr;
+static std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> g_overrides;
 static uint64_t g_total_hits = 0;
+// The game callback can call back into this API, so never hold this mutex
+// while calling it. Deregistration waits for selected entries to leave it.
+static std::mutex g_overrides_mutex;
+static std::condition_variable g_overrides_idle;
+static std::mutex g_hook_install_mutex;
+constexpr DWORD kReentrantDeregisterExitCode = 0xE0000478;
+struct ActiveOverrideFrame {
+    ResourceOverride* selected;
+    ActiveOverrideFrame* previous;
+};
+static thread_local ActiveOverrideFrame* g_active_override = nullptr;
+static void (*g_fatal_line_sink)(const char*) = nullptr;
+// Not a measured limit: no callback has been observed to hold a lease this long. It exists so a blocked game
+// callback cannot hang plugin unload with nothing in the log; the timeout is reported as an Error below.
+static unsigned g_deregister_wait_ms = 30000;
+static unsigned long long g_deregister_timeouts = 0;
 
 /* ── Known asset hashes ───────────────────────────────────────────── */
 
@@ -59,61 +89,83 @@ constexpr uint64_t NAME_SPLASH_TEXTURE  = 0x1f72c5e0fc9fc8c0ULL;
 
 typedef void (__cdecl* AsyncIOCallback_fn)(void* callback_data);
 static AsyncIOCallback_fn g_orig = nullptr;
-static void* g_hook_target = nullptr;
+
+struct CallbackLease {
+    std::shared_ptr<ResourceOverride> selected;
+    ActiveOverrideFrame frame;
+
+    explicit CallbackLease(std::shared_ptr<ResourceOverride> entry)
+        : selected(std::move(entry)), frame{selected.get(), g_active_override} {
+        g_active_override = &frame;
+    }
+
+    ~CallbackLease() {
+        g_active_override = frame.previous;
+        if (selected) {
+            std::lock_guard<std::mutex> lock(g_overrides_mutex);
+            --selected->in_flight;
+            g_overrides_idle.notify_all();
+        }
+    }
+};
 
 static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
-    if (callback_data && g_overrides && !g_overrides->empty()) {
-        auto cbd = reinterpret_cast<uintptr_t>(callback_data);
-        void* resource = *reinterpret_cast<void**>(cbd + 0x08);
-        uint32_t buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
+    std::shared_ptr<ResourceOverride> selected;
+    AsyncIOCallback_fn original;
+    uint64_t type_hash = 0, name_hash = 0, orig_size = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        original = g_orig;
+        if (callback_data && g_overrides && !g_overrides->empty()) {
+            auto cbd = reinterpret_cast<uintptr_t>(callback_data);
+            void* resource = *reinterpret_cast<void**>(cbd + 0x08);
+            uint32_t buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
 
-        if (resource && buf_index == 0) {
-            auto res = reinterpret_cast<uintptr_t>(resource);
-            uint64_t name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
-            uint64_t type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
+            if (resource && buf_index == 0) {
+                auto res = reinterpret_cast<uintptr_t>(resource);
+                name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
+                type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
-            for (auto& ovr : *g_overrides) {
-                if (ovr.applied) continue;
-                if (ovr.name_hash != name_hash) continue;
-                if (ovr.type_hash != 0 && ovr.type_hash != type_hash) continue;
+                for (auto& ovr : *g_overrides) {
+                    if (ovr->applied) continue;
+                    if (ovr->name_hash != name_hash) continue;
+                    if (ovr->type_hash != 0 && ovr->type_hash != type_hash) continue;
 
-                /* Match — replace the buffer */
-                uint64_t orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                *reinterpret_cast<const void**>(cbd + 0x18) = ovr.data;
-                *reinterpret_cast<uint64_t*>(cbd + 0x20) = ovr.size;
-                ovr.applied = true;
-                g_total_hits++;
-
-                {
-                    // Resolve both hashes to human names the same way
-                    // RegisterResourceOverride does at registration time —
-                    // this line is the one that proves the override actually
-                    // fired, so it's the more important of the two to be
-                    // readable.
-                    char typeBuf[128], nameBuf[128];
-                    const char* typeName = EchoVR::LookupSymbolName(type_hash);
-                    const char* resName = EchoVR::LookupSymbolName(name_hash);
-                    snprintf(typeBuf, sizeof(typeBuf), "0x%016llx%s%s",
-                             static_cast<unsigned long long>(type_hash),
-                             typeName ? " (" : "", typeName ? typeName : "");
-                    if (typeName) strncat(typeBuf, ")", sizeof(typeBuf) - strlen(typeBuf) - 1);
-                    snprintf(nameBuf, sizeof(nameBuf), "0x%016llx%s%s",
-                             static_cast<unsigned long long>(name_hash),
-                             resName ? " (" : "", resName ? resName : "");
-                    if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
-                    Log(EchoVR::LogLevel::Info,
-                        "[NEVR.RESOURCE] override applied label=%s type=%s name=%s orig_bytes=%llu "
-                        "new_bytes=%llu",
-                        ovr.label, typeBuf, nameBuf,
-                        static_cast<unsigned long long>(orig_size),
-                        static_cast<unsigned long long>(ovr.size));
+                    /* Match — replace the buffer */
+                    orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
+                    *reinterpret_cast<const void**>(cbd + 0x18) = ovr->data;
+                    *reinterpret_cast<uint64_t*>(cbd + 0x20) = ovr->size;
+                    ovr->applied = true;
+                    ++ovr->in_flight;
+                    selected = ovr;
+                    g_total_hits++;
+                    break;
                 }
-                break;
             }
         }
     }
-
-    g_orig(callback_data);
+    CallbackLease lease(selected);
+    if (selected) {
+        // Resolve both hashes to human names the same way registration does.
+        char typeBuf[128], nameBuf[128];
+        const char* typeName = EchoVR::LookupSymbolName(type_hash);
+        const char* resName = EchoVR::LookupSymbolName(name_hash);
+        snprintf(typeBuf, sizeof(typeBuf), "0x%016llx%s%s",
+                 static_cast<unsigned long long>(type_hash),
+                 typeName ? " (" : "", typeName ? typeName : "");
+        if (typeName) strncat(typeBuf, ")", sizeof(typeBuf) - strlen(typeBuf) - 1);
+        snprintf(nameBuf, sizeof(nameBuf), "0x%016llx%s%s",
+                 static_cast<unsigned long long>(name_hash),
+                 resName ? " (" : "", resName ? resName : "");
+        if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] override applied label=%s type=%s name=%s orig_bytes=%llu "
+            "new_bytes=%llu",
+            selected->label.c_str(), typeBuf, nameBuf,
+            static_cast<unsigned long long>(orig_size),
+            static_cast<unsigned long long>(selected->size));
+    }
+    original(callback_data);
 }
 
 /* ── File loading helper ──────────────────────────────────────────── */
@@ -152,9 +204,62 @@ static void* LoadFileFromDisk(const char* path, uint64_t* out_size, DWORD* outEr
     return buf;
 }
 
+/* ── Cache helpers (#703) ─────────────────────────────────────────── */
+
+static std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return std::string();
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+/* Registers bytes the registry will own (VirtualAlloc'd copy). `source` is only for the log line. */
+static bool RegisterOwnedCopy(uint64_t type_hash, uint64_t name_hash, const uint8_t* bytes, size_t size,
+                              const std::string& label, const std::string& source) {
+    void* data = VirtualAlloc(NULL, size ? size : 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!data) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] cache override not registered label=%s reason=VirtualAlloc failed error=%lu",
+            label.c_str(), GetLastError());
+        return false;
+    }
+    if (size) memcpy(data, bytes, size);
+    auto ovr = std::make_shared<ResourceOverride>();
+    ovr->type_hash = type_hash;
+    ovr->name_hash = name_hash;
+    ovr->data = data;
+    ovr->size = size;
+    ovr->owned = true;
+    ovr->label = label;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) {
+            VirtualFree(data, 0, MEM_RELEASE);
+            return false;
+        }
+        g_overrides->push_back(ovr);
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] Registered file override: %s (%s, %llu bytes)",
+        label.c_str(), source.c_str(), static_cast<unsigned long long>(size));
+    return true;
+}
+
+static bool HasOverrideFor(uint64_t type_hash, uint64_t name_hash) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    if (!g_overrides) return false;
+    for (const auto& ovr : *g_overrides) {
+        if (ovr->name_hash == name_hash && (ovr->type_hash == 0 || ovr->type_hash == type_hash)) return true;
+    }
+    return false;
+}
+
 /* ── Lazy hook installation ───────────────────────────────────────── */
 
 static void EnsureHookInstalled() {
+    std::lock_guard<std::mutex> installLock(g_hook_install_mutex);
     // Memoizes SUCCESS (g_orig) only — without this latch, a persistent
     // failure (bad hook target) re-attempts and re-logs an identical Warning
     // on every RegisterResourceOverride call for the rest of the process
@@ -162,36 +267,66 @@ static void EnsureHookInstalled() {
     // again at the end of InstallResourceOverride, and again for every
     // plugin that later calls the exported NEVR_RegisterResourceOverride).
     static bool s_hookAttemptFailed = false;
-    if (g_orig) return;  /* Already installed */
+    {
+        std::lock_guard<std::mutex> registryLock(g_overrides_mutex);
+        if (g_orig) return;  /* Already installed */
+    }
     if (s_hookAttemptFailed) return;  /* Already tried and failed this session */
 
-    g_hook_target = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
+    // This DLL is loaded for the process lifetime by the game. MinHook cannot
+    // drain a callback that has entered our detour, and DllMain cannot wait for
+    // worker threads under the loader lock. Pin before exposing the detour so
+    // FreeLibrary cannot unmap it while a callback is active.
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            reinterpret_cast<LPCSTR>(&Hook_AsyncIOCallback), &self)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] runtime pin failed error=%lu — resource hook disabled",
+            GetLastError());
+        s_hookAttemptFailed = true;
+        return;
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] runtime pinned for resource hook");
 
-    MH_STATUS cst = MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
-                                   reinterpret_cast<void**>(&g_orig));
+    void* hookTarget = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
+    AsyncIOCallback_fn original = nullptr;
+
+    MH_STATUS cst = MH_CreateHook(hookTarget, reinterpret_cast<void*>(Hook_AsyncIOCallback),
+                                  reinterpret_cast<void**>(&original));
     if (cst != MH_OK) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.RESOURCE] hook create failed target=%p status=%s — resource overrides will not "
             "be applied",
-            g_hook_target, MH_StatusToString(cst));
+            hookTarget, MH_StatusToString(cst));
         s_hookAttemptFailed = true;
         return;
     }
 
-    MH_STATUS est = MH_EnableHook(g_hook_target);
+    // Publish the trampoline before enabling the target; a callback can begin
+    // as soon as MinHook restores the other threads.
+    {
+        std::lock_guard<std::mutex> registryLock(g_overrides_mutex);
+        g_orig = original;
+    }
+    MH_STATUS est = MH_EnableHook(hookTarget);
     if (est != MH_OK) {
-        MH_STATUS rst = MH_RemoveHook(g_hook_target);
+        MH_STATUS rst = MH_RemoveHook(hookTarget);
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.RESOURCE] hook enable failed target=%p status=%s cleanup=%s — resource overrides "
             "will not be applied",
-            g_hook_target, MH_StatusToString(est), MH_StatusToString(rst));
-        g_orig = nullptr;
+            hookTarget, MH_StatusToString(est), MH_StatusToString(rst));
+        {
+            std::lock_guard<std::mutex> registryLock(g_overrides_mutex);
+            g_orig = nullptr;
+        }
         s_hookAttemptFailed = true;
         return;
     }
 
-    Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", g_hook_target);
+    nevr_hook_guard::Record(hookTarget, "AsyncResourceIOCallback");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", hookTarget);
 }
 
 } // anonymous namespace
@@ -201,15 +336,18 @@ static void EnsureHookInstalled() {
 void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
                               const void* data, uint64_t size,
                               const char* label) {
-    if (!g_overrides) return;
-    ResourceOverride ovr = {};
-    ovr.type_hash = type_hash;
-    ovr.name_hash = name_hash;
-    ovr.data = data;
-    ovr.size = size;
-    ovr.owned = false;
-    ovr.label = label;
-    g_overrides->push_back(ovr);
+    auto ovr = std::make_shared<ResourceOverride>();
+    ovr->type_hash = type_hash;
+    ovr->name_hash = name_hash;
+    ovr->data = data;
+    ovr->size = size;
+    ovr->owned = false;
+    ovr->label = label ? label : "(null)";
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return;
+        g_overrides->push_back(ovr);
+    }
 
     /* Lazily install hook if this is the first override after init */
     EnsureHookInstalled();
@@ -227,48 +365,167 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
     if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] Registered embedded override: %s (type=%s name=%s, %llu bytes)",
-        label,
+        ovr->label.c_str(),
         typeBuf,
         nameBuf,
         static_cast<unsigned long long>(size));
 }
 
-void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
-                                      const char* file_path,
-                                      const char* label) {
-    if (!g_overrides) return;
+static bool RegisterResourceOverrideFromFileImpl(uint64_t type_hash, uint64_t name_hash,
+                                                  const char* file_path,
+                                                  const char* label) {
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return false;
+    }
     uint64_t size = 0;
     DWORD err = 0;
     void* data = LoadFileFromDisk(file_path, &size, &err);
     if (!data) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.RESOURCE] override file load failed path=%s error=%lu", file_path, err);
-        return;
+        return false;
     }
-    ResourceOverride ovr = {};
-    ovr.type_hash = type_hash;
-    ovr.name_hash = name_hash;
-    ovr.data = data;
-    ovr.size = size;
-    ovr.owned = true;
-    ovr.label = label;
-    g_overrides->push_back(ovr);
+    auto ovr = std::make_shared<ResourceOverride>();
+    ovr->type_hash = type_hash;
+    ovr->name_hash = name_hash;
+    ovr->data = data;
+    ovr->size = size;
+    ovr->owned = true;
+    ovr->label = label ? label : "(null)";
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) {
+            VirtualFree(data, 0, MEM_RELEASE);
+            return false;
+        }
+        g_overrides->push_back(ovr);
+    }
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] Registered file override: %s (%s, %llu bytes)",
-        label, file_path, static_cast<unsigned long long>(size));
+        ovr->label.c_str(), file_path, static_cast<unsigned long long>(size));
+    return true;
 }
 
-void InstallResourceOverride() {
-    g_overrides = new std::vector<ResourceOverride>();
-    size_t overridesFailed = 0;
+void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
+                                      const char* file_path,
+                                      const char* label) {
+    RegisterResourceOverrideFromFileImpl(type_hash, name_hash, file_path, label);
+}
 
-    /* ── Register built-in overrides ──────────────────────────────── */
-
-    /* Splash screen texture (EchoVRCE branding) */
+/* The EchoVRCE splash texture, unless the cache already supplies that resource. */
+static void RegisterBuiltInSplash() {
+    if (HasOverrideFor(TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE)) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] built-in splash_texture not registered reason=a cached override covers it");
+        return;
+    }
     RegisterResourceOverride(
         TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE,
         kSplashDDS, kSplashDDS_len,
         "splash_texture");
+}
+
+size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir) {
+    return RegisterCachedResourceOverrides(cache_dir, nevr_asset_cache::kDefaultCapBytes);
+}
+
+size_t RegisterCachedResourceOverrides(const wchar_t* cache_dir, uint64_t cap_bytes) {
+    const std::wstring dir = cache_dir ? cache_dir : L"";
+    if (dir.empty()) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] cache disabled reason=no cache directory (LOCALAPPDATA unset)");
+        return 0;
+    }
+    const std::string dirUtf8 = WideToUtf8(dir);
+    const nevr_asset_cache::IndexResult index = nevr_asset_cache::ReadIndex(dir);
+    if (!index.present) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] cache init dir=%s entries=0 loaded=0 refused=0 missing=0 reason=no index.json",
+            dirUtf8.c_str());
+        return 0;
+    }
+    if (!index.ok) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] cache index unusable dir=%s reason=%s — no cached override is applied",
+            dirUtf8.c_str(), index.error.c_str());
+        return 0;
+    }
+    for (const std::string& why : index.skipped) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] cache index entry ignored dir=%s reason=%s",
+            dirUtf8.c_str(), why.c_str());
+    }
+    size_t loaded = 0, refused = 0, missing = 0;
+    std::set<std::string> referenced;
+    for (const nevr_asset_cache::IndexEntry& entry : index.entries) {
+        referenced.insert(entry.sha256);
+        const std::string label = entry.label.empty() ? "cache:" + entry.sha256.substr(0, 12) : entry.label;
+        const std::string blob = WideToUtf8(nevr_asset_cache::BlobPath(dir, entry.sha256));
+        nevr_asset_cache::LoadResult r = nevr_asset_cache::Load(dir, entry.sha256);
+        switch (r.status) {
+        case nevr_asset_cache::LoadStatus::Hit:
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.RESOURCE] cache hit sha256=%s bytes=%llu type=0x%016llx name=0x%016llx label=%s",
+                entry.sha256.c_str(), static_cast<unsigned long long>(r.bytes.size()),
+                static_cast<unsigned long long>(entry.typeHash), static_cast<unsigned long long>(entry.nameHash),
+                label.c_str());
+            if (RegisterOwnedCopy(entry.typeHash, entry.nameHash, r.bytes.data(), r.bytes.size(), label, blob)) ++loaded;
+            break;
+        case nevr_asset_cache::LoadStatus::HashMismatch:
+            ++refused;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] cache refused reason=sha256 mismatch expected=%s actual=%s path=%s label=%s",
+                r.expectedSha256.c_str(), r.actualSha256.c_str(), blob.c_str(), label.c_str());
+            break;
+        case nevr_asset_cache::LoadStatus::Missing:
+            ++missing;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] cache miss reason=blob not in cache sha256=%s path=%s label=%s",
+                entry.sha256.c_str(), blob.c_str(), label.c_str());
+            break;
+        default:
+            ++refused;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] cache refused reason=%s sha256=%s path=%s error=%lu label=%s",
+                r.status == nevr_asset_cache::LoadStatus::TooLarge ? "blob over the size limit" : "blob unreadable",
+                entry.sha256.c_str(), blob.c_str(), r.error, label.c_str());
+            break;
+        }
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] cache init dir=%s entries=%zu loaded=%zu refused=%zu missing=%zu",
+        dirUtf8.c_str(), index.entries.size(), loaded, refused, missing);
+
+    const nevr_asset_cache::EvictReport ev =
+        nevr_asset_cache::Evict(dir, cap_bytes, referenced);
+    Log(ev.overCapAllReferenced ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] cache size blob_bytes_before=%llu blob_bytes_after=%llu cap=%llu evicted=%u "
+        "stale_temps_removed=%u over_cap_all_referenced=%s",
+        static_cast<unsigned long long>(ev.blobBytesBefore), static_cast<unsigned long long>(ev.blobBytesAfter),
+        static_cast<unsigned long long>(cap_bytes), ev.blobsEvicted, ev.staleTempsRemoved,
+        ev.overCapAllReferenced ? "true" : "false");
+    return loaded;
+}
+
+/* Overrides from the asset cache come first: a cached override for a resource the built-in also covers (the
+ * splash) wins, and the built-in is then not registered at all, so shutdown does not warn that it was never
+ * applied. */
+static void RegisterInitialOverrides(const wchar_t* cache_dir) {
+    RegisterCachedResourceOverrides(cache_dir);
+    RegisterBuiltInSplash();
+}
+
+void InstallResourceOverride() {
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (g_overrides) return;
+        g_overrides = std::make_unique<std::vector<std::shared_ptr<ResourceOverride>>>();
+    }
+    size_t overridesFailed = 0;
+
+    /* ── Register built-in overrides ──────────────────────────────── */
+
+    RegisterInitialOverrides(nevr_asset_cache::DefaultDir().c_str());
 
     /* ── Scan _overrides/ directory for additional files ──────────── */
 
@@ -305,35 +562,39 @@ void InstallResourceOverride() {
 
             char filePath[MAX_PATH];
             snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
-            // RegisterResourceOverrideFromFile only push_backs on success and
-            // already logged the specific reason on failure above — comparing
-            // sizes before/after is enough to count failures for the summary
-            // below without changing that function's signature.
-            const size_t beforeCount = g_overrides->size();
-            RegisterResourceOverrideFromFile(type_h, name_h, filePath, name);
-            if (g_overrides->size() == beforeCount) overridesFailed++;
+            if (!RegisterResourceOverrideFromFileImpl(type_h, name_h, filePath, name)) {
+                overridesFailed++;
+            }
         } while (FindNextFileA(hFind, &fd));
         FindClose(hFind);
     }
 
     /* Install hook if overrides exist; otherwise keep g_overrides alive
      * for plugins that register overrides later via the exported API. */
-    if (!g_overrides->empty()) {
+    size_t registered;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        registered = g_overrides->size();
+    }
+    if (registered != 0) {
         EnsureHookInstalled();
     }
 
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] init complete overrides_registered=%zu overrides_failed=%zu",
-        g_overrides->size(), overridesFailed);
+        registered, overridesFailed);
 }
 
 void ResetResourceOverrides() {
-    if (!g_overrides) return;
     uint64_t count = 0;
-    for (auto& ovr : *g_overrides) {
-        if (ovr.applied) {
-            ovr.applied = false;
-            count++;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return;
+        for (auto& ovr : *g_overrides) {
+            if (ovr->applied) {
+                ovr->applied = false;
+                count++;
+            }
         }
     }
     if (count > 0) {
@@ -343,72 +604,134 @@ void ResetResourceOverrides() {
     }
 }
 
-void ShutdownResourceOverride() {
-    const bool hookWasInstalled = (g_hook_target && g_orig);
-    if (hookWasInstalled) {
-        MH_DisableHook(g_hook_target);
-        MH_RemoveHook(g_hook_target);
-        g_hook_target = nullptr;
-        g_orig = nullptr;
-    }
+void SetResourceOverrideFatalLineSink(void (*sink)(const char* line)) {
+    g_fatal_line_sink = sink;
+}
 
-    uint64_t freed = 0;
-    uint64_t neverApplied = 0;
-    if (g_overrides) {
-        freed = g_overrides->size();
-        for (auto& ovr : *g_overrides) {
-            if (!ovr.applied) {
-                // A registered-but-never-matched override (wrong hash, or the
-                // expected resource genuinely never loaded this session) used
-                // to get the same silent treatment as one that worked.
-                neverApplied++;
-                Log(EchoVR::LogLevel::Warning,
-                    "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was "
-                    "never requested this session",
-                    ovr.label, static_cast<unsigned long long>(ovr.name_hash));
-            }
-            if (ovr.owned && ovr.data) {
-                VirtualFree(const_cast<void*>(ovr.data), 0, MEM_RELEASE);
-            }
+ResourceOverrideShutdownReport ShutdownResourceOverride() {
+    ResourceOverrideShutdownReport report = {};
+    uint64_t owned_buffers_process_lifetime = 0;
+    std::unique_ptr<std::vector<std::shared_ptr<ResourceOverride>>> released;
+    {
+        std::lock_guard<std::mutex> lock(g_overrides_mutex);
+        if (!g_overrides) return report;
+        report.registered = g_overrides->size();
+        report.hook_installed = g_orig != nullptr;
+        for (const auto& ovr : *g_overrides) {
+            if (report.hook_installed && ovr->owned) ++owned_buffers_process_lifetime;
+            if (ovr->applied) continue;
+            ++report.never_applied;
+            // A registered-but-never-matched override (wrong hash, or the expected resource genuinely never
+            // loaded this session) must not read the same as one that worked.
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was never requested "
+                "this session",
+                ovr->label.c_str(), static_cast<unsigned long long>(ovr->name_hash));
         }
-        delete g_overrides;
-        g_overrides = nullptr;
+        // With the hook live the module is pinned and a callback may be running: keep the registry. With no
+        // hook nothing can reach the buffers, so release them.
+        if (!report.hook_installed) released = std::move(g_overrides);
     }
-
+    if (released) {
+        for (const auto& ovr : *released) {
+            if (ovr->owned && ovr->data) VirtualFree(const_cast<void*>(ovr->data), 0, MEM_RELEASE);
+        }
+    }
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] shutdown complete overrides_freed=%llu overrides_never_applied=%llu "
-        "hook_removed=%s",
-        static_cast<unsigned long long>(freed), static_cast<unsigned long long>(neverApplied),
-        hookWasInstalled ? "true" : "false");
+        "[NEVR.RESOURCE] shutdown complete overrides_registered=%llu overrides_never_applied=%llu hook_installed=%s "
+        "registry_released=%s owned_buffers_process_lifetime=%llu",
+        static_cast<unsigned long long>(report.registered), static_cast<unsigned long long>(report.never_applied),
+        report.hook_installed ? "true" : "false", report.hook_installed ? "false" : "true",
+        static_cast<unsigned long long>(owned_buffers_process_lifetime));
+    return report;
 }
 
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
+    std::unique_lock<std::mutex> lock(g_overrides_mutex);
     if (!g_overrides) return;
     auto start = reinterpret_cast<uintptr_t>(data_start);
     auto end = reinterpret_cast<uintptr_t>(data_end);
-    uint64_t removed = 0;
+    std::vector<std::shared_ptr<ResourceOverride>> retired;
 
     auto it = g_overrides->begin();
     while (it != g_overrides->end()) {
-        auto ptr = reinterpret_cast<uintptr_t>(it->data);
+        auto ptr = reinterpret_cast<uintptr_t>((*it)->data);
         if (ptr >= start && ptr < end) {
-            /* Free owned file-based data before removing */
-            if (it->owned && it->data) {
-                VirtualFree(const_cast<void*>(it->data), 0, MEM_RELEASE);
-            }
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.RESOURCE] Deregistered override: %s", it->label);
+            retired.push_back(*it);
             it = g_overrides->erase(it);
-            removed++;
         } else {
             ++it;
         }
     }
 
-    if (removed > 0) {
+    for (auto* frame = g_active_override; frame; frame = frame->previous) {
+        for (const auto& ovr : retired) {
+            if (frame->selected != ovr.get()) continue;
+            // The void plugin API cannot safely return while the caller may
+            // unload bytes that this callback still uses. Log() allocates and
+            // takes locks, and this can run with arbitrary game/plugin locks
+            // held, so the one record goes out through a raw, non-allocating
+            // sink (the crash record's WriteFile path) before the process ends.
+            char line[192];
+            snprintf(line, sizeof(line),
+                     "[NEVR.RESOURCE] FATAL reentrant deregistration: label=%s was deregistered from inside its own "
+                     "game callback; terminating with exit code 0x%lX",
+                     ovr->label.c_str(), static_cast<unsigned long>(kReentrantDeregisterExitCode));
+            if (g_fatal_line_sink) {
+                g_fatal_line_sink(line);
+            } else {
+                fputs(line, stderr);
+                fputc('\n', stderr);
+                fflush(stderr);
+            }
+            TerminateProcess(GetCurrentProcess(), kReentrantDeregisterExitCode);
+            std::abort();
+        }
+    }
+
+    // Future callbacks cannot select these entries. The game callback may
+    // still be reading their bytes, so wait without holding the registry lock,
+    // and say so: an unattributed wait looks like a hang.
+    auto busy = [&] {
+        for (const auto& ovr : retired) {
+            if (ovr->in_flight != 0) return true;
+        }
+        return false;
+    };
+    bool timedOut = false;
+    if (busy()) {
+        uint32_t inFlight = 0;
+        for (const auto& ovr : retired) inFlight += ovr->in_flight;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] deregistration waiting for %u in-flight game callback(s) first_label=%s bound_ms=%u",
+            inFlight, retired.front()->label.c_str(), g_deregister_wait_ms);
+        timedOut = !g_overrides_idle.wait_for(lock, std::chrono::milliseconds(g_deregister_wait_ms),
+                                              [&] { return !busy(); });
+        if (timedOut) ++g_deregister_timeouts;
+    }
+    lock.unlock();
+    if (timedOut) {
+        // Freeing now would hand the game's callback freed memory. The entries are already out of the registry,
+        // so nothing new selects them; the owned buffers are leaked on purpose and the caller is told.
+        for (const auto& ovr : retired) {
+            Log(EchoVR::LogLevel::Error,
+                "[NEVR.RESOURCE] deregistration gave up after %u ms with the game callback still running: label=%s "
+                "buffer %s; the plugin's bytes may still be read",
+                g_deregister_wait_ms, ovr->label.c_str(), ovr->owned ? "leaked" : "not owned here");
+        }
+        return;
+    }
+    for (const auto& ovr : retired) {
+        if (ovr->owned && ovr->data) {
+            VirtualFree(const_cast<void*>(ovr->data), 0, MEM_RELEASE);
+        }
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] Deregistered override: %s", ovr->label.c_str());
+    }
+    if (!retired.empty()) {
         Log(EchoVR::LogLevel::Info,
             "[NEVR.RESOURCE] Deregistered %llu override(s)",
-            static_cast<unsigned long long>(removed));
+            static_cast<unsigned long long>(retired.size()));
     }
 }
 
@@ -432,3 +755,30 @@ void NEVR_DeregisterResourceOverrides(const void* data_start,
 }
 
 } /* extern "C" */
+
+#ifdef NEVR_TEST_HOOKS
+void TestHook_InitResourceOverrides(void (*original)(void*)) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    g_overrides = std::make_unique<std::vector<std::shared_ptr<ResourceOverride>>>();
+    g_orig = original;
+}
+
+void TestHook_RegisterInitialOverrides(const wchar_t* cache_dir) { RegisterInitialOverrides(cache_dir); }
+void TestHook_SetDeregisterWaitMs(unsigned ms) { g_deregister_wait_ms = ms; }
+unsigned long long TestHook_DeregisterTimeouts() { return g_deregister_timeouts; }
+
+void TestHook_SetOriginal(void (*original)(void*)) {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    g_orig = original;
+}
+
+void TestHook_RunResourceCallback(void* callback_data) {
+    Hook_AsyncIOCallback(callback_data);
+}
+
+void TestHook_CloseResourceOverrides() {
+    std::lock_guard<std::mutex> lock(g_overrides_mutex);
+    g_overrides.reset();
+    g_orig = nullptr;
+}
+#endif

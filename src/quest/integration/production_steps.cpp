@@ -27,6 +27,7 @@
 #include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
+#include "quest/integration/self_check_wiring.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
@@ -35,6 +36,11 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/friend_request_check.h"
+#include "runtime/compat/party_leave_check.h"
+#include "runtime/compat/party_share_check.h"
+#include "runtime/compat/self_check.h"
+#include "runtime/compat/status_redirect_check.h"
 #include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -120,10 +126,22 @@ nevr_quest::LogLevel MapAuth(nevr::auth::LogLevel level) {
 nevr::quest_auth::Snapshot AuthSnapshot() {
   nevr::quest_auth::Snapshot snap;
   nevr::quest_auth::QuestTokenAuth* const auth = R().auth.load(std::memory_order_acquire);
-  if (auth == nullptr) return snap;  // Starting
+  if (auth == nullptr) {
+    if (R().identity && R().identity->Terminal()) snap.readiness = nevr::quest_auth::Readiness::Failed;
+    return snap;
+  }
   snap = auth->Get();
   snap.access_token = auth->Token();  // empty once the access token is past its expiry
   return snap;
+}
+
+void PublishTokenAuthState(const nevr::quest_auth::Snapshot& snap) {
+  Runtime& rt = R();
+  if (rt.identity) rt.identity->Observe(snap);
+  const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
+  if (rt.loginGate.exchange(gate) != gate) {
+    if (quest_net::SessionBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
+  }
 }
 
 // Logs the token session's readiness whenever it changes (stage line `token_auth_state`), until shutdown.
@@ -132,12 +150,13 @@ nevr::quest_auth::Snapshot AuthSnapshot() {
 void PollTokenAuthState() {
   Runtime& rt = R();
   int last = -1;
+  int lastHold = -1;
   std::uint64_t lastDropped = 0, lastUnmatched = 0;
   for (;;) {
     const nevr::quest_auth::Snapshot snap = AuthSnapshot();
     // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
     // token that ran out without a readiness change.
-    if (rt.identity) rt.identity->Observe(snap);
+    PublishTokenAuthState(snap);
     // The held login connection opens when the account appears and closes when it will not (router gate).
     // One structured line each time the router has dropped more Unrequires (a drop is deliberate; see drop_report.h).
     if (quest_net::SessionBridge* const reporting = rt.bridge.load(std::memory_order_acquire)) {
@@ -152,10 +171,6 @@ void PollTokenAuthState() {
                              {"unmatched_embedded_since_last", static_cast<long long>(unmatchedDelta)}});
       }
     }
-    const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
-    if (rt.loginGate.exchange(gate) != gate) {
-      if (quest_net::SessionBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
-    }
     if (static_cast<int>(snap.readiness) != last) {
       last = static_cast<int>(snap.readiness);
       const bool bad = snap.readiness == nevr::quest_auth::Readiness::Failed ||
@@ -163,6 +178,12 @@ void PollTokenAuthState() {
       sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
                           {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
     }
+    // The login answers' hold (#581), one line each time it changes and on the first poll: "held" while token auth
+    // has a token coming without the player, "answered" otherwise (the game then gets its answers and, with the
+    // identity not ready, fails the login on its own path, the screen the sign-in code is written onto).
+    TokenIdentitySource::ReportHold(TokenIdentitySource::HoldsFor(snap), nevr::quest_auth::ReadinessName(snap.readiness),
+                                    &lastHold);
+    nevr_self_check::Flush();  // probes and queued results, every poll (cheap: nothing is sent before LoginSuccess)
     std::unique_lock<std::mutex> lock(rt.pollMutex);
     if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
   }
@@ -170,9 +191,16 @@ void PollTokenAuthState() {
 
 // --- bridge --------------------------------------------------------------------------------------
 
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len);  // below
+
 bool SendSocialFrame(const std::string& frame) {
   quest_net::SessionBridge* const bridge = R().bridge.load(std::memory_order_acquire);
-  return bridge != nullptr && bridge->SendToLogin(frame);
+  const bool sent = bridge != nullptr && bridge->SendToLogin(frame);
+  if (sent) {
+    // A request the facade sent is not shown to the frame tap; the party_data_share check pairs its answer with it.
+    ObserveForSelfChecks(false, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());
+  }
+  return sent;
 }
 
 std::uint64_t SteadySeconds() {
@@ -249,11 +277,42 @@ ActionResult LoginAction() noexcept {
   }
 }
 
+void SelfCheckLog(const nevr_self_check::LogRecord& record) {
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "self_check",
+                      {{"check", record.name.c_str()}, {"pass", record.pass ? 1 : 0},
+                       {"expected", record.expected.c_str()}, {"observed", record.observed.c_str()}});
+}
+
+// Self-check "party_data_share" (#398): hands each message of a frame to the check, which pairs the service's
+// answers (server to game) with the requests that were sent (game to server, and the facade's own through
+// SendSocialFrame, which the frame tap does not show). Runs on the thread that carries the frame: the frame
+// tap's (the router's) for the tap, the facade's caller for a request. It reads a frame's bytes and calls no game
+// code; it is not reached from the redirector's hooked call.
+void ObserveForSelfChecks(bool serverToGame, const std::uint8_t* data, std::size_t len) {
+  if (!nevr_self_check::Enabled()) return;
+  const std::string frame(reinterpret_cast<const char*>(data), len);  // ReadMessage takes a std::string
+  std::size_t offset = 0;
+  for (;;) {
+    nevr_evr_codec::Message message;
+    if (nevr_evr_codec::ReadMessage(frame, offset, &message) != nevr_evr_codec::ReadStatus::Ok) return;
+    if (serverToGame) {
+      nevr_party_share_check::OnServerMessage(message.symbol);
+      nevr_party_leave_check::OnServerMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+      nevr_friend_request_check::OnServerMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+    } else {
+      nevr_party_share_check::OnClientMessage(message.symbol, message.payload, static_cast<std::size_t>(message.length));
+    }
+    offset += nevr_evr_codec::kHeaderSize + static_cast<std::size_t>(message.length);
+  }
+}
+
 ActionResult MatchmakingAction() noexcept {
   try {
     const sentinel::GotStatus status = nevr_quest::redirect::InstallMatchmakingRedirect();
     switch (status) {
-      case sentinel::GotStatus::kOk: return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
+      case sentinel::GotStatus::kOk:
+        NoteMatchmakingRedirectInstalled();
+        return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
       case sentinel::GotStatus::kAlreadyInstalled:
         return Staged("matchmaking_redirect_installed", {Settle::kDone, "already_installed"});
       case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
@@ -331,6 +390,9 @@ class ProductionSteps final : public Steps {
         if (!created) {
           sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
                               {{"status", "failed"}, {"class", "create_failed"}});
+          nevr::quest_auth::Snapshot failed;
+          failed.readiness = nevr::quest_auth::Readiness::Failed;
+          PublishTokenAuthState(failed);
           return;
         }
         nevr::quest_auth::QuestTokenAuth* const auth = created.release();  // process lifetime
@@ -339,6 +401,9 @@ class ProductionSteps final : public Steps {
       } catch (const std::exception&) {
         sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
                             {{"status", "failed"}, {"class", "start_threw"}});
+        nevr::quest_auth::Snapshot failed;
+        failed.readiness = nevr::quest_auth::Readiness::Failed;
+        PublishTokenAuthState(failed);
         return;
       }
       PollTokenAuthState();
@@ -349,6 +414,24 @@ class ProductionSteps final : public Steps {
 
   bool InstallObbSkip(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallObbSkipHook(countersRegistered);
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallProcessEnd() override {
+    const bool ok = nevr_quest::integration::InstallProcessEndHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallPermissionWait() override {
+    const bool ok = nevr_quest::integration::InstallPermissionWaitHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
+  bool InstallVkExtWindow() override {
+    const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }
@@ -370,6 +453,21 @@ class ProductionSteps final : public Steps {
     quest_net::SessionBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
     config.subscribeFriendList = rt.socialWanted;
+    {
+      // Self-checks (#451) are on in every build: each run-card check's result goes out on the login connection
+      // as the user the service names at LoginSuccess. The runtime adds nothing to the connection for it.
+      SelfCheckHooks hooks;
+      hooks.sender = &SendSocialFrame;
+      hooks.log = &SelfCheckLog;
+      hooks.build = NEVR_QUEST_PROJECT_VERSION;
+      ApplySelfCheck(&config.tap, hooks);
+      // The process ends when the game's android_main returns (#621): its report goes out first (best effort).
+      nevr_quest::integration::SetProcessEndCallback(&ReportAndroidMainReturned);
+      nevr_status_redirect_check::Register(&nevr_status_redirect_check::ProcessProbe);  // #408
+      nevr_self_check::Register({"matchmaking_reload_redirect",
+                                 "the matchmaking redirect is installed on every libpnsradmatchmaking image the game mapped (installs >= images)",
+                                 &MatchmakingReloadProbe});
+    }
     config.connector = rt.connector.get();
     config.log = RouterLog();
     config.loginGate = [] { return static_cast<nevr_session_router::LoginGate>(R().loginGate.load(std::memory_order_acquire)); };
@@ -382,6 +480,7 @@ class ProductionSteps final : public Steps {
     };
     if (rt.socialWanted) {
       config.tap.observe = [](bool serverToGame, const std::uint8_t* data, std::size_t len) {
+        ObserveForSelfChecks(serverToGame, data, len);
         quest_social::ObserveFrames(quest_social::ProductionPorts(),
                                     serverToGame ? quest_social::Direction::kServerToGame
                                                  : quest_social::Direction::kGameToServer,
@@ -425,7 +524,8 @@ class ProductionSteps final : public Steps {
     const char* detail = "unknown";
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail,
                                                               sentinel::ActiveConfig().effective.presenceNames,
-                                                              sentinel::ActiveConfig().effective.presenceLocal);
+                                                              sentinel::ActiveConfig().effective.presenceLocal,
+                                                              sentinel::ActiveConfig().effective.uiEventProbe);
     detail_ = detail;
     // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
     if (ok) R().socialLevel.store(nevr_social_party::kSocialLevel);

@@ -13,15 +13,17 @@
 //
 // Login: the bridge injects NOTHING. On Quest the game's own login (rewritten in place, PR #221) is the only
 // login, so Config has no login builder and the router runs with its injection options at their defaults.
-// The game's LoginRequest is relayed as the first frame of the login session; a second one here would give
-// the service two logins on one session.
+// The game's LoginRequest is relayed as the game sent it, after the frames queued before it (a config request
+// the game sent first goes ahead of it); a second one here would give the service two logins on one session.
 //
-// A held login. While the player has not signed in there is no account token. The login connection (the
-// game's long-lived, silent one) must not fail then: Config::loginGate says whether the account is
-// available, and while it answers Awaiting the router keeps the login connection open without a remote
-// (and the loopback server exempts it from the idle close). The owner calls ReevaluateLoginGate() when
-// the gate's answer changes: Ready opens the remote and the game's login goes through, Refused closes
-// the connection. A config or matchmaker connection with no token still fails at once.
+// A held session. While the player has not signed in there is no account token. The login connection (the
+// game's long-lived, silent one) must not fail then, and neither does the config connection beside it:
+// Config::loginGate says whether the account is available, and while it answers Awaiting the router keeps
+// the session without a remote when the login connection opened it (a config connection opens its remote at
+// once and is refused when there is no account, #704), and queues what the connections send (and the
+// loopback server exempts the login connection from the idle close). The owner calls ReevaluateLoginGate()
+// when the gate's answer changes: Ready opens the remote and the queued frames and the game's login go
+// through, Refused closes every connection on the session.
 //
 // Frame tap and side channel (the social facade): Config::tap sees every frame the bridge relays, in both
 // directions, and the moment the service accepts the login (a server-to-game LoginSuccess). SendToLogin()
@@ -71,7 +73,7 @@ class SessionBridge {
     // replaces), so the bridge asks, exactly as the PC bridge does after LoginSuccess.
     bool subscribeFriendList = false;
     nevr_session_router::LogSink log;
-    // Whether the account the login needs is available (see "A held login"). Null: always available.
+    // Whether the account the login needs is available (see "A held session"). Null: always available.
     // Called with the router lock held: a lock-free read of a flag the owner keeps current.
     nevr_session_router::LoginGateFn loginGate;
     FrameTapSinks tap;                                      // consumers of the relayed frames
@@ -101,6 +103,10 @@ class SessionBridge {
   bool LoginRemovedDue() const { return router_->GetStats().loginRemovedDue; }
   // Login-removed notices sent so far.
   std::uint64_t LoginsRemoved() const { return router_->GetStats().loginsRemoved; }
+  // Game connections the router has counted so far. It counts one only after the upgrade response is on the
+  // wire, and a connection's role is its place in this count, so a client that connects a second socket right
+  // after the first one's 101 must wait on this first.
+  std::size_t ConnectionsCounted() const { return router_->GetStats().nextConnIdx; }
   // Login connections currently held for the account (0 or 1 in practice).
   std::size_t HeldLogins() const { return router_->GetStats().heldRemotes; }
   // One whole EVR frame, toward the service, on the login session. False when there is no login session,

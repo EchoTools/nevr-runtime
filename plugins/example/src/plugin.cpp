@@ -91,7 +91,7 @@
  *   feature didn't exist when the plugin was built; the host treats
  *   the absence as "not supported" rather than "error."
  *
- *   NEVR_PLUGIN_API_VERSION is currently 6 (#432).
+ *   NEVR_PLUGIN_API_VERSION is currently 7 (#432).
  *
  *   | Export present        | What it signals                                 |
  *   |-----------------------|-------------------------------------------------|
@@ -152,12 +152,22 @@
 /*
  * ── PER-PLUGIN LOGGING ─────────────────────────────────────────────
  *
- * NEVR_DEFINE_PLUGIN_LOG generates inline PluginLog(), PluginLogWarning()
- * and PluginLogError() functions that write one printf-style formatted,
- * leveled line to stderr ("<prefix> INFO|WARNING|ERROR <message>"). A
- * failure is a warning or an error, never PluginLog(). Call the macro
- * ONCE per plugin at file scope. The prefix identifies this plugin's
- * log lines.
+ * NEVR_DEFINE_PLUGIN_LOG generates inline PluginLogBind(), PluginLog(),
+ * PluginLogWarning(), PluginLogError(), PluginLogDebug() and
+ * PluginLogFields() functions. A failure is a warning or an error, never
+ * PluginLog(). Call the macro ONCE per plugin at file scope.
+ *
+ * Call PluginLogBind(ctx) first thing in init. From then on (API v6+
+ * host) every line goes to the host's structured Log(), tagged
+ * "[NEVR.PLUGIN] plugin=<name from config.yaml>", at the level the call
+ * names, in the host's log file. PluginLogFields adds key=value fields:
+ *
+ *   PluginLogFields(NEVR_LOG_INFO, "hook installed", {{"va", "0x1400a1b20"}});
+ *
+ * Before PluginLogBind, and on a host older than v6, lines are
+ * "<prefix> INFO|WARNING|ERROR <message>" on stderr, which the host does
+ * not collect: the prefix is only that fallback. There is no host log
+ * before init and none from DllMain (the loader lock is held there).
  *
  * For multi-translation-unit plugins, wrap in a namespace:
  *
@@ -472,8 +482,9 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx);
  * runtime whether the host provides the query API by comparing
  * ctx->ctx_size against its own sizeof(NvrGameContext):
  *
- *   if (ctx->ctx_size >= sizeof(NvrGameContext)) {
- *       // Safe: the host's struct is at least as large as ours.
+ *   if (ctx->ctx_size >= offsetof(NvrGameContext, get_plugin_info) +
+ *                        sizeof(ctx->get_plugin_info)) {
+ *       // Safe: the host's struct reaches the end of the query API.
  *       // The query API pointers (get_plugin_count, get_plugin_info)
  *       // were filled by the host and are valid to call.
  *   } else {
@@ -483,12 +494,15 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx);
  *   }
  *
  * This is a RUNTIME check, not a compile-time #ifdef. The same binary
- * works on v4 and v5 hosts, degrading gracefully when the query API is
- * absent. This is the pattern that makes tail-extensions backward-
+ * works on v4, v5 and v6 hosts, degrading gracefully when the query API
+ * is absent. This is the pattern that makes tail-extensions backward-
  * compatible without recompilation.
  */
 NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json)
 {
+    /* Bind to the host's log before the first line (see PER-PLUGIN LOGGING). */
+    const bool hostLog = PluginLogBind(ctx);
+
     /*
      * ── ctx_size check (v5+ query API discovery) ──────────────────
      *
@@ -502,7 +516,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
      * GetProcAddress or assuming load order.
      */
 
-    if (ctx->ctx_size >= sizeof(NvrGameContext)) {
+    if (ctx->ctx_size >= offsetof(NvrGameContext, get_plugin_info) + sizeof(ctx->get_plugin_info)) {
         /*
          * ctx->get_plugin_count() returns the number of plugins loaded
          * SO FAR at the time of the call (including plugins that
@@ -540,8 +554,17 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
     } else {
         PluginLog("initex: host pre-v5 (ctx_size=%u < %u) —"
                   " query API unavailable",
-                  ctx->ctx_size, (unsigned)sizeof(NvrGameContext));
+                  ctx->ctx_size,
+                  (unsigned)(offsetof(NvrGameContext, get_plugin_info) + sizeof(ctx->get_plugin_info)));
     }
+
+    /* A line with fields. Through a v6+ host it reads
+     *   [NEVR.PLUGIN] plugin=<name> initex: host log bound host_log=true ctx_size=<n>
+     * in the host's log; on an older host the same call writes to stderr. */
+    char ctxSize[16];
+    std::snprintf(ctxSize, sizeof(ctxSize), "%u", static_cast<unsigned>(ctx->ctx_size));
+    PluginLogFields(NEVR_LOG_INFO, "initex: host log bound",
+                    {{"host_log", hostLog ? "true" : "false"}, {"ctx_size", ctxSize}});
 
     /*
      * ── Config args from config.yaml ───────────────────────────────
@@ -638,6 +661,8 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
  */
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
 {
+    PluginLogBind(ctx);  /* idempotent: InitEx has already bound, an Init-only plugin binds here */
+
     /*
      * ctx is guaranteed non-null by the host, but defensive null-checks
      * cost nothing and prevent crashes if the plugin is loaded by a
@@ -872,7 +897,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
      *   PluginLog("state: %u → %u flags=0x%x",
      *             old_state, new_state, ctx->flags);
      *
-     *   if (new_state == 2 /* IN_GAME *​/ && (ctx->flags & NEVR_HOST_HAS_NETGAME)) {
+     *   if (new_state == 2 && (ctx->flags & NEVR_HOST_HAS_NETGAME)) {  // 2 = IN_GAME
      *       PluginLog("state: entered IN_GAME, net_game=%p", ctx->net_game);
      *   }
      */

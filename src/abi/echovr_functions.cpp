@@ -66,6 +66,8 @@ LoadJsonFromBufferFunc* LoadJsonFromBuffer = nullptr;
 LoadLocalConfigFunc* LoadLocalConfig = nullptr;
 NetGameSwitchStateFunc* NetGameSwitchState = nullptr;
 NetGameScheduleReturnToLobbyFunc* NetGameScheduleReturnToLobby = nullptr;
+QueueGameThreadCallFunc* QueueGameThreadCall = nullptr;
+BeginMultiplayerLobbyFunc* BeginMultiplayerLobby = nullptr;
 GetProcAddressFunc* GetProcAddress = nullptr;
 SetWindowTextAFunc* SetWindowTextA_ = nullptr;
 
@@ -120,6 +122,8 @@ void InitializeFunctionPointers() {
   LoadLocalConfig = (LoadLocalConfigFunc*)(g_GameBaseAddress + 0x179EB0);
   NetGameSwitchState = (NetGameSwitchStateFunc*)(g_GameBaseAddress + 0x1B8650);
   NetGameScheduleReturnToLobby = (NetGameScheduleReturnToLobbyFunc*)(g_GameBaseAddress + 0x1A89F0);
+  QueueGameThreadCall = (QueueGameThreadCallFunc*)(g_GameBaseAddress + 0x104E70);
+  BeginMultiplayerLobby = (BeginMultiplayerLobbyFunc*)(g_GameBaseAddress + 0xFDDD0);
   GetProcAddress = (GetProcAddressFunc*)(g_GameBaseAddress + 0xEAEF0);
   SetWindowTextA_ = (SetWindowTextAFunc*)(g_GameBaseAddress + 0x5105F0);
 }

@@ -1,5 +1,7 @@
 #include "quest/integration/identity_source.h"
 
+#include "quest/sentinel/hook_log.h"
+
 namespace nevr_quest::integration {
 
 nevr_quest_login::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth::Snapshot& snap) noexcept {
@@ -42,14 +44,31 @@ nevr_session_router::LoginGate TokenIdentitySource::GateFor(const nevr::quest_au
   return LoginGate::Ready;
 }
 
+bool TokenIdentitySource::HoldsFor(const nevr::quest_auth::Snapshot& snap) noexcept {
+  return GateFor(snap) == nevr_session_router::LoginGate::Awaiting &&
+         snap.readiness != nevr::quest_auth::Readiness::AwaitingUser;
+}
+
+void TokenIdentitySource::ReportHold(bool hold, const char* status, int* last) {
+  const int now = hold ? 1 : 0;
+  if (now == *last) return;
+  *last = now;
+  sentinel::LogFields(sentinel::LogLevel::kInfo, "quest_login_answers",
+                      {{"mode", hold ? "held" : "answered"}, {"status", status}});
+}
+
 nevr_quest_login::IdentityStatus TokenIdentitySource::Fetch(nevr_quest_login::Identity& out) {
+  if (Terminal()) {
+    nevr_quest_login::attempt_gate::Publish(false, false);
+    return nevr_quest_login::IdentityStatus::NoToken;
+  }
   if (!snapshot_) {
-    nevr_quest_login::attempt_gate::SetReady(false);
+    nevr_quest_login::attempt_gate::Publish(false, false);
     return nevr_quest_login::IdentityStatus::NotReady;
   }
   const nevr::quest_auth::Snapshot snap = snapshot_();
   const nevr_quest_login::IdentityStatus status = Classify(snap);
-  nevr_quest_login::attempt_gate::SetReady(status == nevr_quest_login::IdentityStatus::Ok);  // the state this login saw
+  nevr_quest_login::attempt_gate::Publish(status == nevr_quest_login::IdentityStatus::Ok, HoldsFor(snap));  // the state this login saw
   if (status != nevr_quest_login::IdentityStatus::Ok) return status;
   out.account_id = snap.discord_id;
   out.display_name = snap.username;
@@ -59,7 +78,12 @@ nevr_quest_login::IdentityStatus TokenIdentitySource::Fetch(nevr_quest_login::Id
 }
 
 void TokenIdentitySource::Observe(const nevr::quest_auth::Snapshot& snap) noexcept {
-  nevr_quest_login::attempt_gate::SetReady(Classify(snap) == nevr_quest_login::IdentityStatus::Ok);
+  if ((snap.readiness == nevr::quest_auth::Readiness::Failed && !snap.will_retry) ||
+      snap.readiness == nevr::quest_auth::Readiness::Stopped) {
+    terminal_.store(true, std::memory_order_release);
+  }
+  nevr_quest_login::attempt_gate::Publish(!Terminal() && Classify(snap) == nevr_quest_login::IdentityStatus::Ok,
+                                          !Terminal() && HoldsFor(snap));
 }
 
 }  // namespace nevr_quest::integration

@@ -4,7 +4,6 @@
 #include "core/logging.h"
 #include "core/globals.h"
 #include "runtime/hook/addresses.h"
-#include <MinHook.h>
 // N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
 // its Log() output reached neither the console log nor nevr-boot.jsonl — so
 // across every captured run the patch reported NOTHING, success or failure, and
@@ -12,7 +11,7 @@
 // (`login injected xpid=DSC-...` does not prove it: ws_bridge builds that prefix
 // itself, so it is green even when this patch never ran.) Tee the outcome.
 #include "runtime/log/boot_log_tee.h"
-#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
+#include "runtime/lifecycle/initialize.h"  // g_bootHookFailed
 
 // Expected original bytes at each patch site (for validation).
 static const BYTE kPsnShort[] = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
@@ -31,18 +30,23 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
 
 /// Report a mismatch with both expected and actual bytes — `ValidateBytes`
 /// only returns a bool, so this re-derives `site` to show what was actually
-/// found, not just what was expected. Warning, not Error: these are
-/// diagnostic detail feeding into the mode-aware ServerFatal() call below,
-/// which owns the terminal severity (fatal+Error on server, non-fatal+
-/// Warning on client) — five unconditional Error lines here would read as
-/// five separate decisions when it's really one.
-static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
+/// found, not just what was expected. These are diagnostic detail feeding into
+/// the single g_bootHookFailed decision below, which boot.cpp turns into the
+/// terminal severity once the CLI says whether this is a server.
+///
+/// This runs from Initialize() under the DllMain loader lock, in the boot phase,
+/// so it reports through the boot tee (stderr and nevr-boot.jsonl). The first
+/// mismatch is also the cause boot.cpp names when a server refuses to start.
+static void ReportByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
-  Log(EchoVR::LogLevel::Warning,
-      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
+  nevr_boot_log_tee::TeeFprintf(
+      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x\n",
       what, static_cast<unsigned>(offset),
       expected[0], expected[1], expected[2], expected[3],
       site[0], site[1], site[2], site[3]);
+  char cause[sizeof(g_bootHookFailedCause)];
+  snprintf(cause, sizeof(cause), "XPID %s mismatch rva=0x%X", what, static_cast<unsigned>(offset));
+  NoteBootHookFailureCause(cause);
 }
 
 VOID PatchDscProvider() {
@@ -52,32 +56,29 @@ VOID PatchDscProvider() {
   // Validate all four sites before patching any.
   bool ok = true;
   if (!ValidateBytes(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    LogByteMismatch(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, "short name");
+    ReportByteMismatch(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, "short name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, sizeof(kPsnDash))) {
-    LogByteMismatch(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, "dash prefix");
+    ReportByteMismatch(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, "dash prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    LogByteMismatch(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, "compact name");
+    ReportByteMismatch(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, "compact name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, sizeof(kQmarkDash))) {
-    LogByteMismatch(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, "fallback prefix");
+    ReportByteMismatch(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, "fallback prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, sizeof(kQmarkNull))) {
-    LogByteMismatch(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, "compact fallback name");
+    ReportByteMismatch(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, "compact fallback name");
     ok = false;
   }
 
   if (!ok) {
-    // No standalone "Aborting..." Log() line here (was Category J): ServerFatal
-    // below already logs the better, more detailed explanation at the
-    // mode-correct level (Error+exit on server, Warning+continue on client) —
-    // this also resolves severity being decided in one place instead of split
-    // across this line and ServerFatal.
+    // The failure is reported once, through the boot tee below, and g_bootHookFailed
+    // carries the decision.
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
@@ -86,8 +87,16 @@ VOID PatchDscProvider() {
     // would be somewhere unrelated. Verified safe to make fatal: a real server run
     // reports "DSC provider patch applied at 5 sites", so this fires only on an
     // actual binary mismatch, never on a healthy boot.
-    ServerFatal("XPID provider-string validation failed — echovr.exe is not the "
-                "build this runtime targets; every patched address is suspect");
+    //
+    // ServerFatal is not callable here: this runs from Initialize() before the CLI
+    // is parsed, so g_isServer is still false and ServerFatal would only warn.
+    // g_bootHookFailed is checked by boot.cpp once g_isServer is known, and a
+    // server refuses to start with it set (a client reports ok=false and goes on).
+    g_bootHookFailed = true;
+    NoteBootHookFailureCause("XPID provider-string validation failed");
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.XPID] XPID provider-string validation failed — echovr.exe is not the build this runtime "
+        "targets; every patched address is suspect; a server will refuse to start\n");
     return;
   }
 
@@ -98,13 +107,24 @@ VOID PatchDscProvider() {
   static_assert(sizeof(kDscDash)  == XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
   static_assert(sizeof(kDscShort) == XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE);
 
-  ApplyPatch(XPID_PLATFORM_SHORT_NAME,  kDscShort, sizeof(kDscShort));
-  ApplyPatch(XPID_PLATFORM_DASH_PREFIX, kDscDash,  sizeof(kDscDash));
-  ApplyPatch(XPID_PLATFORM_COMPACT_NAME, kDscShort, sizeof(kDscShort));
-  ApplyPatch(XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, sizeof(kDscDash));
-  ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
+  bool allPatched = true;
+  allPatched &= ApplyPatch(XPID_PLATFORM_SHORT_NAME,  kDscShort, sizeof(kDscShort));
+  allPatched &= ApplyPatch(XPID_PLATFORM_DASH_PREFIX, kDscDash,  sizeof(kDscDash));
+  allPatched &= ApplyPatch(XPID_PLATFORM_COMPACT_NAME, kDscShort, sizeof(kDscShort));
+  allPatched &= ApplyPatch(XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, sizeof(kDscDash));
+  allPatched &= ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
+  if (!allPatched) {
+    // Same rule as the validation failure above: no ServerFatal before the CLI is
+    // parsed. The identity strings are now a mix of PSN-/DSC-, so a server must not run.
+    g_bootHookFailed = true;
+    NoteBootHookFailureCause("XPID provider-string patch write failed");
+    nevr_boot_log_tee::TeeFprintf(
+        "[NEVR.XPID] provider-string patch FAILED — identity strings are inconsistent; "
+        "a server will refuse to start\n");
+    return;
+  }
+
   nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
 }
 
@@ -128,16 +148,26 @@ static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
 VOID PatchProviderPrefixOvrOrg() {
   using namespace nevr_patch_addresses;
   void* target = EchoVR::g_GameBaseAddress + GET_PROVIDER_PREFIX;
-  MH_STATUS st = MH_CreateHook(target, (void*)GetProviderPrefixHook,
-                                (void**)&g_RealGetProviderPrefix);
-  if (st == MH_OK) st = MH_EnableHook(target);
-  if (st == MH_OK) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
+  g_RealGetProviderPrefix = reinterpret_cast<GetProviderPrefixFn>(target);
+  if (PatchDetour(&g_RealGetProviderPrefix, reinterpret_cast<PVOID>(GetProviderPrefixHook),
+                  "GetProviderPrefix")) {
     nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
-  } else {
-    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
-        target, MH_StatusToString(st));
-    nevr_boot_log_tee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
-                           MH_StatusToString(st));
+    return;
   }
+  const char* const status = Hooking::LastAttachError();
+  // N120. Without this detour the 17 callers of GetProviderPrefix (CreateUser, SaveLocalData,
+  // LobbyFindSession, LobbyPlayerSessions, the Send() paths) keep building xpids with the game's own
+  // PSN- prefix while the bridge logs in as OVR-ORG, so a server that went on would register and
+  // match under two identities. That is the same degraded identity a failed five-site byte patch
+  // leaves, so it gets the same answer: g_bootHookFailed, which boot.cpp turns into a refusal to
+  // start a server once the CLI says it is one (ServerFatal would only warn here), and a client
+  // reports ok=false and goes on.
+  g_bootHookFailed = true;
+  char cause[sizeof(g_bootHookFailedCause)];
+  snprintf(cause, sizeof(cause), "XPID GetProviderPrefix detour failed: %s", status);
+  NoteBootHookFailureCause(cause);
+  nevr_boot_log_tee::TeeFprintf(
+      "[NEVR.XPID] warn; GetProviderPrefix detour FAILED target=%p status=%s — 17 callers still format PSN- xpids; "
+      "a server will refuse to start\n",
+      target, status);
 }

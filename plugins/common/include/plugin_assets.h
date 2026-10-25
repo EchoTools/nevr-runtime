@@ -1,10 +1,10 @@
 /*
- * plugin_assets.h — Plugin-side wrappers for the asset exports (API v6): NEVR_RegisterAsset and
+ * plugin_assets.h — Plugin-side wrappers for the asset exports (API v7): NEVR_RegisterAsset and
  * NEVR_DeregisterAssets. See docs/reference/plugin-assets.md for the contract.
  *
  * Lazily resolves the exports on first call from the runtime module: BugSplat64.dll (its deployed name; the
  * runtime masquerades as the game's crash reporter) or dbgcore.dll (the older deployed name resource_registry.h
- * still uses). Returns NEVR_ASSET_UNAVAILABLE / no-ops when no loaded module exports them (a pre-v6 host, or a
+ * still uses). Returns NEVR_ASSET_UNAVAILABLE / no-ops when no loaded module exports them (a pre-v7 host, or a
  * test harness outside the game process).
  */
 #pragma once

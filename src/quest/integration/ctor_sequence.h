@@ -7,7 +7,7 @@
 //
 // Order:
 //   1  ArmCrashReporter              breakpad, before anything else can crash
-//   2  ResolveConfig                 InitActivation: embedded defaults + nevr-quest.json, every state logged
+//   2  ResolveConfig                 InitActivation: embedded defaults + config.yaml, every state logged
 //   3  RegisterCounters              every counter of every hook that will be installed (clock, redirect,
 //                                    dlopen, login, social, login prompt), BEFORE ...
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
@@ -22,9 +22,18 @@
 //  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
 //                                    prerequisites), matchmaking redirect
 //      InstallObbSkip                the OBB-mount skip (#319): two libr15 slots (AStorageManager_mountObb,
-//                                    AStorageManager_getMountedObbPath); independent of every feature above,
-//                                    runs right after the clock hook so it is in place before libr15 runs
-//                                    CSysFile::Init. Its counters are registered with the others (step 3).
+//                                    AStorageManager_getMountedObbPath); on every launch, whatever the
+//                                    configuration says, right after the clock hook so it is in place before
+//                                    libr15 runs CSysFile::Init. Its counters are registered with the others
+//                                    (step 3).
+//      InstallProcessEnd             the process ends when the game's android_main returns (#621): one libr15
+//                                    slot, on every launch, right after the OBB skip; no counters
+//      InstallPermissionWait         the game waits for the storage permission it just asked for (#640): one
+//                                    libr15 slot (CSysInfo::RequestPermissions), on every launch, right after
+//                                    the process-end hook; no counters
+//      InstallVkExtWindow            the device extensions libr15 requires stay inside the 128 entries it reads
+//                                    (#868): two libr15 slots (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan),
+//                                    on every launch, right after the permission-wait hook; no counters
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
 //   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
@@ -72,6 +81,9 @@ enum class StepId : std::uint8_t {
   kStartReporter,
   kInstallClockHook,
   kInstallObbSkip,
+  kInstallProcessEnd,
+  kInstallPermissionWait,
+  kInstallVkExtWindow,
   kStartTokenAuth,
   kInstallLoginPrompt,
   kStartBridge,
@@ -111,7 +123,7 @@ class Steps {
   virtual bool RegisterLoginCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
   virtual bool RegisterLoginPromptCounters() = 0;
-  // The OBB-mount skip's counters (#319), registered when the obb_skip feature is on.
+  // The OBB-mount skip's counters (#319), registered on every launch.
   virtual bool RegisterObbSkipCounters() = 0;
   virtual bool StartReporter() = 0;
 
@@ -119,6 +131,13 @@ class Steps {
   // `countersRegistered`: the result of RegisterObbSkipCounters (the hook's own rule: without its counters it
   // logs the skip and installs nothing). True when both slots hold their thunks.
   virtual bool InstallObbSkip(bool countersRegistered) = 0;
+  // The process ends when the game's android_main returns (#621): one libr15 slot, on every launch.
+  virtual bool InstallProcessEnd() = 0;
+  // The game waits for the storage permission it just asked for (#640): one libr15 slot, on every launch.
+  virtual bool InstallPermissionWait() = 0;
+  // The device extensions libr15 requires stay inside the 128 entries it reads (#868): two libr15 slots
+  // (CSysModule::FindMethod, vrapi_GetDeviceExtensionsVulkan), on every launch.
+  virtual bool InstallVkExtWindow() = 0;
   virtual bool StartTokenAuth() = 0;
   // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
   // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.

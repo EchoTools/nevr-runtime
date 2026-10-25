@@ -122,12 +122,12 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 // registration step calls the package's real registration function, in the sequence's order, before its
 // single StartReporter. Every registration must be accepted (a refused one would leave its hook out), and
 // the table must have exactly the counters below in it. The clock hook's two are registered under its real
-// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 12 (#408: the
-// CSysHttp::CreateConnection thunk's calls and faults),
-// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 20 (#411 adds the local entitlement answer and the local message pump's three: pops, deliveries, drops; #338:
+// names here because entry.cpp (jni.h, breakpad) cannot be built on the host. Clock 2, redirect 14 (#408: the
+// CSysHttp::CreateConnection thunk's calls and faults, and the URL decisions' two),
+// dlopen 1, login 2 (#237: calls and faults of the SendLogInRequest thunk), login prerequisites 22 (#411 adds the refused social org-id requests, the local entitlement answer and the local message pump's four: pops, deliveries, deferrals, SDK ids in the local range; #338:
 // one calls counter per hook), social 26 (the facade's, the invite gate's, the rich presence trace's four, its three local answers), login prompt 14 (#239, login_prompt_hook.h kCounterCount), OBB-mount
 // skip 4 (#319, obb_skip_hook.h kCounterCount).
-constexpr int kSentinelCounters = 2 + 12 + 1 + 2 + 20 + 26 + 14 + 4;
+constexpr int kSentinelCounters = 2 + 14 + 1 + 2 + 22 + 26 + 14 + 4;
 static_assert(kSentinelCounters <= static_cast<int>(sentinel::kMaxReportCounters),
               "the sentinel's hooks register more counters than the reporter holds");
 
@@ -151,6 +151,9 @@ struct RealCounterSteps final : Steps {
   bool StartReporter() override { return true; }
   bool InstallClockHook() override { return true; }
   bool InstallObbSkip(bool counted) override { return counted; }
+  bool InstallProcessEnd() override { return true; }
+  bool InstallPermissionWait() override { return true; }
+  bool InstallVkExtWindow() override { return true; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
@@ -166,7 +169,6 @@ void TestCounterBudget() {
   RealCounterSteps steps;
   steps.config.effective.redirect = steps.config.effective.bridge = true;
   steps.config.effective.login = steps.config.effective.social = true;
-  steps.config.effective.obbSkip = true;
   const ConstructorReport r = RunConstructorSequence(steps);
   for (StepId id : {StepId::kRegisterClockCounters, StepId::kRegisterRedirectCounters, StepId::kRegisterDlopenCounters,
                     StepId::kRegisterLoginCounters, StepId::kRegisterSocialCounters,

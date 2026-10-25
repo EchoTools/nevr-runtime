@@ -1,5 +1,5 @@
 // echovr_server.exe — thin Windows launcher for Echo VR dedicated server.
-// Locates echovr.exe relative to itself and spawns it with -server -headless -noconsole.
+// Locates echovr.exe relative to itself and spawns it with -server -headless -no-console.
 // For Windows users: drop next to echovr.exe and double-click to start a server.
 //
 // Hard-Stops (CPP-MINGW-ADDENDUM-GENERIC.md): no C-style casts, no catch(...),
@@ -102,11 +102,11 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // -headless is required when -noconsole is passed on native Windows.
-  // Build command line: echovr.exe -server -headless -noconsole [user args...]
+  // -headless is required when -no-console is passed on native Windows.
+  // Build command line: echovr.exe -server -headless -no-console [user args...]
   // Each argument is Windows-quoted so paths with spaces (e.g. -config-path
   // "C:\Program Files\Echo VR") are not split by CommandLineToArgvW.
-  std::string cmd_line = "echovr.exe -server -headless -noconsole";
+  std::string cmd_line = "echovr.exe -server -headless -no-console";
   for (int i = 1; i < argc; ++i) {
     cmd_line += " ";
     cmd_line += QuoteArgForWindows(argv[i]);

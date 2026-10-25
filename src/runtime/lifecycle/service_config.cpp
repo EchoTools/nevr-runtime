@@ -15,6 +15,7 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/compat/socket_role.h"  // TagBridgeUrl: the config and login services get their own request target (#520)
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
@@ -23,7 +24,7 @@
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
-#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from env/.env at configure
+#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from config/public-defaults.env
 
 #ifdef NEVR_TEST_HOOKS
 #include "runtime/tests/service_config_test_hooks.h"
@@ -133,15 +134,17 @@ const nevr::NevrConfig& NevrCfg() {
     }
     try {
       nevr::NevrConfig c = nevr::NevrConfig::LoadFromFile(path);
+      nevr::LogUnsetBareVars(c);  // the parser logs nothing (it is shared with the Quest); the PC caller reports
       Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
       return c;
     } catch (const nevr::NevrConfigError& e) {
       // Server: fail loud (ServerFatal -> ForceFatalExit). Client: ServerFatal
       // warns and returns, then we fall through to the warn+empty client path.
+      const std::string detail = nevr::ConfigRejectionDetail(e);
       ServerFatal("config.yaml at %s is invalid: %s — refusing to run a server on a "
                   "broken or incomplete config (an unset required secret must fail loud, "
                   "never silently degrade to no login)",
-                  path.c_str(), e.what());
+                  path.c_str(), detail.c_str());
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] continuing with built-in defaults after config.yaml rejection (client mode)");
       return nevr::NevrConfig();
@@ -152,7 +155,7 @@ const nevr::NevrConfig& NevrCfg() {
 
 // --- build-time defaults ---------------------------------------------------
 // The four keys a player needs to reach the service without any config file, embedded at
-// configure time from the environment / .env (cmake/nevr_builtin_defaults.cmake). Applied
+// configure time from config/public-defaults.env (cmake/nevr_builtin_defaults.cmake). Applied
 // at LOOKUP time under the config.yaml value (nevr_cfg::LookupFlatWithDefaults), so a
 // config.yaml can override any of them and a rejected or absent file still leaves them in
 // place. Client mode only: a dedicated server has always been configured explicitly, and
@@ -337,7 +340,7 @@ const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource) {
 }
 
 const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int bridgeActive,
-                            unsigned bridgePort) {
+                            unsigned bridgePort, const char* serviceKey) {
   return AccessorBoundary("NevrCfgRedirect", [&]() -> const char* {
     if (result == nullptr) return nullptr;
     const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
@@ -347,6 +350,8 @@ const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int 
     const std::optional<std::string> redir =
         nevr_cfg::ResolveRedirect(result, socketTarget, httpTarget, bridgeActive != 0, bridgePort);
     if (!redir) return nullptr;
+    // Only the bridge address is tagged: a direct target (bridge inactive) is the community service's own URL.
+    if (bridgeActive != 0) return InternCStr(nevr_socket_role::TagBridgeUrl(*redir, bridgePort, serviceKey), "NevrCfgRedirect");
     return InternCStr(*redir, "NevrCfgRedirect");
   });
 }
@@ -360,11 +365,13 @@ const char* NevrGameNativeDefault(const char* key) {
   });
 }
 
-const char* NevrCfgAutoRelay(unsigned bridgePort) {
+const char* NevrCfgAutoRelay(unsigned bridgePort, const char* serviceKey) {
   return AccessorBoundary("NevrCfgAutoRelay", [&]() -> const char* {
     const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
     if (!socketTarget || socketTarget->empty()) return nullptr;
-    return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort), "NevrCfgAutoRelay");
+    return InternCStr(nevr_socket_role::TagBridgeUrl(std::string("ws://127.0.0.1:") + std::to_string(bridgePort),
+                                                      bridgePort, serviceKey),
+                      "NevrCfgAutoRelay");
   });
 }
 
