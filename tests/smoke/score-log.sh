@@ -69,8 +69,6 @@ if [ "$WANT" = "all" ]; then
   fi
 fi
 
-# C12: since #832 the game server sends no loadout save (the game service has no handler for it), so C12 scores the
-# one skip line each save request logs. #772 and #776 bring the round trip back; C12 then returns to `[SAVE_SUCCESS]`.
 # ID @@ group @@ feature @@ pass-regex @@ fail-regex
 # An empty fail-regex means the feature emits no distinct failure line, so it can
 # only be PASS or ABSENT — absence is the only negative evidence available.
@@ -156,7 +154,7 @@ C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cac
 C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
-C12@@client@@Loadout save reported as not sent (#832)@@\[SAVE_LOADOUT\] not sent: the game service does not accept this message yet@@\[SAVE_LOADOUT\] No game base address
+C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No accepted client session|\[SAVE_LOADOUT\] No game base address
 C13@@client@@Current loadout read back@@\[CURRENT_LOADOUT\] Player:@@\[CURRENT_LOADOUT\] Empty response|\[CURRENT_LOADOUT\] Invalid
 EOF
 
