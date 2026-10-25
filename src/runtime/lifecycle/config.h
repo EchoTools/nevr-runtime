@@ -2,6 +2,7 @@
 
 #include "core/pch.h"
 #include "abi/echovr.h"
+#include "runtime/lifecycle/server_timestep.h"
 
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.
@@ -19,6 +20,15 @@ extern EchoVR::Json* g_localConfig;
 /// A detour hook for the game's function to load the local config.json for the game instance.
 /// </summary>
 UINT64 LoadLocalConfigHook(PVOID pGame);
+
+/// #515: what writing the server's time step did (outcome kNotApplied until the local config has loaded),
+/// with the step written and the value it replaced. boot.cpp reports this, not the configured rate, when it
+/// says what step the server runs on.
+nevr_server_timestep::StepWrite ServerStepWrite();
+
+/// #515: logs once what the clock the server runs on holds (its step and mode bits), so a run's log says
+/// whether the step NEVR wrote is live. Called from the per-frame tick on one tick (frame/tick.cpp).
+void LogServerStepReadBack(long tick);
 
 /// <summary>
 /// A detour hook for the game's HTTP(S) connect function. Redirects hardcoded endpoints

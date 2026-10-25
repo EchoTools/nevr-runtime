@@ -24,6 +24,7 @@
  */
 
 #include "runtime/frame/tick.h"
+#include "runtime/frame/window_watch.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -31,13 +32,17 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/logging.h"
+#include "runtime/compat/self_check.h"  // Flush
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
 #include "runtime/hook/hook_guard.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/lifecycle/cli.h"             // g_isServer
+#include "runtime/lifecycle/config.h"          // LogServerStepReadBack
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
+#include "runtime/lifecycle/server_timestep.h"
 #include "runtime/log/builtin_filter.h"
+#include "runtime/patch/pnsrad_enabler.h"
 
 namespace nevr_frame {
 
@@ -47,6 +52,7 @@ volatile LONG g_tickReentry = 0;
 uint64_t g_lastTickUs = 0;
 
 constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
+constexpr uint64_t kSelfCheckIntervalUs = 250000;  // self-check probes and sends: four times a second
 
 /// Ticks between periodic liveness reports: ~30s at 8ms.
 constexpr LONG kLivenessReportEvery = 3750;
@@ -62,13 +68,28 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     g_lastTickUs = nowUs;
 
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
+    nevr_pnsrad_enabler::ApplyLoadsMissedAtLibraryReturn();
+    nevr_pnsrad_enabler::InstallPendingDiagnostics();
     nevr_builtin_log_filter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
     nevr_builtin_log_filter::PollHealth();         // N89: health must not depend on the hook it watches
+    nevr_window_watch::Poll(nowUs / 1000);         // #341: a client whose X window vanished quits (Wine only; a no-op on a server)
+
+    // Self-checks: run the probes and send what is queued, a few times a second (a no-op when off).
+    {
+        static uint64_t s_lastSelfCheckUs = 0;
+        if (!g_isServer && nowUs - s_lastSelfCheckUs >= kSelfCheckIntervalUs) {
+            s_lastSelfCheckUs = nowUs;
+            nevr_self_check::Flush();
+        }
+    }
 
     // Liveness + N83/N84 evidence.
     {
         static volatile LONG s_ticks = 0;
         const LONG t = InterlockedIncrement(&s_ticks);
+        // #515: one read-back of the server's clock, about a second in. N86/N110: no new dispatcher or
+        // Tick* site; this runs inside DispatchPerFrameWork like the rest.
+        if (nevr_server_timestep::ShouldReadBack(g_isServer != FALSE, t)) LogServerStepReadBack(t);
         if (t == 1) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.PATCH] per-frame tick ALIVE — plugin/module OnFrame "

@@ -36,6 +36,7 @@ Operational procedures and testing protocols.
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
+| `testing/smoke-checklist.md` | Every feature a tester can check on a PC game client, a Quest game client or a game server, with the player action and the log line that proves it | Testers and release managers |
 | *(see `just --list` for automated test and verification recipes)* | | |
 
 ## Standards

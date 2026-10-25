@@ -1,4 +1,4 @@
-# The platform-DLL export tracer (`-traceexports`)
+# The platform-DLL export tracer (`-trace-exports`)
 
 What the game calls in `pnsrad.dll`, `pnsovr.dll` and `pnsdemo.dll`, with the arguments and results, from a
 run. The export tables themselves are in `docs/reference/pns-export-surface.md` (`tools/pe_exports.py`);
@@ -9,8 +9,8 @@ Off by default. It records; it never changes an argument, a result or a call.
 ## Switching it on
 
 ```
-echovr.exe ... -traceexports pnsrad            # or pnsovr, pnsdemo, all; comma separated
-echovr.exe ... -traceexports pnsrad,pnsovr
+echovr.exe ... -trace-exports pnsrad            # or pnsovr, pnsdemo, all; comma separated
+echovr.exe ... -trace-exports pnsrad,pnsovr
 ```
 
 The list names the DLLs whose exports are traced. The flag is read when the game first resolves a symbol, so
@@ -51,7 +51,7 @@ result). Read an argument against `echovr-reconstruction/src/pnsrad/Plugin/RadPl
 
 ## Comparing a pnsrad run with a pnsovr run
 
-Run each with the same flag set (`-traceexports pnsrad`, then `-traceexports pnsovr` on a machine with the
+Run each with the same flag set (`-trace-exports pnsrad`, then `-trace-exports pnsovr` on a machine with the
 Oculus runtime, `-micprovider OVR`) and compare the `resolve` and `summary` lines by export name:
 
 ```

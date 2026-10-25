@@ -28,7 +28,7 @@ echo "=== Starting echovr.exe ==="
 # disable it so the status echo below is reachable on failure. Fd 9 (the run lock) is closed for the
 # game so a leftover wineserver cannot hold the lock after this script ends.
 set +e
-cd "$GAME_DIR" && wine ./echovr.exe -server -headless -noconsole 2>&1 9>&-
+cd "$GAME_DIR" && wine ./echovr.exe -server -headless -no-console 2>&1 9>&-
 exit_code=$?
 set -e
 if [[ $exit_code -ne 0 ]]; then

@@ -104,6 +104,9 @@ bool RegisterRedirectCounters() noexcept {
   ok = sentinel::RegisterReportCounter("redirect_value_too_long", &c.valueTooLong, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("redirect_pool_refused", &c.poolRefused, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("redirect_exceptions", &c.exceptions, sentinel::ReportKind::kFaults) && ok;
+  // The CSysHttp::CreateConnection decisions alone (#408): `redirect_applied` also counts the config-key reads.
+  ok = sentinel::RegisterReportCounter("redirect_url_redirected", &c.urlRedirected) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_url_pass_through", &c.urlPassThrough) && ok;
   return ok;
 }
 

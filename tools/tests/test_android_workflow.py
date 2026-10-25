@@ -21,7 +21,8 @@ class AndroidWorkflowTest(unittest.TestCase):
     def test_the_job_builds_and_tests_with_the_pinned_ndk_and_vcpkg(self):
         text = WORKFLOW.read_text()
         self.assertIn("just test-android", text)
-        self.assertIn("26.3.11579264", text)
+        self.assertIn("./.github/actions/setup-ndk", text)
+        self.assertIn("26.3.11579264", (REPO / ".github/actions/setup-ndk/action.yml").read_text())
         self.assertIn('.vcpkg-commit', text)
         ndk = (REPO / "src/quest/CMakePresets.json").read_text()
         self.assertIn("NDK r26d", ndk)

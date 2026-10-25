@@ -45,7 +45,8 @@ class FakeRemotes : public RemoteTransport {
     std::lock_guard<std::mutex> lock(mutex);
     opens.push_back(request);
     cv.notify_all();
-    return true;
+    // The bridge has no token to open a session with while the account is awaited: it refuses (#704).
+    return gate == nullptr || gate->load() != static_cast<int>(LoginGate::Awaiting);
   }
   SendResult Send(RemoteId remote, std::string_view frame, bool) override {
     std::lock_guard<std::mutex> lock(mutex);
@@ -56,6 +57,7 @@ class FakeRemotes : public RemoteTransport {
   void Close(RemoteId remote, uint16_t) override {
     std::lock_guard<std::mutex> lock(mutex);
     closedRemotes.push_back(remote);
+    cv.notify_all();
   }
   template <class Pred>
   bool WaitFor(Pred pred, int ms = 3000) {
@@ -64,6 +66,7 @@ class FakeRemotes : public RemoteTransport {
   }
   std::mutex mutex;
   std::condition_variable cv;
+  const std::atomic<int>* gate = nullptr;  // set by a gated rig: Open is refused while this is Awaiting
   std::vector<RemoteOpenRequest> opens;
   std::vector<std::pair<RemoteId, std::string>> sent;
   std::vector<RemoteId> closedRemotes;
@@ -137,6 +140,7 @@ std::string UpgradeRequestText(const std::string& target, const std::string& ext
 struct Rig {
   FakeRemotes remotes;
   std::mutex logMutex;
+  std::condition_variable logCv;
   std::vector<std::string> logs;
   std::unique_ptr<LoopbackGameServer> server;
   std::unique_ptr<Router> router;
@@ -152,6 +156,7 @@ struct Rig {
     cfg.log = [this](LogLevel, const std::string& l) {
       std::lock_guard<std::mutex> lock(logMutex);
       logs.push_back(l);
+      logCv.notify_all();
     };
     server = std::make_unique<LoopbackGameServer>(cfg);
     Options options;
@@ -163,6 +168,7 @@ struct Rig {
       // The Quest wiring: the game's own login is the login (no injection), held until the player signs in.
       options.buildLogin = nullptr;
       options.loginGate = [this]() { return static_cast<LoginGate>(gate.load()); };
+      remotes.gate = &gate;
     }
     router = std::make_unique<Router>(server.get(), &remotes, options);
     server->Attach(router.get());
@@ -211,6 +217,17 @@ struct Rig {
     }
     return n;
   }
+  bool WaitForAccepted(std::size_t count) {
+    std::unique_lock<std::mutex> lock(logMutex);
+    return logCv.wait_for(lock, std::chrono::seconds(3), [&] {
+      std::size_t accepted = 0;
+      for (const std::string& line : logs) {
+        if (line.find("\"event\":\"router_game_conn\"") != std::string::npos &&
+            line.find("\"action\":\"accepted\"") != std::string::npos) ++accepted;
+      }
+      return accepted >= count;
+    });
+  }
   bool WaitForRecord(const std::string& event, const std::string& action, const std::string& why = "",
                      int ms = 3000) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
@@ -221,6 +238,17 @@ struct Rig {
     return false;
   }
 };
+
+// Polls `pred` for up to `ms`: for state the router keeps (its stats), which no fake transport signals.
+template <class Pred>
+bool PollUntil(Pred pred, int ms = 3000) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return pred();
+}
 
 // The descriptor of this process's socket listening on kListenAddress:`port`, found the way a foreign component
 // would hold it: by number. -1 when there is none.
@@ -304,6 +332,17 @@ bool Upgrade(Rig& rig, Client& c) {
   return resp.rfind("HTTP/1.1 101", 0) == 0 && resp.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos;
 }
 
+// A connection the router refuses as it opens (a config connection while the account is awaited, #704): the 101
+// response and the close frame arrive together, so they are read to the end of the stream and the close frame
+// is the tail of it.
+bool UpgradeAndRefused(Rig& rig, Client& c, const std::string& closeFrame) {
+  c.Write(UpgradeRequestText(rig.GoodTarget()), /*oneByteAtATime=*/true);
+  bool eof = false;
+  const std::string all = c.Read(1u << 30, 3000, &eof);
+  return eof && all.rfind("HTTP/1.1 101", 0) == 0 && all.size() > closeFrame.size() &&
+         all.compare(all.size() - closeFrame.size(), closeFrame.size(), closeFrame) == 0;
+}
+
 // Failure caught (smoke test 2026-10-09, #240): the redirect value named 127.0.0.1, which libr15 never
 // dials (it substitutes a non-loopback interface address), so every game connect was refused while the
 // listener sat idle. The game must reach the listener through LoopbackUri() exactly as libr15 resolves it.
@@ -340,15 +379,26 @@ void TestRoundTrip() {
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
   const RemoteId remote = rig.remotes.opens.empty() ? 0 : rig.remotes.opens[0].remote;
   QCHECK(rig.remotes.opens[0].role == Role::Config);
+  QCHECK(rig.remotes.opens[0].session);  // the first connection opened the session
 
   rig.router->OnRemoteOpen(remote);
-  const std::string payload = nevr_evr_codec::BuildMessage(0x1234, std::string(40000, 'p'));  // > one TCP chunk
+  // The config request for main_menu, in a frame larger than one TCP chunk (an extra JSON field the service
+  // ignores); its reply, which carries the same type and id, is routed to the config connection.
+  const std::string payload = nevr_evr_codec::BuildMessage(
+      nevr_evr_codec::kSymConfigRequest,
+      std::string(1, '\0') + "{\"type\":\"main_menu\",\"id\":\"main_menu\",\"pad\":\"" + std::string(40000, 'p') + "\"}");
   game.Write(BuildMaskedFrame(Opcode::Binary, payload, kMask), /*oneByteAtATime=*/false);
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.sent.size() == 1; }));
   QCHECK(rig.remotes.sent[0].second == payload);
 
-  rig.router->OnRemoteFrame(remote, "reply-from-service", true);
-  const std::string wire = BuildFrame(Opcode::Binary, "reply-from-service");
+  std::string replyPayload;
+  for (int i = 0; i < 2; ++i) {
+    const uint64_t symbol = nevr_evr_codec::ConfigSymbol("main_menu");
+    for (int b = 0; b < 8; ++b) replyPayload.push_back(static_cast<char>((symbol >> (8 * b)) & 0xFF));
+  }
+  const std::string reply = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigSuccess, replyPayload + "reply-from-service");
+  rig.router->OnRemoteFrame(remote, reply, true);
+  const std::string wire = BuildFrame(Opcode::Binary, reply);
   QCHECK(game.Read(wire.size()) == wire);
 
   // A ping is answered with a pong carrying the same payload.
@@ -365,13 +415,16 @@ void TestRemoteCloseReachesTheSocket() {
   QCHECK(Upgrade(rig, config));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
   QCHECK(Upgrade(rig, login));
-  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
-  const RemoteId loginRemote = rig.remotes.opens[1].remote;
-  rig.router->OnRemoteOpen(loginRemote);
-  rig.router->OnRemoteClose(loginRemote, 1006);
+  QCHECK(PollUntil([&] { return rig.router->GetStats().games == 2; }));  // the login shares the session
+  QCHECK(rig.remotes.opens.size() == 1);
+  const RemoteId sessionRemote = rig.remotes.opens[0].remote;
+  rig.router->OnRemoteOpen(sessionRemote);
+  rig.router->OnRemoteClose(sessionRemote, 1006);
   const std::string expected = BuildCloseFrame(kCloseGoingAway, "remote closed, code=1006");
   QCHECK(login.Read(expected.size()) == expected);
   QCHECK(login.WaitEof());
+  QCHECK(config.Read(expected.size()) == expected);  // the config connection shares the session
+  QCHECK(config.WaitEof());
   QCHECK(rig.router->GetStats().nextConnIdx == 1);
 }
 
@@ -402,7 +455,8 @@ void TestOversizedMessage() {
   QCHECK(game.Read(expected.size()) == expected);
   QCHECK(game.WaitEof());
   QCHECK(rig.remotes.sent.empty());
-  QCHECK(rig.router->GetStats().games == 0);
+  QCHECK(PollUntil([&] { return rig.router->GetStats().games == 0; }));
+  QCHECK(rig.remotes.closedRemotes.empty());  // the session outlives the connection that closed
 }
 
 // Backpressure: the game stops reading; the server keeps a bounded buffer and the router queues the rest;
@@ -410,16 +464,20 @@ void TestOversizedMessage() {
 void TestSlowReaderBackpressure() {
   Rig rig(/*maxMessage=*/1u << 20, /*maxWrite=*/256u << 10);
   const uint16_t port = rig.server->Start();
-  Client game(port);
+  Client config(port), game(port);  // the second connection is the login: login-family replies go to it
+  QCHECK(Upgrade(rig, config));
   QCHECK(Upgrade(rig, game));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
+  QCHECK(PollUntil([&] { return rig.router->GetStats().games == 2; }));
   const RemoteId remote = rig.remotes.opens[0].remote;
   rig.router->OnRemoteOpen(remote);
   constexpr int kFrames = 400;
   constexpr std::size_t kSize = 60000;  // 24 MB total: far beyond socket buffers and the 256 KiB cap
+  const std::size_t header = nevr_evr_codec::kHeaderSize;
   std::thread producer([&]() {
     for (int i = 0; i < kFrames; ++i) {
-      std::string f(kSize, static_cast<char>('a' + (i % 26)));
+      std::string f = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoggedInUserProfileSuccess,
+                                                   std::string(kSize - header, static_cast<char>('a' + (i % 26))));
       rig.router->OnRemoteFrame(remote, std::move(f), true);
     }
   });
@@ -435,7 +493,7 @@ void TestSlowReaderBackpressure() {
     if (!bytes.empty()) d.Feed(bytes.data(), bytes.size());
     Message m;
     while (d.Next(&m) == DecodeStatus::Message) {
-      if (m.payload.size() != kSize || m.payload[0] != static_cast<char>('a' + (got % 26))) ordered = false;
+      if (m.payload.size() != kSize || m.payload[header] != static_cast<char>('a' + (got % 26))) ordered = false;
       ++got;
     }
   }
@@ -451,8 +509,8 @@ void TestStopClosesEverything() {
   Client a(port), b(port);
   QCHECK(Upgrade(rig, a));
   QCHECK(Upgrade(rig, b));
-  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
-  QCHECK(rig.router->GetStats().games == 2);
+  QCHECK(PollUntil([&] { return rig.router->GetStats().games == 2; }));
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));  // one session for both
   rig.server->Stop();
   QCHECK(rig.router->GetStats().games == 0);
   QCHECK(a.WaitEof());
@@ -507,7 +565,8 @@ void TestUpgradeNeedsTheToken() {
     const std::string resp = game.Read(50, 3000);
     QCHECK(resp.rfind("HTTP/1.1 101", 0) == 0);
   }
-  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));  // config + login for the first two
+  QCHECK(PollUntil([&] { return rig.Count("router_game_conn", "upgraded") == 3; }));  // all three spellings were accepted
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));  // one session for the three
   QCHECK(rig.remotes.opens[0].connIdx == 0);
   QCHECK(rig.server->RejectedUpgrades() == expectRefused);
 
@@ -541,15 +600,16 @@ void TestSilentUpgradedConnectionsAreClosed() {
 
 // Failure caught (#239): the login connection, silent until the player signs in, being closed by the
 // idle-before-first-frame rule (or failed) while the code is on screen. A held connection stays open past
-// the idle window and is answered to pings; the config connection beside it is not held; when the account
-// appears the remote opens and frames flow both ways; the idle rule applies again from the release.
+// the idle window and is answered to pings; the config connection before it was refused at once (#704) and the
+// login connection holds its session, so nothing more opens; when the account appears the remote opens and
+// frames flow both ways; the idle rule applies again from the release.
 void TestHeldLoginConnectionSurvivesTheIdleWindow() {
   Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400, nullptr, /*gated=*/true);
   const uint16_t port = rig.server->Start();
   Client config(port), login(port);
-  QCHECK(Upgrade(rig, config));
-  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
-  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));  // the config remote opened
+  const std::string refusal = BuildCloseFrame(nevr_session_router::kCloseInternalError, "remote could not be started");
+  QCHECK(UpgradeAndRefused(rig, config, refusal));  // config is not held: it opens a remote and is refused at once
+  QCHECK(rig.router->GetStats().heldRemotes == 0);
   QCHECK(Upgrade(rig, login));
   QCHECK(rig.WaitForRecord("router_game_conn", "idle_exempt"));
   QCHECK(rig.router->GetStats().heldRemotes == 1);
@@ -560,7 +620,7 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
   QCHECK(login.Read(pong.size()) == pong);  // still open, and answered
   {
     std::lock_guard<std::mutex> lock(rig.remotes.mutex);
-    QCHECK(rig.remotes.opens.size() == 1);  // no login remote yet
+    QCHECK(rig.remotes.opens.size() == 1);  // nothing opens while the account is awaited but config's refused attempt
   }
   // The game queues its login while it waits; it is delivered, in order, once the remote opens.
   const std::string loginRequest = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymLoginRequest, "the-login");
@@ -572,7 +632,7 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
   {
     std::lock_guard<std::mutex> lock(rig.remotes.mutex);
     if (rig.remotes.opens.size() == 2) {
-      QCHECK(rig.remotes.opens[1].role == Role::Login);
+      QCHECK(rig.remotes.opens[1].session && rig.remotes.opens[1].role == Role::Login);
       remote = rig.remotes.opens[1].remote;
     }
   }
@@ -592,8 +652,8 @@ void TestHeldLoginConnectionSurvivesTheIdleWindow() {
 }
 
 // Failure caught (#239 review H1): the login connection idle-closed (1008) some time after the player signed in,
-// because it is silent until the game's LogInRequest. Released from its hold it stays exempt; a config
-// connection that sends nothing is closed all the same.
+// because it is silent until the game's LogInRequest. Released from its hold it stays exempt. The config
+// connection is refused at once while the account is awaited (#704), so the idle rule never reaches it.
 void TestLoginConnectionIsNeverIdleClosedAfterTheRelease() {
   Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400, nullptr, /*gated=*/true);
   const uint16_t port = rig.server->Start();
@@ -604,26 +664,27 @@ void TestLoginConnectionIsNeverIdleClosedAfterTheRelease() {
   rig.gate = static_cast<int>(LoginGate::Ready);
   rig.router->ReevaluateHeldLogins();
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
-  // The config connection sent nothing: idle-closed after its window.
+  // The config connection was refused when it opened, not idle-closed.
   QCHECK(config.WaitEof(2500));
-  QCHECK(rig.server->IdleClosed() == 1);
+  QCHECK(rig.server->IdleClosed() == 0);
   // The login connection has been silent for several windows since the release and is still open.
   std::this_thread::sleep_for(std::chrono::milliseconds(1300));
-  QCHECK(rig.server->IdleClosed() == 1);
+  QCHECK(rig.server->IdleClosed() == 0);
   login.Write(BuildMaskedFrame(Opcode::Ping, "pp", kMask));
   const std::string pong = BuildFrame(Opcode::Pong, "pp");
   QCHECK(login.Read(pong.size()) == pong);
-  QCHECK(rig.Count("router_game_conn", "closing", "idle_before_first_frame") == 1);  // the config one only
+  QCHECK(rig.Count("router_game_conn", "closing", "idle_before_first_frame") == 0);
 }
 
-// Failure caught: a sign-in that failed leaving the held connection open for ever. The refusal closes it
-// (1011) and the connection ends.
+// Failure caught: a sign-in that failed leaving the held connections open for ever. The refusal closes every
+// socket on the held session (1011) and the connections end; the config connection was refused (1011) when it
+// opened.
 void TestHeldLoginIsClosedWhenTheAccountIsRefused() {
   Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400, nullptr, /*gated=*/true);
   const uint16_t port = rig.server->Start();
   Client config(port), login(port);
-  QCHECK(Upgrade(rig, config));
-  config.Write(BuildMaskedFrame(Opcode::Binary, nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymConfigRequest, "c"), kMask));
+  const std::string refusal = BuildCloseFrame(nevr_session_router::kCloseInternalError, "remote could not be started");
+  QCHECK(UpgradeAndRefused(rig, config, refusal));
   QCHECK(Upgrade(rig, login));
   QCHECK(rig.WaitForRecord("router_game_conn", "idle_exempt"));
   rig.gate = static_cast<int>(LoginGate::Refused);
@@ -667,6 +728,26 @@ void TestEveryConnectionIsRecorded() {
   }
   QCHECK(sawLimit);
   QCHECK(!rig.HasLog(rig.Token()));
+}
+
+void TestSilentSocketsDoNotRefuseGameUpgrade() {
+  Rig rig(1u << 20, 8u << 20, 30000,
+          [](LoopbackGameServer::Config& c) { c.handshakeTimeoutMs = 5000; });
+  const uint16_t port = rig.server->Start();
+  QCHECK(port != 0);
+  std::vector<std::unique_ptr<Client>> silent;
+  for (std::size_t i = 0; i < 16; ++i) {
+    silent.push_back(std::make_unique<Client>(port));
+    QCHECK(silent.back()->fd >= 0);
+  }
+  QCHECK(rig.WaitForAccepted(16));
+  Client game(port);
+  QCHECK(game.fd >= 0);
+  game.Write(UpgradeRequestText(rig.GoodTarget()));
+  const std::string response = game.Read(50);
+  QCHECK(response.rfind("HTTP/1.1 101", 0) == 0);
+  QCHECK(silent.front()->WaitEof());
+  QCHECK(rig.Count("router_game_conn", "ended", "silent_preempted") == 1);
 }
 
 // Failure caught (#240): the listening socket closed by someone else in the process (a stale close of a
@@ -849,6 +930,7 @@ int main() {
   TestLoginConnectionIsNeverIdleClosedAfterTheRelease();
   TestHeldLoginIsClosedWhenTheAccountIsRefused();
   TestEveryConnectionIsRecorded();
+  TestSilentSocketsDoNotRefuseGameUpgrade();
   TestListenerClosedUnderneathIsReportedAndRestored();
   TestListenerThatStopsListeningIsReportedAndRestored();
   TestReplacedListenerNumberIsNotClosed();

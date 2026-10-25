@@ -7,6 +7,14 @@ set(PATCHES_SOURCES
     "lifecycle/dllmain.cpp"
     "lifecycle/initialize.cpp"
     "lifecycle/game_image_guard.cpp"
+    "lifecycle/runtime_entry.cpp"
+    # The host units (runtime/host/) are compiled in without NEVR_HOST_TESTING: the DLL's
+    # DllMain and exports call them, and the runtime is handed to the host as an in-process provider.
+    "host/bootstrap_diagnostics.cpp"
+    "host/crash_capture.cpp"
+    "host/host_entry.cpp"
+    "host/runtime_load.cpp"
+    "host/runtime_rendezvous.cpp"
     "lifecycle/system_module_loader.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
@@ -30,14 +38,23 @@ set(PATCHES_SOURCES
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
     "ext/plugin_manifest.cpp"
+    "ext/plugin_signature.cpp"
+    "ext/plugin_tree.cpp"
+    "ext/plugin_trust.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
+    "patch/asset_cache.cpp"
     "compat/ws_bridge.cpp"
+    # #708: the session router Quest ships and the ixwebsocket adapters ws_bridge.cpp hands game sockets to.
+    "compat/session_router.cpp"
+    "compat/ws_session_transport.cpp"
     "compat/login_profile.cpp"
     "compat/evr_codec.cpp"
+    "compat/self_check.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
+    "frame/window_watch.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
@@ -98,12 +115,18 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery.h"
     "lifecycle/return_to_lobby.h"
     "lifecycle/return_to_lobby_hold.h"
+    "lifecycle/server_timestep.h"
+    "lifecycle/cmdline_strip.h"
+    "lifecycle/timestep_log.h"
+    "lifecycle/server_bringup.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
     "lifecycle/veh_policy.h"
+    "lifecycle/boot_hook_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
+    "patch/asset_cache.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
@@ -116,11 +139,13 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/socket_role.h"
     "compat/evr_codec.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/pnsrad_load_queue.h"
     "patch/mic_provider.h"
     "patch/party_invite_gate.h"
     "patch/social_facade.h"
@@ -183,7 +208,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 nevr_platform_compat nevr_token_auth ole32 crypt32 advapi32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -192,7 +217,8 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzs
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(compat/ws_bridge.cpp compat/social_names.cpp compat/evr_codec.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(host/bootstrap_diagnostics.cpp host/crash_capture.cpp host/host_entry.cpp host/runtime_load.cpp host/runtime_rendezvous.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(compat/ws_bridge.cpp compat/session_router.cpp compat/ws_session_transport.cpp compat/social_names.cpp compat/evr_codec.cpp compat/self_check.cpp patch/asset_cache.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # #20: the export tracer's thunk layer is windows.h plus a global assembly block; the tracer logs through core.
 set_source_files_properties(hook/export_trace_thunk.cpp hook/export_tracer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
@@ -221,6 +247,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(compat/ws_bridge.cpp PROPERTIES COMPILE_OPTIONS "-Werror=old-style-cast")
 endif()
 
+# Signed plugins only (ADR 0010, #741). Every build enforces the signature gate unless this is ON; only the
+# mingw-plugin-dev preset turns it on. The mode is compiled in and embedded as a NUL-bounded
+# "NEVR-PLUGIN-TRUST <mode>" literal that tools/package_release.py reads from the packaged DLL and refuses
+# unless it says signed-only. No config key and no environment variable changes it.
+option(NEVR_ALLOW_UNSIGNED_PLUGINS "Load plugins the signature gate refuses, with a Warning (plugin developers' builds only, never ship)" OFF)
+if(NEVR_ALLOW_UNSIGNED_PLUGINS)
+  set_source_files_properties(ext/plugin_trust.cpp PROPERTIES COMPILE_DEFINITIONS NEVR_ALLOW_UNSIGNED_PLUGINS=1)
+  message(STATUS "NEVR_ALLOW_UNSIGNED_PLUGINS=ON: BugSplat64.dll loads unsigned plugins (plugin developer build, never ship)")
+endif()
+set_source_files_properties(ext/plugin_signature.cpp ext/plugin_tree.cpp ext/plugin_trust.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
 # on; `just verify` checks the release DLL carries none of its strings.
@@ -236,6 +273,12 @@ set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
   PREFIX ""
 )
+
+# The Details tab of BugSplat64.dll (cmake/nevr_version_info.cmake; tools/pe_version_info.py reads it back).
+nevr_add_version_info(nevr_runtime
+  FILE_DESCRIPTION "nEVR runtime for Echo VR"
+  ORIGINAL_FILENAME "BugSplat64.dll"
+  TYPE DLL)
 
 # Disable specific warnings (MSVC only)
 if(MSVC)
@@ -306,6 +349,256 @@ if(BUILD_TESTING)
     target_include_directories(test_game_image_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
     gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
+
+    # The host <-> runtime descriptor (core/runtime_abi.h): header-only validators that BugSplat64.dll
+    # runs on nevr.dll's descriptor, and nevr.dll on the host's context.
+    add_executable(test_runtime_abi tests/test_runtime_abi.cpp)
+    set_source_files_properties(tests/test_runtime_abi.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
+
+    # The code the stable BugSplat64.dll host runs behind its DllMain and its exports
+    # (runtime/host/, docs/adr/0008-bugsplat-host-and-nevr-runtime.md): the diagnostic
+    # recorder, the minidump capture, the runtime load/validate state machine and the
+    # GameMainWrapper rendezvous. It is a static library of its own so the tests
+    # drive the objects the host links and not a copy. Built only for the tests until the
+    # target split links it into BugSplat64.dll.
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_library(nevr_host_core STATIC
+      host/bootstrap_diagnostics.cpp
+      host/crash_capture.cpp
+      host/host_entry.cpp
+      host/runtime_load.cpp
+      host/runtime_rendezvous.cpp
+      lifecycle/game_image_guard.cpp)
+    target_compile_options(nevr_host_core PRIVATE -Werror)
+    target_include_directories(nevr_host_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    # The host units carry test seams (RuntimeRendezvous::Seams, SetEmitLoadFailureForTest, the emit
+    # sink) that exist only under NEVR_HOST_TESTING. This library is built for the tests alone; the
+    # target that builds the host into BugSplat64.dll must not define it
+    # (tools/tests/test_host_test_seams.py).
+    target_compile_definitions(nevr_host_core PUBLIC NEVR_HOST_TESTING)
+    target_link_libraries(nevr_host_core PUBLIC minhook nlohmann_json::nlohmann_json)
+
+    # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
+    # (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Proof gate").
+    # The host (the production host units behind a shim, built as BugSplat64.dll) validates the game image and the
+    # real GameMainWrapper prologue and installs ONE MinHook detour from
+    # DLL_PROCESS_ATTACH; it loads the versioned runtime (core/runtime_abi.h) on
+    # the first rendezvous call. test_bootstrap_attach.exe drives twelve
+    # dynamic-load child scenarios; test_bootstrap_attach_static.exe imports the
+    # host statically, as echovr.exe does, so attach runs before main.
+    set(BOOTSTRAP_ATTACH_DIR "${CMAKE_BINARY_DIR}/bin/bootstrap-attach")
+    set(BOOTSTRAP_ATTACH_FIXTURE_DIR "${BOOTSTRAP_ATTACH_DIR}/fixtures")
+
+    function(bootstrap_attach_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    # The host of the gate is the production host units (nevr_host_core) behind a shim DllMain.
+    add_library(test_bootstrap_attach_host SHARED tests/bootstrap_attach/host_shim.cpp)
+    target_link_libraries(test_bootstrap_attach_host PRIVATE nevr_host_core)
+    set_target_properties(test_bootstrap_attach_host PROPERTIES
+      PREFIX "" OUTPUT_NAME "BugSplat64")
+    bootstrap_attach_output(test_bootstrap_attach_host "${BOOTSTRAP_ATTACH_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    function(add_bootstrap_attach_fixture target fixture_dir)
+      add_library(${target} SHARED tests/bootstrap_attach/runtime_probe.cpp)
+      target_link_libraries(${target} PRIVATE minhook)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      bootstrap_attach_output(${target} "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_good good)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_bad_version bad-version
+      BOOTSTRAP_PROBE_BAD_VERSION)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_init_failure init-failure
+      BOOTSTRAP_PROBE_INIT_FAILURE)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_reenter_init reenter-init
+      BOOTSTRAP_PROBE_REENTER_INIT)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_slow_init slow-init
+      BOOTSTRAP_PROBE_SLOW_INIT)
+
+    add_library(test_bootstrap_attach_runtime_missing_entry SHARED
+      tests/bootstrap_attach/runtime_missing_entry.cpp)
+    set_target_properties(test_bootstrap_attach_runtime_missing_entry PROPERTIES
+      PREFIX "" OUTPUT_NAME "nevr")
+    bootstrap_attach_output(test_bootstrap_attach_runtime_missing_entry
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
+
+    set(BOOTSTRAP_BAD_IMAGE
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr.dll")
+    add_custom_command(OUTPUT "${BOOTSTRAP_BAD_IMAGE}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach/runtime_bad_image.txt"
+        "${BOOTSTRAP_BAD_IMAGE}"
+      DEPENDS tests/bootstrap_attach/runtime_bad_image.txt
+      VERBATIM)
+    add_custom_target(test_bootstrap_attach_bad_image ALL
+      DEPENDS "${BOOTSTRAP_BAD_IMAGE}")
+
+    add_executable(test_bootstrap_attach_static tests/bootstrap_attach/attach_test.cpp)
+    target_compile_definitions(test_bootstrap_attach_static PRIVATE BOOTSTRAP_PROBE_STATIC_IMPORT)
+    target_link_libraries(test_bootstrap_attach_static PRIVATE test_bootstrap_attach_host
+      nlohmann_json::nlohmann_json)
+    bootstrap_attach_output(test_bootstrap_attach_static "${BOOTSTRAP_ATTACH_DIR}")
+
+    add_executable(test_bootstrap_attach tests/bootstrap_attach/attach_test.cpp)
+    target_link_libraries(test_bootstrap_attach PRIVATE nlohmann_json::nlohmann_json)
+    bootstrap_attach_output(test_bootstrap_attach "${BOOTSTRAP_ATTACH_DIR}")
+    add_dependencies(test_bootstrap_attach
+      test_bootstrap_attach_host
+      test_bootstrap_attach_static
+      test_bootstrap_attach_runtime_good
+      test_bootstrap_attach_runtime_bad_version
+      test_bootstrap_attach_runtime_init_failure
+      test_bootstrap_attach_runtime_reenter_init
+      test_bootstrap_attach_runtime_slow_init
+      test_bootstrap_attach_runtime_missing_entry
+      test_bootstrap_attach_bad_image)
+
+    add_executable(test_host_json tests/test_host_json.cpp)
+    set_source_files_properties(tests/test_host_json.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_host_json PRIVATE -Werror)
+    target_link_libraries(test_host_json PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_json DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_bootstrap_diagnostics tests/test_bootstrap_diagnostics.cpp)
+    target_compile_options(test_bootstrap_diagnostics PRIVATE -Werror)
+    target_link_libraries(test_bootstrap_diagnostics PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_bootstrap_diagnostics DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_crash_capture tests/test_host_crash_capture.cpp)
+    target_compile_options(test_host_crash_capture PRIVATE -Werror)
+    target_link_libraries(test_host_crash_capture PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_crash_capture DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_runtime_load tests/test_host_runtime_load.cpp)
+    target_compile_options(test_host_runtime_load PRIVATE -Werror)
+    target_link_libraries(test_host_runtime_load PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_runtime_load DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_rendezvous tests/test_host_rendezvous.cpp)
+    target_compile_options(test_host_rendezvous PRIVATE -Werror)
+    target_link_libraries(test_host_rendezvous PRIVATE nevr_host_core GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_rendezvous DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_host_minidump tests/test_host_minidump.cpp)
+    target_compile_options(test_host_minidump PRIVATE -Werror)
+    target_include_directories(test_host_minidump PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_host_minidump PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_host_minidump DISCOVERY_MODE PRE_TEST)
+
+    # Crash harness: a BugSplat64.dll shim (the production host objects behind the real
+    # mangled createReport export, plus runtime-load test seams) and child scenarios that
+    # fault through it.
+    set(HOST_CRASH_DIR "${CMAKE_BINARY_DIR}/bin/host-crash")
+    set(HOST_CRASH_FIXTURE_DIR "${HOST_CRASH_DIR}/fixtures")
+
+    function(host_crash_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_host_crash_shim SHARED
+      tests/host_crash/shim.cpp
+      "tests/host_crash/shim.def")
+    target_link_libraries(test_host_crash_shim PRIVATE nevr_host_core)
+    set_target_properties(test_host_crash_shim PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    host_crash_output(test_host_crash_shim "${HOST_CRASH_DIR}")
+
+    function(add_host_crash_fixture target fixture_dir)
+      add_library(${target} SHARED tests/host_crash/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      host_crash_output(${target} "${HOST_CRASH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_host_crash_fixture(test_host_crash_runtime_good good)
+    add_host_crash_fixture(test_host_crash_runtime_bad_version bad-version
+      HOST_CRASH_BAD_VERSION)
+    add_host_crash_fixture(test_host_crash_runtime_init_failure init-failure
+      HOST_CRASH_INIT_FAILURE)
+
+    add_library(test_host_crash_runtime_missing_entry SHARED
+      tests/host_crash/runtime_missing_entry.cpp)
+    set_target_properties(test_host_crash_runtime_missing_entry PROPERTIES
+      PREFIX "" OUTPUT_NAME "nevr")
+    host_crash_output(test_host_crash_runtime_missing_entry
+      "${HOST_CRASH_FIXTURE_DIR}/missing-entry")
+
+    add_executable(test_host_crash tests/host_crash/host_crash_test.cpp)
+    target_link_libraries(test_host_crash PRIVATE nlohmann_json::nlohmann_json)
+    host_crash_output(test_host_crash "${HOST_CRASH_DIR}")
+    add_dependencies(test_host_crash
+      test_host_crash_shim
+      test_host_crash_runtime_good
+      test_host_crash_runtime_bad_version
+      test_host_crash_runtime_init_failure
+      test_host_crash_runtime_missing_entry)
+
+    # Early GameMainWrapper rendezvous harness for the BugSplat64.dll / nevr.dll
+    # split (docs/adr/0008-bugsplat-host-and-nevr-runtime.md, "Decision: the rendezvous is
+    # the game's main wrapper"). The host shim (BugSplat64.dll) calls the production host
+    # entry points: one detour from DLL_PROCESS_ATTACH, then the sibling nevr.dll loads on
+    # the first call. test_rendezvous.exe drives valid / missing / reenter / bad-prologue
+    # child scenarios plus the NEVR_SetGameModule external contract.
+    set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
+    set(RENDEZVOUS_FIXTURE_DIR "${RENDEZVOUS_DIR}/fixtures")
+
+    function(rendezvous_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_rendezvous_host SHARED tests/rendezvous/host_shim.cpp)
+    target_link_libraries(test_rendezvous_host PRIVATE nevr_host_core)
+    set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    rendezvous_output(test_rendezvous_host "${RENDEZVOUS_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    function(add_rendezvous_fixture target fixture_dir)
+      add_library(${target} SHARED tests/rendezvous/runtime_fixture.cpp)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      rendezvous_output(${target} "${RENDEZVOUS_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_rendezvous_fixture(test_rendezvous_runtime_good good)
+    add_rendezvous_fixture(test_rendezvous_runtime_reenter reenter-init
+      RENDEZVOUS_PROBE_REENTER_INIT)
+
+    add_executable(test_rendezvous tests/rendezvous/rendezvous_test.cpp)
+    target_link_libraries(test_rendezvous PRIVATE nlohmann_json::nlohmann_json)
+    rendezvous_output(test_rendezvous "${RENDEZVOUS_DIR}")
+    add_dependencies(test_rendezvous
+      test_rendezvous_host
+      test_rendezvous_runtime_good
+      test_rendezvous_runtime_reenter)
 
     # #20: the export tracer. The thunk is assembly, so this test runs it (under Wine in test-auth-unit):
     # forwarded register, stack and float arguments, results, nesting, exceptions, threads.
@@ -386,6 +679,7 @@ if(BUILD_TESTING)
       log/url_diagnostics.cpp)
     set_source_files_properties(tests/test_websocket_client_auth.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_websocket_client_auth PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_websocket_client_auth PRIVATE
       GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
@@ -396,10 +690,13 @@ if(BUILD_TESTING)
     endif()
     gtest_discover_tests(test_websocket_client_auth DISCOVERY_MODE PRE_TEST)
 
+    # test_gpu_hung_notice.cpp (#553, header-only policy) rides in this executable, so the existing
+    # url-diagnostics loop in `just test-auth-unit` runs it with no recipe change.
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
+      tests/test_gpu_hung_notice.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_url_diagnostics.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_url_diagnostics.cpp tests/test_gpu_hung_notice.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -618,6 +915,17 @@ if(BUILD_TESTING)
       test_stable_string_pool_fixture
       test_stable_string_pool_destructible_control)
 
+    # #703: the content-addressed asset cache (patch/asset_cache.cpp), driven for real against a temp directory.
+    add_executable(test_asset_cache
+      tests/test_asset_cache.cpp
+      patch/asset_cache.cpp)
+    set_source_files_properties(tests/test_asset_cache.cpp patch/asset_cache.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_asset_cache PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_asset_cache PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json advapi32)
+    gtest_discover_tests(test_asset_cache DISCOVERY_MODE PRE_TEST)
+
     # EVR codec (compat/evr_codec.cpp): platform-neutral frame parse/build and login layout, the same
     # source the Quest target compiles. login_profile.cpp supplies the real profile JSON the tests parse.
     add_executable(test_evr_codec
@@ -630,6 +938,116 @@ if(BUILD_TESTING)
     target_link_libraries(test_evr_codec PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_evr_codec DISCOVERY_MODE PRE_TEST)
+
+    # Session router (compat/session_router.cpp, #708 S0): the source the Quest target compiles, with its host
+    # test (plain main, no framework: the Quest NDK build shares the file), run under Wine here.
+    add_executable(test_session_router
+      ../quest/tests/session_router_test.cpp
+      compat/session_router.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(../quest/tests/session_router_test.cpp compat/session_router.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_session_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_session_router PRIVATE nlohmann_json::nlohmann_json)
+
+    # Self-check unit (compat/self_check.cpp): the registry that reports a run-card check's result as one
+    # remote log string, and the SNSRemoteLogSetv3 frame builder it sends through. Platform neutral, the same
+    # sources the Quest target compiles.
+    add_executable(test_self_check
+      tests/test_self_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_self_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_self_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_self_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_self_check DISCOVERY_MODE PRE_TEST)
+
+    # The #398 self-check (compat/party_share_check.h): each service answer to a party data share is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_party_share_check
+      tests/test_party_share_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_party_share_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_party_share_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_share_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_party_share_check DISCOVERY_MODE PRE_TEST)
+
+    # The #403 self-check (compat/party_leave_check.h): each SNSPartyLeaveNotify the game client receives is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_party_leave_check
+      tests/test_party_leave_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_party_leave_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_party_leave_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_party_leave_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_party_leave_check DISCOVERY_MODE PRE_TEST)
+
+    # The #392 self-check (lifecycle/quit_check.h): the client's game loop returning is one
+    # self-check result. Header only on top of the self-check unit .
+    add_executable(test_quit_check
+      tests/test_quit_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_quit_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_quit_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_quit_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_quit_check DISCOVERY_MODE PRE_TEST)
+
+    # The #405 self-check (compat/friend_request_check.h): each friend request that arrives, repeats or ends is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_friend_request_check
+      tests/test_friend_request_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_friend_request_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_friend_request_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_friend_request_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_friend_request_check DISCOVERY_MODE PRE_TEST)
+
+    # The #562 self-check (compat/credential_cache_check.h): what the credential cache did in this process is one
+    # self-check result. Header only on top of the self-check unit and the party symbol table.
+    add_executable(test_credential_cache_check
+      tests/test_credential_cache_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_credential_cache_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_credential_cache_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_credential_cache_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_credential_cache_check DISCOVERY_MODE PRE_TEST)
+
+    # #520: which game socket is config, login or matchmaker (compat/socket_role.h): header only, pure.
+    add_executable(test_socket_role tests/test_socket_role.cpp)
+    set_source_files_properties(tests/test_socket_role.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_socket_role PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_socket_role PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_socket_role DISCOVERY_MODE PRE_TEST)
+
+    # The #408 self-check (compat/status_redirect_check.h): the game's API connections counted as redirected or
+    # passed through. Header only on top of the self-check unit.
+    add_executable(test_status_redirect_check
+      tests/test_status_redirect_check.cpp
+      compat/self_check.cpp
+      compat/evr_codec.cpp)
+    set_source_files_properties(tests/test_status_redirect_check.cpp compat/self_check.cpp compat/evr_codec.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_status_redirect_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_status_redirect_check PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_status_redirect_check DISCOVERY_MODE PRE_TEST)
 
     # Legacy <-> current translator (compat/legacy_codec.cpp): platform neutral like evr_codec, so it builds
     # and runs on its own. It is not part of BugSplat64.dll until the legacy mode wires it in.
@@ -644,6 +1062,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_legacy_codec PRIVATE
       GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json zstd::libzstd ZLIB::ZLIB)
     gtest_discover_tests(test_legacy_codec DISCOVERY_MODE PRE_TEST)
+
+    # CSymbol64Hash with plain `char` unsigned, as under the NDK's AArch64 clang (#657). A change to
+    # abi/symbol_hash.h that zero-extends a byte >= 0x80 passes with the default signed char and fails here.
+    add_executable(test_symbol_hash tests/test_symbol_hash.cpp)
+    set_source_files_properties(tests/test_symbol_hash.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_options(test_symbol_hash PRIVATE -funsigned-char)
+    target_include_directories(test_symbol_hash PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_symbol_hash PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_symbol_hash DISCOVERY_MODE PRE_TEST)
 
     # The per-login legacy session (compat/legacy_session.cpp) on top of the translator; same platform-neutral
     # rules, so it also builds and runs on its own.
@@ -671,11 +1098,20 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp)
-    set_source_files_properties(tests/test_early_quit_lockout.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # test_server_timestep.cpp (#511, header-only lifecycle/server_timestep.h) rides in this executable.
+    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp)
+    set_source_files_properties(tests/test_early_quit_lockout.cpp tests/test_server_timestep.cpp
+                                PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
+
+    # test_cmdline_strip.cpp (#515, header-only lifecycle/cmdline_strip.h); nevr_core supplies g_headlessTickRateHz.
+    add_executable(test_cmdline_strip tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp)
+    set_source_files_properties(tests/test_cmdline_strip.cpp tests/test_timestep_log.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_cmdline_strip PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_cmdline_strip PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_cmdline_strip DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
     set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -684,9 +1120,14 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
-    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) and
+    # test_server_bringup.cpp (#45, #592, header-only lifecycle/server_bringup.h) and
+    # test_return_to_lobby_queue.cpp (#730, header-only lifecycle/return_to_lobby_queue.h) and
+    # test_window_watch.cpp (#341, the decision half of frame/window_watch.h) ride in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp
+                   tests/test_server_bringup.cpp tests/test_return_to_lobby_queue.cpp tests/test_window_watch.cpp)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src
+                               ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
 
@@ -697,13 +1138,23 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # DllLoadHook load-filter test (#361): the real LoadLibrary hooks under MinHook.
-    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp)
-    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp
+    add_executable(test_dll_load_hook tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_dll_load_hook.cpp hook/dll_load_hook.cpp hook/hook_guard.cpp log/boot_log_tee.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK)
+    target_compile_definitions(test_dll_load_hook PRIVATE NEVR_USE_MINHOOK NEVR_DLL_LOAD_HOOK_TESTING NEVR_TEST_HOOKS)
     target_include_directories(test_dll_load_hook PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook)
+    target_link_libraries(test_dll_load_hook PRIVATE GTest::gtest GTest::gtest_main minhook nevr_core)
+    # #504's timing fixture loads the stand-in pnsrad.dll that test_export_trace builds.
+    add_dependencies(test_dll_load_hook nevr_export_trace_fixture)
     gtest_discover_tests(test_dll_load_hook DISCOVERY_MODE PRE_TEST)
+
+    # #593: Log() routes by boot phase. Links the real Log() (nevr_core) and the real boot tee.
+    add_executable(test_boot_log_routing tests/test_boot_log_routing.cpp log/boot_log_tee.cpp)
+    set_source_files_properties(tests/test_boot_log_routing.cpp log/boot_log_tee.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_boot_log_routing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_boot_log_routing PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_boot_log_routing DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
@@ -725,6 +1176,43 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
 
+    # plugin_signature tests (ADR 0010, #741) — the pure verifier over signed fixtures that
+    # tools/gen_plugin_signature_fixtures.py writes into $NEVR_SIGFIX_DIR. Links only the
+    # verifier TU and crypt32/advapi32: no game stubs, no Log.
+    add_executable(test_plugin_signature
+      tests/test_plugin_signature.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_signature.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_signature PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_signature PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_signature DISCOVERY_MODE PRE_TEST)
+
+    # plugin_tree tests (ADR 0010, #741): a plugin's imports, delay loads and forwarders from its own directory
+    # pass the same check, over fixture directories the same generator writes.
+    add_executable(test_plugin_tree
+      tests/test_plugin_tree.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_tree.cpp ext/plugin_tree.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_tree PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_tree PRIVATE
+      GTest::gtest GTest::gtest_main nlohmann_json::nlohmann_json crypt32 advapi32)
+    gtest_discover_tests(test_plugin_tree DISCOVERY_MODE PRE_TEST)
+
+    # plugin_trust tests (ADR 0010, #741): the pinned root matches its digest, the policy is well formed.
+    add_executable(test_plugin_trust
+      tests/test_plugin_trust.cpp
+      ext/plugin_trust.cpp
+      ext/plugin_signature.cpp)
+    set_source_files_properties(tests/test_plugin_trust.cpp ext/plugin_trust.cpp ext/plugin_signature.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_trust PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_trust PRIVATE GTest::gtest GTest::gtest_main crypt32 advapi32)
+    gtest_discover_tests(test_plugin_trust DISCOVERY_MODE PRE_TEST)
+
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
     # compiled with NEVR_TEST_HOOKS to enable mock-callback injection into the
@@ -737,9 +1225,15 @@ if(BUILD_TESTING)
     # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
+      tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       # evrp_package.cpp is pure parsing; the test drives the production parser.
       patch/evrp_package.cpp
+      # #703: resource_override registers the cache's overrides through the production cache.
+      patch/asset_cache.cpp
+      patch/resource_override.cpp
+      # #479: the XPID patch's failure path (g_bootHookFailed, never ServerFatal) is driven for real.
+      patch/xpid_patch.cpp
       # ws_bridge.cpp calls nevr_system_info::Get(). Linked as a source rather than
       # via nevr_core, because this test deliberately does NOT link core — it
       # provides its own stubs for Log/FatalError and linking the real ones
@@ -753,13 +1247,21 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       # #60: plugin_loader.cpp builds the login's plugin report through this.
       ext/plugin_manifest.cpp
+      # #741: the signature gate StageOne consults, linked as production source.
+      ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
       log/boot_log_tee.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
+      # self-checks: ws_bridge.cpp wires the sender and the login gate through the unit.
+      compat/self_check.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -768,10 +1270,13 @@ if(BUILD_TESTING)
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
       hook/hook_liveness.cpp
+      # #741: plugin_loader registers its load filter with the hook.
+      hook/dll_load_hook.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS NEVR_USE_MINHOOK
       NEVR_PROJECT_VERSION="${PROJECT_VERSION}"
       NEVR_GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+      NEVR_GIT_COMMIT_FULL="${GIT_COMMIT_HASH_FULL}"
       NEVR_GIT_DESCRIBE="${GIT_DESCRIBE}"
       CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
     # Disable PCH — the test has its own stub headers and must not depend on
@@ -780,18 +1285,29 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
+      tests/test_resource_override.cpp
       tests/test_evrp_package.cpp
       patch/evrp_package.cpp
+      patch/asset_cache.cpp
+      patch/resource_override.cpp
+      patch/xpid_patch.cpp
       ext/plugin_loader.cpp
       ext/plugin_manifest.cpp
+      ext/plugin_signature.cpp
+      ext/plugin_tree.cpp
+      ext/plugin_trust.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/session_router.cpp
+      compat/ws_session_transport.cpp
       compat/login_profile.cpp
       compat/evr_codec.cpp
+      compat/self_check.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       hook/hook_liveness.cpp
+      hook/dll_load_hook.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
@@ -820,7 +1336,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
       ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
-      ws2_32 psapi
+      ws2_32 psapi advapi32 crypt32
     )
 
     # Hermetic DLL fixtures for the real LoadLibraryExA path in
@@ -843,6 +1359,18 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_onframe"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    # #598: two builds of one fixture that logs through ctx->log, so a test can tell two plugins' ids apart.
+    foreach(_logging_suffix a b)
+      add_library(test_plugin_logging_${_logging_suffix} SHARED
+        tests/plugin_logging_test_dll.cpp)
+      target_compile_definitions(test_plugin_logging_${_logging_suffix} PRIVATE NEVR_PLUGIN_EXPORTS
+        TEST_PLUGIN_NAME="test-plugin-logging-${_logging_suffix}")
+      target_include_directories(test_plugin_logging_${_logging_suffix} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+      set_target_properties(test_plugin_logging_${_logging_suffix} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_logging_${_logging_suffix}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    endforeach()
     add_library(test_plugin_init_fail SHARED
       tests/plugin_init_fail_test_dll.cpp)
     target_compile_definitions(test_plugin_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
@@ -850,6 +1378,14 @@ if(BUILD_TESTING)
     set_target_properties(test_plugin_init_fail PROPERTIES
       PREFIX ""
       OUTPUT_NAME "test_plugin_init_fail"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_library(test_plugin_partial_init_fail SHARED
+      tests/plugin_partial_init_fail_test_dll.cpp)
+    target_compile_definitions(test_plugin_partial_init_fail PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_partial_init_fail PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_partial_init_fail PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_partial_init_fail"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
     add_library(test_plugin_info_keeper SHARED
       tests/plugin_info_keeper_test_dll.cpp)
@@ -859,7 +1395,8 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_info_keeper"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail test_plugin_info_keeper)
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail
+      test_plugin_partial_init_fail test_plugin_info_keeper test_plugin_logging_a test_plugin_logging_b)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -886,11 +1423,12 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
-    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
+    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) and
+    # test_plugin_log.cpp (#598, header-only ext/plugin_log.h) ride in this
     # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_game_line_format.cpp tests/test_broadcaster_pointer_guard.cpp tests/test_process_memory.cpp tests/test_pnsrad_diag_queue.cpp tests/test_pnsrad_load_queue.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp tests/test_plugin_log.cpp tests/test_resource_registry.cpp tests/test_bounded_thread.cpp tests/test_reader_gate.cpp tests/test_checked_patch.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include)

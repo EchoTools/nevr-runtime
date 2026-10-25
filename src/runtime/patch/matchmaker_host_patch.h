@@ -7,11 +7,13 @@
 // function of one image and runs on every load notification (#18). It is separate from the loader
 // callback so a test can drive it over fake images.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace nevr_matchmaker_host_patch {
@@ -76,5 +78,32 @@ std::optional<Result> OnModuleNotification(unsigned reason, const Ch* name, std:
   if (reason != kNotificationLoaded || base == nullptr || !IsMatchmakingModule(name, nameChars)) return std::nullopt;
   return Apply(base, port, std::forward<Write>(write));
 }
+
+/// The tally behind the "matchmaking_reload_patch" self-check (#451, compat/self_check.h): how many times the
+/// module loaded and how many of those loads had their host default re-applied. NoteLoad runs in the loader
+/// callback and only does atomic stores; Take runs on the self-check flush and answers once per change of the
+/// load count. `patched` is stored before `loads`, so a reader that sees N loads also sees every patch of them.
+class ReloadLedger {
+ public:
+  void NoteLoad(const std::optional<Result>& result) {
+    if (result && *result == Result::Patched) patched_.fetch_add(1, std::memory_order_release);
+    loads_.fetch_add(1, std::memory_order_release);
+  }
+
+  /// True with the observation text and the verdict when the load count differs from the last Take.
+  bool Take(std::string* observed, bool* pass) {
+    const std::uint64_t loads = loads_.load(std::memory_order_acquire);
+    if (reported_.exchange(loads) == loads) return false;
+    const std::uint64_t patched = patched_.load(std::memory_order_acquire);
+    *observed = "loads=" + std::to_string(loads) + " patched=" + std::to_string(patched);
+    *pass = patched == loads;
+    return true;
+  }
+
+ private:
+  std::atomic<std::uint64_t> loads_{0};
+  std::atomic<std::uint64_t> patched_{0};
+  std::atomic<std::uint64_t> reported_{0};
+};
 
 }  // namespace nevr_matchmaker_host_patch

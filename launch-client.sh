@@ -1,7 +1,7 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test after every
 # commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll,
-# runs the client on Xephyr :101, judges the run from the game's own JSONL log, and
+# runs the client on display :101 (headless Xvfb; Xephyr when the owner watches), judges the run from the game's own JSONL log, and
 # restores the original DLL.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -13,25 +13,32 @@ GAME_ROOT=$(resolve_game_root) || exit $?
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
 # `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
-# use its own config without touching the game directory. --exit-after-login stops the game itself:
+# use its own config without touching the game directory. --require-in-game fails the run unless the
+# client also reaches "in game" (multiplayer entry), not just "logged in" -- the scenario runner
+# passes it with `--game-arg -mp`. --exit-after-login stops the game itself:
 # it polls the run's own log until the client reaches "logged in" (PASS), the service stays
 # unavailable or --login-timeout seconds pass (FAIL), kills the game, restores the DLL and returns the
 # verdict. Without it the script returns only after the game exits (the scenario runner relies on that).
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
 TRACE_EXPORTS=""
+EXTRA_GAME_ARGS=()
+REQUIRE_IN_GAME=0
 EXIT_AFTER_LOGIN=0
 LOGIN_TIMEOUT=120
+USAGE="launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--game-arg ARG]... [--require-in-game] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
     --trace-exports) TRACE_EXPORTS="${2:?--trace-exports needs a list (pnsrad, pnsovr, pnsdemo, all; comma separated)}"; shift 2 ;;
+    --game-arg) EXTRA_GAME_ARGS+=("${2:?--game-arg needs one game argument}"); shift 2 ;;
+    --require-in-game) REQUIRE_IN_GAME=1; shift ;;
     --exit-after-login) EXIT_AFTER_LOGIN=1; shift ;;
     --login-timeout) LOGIN_TIMEOUT="${2:?--login-timeout needs seconds}"; shift 2 ;;
     --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--trace-exports LIST] [--exit-after-login [--login-timeout SECONDS]] [--print-game-root])" >&2; exit 2 ;;
+    -h|--help) echo "usage: $USAGE  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: $USAGE)" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -54,7 +61,7 @@ acquire_game_run_lock
 
 # Nested display only: never the owner's desktop. Unset every Wayland/session
 # variable so nothing can fall back to it (gamescope did, see AGENTS.md).
-pgrep -f 'Xephyr :101' >/dev/null || { echo "ERROR: Xephyr :101 is not running" >&2; exit 2; }
+pgrep -f '([X]vfb|[X]ephyr) :101' >/dev/null || { echo "ERROR: no X server on :101 (start Xvfb :101 -screen 0 1920x1080x24)" >&2; exit 2; }
 unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 export DISPLAY=:101
 export WINEPREFIX
@@ -125,9 +132,16 @@ echo "=== Console log: $CONSOLE_LOG ==="
 start=$(date +%s)
 set +e
 # -windowed alone (owner, 2026-10-03: "just -windowed"; "-windowed is basically -novr (not -noovr)"):
-# it is the game's no-headset mode. A client is not meant to run with -noovr (a "VR bypass");
-# -mp has no reader in the runtime and no string in echovr.exe (issue #45).
+# it is the game's no-headset mode. A client is not meant to run with -noovr (a "VR bypass").
+# A player's client reaches multiplayer from the menu's own Play action; a scenario has no hand, so
+# it passes the stock flag that begins multiplayer itself: `--game-arg -mp` (#674). The game's syntax
+# has both: `-mp\0` sits in echovr.exe's CLI table at file offset 0x16d0d44, beside -capture and
+# -dumpstats; `-windowed` is the runtime's own flag (src/runtime/lifecycle/cli.cpp).
 game_args=(-windowed)
+if [[ ${#EXTRA_GAME_ARGS[@]} -gt 0 ]]; then
+  game_args+=("${EXTRA_GAME_ARGS[@]}")
+  echo "=== extra game arguments: ${EXTRA_GAME_ARGS[*]} ==="
+fi
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")
@@ -135,7 +149,7 @@ if [[ -n "$CONFIG" ]]; then
 fi
 if [[ -n "$TRACE_EXPORTS" ]]; then
   [[ "$TRACE_EXPORTS" =~ ^[A-Za-z,.]+$ ]] || { echo "ERROR: --trace-exports takes a comma separated list of pnsrad, pnsovr, pnsdemo, all" >&2; exit 2; }
-  game_args+=(-traceexports "$TRACE_EXPORTS")
+  game_args+=(-trace-exports "$TRACE_EXPORTS")
   echo "=== tracing platform DLL exports: $TRACE_EXPORTS (docs/reference/export-tracer.md) ==="
 fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
@@ -212,3 +226,10 @@ if [[ $(count 'to logged in') -eq 0 ]]; then
   exit 1
 fi
 echo "PASS: client reached logged in"
+if [[ $REQUIRE_IN_GAME -eq 1 ]]; then
+  if [[ $(count 'to in game') -eq 0 ]]; then
+    echo "FAIL: client never reached in game" >&2
+    exit 1
+  fi
+  echo "PASS: client reached in game (multiplayer entry)"
+fi

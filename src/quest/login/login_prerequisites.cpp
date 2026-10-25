@@ -33,6 +33,7 @@ struct Config {
   bool substitute;
   ReadyFn ready;
   ResetFn reset;
+  HoldFn hold;
 };
 
 Config g_config;
@@ -86,6 +87,11 @@ std::atomic<std::uint64_t> g_slot_id[local::kSlots] = {};
 std::atomic<std::uint64_t> g_issued{0};        // ids handed out: 1..g_issued
 std::atomic<std::uint64_t> g_next_deliver{1};  // the next id to hand the pump
 std::atomic<bool> g_local_enabled{false};
+std::atomic<local::SocialSelectedFn> g_social_selected{nullptr};
+std::atomic<std::uint64_t> g_local_refused{0};
+std::atomic<std::uint64_t> g_refused_ids{0};
+constexpr std::size_t kRefusedSites = 16;                // distinct call sites logged; libpnsovr has nine
+std::atomic<std::uint64_t> g_refused_site[kRefusedSites] = {};  // site + 1; 0 is a free entry
 std::atomic<std::uint64_t> g_local_requested{0};
 std::atomic<std::uint64_t> g_local_delivered{0};
 std::atomic<std::uint64_t> g_local_deferred{0};
@@ -371,12 +377,13 @@ bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept {
   return accessors_hooked == 8 && have_is_error;
 }
 
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset) noexcept {
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset, HoldFn hold) noexcept {
   StandIn::Generate();
   g_config.api = api;
   g_config.substitute = substitute && api.message_is_error != nullptr;
   g_config.ready = ready;
   g_config.reset = reset;
+  g_config.hold = hold;
   g_configured.store(true, std::memory_order_release);
 }
 
@@ -423,6 +430,7 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
                            {"result", "stand_in"},
                            {"reason", "local"},
                            {"accessor", "local"},
+                           {"ready", ready_now ? 1 : 0},  // 0: the reset above withdrew the stand-ins (#581)
                            {"ovr_error", -1},
                            {"error_code", 0},
                            {"http_code", 0},
@@ -603,7 +611,10 @@ std::uint64_t Request(Prerequisite which) noexcept {
 
 const void* OnPopMessage(const void* (*original)()) noexcept {
   // Frequency: once per game-loop pump iteration. Atomics only, no logging.
-  if (g_local_enabled.load(std::memory_order_acquire) && g_config.ready != nullptr && g_config.ready()) {
+  // Delivered unless the identity source holds the answers (#581): token auth has a token coming without the
+  // player. Not ready and not held, the game receives them, the not-ready reset withdraws the stand-ins, and
+  // its own UpdateInternal fails the login: the screen the sign-in code is written onto.
+  if (g_local_enabled.load(std::memory_order_acquire) && !(g_config.hold != nullptr && g_config.hold())) {
     for (;;) {
       const std::uint64_t n = g_next_deliver.load(std::memory_order_acquire);
       if (n > g_issued.load(std::memory_order_acquire)) break;  // nothing pending
@@ -652,6 +663,36 @@ void OnFreeMessage(void (*original)(void*), void* message) noexcept {
   original(message);
 }
 
+void SetSocialSelectedProbe(SocialSelectedFn probe) noexcept {
+  g_social_selected.store(probe, std::memory_order_release);
+}
+bool SocialSelected() noexcept {
+  const SocialSelectedFn probe = g_social_selected.load(std::memory_order_acquire);
+  return probe != nullptr && probe();
+}
+
+std::uint64_t Refuse(std::uint64_t site) noexcept {
+  const std::uint64_t count = g_local_refused.fetch_add(1, std::memory_order_relaxed) + 1;
+  // One log line per call site (the first kRefusedSiteLogLimit distinct ones), so a caller that runs is named
+  // without a spinning request flooding the log. No id or user value is logged.
+  bool first = false;
+  for (std::size_t i = 0; i < kRefusedSites; ++i) {
+    std::uint64_t seen = g_refused_site[i].load(std::memory_order_relaxed);
+    if (seen == 0 && g_refused_site[i].compare_exchange_strong(seen, site + 1, std::memory_order_acq_rel)) {
+      first = true;  // this call site was not seen before
+      break;
+    }
+    if (seen == site + 1) break;  // seen (either already, or by the thread that just took the entry)
+  }
+  if (first) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_social_org_request_refused",
+                        {{"site", site}, {"refused", count}});
+  }
+  return kRequestIdBase | kRefusedIdBit | g_refused_ids.fetch_add(1, std::memory_order_relaxed);
+}
+std::uint64_t Refused() noexcept { return g_local_refused.load(std::memory_order_relaxed); }
+const std::atomic<std::uint64_t>& RefusedCounter() noexcept { return g_local_refused; }
+
 std::uint64_t Requested() noexcept { return g_local_requested.load(std::memory_order_relaxed); }
 std::uint64_t Delivered() noexcept { return g_local_delivered.load(std::memory_order_relaxed); }
 std::uint64_t Deferred() noexcept { return g_local_deferred.load(std::memory_order_relaxed); }
@@ -677,6 +718,10 @@ void ResetForTest() noexcept {
   g_issued.store(0, std::memory_order_relaxed);
   g_next_deliver.store(1, std::memory_order_relaxed);
   g_local_enabled.store(false, std::memory_order_relaxed);
+  g_social_selected.store(nullptr, std::memory_order_relaxed);
+  g_local_refused.store(0, std::memory_order_relaxed);
+  g_refused_ids.store(0, std::memory_order_relaxed);
+  for (std::size_t i = 0; i < kRefusedSites; ++i) g_refused_site[i].store(0, std::memory_order_relaxed);
   g_local_requested.store(0, std::memory_order_relaxed);
   g_local_delivered.store(0, std::memory_order_relaxed);
   g_local_deferred.store(0, std::memory_order_relaxed);

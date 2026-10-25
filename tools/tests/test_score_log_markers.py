@@ -36,6 +36,12 @@ def row(output: str, row_id: str) -> str:
 
 
 class CurrentSmokeMarkerTest(unittest.TestCase):
+    def test_shutdown_marker_requires_the_console_handler(self):
+        old_signal = score("[NEVR.PATCH] POSIX signal handlers installed\n")
+        self.assertNotIn("PASS", row(old_signal.stdout, "S31"))
+        console = score("[NEVR.PATCH] console ctrl handler installed\n")
+        self.assertIn("PASS", row(console.stdout, "S31"))
+
     def test_current_boot_redirect_and_login_success_markers_score(self):
         log = (
             "[NEVR.PATCH] boot hooks installed ok=TrUe\n"
@@ -63,6 +69,24 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "B03"))
         self.assertIn("FAIL", row(result.stdout, "S20"))
+
+    def test_a_partial_loadlibrary_hook_install_scores_fail_and_a_full_one_passes(self):
+        # #632: B09 had no fail pattern, so a partial install scored ABSENT. A partial install also ends the boot
+        # with ok=false (the hooks are required), which B03 scores FAIL.
+        partial = (
+            "[NEVR.DLLHOOK] warn; hook FAILED name=LoadLibraryExA reason=MH_ERROR_MEMORY_PROTECT\n"
+            "[NEVR.DLLHOOK] warn; LoadLibrary hooks PARTIAL (3/4)\n"
+            "[NEVR.PATCH] warn; dll load hooks PARTIAL (3/4): loads through an unhooked variant\n"
+            "[NEVR.PATCH] boot hooks installed ok=false\n"
+        )
+        result = score(partial, group="boot")
+        self.assertIn("FAIL", row(result.stdout, "B09"))
+        self.assertIn("FAIL", row(result.stdout, "B03"))
+        self.assertNotEqual(result.returncode, 0)
+        full = score("[NEVR.DLLHOOK] info; LoadLibrary hooks OK (4/4)\n[NEVR.PATCH] info; dll load hooks installed\n"
+                     "[NEVR.PATCH] boot hooks installed ok=true\n", group="boot")
+        self.assertIn("PASS", row(full.stdout, "B09"))
+        self.assertIn("PASS", row(full.stdout, "B03"))
 
     def test_missing_login_marker_remains_absent(self):
         result = score("[NEVR.PATCH] boot hooks installed ok=true\n")
@@ -122,6 +146,19 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         result = score(missing, group="all")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "M04"))
+
+    def test_c12_scores_the_loadout_skip_line_and_not_the_removed_round_trip(self):
+        # #832: no loadout save is sent, so C12 scores the skip line the runtime logs; the old
+        # "Not in active session" fail pattern is gone and must not turn a healthy run red.
+        skip = ("[NEVR.GAMESERVER] [SAVE_LOADOUT] not sent: the game service does not accept this message yet "
+                "(#772) slot=3\n")
+        self.assertIn("PASS", row(score(skip, group="client").stdout, "C12"))
+        self.assertIn("ABSENT", row(score("[NEVR.GAMESERVER] [SAVE_SUCCESS] size=12\n", group="client").stdout, "C12"))
+        removed = score(skip + "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session, slot=3 \u2014 loadout not sent\n",
+                        group="client")
+        self.assertIn("PASS", row(removed.stdout, "C12"))
+        base = score("[NEVR.GAMESERVER] [SAVE_LOADOUT] No game base address\n", group="client")
+        self.assertIn("FAIL", row(base.stdout, "C12"))
 
 
 if __name__ == "__main__":

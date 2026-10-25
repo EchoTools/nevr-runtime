@@ -16,6 +16,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
@@ -63,7 +64,8 @@ static uint64_t AcceptedEntrantsNow() {
 }
 
 void CallScheduleReturnToLobby() {
-    if (g_pGame) nevr_return_to_lobby::Request(g_pGame);
+    // g_pGame is the game context; the game's function takes the net game (#730).
+    if (g_pGame) nevr_return_to_lobby::Request(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame));
 }
 
 #include "core/logging.h"
@@ -206,6 +208,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 
   m_context->Initialize(lobby, broadcaster);
   m_context->FinalizeInitialization();
+  m_reconnectPending.store(false, std::memory_order_release);
+  m_reconnectRegistrationEnabled.store(true, std::memory_order_release);
 
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
@@ -242,6 +246,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 }
 
 VOID GameServerLib::Terminate() {
+  m_reconnectRegistrationEnabled.store(false, std::memory_order_release);
+  m_reconnectPending.store(false, std::memory_order_release);
   g_activeServerLib.store(nullptr, std::memory_order_release);
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] terminating game server");
   m_context->Terminate();
@@ -265,7 +271,7 @@ VOID GameServerLib::Terminate() {
   }
 }
 
-// File-static state for -exitonerror disconnect detection
+// File-static state for -exit-on-error disconnect detection
 static bool s_wasConnectedToServerDb = false;
 static bool s_exitPending = false;
 
@@ -278,6 +284,12 @@ VOID GameServerLib::Update() {
   // is unregistered and about to exit; skip the rest of the frame rather than
   // process ServerDB traffic for a server that no longer exists.
   if (m_gameThreadHandoff.Service()) return;
+
+  if (m_reconnectPending.exchange(false, std::memory_order_acq_rel) &&
+      m_reconnectRegistrationEnabled.load(std::memory_order_acquire) &&
+      m_wsClient && m_wsClient->IsConnected()) {
+    ProcessPendingReconnect();
+  }
 
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
@@ -293,13 +305,13 @@ VOID GameServerLib::Update() {
     m_telemetry->RunDiagnostics();
   }
 
-  // -exitonerror: detect serverdb disconnect and trigger graceful shutdown
+  // -exit-on-error: detect serverdb disconnect and trigger graceful shutdown
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();
     if (s_wasConnectedToServerDb && !nowConnected) {
       s_exitPending = true;
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- beginning graceful shutdown");
+          "[NEVR.GAMESERVER] ServerDB disconnected with -exit-on-error -- beginning graceful shutdown");
       BeginGracefulShutdown(false);
     }
     s_wasConnectedToServerDb = nowConnected;
@@ -324,6 +336,9 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
         "[NEVR.GAMESERVER] BeginGracefulShutdown already in progress — ignoring redundant call");
     return;
   }
+
+  m_reconnectRegistrationEnabled.store(false, std::memory_order_release);
+  m_reconnectPending.store(false, std::memory_order_release);
 
   // Prevent further reconnection attempts so the next disconnect is final.
   if (m_wsClient) m_wsClient->DisableReconnection();

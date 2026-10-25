@@ -15,16 +15,30 @@
 #include <windows.h>
 
 #include <gtest/gtest.h>
+#include <ixwebsocket/IXNetSystem.h>
+#include <ixwebsocket/IXWebSocket.h>
+#include <ixwebsocket/IXWebSocketServer.h>
+#include <chrono>
+#include <condition_variable>
+#include <future>
 #include <cstdarg>
+#include <cstring>
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <utility>
+#include <atomic>
 #include <iterator>
+#include <memory>
+#include <random>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <signal.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
@@ -36,10 +50,16 @@
 #include "runtime/compat/login_profile.h"
 #include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
+#include "core/cli_option_value.h"
+#include "core/host_environment_line.h"
 #include "core/system_info.h"
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/patch/evrp_package.h"
+#include "runtime/patch/xpid_patch.h"
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/hook/addresses.h"
+#include <MinHook.h>  // XpidPrefixDetourBoot initialises the hooking engine for one test
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -104,7 +124,6 @@ CHAR   g_regionOverride[64]   = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
-volatile sig_atomic_t g_shutdownRequested = 0;
 
 // --- logging.h implementations (not linking logging.cpp to avoid nlohmann-json) ---
 std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
@@ -112,6 +131,7 @@ const char* GetLogLevelString(EchoVR::LogLevel) { return "info"; }
 std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { return "{}"; }
 
 std::mutex g_testLogMutex;
+std::condition_variable g_testLogCv;  // notified on every line, so a test waits for a line without sleeping
 std::vector<std::string> g_testLogMessages;
 
 bool TestLogContains(const std::string& needle) {
@@ -122,29 +142,58 @@ bool TestLogContains(const std::string& needle) {
                      });
 }
 
+// Every line with the level it was logged at, for tests that pin the level (#598).
+std::vector<std::pair<EchoVR::LogLevel, std::string>> g_testLogLeveled;
+
+bool TestLogContainsAtLevel(EchoVR::LogLevel level, const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return std::any_of(g_testLogLeveled.begin(), g_testLogLeveled.end(),
+                     [&](const std::pair<EchoVR::LogLevel, std::string>& entry) {
+                       return entry.first == level && entry.second.find(needle) != std::string::npos;
+                     });
+}
+
 void ClearTestLogs() {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   g_testLogMessages.clear();
+  g_testLogLeveled.clear();
 }
 
+// The park point for the flush tests (see Log).
+std::atomic<bool> g_flushPark{false};
+std::promise<void>* g_flushParked = nullptr;
+std::shared_future<void> g_flushRelease;
+
 void Log(EchoVR::LogLevel level, const char* format, ...) {
-  (void)level;
   char buffer[2048] = {};
   va_list args;
   va_start(args, format);
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
+  // Park the logging thread on the "login injected" line (HandleRemoteOpen, between its first batch of
+  // sends and its re-lock) until the test releases it.
+  if (g_flushPark.load() && std::strstr(buffer, "login injected") != nullptr && g_flushPark.exchange(false)) {
+    g_flushParked->set_value();
+    g_flushRelease.wait();
+  }
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   nevr_test_log_cap::Append(g_testLogMessages, buffer);
+  g_testLogLeveled.emplace_back(level, buffer);
+  g_testLogCv.notify_all();
 }
 
 // boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
 const CHAR* GetRunId() { return "test-run"; }
+// boot_log_tee.cpp sets Log()'s boot sink; the stub Log() above records every line instead, so the
+// sink is not kept (test_boot_log_routing drives the real routing).
+void SetBootLogSink(BootLogSink) {}
 
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
 
+int g_fatalErrorCalls = 0;
 void FatalError(const char* msg, const char* title) {
+  ++g_fatalErrorCalls;
   fprintf(stderr, "[TEST] FatalError: %s: %s\n", title ? title : "?", msg ? msg : "?");
 }
 
@@ -166,6 +215,10 @@ void ServerFatal(const CHAR* format, ...) {
   fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
 }
 
+// --- initialize.h extern (set by xpid_patch.cpp; initialize.cpp is not linked here) ---
+bool g_bootHookFailed = false;
+char g_bootHookFailedCause[96] = {};
+
 // --- config.h extern (used by ws_bridge.cpp) ---
 PVOID g_pGame = nullptr;
 void* g_earlyConfigPtr = nullptr;
@@ -175,7 +228,11 @@ void* g_earlyConfigPtr = nullptr;
 // file discovery). A null return == "key absent", so ws_bridge's guard skips the
 // URL-credential path exactly as an absent identity.discord_id/auth.password
 // would. The N61 tests drive the Close handler, not login injection.
-const char* NevrCfgGetFlat(const char* /*flatKey*/) { return nullptr; }
+// #708: nevr_session_router answers from g_testRouterMode, so a test picks the bridge's routing mode.
+const char* g_testRouterMode = nullptr;
+const char* NevrCfgGetFlat(const char* flatKey) {
+  return std::strcmp(flatKey, "nevr_session_router") == 0 ? g_testRouterMode : nullptr;
+}
 
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
 // service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
@@ -195,12 +252,18 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 // Production headers (included AFTER all stubs are defined).
 // ============================================================================
 
+#include <cctype>
 #include "runtime/ext/plugin_loader.h"
+#include "runtime/ext/plugin_refusal_notice.h"
+#include "runtime/hook/dll_load_hook.h"
+#include "runtime/ext/plugin_trust.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/self_check.h"
 #include "runtime/compat/evr_codec.h"
+#include "runtime/compat/socket_role.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -256,14 +319,601 @@ class PluginLoaderDiagnosticTest : public ::testing::Test {
     ClearTestLogs();
     EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
     ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+    // These tests are about the loader, not the signature gate: their fixture DLLs are unsigned. The gate has
+    // its own fixture below (PluginSignatureGateTest), which enforces.
+    nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, nullptr);
   }
 
   void TearDown() override {
     UnloadPlugins();
     g_testPluginLoadPlan.clear();
     ClearTestLogs();
+    nevr_plugin_trust::TestHook_ResetTrust();
   }
 };
+
+// ============================================================================
+// The plugin signature gate in the real loader (ADR 0010, #741): real LoadPlugins, real files, a policy that
+// pins the test root. The fixtures are the test plugin signed by a throwaway PKI, made by
+// tools/gen_plugin_signature_fixtures.py (--plugin-dll) into $NEVR_SIGFIX_DIR; a missing directory fails the
+// tests, it does not skip them.
+// ============================================================================
+
+class PluginSignatureGateTest : public PluginLoaderDiagnosticTest {
+ protected:
+  void SetUp() override {
+    PluginLoaderDiagnosticTest::SetUp();
+    const char* dir = std::getenv("NEVR_SIGFIX_DIR");
+    ASSERT_NE(dir, nullptr) << "NEVR_SIGFIX_DIR is not set: just test-auth-unit makes the fixtures and sets it";
+    fixtures_ = dir;
+    std::ifstream in(fixtures_ + "/fixtures.json");
+    ASSERT_TRUE(in.good()) << "no fixtures.json in " << fixtures_;
+    manifest_ = nlohmann::json::parse(in);
+    ASSERT_TRUE(manifest_["plugins"].contains("test_plugin_onframe"));
+    std::ifstream root(fixtures_ + "/" + manifest_["root_der"].get<std::string>(), std::ios::binary);
+    policy_.rootDer.assign(std::istreambuf_iterator<char>(root), std::istreambuf_iterator<char>());
+    ASSERT_FALSE(policy_.rootDer.empty());
+    policy_.profileEkus = {manifest_["profile_eku"].get<std::string>()};
+    nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::SignedOnly, &policy_);
+
+    char exePath[MAX_PATH] = {};
+    ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+    pluginsDir_ = std::string(exePath);
+    pluginsDir_.resize(pluginsDir_.find_last_of("\\/") + 1);
+    pluginsDir_ += "plugins\\";
+  }
+
+  void TearDown() override {
+    UnloadPlugins();
+    for (const std::string& file : copies_) DeleteFileA(file.c_str());
+    PluginLoaderDiagnosticTest::TearDown();
+  }
+
+  // Puts fixture `kind` (signed, wrong_eku, unsigned) of the test plugin into plugins/ as `name` and plans it.
+  void Plan(const std::string& name, const std::string& kind, bool required = false) {
+    const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe." + kind].get<std::string>();
+    const std::string target = pluginsDir_ + name;
+    ASSERT_TRUE(CopyFileA(source.c_str(), target.c_str(), FALSE)) << source << " error " << GetLastError();
+    copies_.push_back(target);
+    g_testPluginLoadPlan.push_back({name, name, required, "", "{}"});
+  }
+
+  std::string fixtures_;
+  std::string pluginsDir_;
+  nlohmann::json manifest_;
+  nevr_plugin_signature::Policy policy_;
+  std::vector<std::string> copies_;
+};
+
+TEST_F(PluginSignatureGateTest, PluginSignedByThePinnedSignerLoads) {
+  Plan("gate_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_NE(BuildPluginManifestJson().find("gate_signed.dll"), std::string::npos);
+}
+
+TEST_F(PluginSignatureGateTest, UnsignedPluginIsRefusedWithOneLineAndAManifestEntry) {
+  Plan("gate_unsigned.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("gate_unsigned.dll"), nullptr) << "a refused file was mapped";
+  EXPECT_TRUE(TestLogContains("plugin=gate_unsigned.dll file=gate_unsigned.dll refused: unsigned"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 1u);
+  EXPECT_FALSE(manifest[0]["loaded"].get<bool>());
+  EXPECT_EQ(manifest[0]["error"].get<std::string>(), "refused: unsigned");
+}
+
+TEST_F(PluginSignatureGateTest, PluginSignedByAnotherProfileIsRefused) {
+  Plan("gate_other.dll", "wrong_eku");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("gate_other.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("file=gate_other.dll refused: EKU"));
+}
+
+TEST_F(PluginSignatureGateTest, DevBuildLoadsAnUnsignedPluginWithAWarning) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("gate_dev.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "file=gate_dev.dll UNSIGNED, loaded because this is a dev build"));
+}
+
+TEST_F(PluginSignatureGateTest, RefusalIsPerPluginAndTheSignedOneStillLoads) {
+  Plan("gate_a_unsigned.dll", "unsigned");
+  Plan("gate_b_signed.dll", "signed");
+  LoadPlugins();
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("file=gate_a_unsigned.dll refused: unsigned"));
+}
+
+// ---- the dependency walk, the refusal dialog and the load filter (ADR 0010 sections 1 and 6, #741) -------------
+
+namespace {
+std::vector<std::string> g_refusalDialogs;
+void CaptureRefusalDialog(const std::string& text) { g_refusalDialogs.push_back(text); }
+}  // namespace
+
+class PluginDependencyGateTest : public PluginSignatureGateTest {
+ protected:
+  void SetUp() override {
+    PluginSignatureGateTest::SetUp();
+    ASSERT_TRUE(manifest_.contains("trees"));
+    wasServer_ = g_isServer;
+    wasHeadless_ = g_isHeadless;
+    g_isServer = FALSE;  // a client with graphics: the one run that shows the dialog
+    g_isHeadless = FALSE;
+    g_refusalDialogs.clear();
+    TestHook_ResetRefusals();
+    TestHook_SetRefusalDialogSink(&CaptureRefusalDialog);
+  }
+
+  void TearDown() override {
+    TestHook_ResetPluginLoadFilter();
+    TestHook_SetRefusalDialogSink(nullptr);
+    TestHook_ResetRefusals();
+    g_isServer = wasServer_;
+    g_isHeadless = wasHeadless_;
+    PluginSignatureGateTest::TearDown();
+  }
+
+  // Copies the fixture tree `tree` (its signed and unsigned files) into plugins/ and returns the root file's name.
+  std::string Copy(const std::string& tree) {
+    const nlohmann::json& t = manifest_["trees"][tree];
+    const std::string from = fixtures_ + "/" + t["dir"].get<std::string>() + "/";
+    WIN32_FIND_DATAA found;
+    HANDLE h = FindFirstFileA((from + "*.dll").c_str(), &found);
+    EXPECT_NE(h, INVALID_HANDLE_VALUE) << from;
+    if (h == INVALID_HANDLE_VALUE) return {};
+    do {
+      const std::string target = pluginsDir_ + found.cFileName;
+      EXPECT_TRUE(CopyFileA((from + found.cFileName).c_str(), target.c_str(), FALSE)) << target;
+      copies_.push_back(target);
+    } while (FindNextFileA(h, &found));
+    FindClose(h);
+    return t["root"].get<std::string>();
+  }
+
+  void PlanTree(const std::string& tree) {
+    const std::string root = Copy(tree);
+    g_testPluginLoadPlan.push_back({root, root, false, "", "{}"});
+  }
+
+  // What the filter is asked about a load of `file` in plugins/.
+  bool Blocked(const std::string& file) {
+    std::wstring wide;
+    for (char c : pluginsDir_ + file) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return nevr_dll_load_hook::IsLoadBlocked(wide.c_str(), nullptr);
+  }
+
+  void ExpectDependencyRefusal(const std::string& tree) {
+    const nlohmann::json& t = manifest_["trees"][tree];
+    PlanTree(tree);
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_EQ(GetModuleHandleA(t["root"].get<std::string>().c_str()), nullptr) << "the plugin was mapped";
+    EXPECT_EQ(GetModuleHandleA("dep.dll"), nullptr) << "the refused dependency was mapped";
+    const std::string expected = "refused: dependency dep.dll (" + t["via"].get<std::string>() + "): unsigned";
+    EXPECT_TRUE(TestLogContains(expected)) << expected;
+    const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+    ASSERT_EQ(manifest.size(), 1u);
+    EXPECT_EQ(manifest[0]["error"].get<std::string>(), expected);
+  }
+
+  BOOL wasServer_ = FALSE;
+  BOOL wasHeadless_ = FALSE;
+};
+
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedImportIsRefused) { ExpectDependencyRefusal("import_unsigned"); }
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedDelayLoadIsRefused) { ExpectDependencyRefusal("delay_unsigned"); }
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedForwardTargetIsRefused) {
+  ExpectDependencyRefusal("forwarder_unsigned");
+}
+TEST_F(PluginDependencyGateTest, PluginWithAnUnsignedDependencyTwoLevelsDownIsRefused) {
+  ExpectDependencyRefusal("transitive_unsigned");
+}
+
+TEST_F(PluginDependencyGateTest, SignedDependenciesAreNotARefusal) {
+  PlanTree("import_ok");
+  LoadPlugins();
+  // The fixture is not a real plugin, so it fails for lacking the plugin exports; what matters is that the gate let
+  // it through.
+  EXPECT_FALSE(TestLogContains("refused"));
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, DevBuildDoesNotWalkTheDependencies) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  PlanTree("import_unsigned");
+  LoadPlugins();
+  EXPECT_FALSE(TestLogContains("dependency"));
+}
+
+TEST_F(PluginDependencyGateTest, RefusalDialogNamesThePluginAndTheFileThatStoppedIt) {
+  PlanTree("import_unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  EXPECT_NE(g_refusalDialogs[0].find("importer.dll wasn't loaded because it isn't signed by nEVR."), std::string::npos)
+      << g_refusalDialogs[0];
+  EXPECT_NE(g_refusalDialogs[0].find("dep.dll wasn't loaded because it isn't signed by nEVR."), std::string::npos)
+      << g_refusalDialogs[0];
+  EXPECT_NE(g_refusalDialogs[0].find("ask each plugin's author for a signed release."), std::string::npos);
+}
+
+TEST_F(PluginDependencyGateTest, OneRefusedPluginGetsTheExactDialogText) {
+  Plan("gate_dialog.dll", "unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  EXPECT_EQ(g_refusalDialogs[0],
+            "gate_dialog.dll wasn't loaded because it isn't signed by nEVR. Plugins from the launcher are signed; "
+            "ask the plugin's author for a signed release.");
+}
+
+TEST_F(PluginDependencyGateTest, DialogIsShownOncePerRun) {
+  Plan("gate_dialog_a.dll", "unsigned");
+  LoadPlugins();
+  ASSERT_EQ(g_refusalDialogs.size(), 1u);
+  TestHook_RecordRefusal("later.dll");
+  TestHook_ShowRefusalNoticeIfDue();
+  EXPECT_EQ(g_refusalDialogs.size(), 1u) << "a second dialog in the same run";
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogOnAServer) {
+  g_isServer = TRUE;
+  Plan("gate_dialog_s.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+  EXPECT_TRUE(TestLogContains("file=gate_dialog_s.dll refused: unsigned"));  // the record is still written
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogOnAHeadlessRun) {
+  g_isHeadless = TRUE;
+  Plan("gate_dialog_h.dll", "unsigned");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, NoDialogWhenNothingWasRefused) {
+  Plan("gate_dialog_ok.dll", "signed");
+  LoadPlugins();
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfAnUnsignedFileInThePluginsDirectoryIsRefused) {
+  Plan("late_unsigned.dll", "unsigned");  // copied into plugins/, never planned to load
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_unsigned.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_unsigned.dll: unsigned"));
+}
+
+// After LoadPlugins has finished nothing else would tell the player: the refusal shows the notice itself, once.
+// The test never calls the dialog hook; production does not either.
+TEST_F(PluginDependencyGateTest, ALateRefusalAfterLoadPluginsShowsTheNoticeItself) {
+  Plan("late_notice_signed.dll", "signed");
+  LoadPlugins();  // loads it, installs the filter, shows its own (empty) notice
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  ASSERT_TRUE(g_refusalDialogs.empty());
+  Plan("late_notice.dll", "unsigned");
+  g_testPluginLoadPlan.pop_back();  // copied into plugins/, never planned to load
+  EXPECT_TRUE(Blocked("late_notice.dll"));
+  ASSERT_EQ(g_refusalDialogs.size(), 1u) << "the player was not told";
+  EXPECT_NE(g_refusalDialogs[0].find("late_notice.dll"), std::string::npos);
+  Plan("late_notice_two.dll", "unsigned");
+  g_testPluginLoadPlan.pop_back();
+  EXPECT_TRUE(Blocked("late_notice_two.dll"));
+  EXPECT_EQ(g_refusalDialogs.size(), 1u) << "one dialog per run";
+}
+
+// A refusal made while LoadPlugins still runs is shown by LoadPlugins's own notice, not before.
+TEST_F(PluginDependencyGateTest, ARefusalBeforeLoadPluginsEndsWaitsForItsNotice) {
+  Plan("early_notice.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("early_notice.dll"));
+  EXPECT_TRUE(g_refusalDialogs.empty());
+}
+
+// LoadLibrary appends ".dll" to a name with no extension, so a late load of "<plugins>\late_noext" maps
+// late_noext.dll.
+TEST_F(PluginDependencyGateTest, ALateLoadNamedWithoutAnExtensionIsRefused) {
+  Plan("late_noext.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("late_noext"));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_noext.dll: unsigned"));
+}
+
+TEST_F(PluginDependencyGateTest, ALateLoadByBareNameWithoutAnExtensionIsRefused) {
+  Plan("late_bare_noext.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare_noext", nullptr));
+}
+
+// A relative path with a directory part: the loader finds it from the application directory even when the
+// current directory is somewhere else.
+class CurrentDirectoryScope {
+ public:
+  explicit CurrentDirectoryScope(const wchar_t* to) {
+    wchar_t buf[MAX_PATH * 2] = {};
+    const DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(std::size(buf)), buf);
+    if (n != 0 && n < std::size(buf)) saved_.assign(buf, n);
+    SetCurrentDirectoryW(to);
+  }
+  ~CurrentDirectoryScope() {
+    if (!saved_.empty()) SetCurrentDirectoryW(saved_.c_str());
+  }
+
+ private:
+  std::wstring saved_;
+};
+
+// The loader appends a relative path to every directory it searches (System32, the Windows directory, PATH, the
+// SetDllDirectory directories, each of them through links), so no list of candidates is complete: a "..", an
+// ancestor of plugins\ and a junction in a search directory each reach it. In a signed-only build every relative
+// path with a directory part, "\" or "/", is refused, whatever it leads to.
+static const wchar_t* const kRelativeWithADirectoryPart[] = {
+    L"plugins\\late_rel.dll",           L"plugins/late_rel.dll",       L".\\late_cwd.dll",
+    L"./late_cwd.dll",                  L"..\\..\\no-such-dir\\late_up.dll",
+    L".\\..\\x.dll",                    L"./../x.dll",                 L"sub\\..\\..\\x.dll",
+    L"..\\x.dll",                       L"../x.dll",                   L"no-such-dir\\a..b.dll",
+    L"work\\ancestor\\of\\plugins\\k.dll", L"a/b.dll",
+};
+
+TEST_F(PluginDependencyGateTest, ARelativePathWithADirectoryPartIsRefusedWhateverItLeadsTo) {
+  Plan("late_rel.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  wchar_t temp[MAX_PATH] = {};
+  ASSERT_GT(GetTempPathW(MAX_PATH, temp), 0u);
+  CurrentDirectoryScope cwd(temp);
+  for (const wchar_t* spelling : kRelativeWithADirectoryPart) {
+    SCOPED_TRACE(std::string(spelling, spelling + wcslen(spelling)));
+    EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(spelling, nullptr));
+  }
+  EXPECT_TRUE(TestLogContains("a relative path with a directory part cannot be checked"));
+}
+
+// A name with no directory part, and a full path, keep the rules they had: a bare name is the plugins directory's
+// when that directory holds it; a file that is not there is the real load's to report.
+TEST_F(PluginDependencyGateTest, ABareNameAndAFullPathKeepTheirOwnRules) {
+  Plan("late_bare.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare.dll", nullptr));
+  EXPECT_TRUE(TestLogContains("refused a later load of late_bare.dll: unsigned"));
+  std::wstring full = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"late_bare.dll";
+  for (wchar_t& c : full) c = static_cast<wchar_t>(towlower(c));  // the hook hands the filter a lower-cased path
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(full.c_str(), nullptr));
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(L"no-such-file.dll", nullptr));
+}
+
+TEST_F(PluginDependencyGateTest, ADevBuildLetsARelativePathWithADirectoryPartThrough) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  for (const wchar_t* spelling : kRelativeWithADirectoryPart) {
+    SCOPED_TRACE(std::string(spelling, spelling + wcslen(spelling)));
+    EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(spelling, nullptr));
+  }
+}
+
+TEST_F(PluginDependencyGateTest, ARelativePathThatCannotBeResolvedIsRefusedNotLetThrough) {
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring tooLong;
+  for (int i = 0; i < 700; ++i) tooLong += L"a\\";
+  tooLong += L"x.dll";
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(tooLong.c_str(), nullptr));
+  EXPECT_TRUE(TestLogContains("a relative path with a directory part cannot be checked"));
+}
+
+TEST_F(PluginDependencyGateTest, ADevBuildLetsAnUnresolvableRelativePathThrough) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring tooLong;
+  for (int i = 0; i < 700; ++i) tooLong += L"a\\";
+  tooLong += L"x.dll";
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(tooLong.c_str(), nullptr));
+}
+
+// The game under a path with a character the ANSI code page spells as a byte above 0x7F. The loader's directory is
+// an ANSI string; widening it byte by byte makes a directory no path ever starts with, and the filter checked
+// nothing.
+TEST_F(PluginDependencyGateTest, ALateLoadUnderANonAsciiGamePathIsRefused) {
+  std::wstring wideDir(pluginsDir_.begin(), pluginsDir_.end());
+  const std::wstring root = wideDir.substr(0, wideDir.size() - std::wstring(L"plugins\\").size()) + L"Nevr_T\u0161\\";
+  const std::wstring plugins = root + L"plugins\\";
+  CreateDirectoryW(root.c_str(), nullptr);
+  ASSERT_TRUE(CreateDirectoryW(plugins.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS) << GetLastError();
+  BOOL usedDefault = FALSE;
+  char narrow[MAX_PATH] = {};
+  ASSERT_GT(WideCharToMultiByte(CP_ACP, 0, plugins.c_str(), -1, narrow, MAX_PATH, nullptr, &usedDefault), 0);
+  ASSERT_FALSE(usedDefault) << "the ANSI code page cannot spell U+0161: this form is not under test";
+  bool hasHighByte = false;
+  for (const char* c = narrow; *c != '\0'; ++c) hasHighByte = hasHighByte || static_cast<unsigned char>(*c) > 0x7F;
+  ASSERT_TRUE(hasHighByte) << "the spelled path has no byte above 0x7F: this form is not under test";
+  const std::string source = fixtures_ + "/" + manifest_["files"]["test_plugin_onframe.unsigned"].get<std::string>();
+  const std::wstring target = plugins + L"late_na.dll";
+  ASSERT_TRUE(CopyFileW(std::wstring(source.begin(), source.end()).c_str(), target.c_str(), FALSE)) << GetLastError();
+  TestHook_InstallPluginLoadFilter(narrow);
+  std::wstring lowered = target;
+  for (wchar_t& c : lowered) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  const bool blocked = nevr_dll_load_hook::IsLoadBlocked(lowered.c_str(), nullptr);
+  // The ANSI hooks hand the filter the path through the code page: the same wide spelling.
+  const std::wstring viaHook = nevr_dll_load_hook::AnsiPathToLowerWide(narrow);
+  TestHook_ResetPluginLoadFilter();
+  DeleteFileW(target.c_str());
+  RemoveDirectoryW(plugins.c_str());
+  RemoveDirectoryW(root.c_str());
+  EXPECT_TRUE(blocked);
+  std::wstring expected = plugins;
+  for (wchar_t& c : expected) c = (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
+  EXPECT_EQ(viaHook, expected);
+}
+
+// A plugin's own DllMain loading another file runs inside the loader's own load of that plugin, with the loader
+// lock held. The file it loads is not the one the loader checked.
+TEST_F(PluginDependencyGateTest, ALoadMadeFromAStagedPluginsDllMainIsChecked) {
+  Plan("dllmain_victim.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  PlanTree("dllmain_load");
+  const std::wstring victim = std::wstring(pluginsDir_.begin(), pluginsDir_.end()) + L"dllmain_victim.dll";
+  ASSERT_TRUE(SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", victim.c_str()));
+  // The plugin's LoadLibraryW reaches the filter only through the real hooks.
+  ASSERT_EQ(MH_Initialize(), MH_OK);
+  const int hooked = nevr_dll_load_hook::Install();
+  if (hooked == 4) {
+    LoadPlugins();
+    // The ANSI entry points reach the filter through the same hooks, with the path in the ANSI code page.
+    const std::string victimNarrow = pluginsDir_ + "dllmain_victim.dll";
+    SetLastError(0);
+    EXPECT_EQ(LoadLibraryA(victimNarrow.c_str()), nullptr) << "LoadLibraryA mapped an unsigned file in plugins/";
+    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_MOD_NOT_FOUND));
+    EXPECT_EQ(LoadLibraryExA(victimNarrow.c_str(), nullptr, 0), nullptr) << "LoadLibraryExA mapped an unsigned file";
+  }
+  nevr_dll_load_hook::Shutdown();  // also clears the registered filters
+  MH_Uninitialize();
+  nevr_hook_guard::ResetForTest();
+  TestHook_ForgetLoadFilterRegistration();
+  ASSERT_EQ(hooked, 4) << "the LoadLibrary hooks did not install";
+  SetEnvironmentVariableW(L"NEVR_TEST_DLLMAIN_LOAD", nullptr);
+  EXPECT_EQ(GetModuleHandleA("dllmain_victim.dll"), nullptr) << "a file loaded from a DllMain was mapped unchecked";
+  ASSERT_EQ(g_refusalDialogs.size(), 1u) << "the refusal reached no notice";
+  EXPECT_NE(g_refusalDialogs[0].find("dllmain_victim.dll"), std::string::npos);
+}
+
+// The path the filter resolved is opened a moment later; a name pointed elsewhere in between must not be verified
+// as the file that was resolved (heldPath != full). The hook turns the resolved name into a link to a signed file.
+std::wstring g_linkTarget;
+
+void PointTheResolvedNameAtTheSignedFile(const std::wstring& resolved) {
+  DeleteFileW(resolved.c_str());
+  CreateSymbolicLinkW(resolved.c_str(), g_linkTarget.c_str(), 0);
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfANameRepointedBetweenResolveAndOpenIsRefused) {
+  Plan("late_swap.dll", "unsigned");  // the name the late load asks for
+  Plan("late_swap_target.dll", "signed");  // what the name is pointed at in between
+  g_testPluginLoadPlan.clear();
+  g_linkTarget.assign(pluginsDir_.begin(), pluginsDir_.end());
+  g_linkTarget += L"late_swap_target.dll";
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  TestHook_SetBetweenResolveAndOpen(&PointTheResolvedNameAtTheSignedFile);
+  const bool blocked = Blocked("late_swap.dll");
+  TestHook_SetBetweenResolveAndOpen(nullptr);
+  EXPECT_TRUE(blocked);
+  EXPECT_TRUE(TestLogContains("the file changed between resolving its path and opening it"));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileIsLeftAlone) {
+  Plan("late_signed.dll", "signed");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_signed.dll"));
+  EXPECT_FALSE(TestLogContains("refused a later load"));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadByBareNameResolvesToThePluginsDirectory) {
+  Plan("late_bare.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(L"late_bare.dll", nullptr));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfAFileOutsideThePluginsDirectoryIsNotThisFiltersBusiness) {
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  std::wstring outside;
+  for (char c : fixtures_ + "/" + manifest_["files"]["test_plugin_onframe.unsigned"].get<std::string>()) {
+    outside.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(outside.c_str(), nullptr));
+}
+
+// The same unsigned file in plugins/, named four ways that all resolve to it but do not spell its directory the way
+// the loader does. A filter that compares the text of the path lets each of them load unchecked.
+class PluginLateLoadAliasTest : public PluginDependencyGateTest {
+ protected:
+  void SetUp() override {
+    PluginDependencyGateTest::SetUp();
+    Plan("alias_target_unsigned.dll", "unsigned");  // copied into plugins/, never planned to load
+    g_testPluginLoadPlan.clear();
+    plain_ = pluginsDir_ + "alias_target_unsigned.dll";
+    TestHook_InstallPluginLoadFilter(pluginsDir_);
+  }
+
+  static std::wstring Lower(const std::string& narrow) {
+    std::wstring wide;
+    for (char c : narrow) wide.push_back(static_cast<wchar_t>(std::tolower(static_cast<unsigned char>(c))));
+    return wide;
+  }
+
+  void ExpectRefused(const std::wstring& spelled) {
+    EXPECT_TRUE(nevr_dll_load_hook::IsLoadBlocked(spelled.c_str(), nullptr)) << "not refused: " << std::string(spelled.begin(), spelled.end());
+    EXPECT_TRUE(TestLogContains("refused a later load of alias_target_unsigned.dll: unsigned"));
+  }
+
+  std::string plain_;
+};
+
+TEST_F(PluginLateLoadAliasTest, TheOrdinarySpellingIsRefused) { ExpectRefused(Lower(plain_)); }
+
+TEST_F(PluginLateLoadAliasTest, AnEightDotThreeShortNameIsRefused) {
+  char shortPath[MAX_PATH] = {};
+  const DWORD n = GetShortPathNameA(plain_.c_str(), shortPath, MAX_PATH);
+  ASSERT_GT(n, 0u) << "GetShortPathName failed: " << GetLastError();
+  ASSERT_NE(std::string(shortPath), plain_) << "no 8.3 name was made for the file: this form is not under test";
+  ExpectRefused(Lower(shortPath));
+}
+
+TEST_F(PluginLateLoadAliasTest, AQuestionMarkPrefixIsRefused) { ExpectRefused(Lower("\\\\?\\" + plain_)); }
+TEST_F(PluginLateLoadAliasTest, ATrailingDotIsRefused) { ExpectRefused(Lower(plain_ + ".")); }
+TEST_F(PluginLateLoadAliasTest, ATrailingSpaceIsRefused) { ExpectRefused(Lower(plain_ + " ")); }
+
+TEST_F(PluginLateLoadAliasTest, ADotDotDetourThroughThePluginsDirectoryIsRefused) {
+  ExpectRefused(Lower(pluginsDir_ + "..\\plugins\\alias_target_unsigned.dll"));
+}
+
+TEST_F(PluginLateLoadAliasTest, AFileThatIsNotInThePluginsDirectoryIsStillNotThisFiltersBusiness) {
+  EXPECT_FALSE(nevr_dll_load_hook::IsLoadBlocked(Lower("\\\\?\\" + fixtures_ + "\\fixtures.json").c_str(), nullptr));
+}
+
+TEST_F(PluginDependencyGateTest, LateLoadOfASignedFileWithAnUnsignedDependencyIsRefused) {
+  Copy("import_unsigned");
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_TRUE(Blocked("importer.dll"));
+  EXPECT_TRUE(TestLogContains("refused a later load of importer.dll: dependency dep.dll (import): unsigned"));
+}
+
+TEST_F(PluginDependencyGateTest, DevBuildAllowsALateLoadWithAWarning) {
+  nevr_plugin_trust::TestHook_SetTrust(nevr_plugin_trust::Mode::UnsignedAllowed, &policy_);
+  Plan("late_dev.dll", "unsigned");
+  g_testPluginLoadPlan.clear();
+  TestHook_InstallPluginLoadFilter(pluginsDir_);
+  EXPECT_FALSE(Blocked("late_dev.dll"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning, "a plugin loads late_dev.dll after its init"));
+}
+
+TEST(PluginRefusalNotice, TrackerKeepsEachNameOnceAndNeverShowsATwiceDialog) {
+  nevr_plugin_refusal::Tracker t;
+  t.Record("a.dll");
+  t.Record("a.dll");
+  EXPECT_EQ(t.refused(), 1u);
+  EXPECT_TRUE(t.TakeDialog(true, false).empty());  // a server gets no dialog
+  EXPECT_FALSE(t.shown());
+  EXPECT_TRUE(t.TakeDialog(false, true).empty());  // nor does a headless run
+  EXPECT_FALSE(t.TakeDialog(false, false).empty());
+  EXPECT_TRUE(t.shown());
+  EXPECT_TRUE(t.TakeDialog(false, false).empty());
+}
+
+TEST(PluginSignatureGate, NoFallbackToTheDefaultSearchInASignedOnlyBuild) {
+  EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(true, ERROR_INVALID_PARAMETER));
+  EXPECT_TRUE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_INVALID_PARAMETER));
+  EXPECT_FALSE(TestHook_RestrictedSearchFallbackAllowed(false, ERROR_FILE_NOT_FOUND));
+}
 
 TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndContinues) {
   g_testPluginLoadPlan.push_back(
@@ -275,6 +925,91 @@ TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndCo
   EXPECT_TRUE(TestLogContains("plugin_that_does_not_exist.dll"));
   EXPECT_TRUE(TestLogContains("LoadLibrary failed: error"));
   EXPECT_TRUE(TestLogContains("optional, continuing"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, ConfiguredPluginPathCannotEscapePluginsDirectory) {
+  char exePath[MAX_PATH] = {};
+  ASSERT_NE(GetModuleFileNameA(nullptr, exePath, MAX_PATH), 0U);
+  std::string directory(exePath);
+  directory.resize(directory.find_last_of("\\/") + 1);
+  const std::string source = directory + "plugins\\test_plugin_onframe.dll";
+  const std::string escaped = directory + "test_plugin_escape.dll";
+  ASSERT_NE(GetFileAttributesA(source.c_str()), INVALID_FILE_ATTRIBUTES);
+  ASSERT_TRUE(CopyFileA(source.c_str(), escaped.c_str(), FALSE));
+
+  g_testPluginLoadPlan.push_back({"escape", "..\\test_plugin_escape.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_escape.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  UnloadPlugins();
+  EXPECT_TRUE(DeleteFileA(escaped.c_str()));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, RejectsEveryUnsafePluginFilename) {
+  const std::vector<std::string> invalid = {
+      "", ".", "..", ".\\", ".\\.", ".\\..", "sub/plugin.dll",
+      "sub\\plugin.dll", "C:plugin.dll", std::string("plugin.dll\0extra", 16)};
+  for (const std::string& file : invalid) {
+    SCOPED_TRACE(file);
+    g_testPluginLoadPlan = {{"unsafe", file, false, "", "{}"}};
+    ClearTestLogs();
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_TRUE(TestLogContains("outside plugins directory"));
+  }
+}
+
+TEST_F(PluginLoaderDiagnosticTest, DottedSupersededPluginIsSkippedBeforeLoad) {
+  for (const char* file : {".\\log_filter.dll", ".\\LOG-FILTER.DLL"}) {
+    SCOPED_TRACE(file);
+    g_testPluginLoadPlan = {{"old-filter", file, true, "", "{}"}};
+    ClearTestLogs();
+    LoadPlugins();
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+    EXPECT_TRUE(TestLogContains("superseded by the built-in log filter"));
+  }
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitRunsShutdownBeforeReleasingPlugin) {
+  constexpr char kEventName[] = "Local\\NEVRTestPartialInitShutdownObserved";
+  HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kEventName);
+  ASSERT_NE(shutdownObserved, nullptr);
+
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_partial_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0), WAIT_OBJECT_0);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_partial_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("test_plugin_partial_init_fail.dll: shutdown after failed init"));
+  CloseHandle(shutdownObserved);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitWithoutShutdownRetainsModule) {
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_NE(GetModuleHandleA("test_plugin_init_fail.dll"), nullptr);
+  EXPECT_TRUE(TestLogContains("retained until process exit"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FailedInitStillVerifiesHookedAddresses) {
+  nevr_hook_guard::ResetForTest();
+  std::array<unsigned char, 16> target{};
+  nevr_hook_guard::Record(target.data(), "failed-init-target");
+  target[0] = 0xE9;
+  const int fatalCallsBefore = g_serverFatalCalls;
+  g_testPluginLoadPlan.push_back({"partial", "test_plugin_init_fail.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_EQ(g_serverFatalCalls, fatalCallsBefore + 1);
+  EXPECT_TRUE(TestLogContains("failed-init-target"));
+  nevr_hook_guard::ResetForTest();
 }
 
 TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
@@ -571,6 +1306,127 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
+// #596: the address GetLoadedPluginInfo hands out belongs to the storage, not to a prediction of how
+// many plugins a later pass adds. Registering plugins the loader never planned for (the test hook
+// appends exactly as a load does) must not move the first one's entry.
+static void NoOpPluginFrame(const NvrGameContext*) {}
+
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan) {
+  TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  ASSERT_NE(first, nullptr);
+
+  for (int i = 0; i < 256; ++i) TestHook_RegisterPluginOnFrame(NoOpPluginFrame);
+
+  ASSERT_EQ(GetLoadedPluginCount(), 257);
+  EXPECT_EQ(first, GetLoadedPluginInfo(0)) << "adding plugins moved an entry a plugin may have kept";
+}
+
+// #496: an entry marked early loads in the early pass, alone; the normal pass loads the
+// rest, the early one is not loaded again, and the report covers both passes.
+static PluginLoadItem EarlyItem(const char* name, const char* file) {
+  PluginLoadItem item{name, file, false, "", "{}"};
+  item.early = true;
+  return item;
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EarlyPassLoadsOnlyTheEntriesMarkedEarly) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back(EarlyItem("future-api", "test_plugin_future_api.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_onframe.dll"), nullptr) << "the early pass loaded a normal entry";
+  EXPECT_TRUE(TestLogContains("early pass: 1 plugin(s) marked early"));
+  EXPECT_TRUE(TestLogContains("early pass complete: 1/1 loaded"));
+  nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin load complete: 2/2 loaded"));
+  EXPECT_FALSE(TestLogContains("SKIPPED")) << "the normal pass took the early entry again";
+  manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), true);
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EarlyPassWithNothingMarkedEarlyLoadsNothing) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_FALSE(TestLogContains("early pass"));
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("plugin load complete: 1/1 loaded"));
+}
+
+// The first entry for a file decides its pass, as for any repeat (#135): an early repeat
+// of a normal entry is skipped by the early pass and the plugin loads in the normal one.
+TEST_F(PluginLoaderDiagnosticTest, EarlyRepeatOfANormalEntryLoadsInTheNormalPass) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe-early", "test_plugin_onframe.dll"));
+
+  LoadPlugins(PluginPhase::Early);
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-early (test_plugin_onframe.dll)"));
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+}
+
+// Another spelling of a module the early pass loaded is caught by the same-module check.
+TEST_F(PluginLoaderDiagnosticTest, ModuleTheEarlyPassLoadedIsNotLoadedAgainUnderAnotherSpelling) {
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe", "test_plugin_onframe.dll"));
+  g_testPluginLoadPlan.push_back({"onframe-dotted", ".\\test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-dotted"));
+  EXPECT_TRUE(TestLogContains("the same module as onframe"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
+}
+
+// #152 across the passes: a pointer an early plugin kept from get_plugin_info stays valid
+// when the normal pass loads more.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass) {
+  g_testPluginLoadPlan.push_back(EarlyItem("onframe", "test_plugin_onframe.dll"));
+  g_testPluginLoadPlan.push_back(EarlyItem("keeper", "test_plugin_info_keeper.dll"));
+  g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
+
+  LoadPlugins(PluginPhase::Early);
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 3);
+
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the normal pass moved what an early plugin kept";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
 // NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
@@ -594,6 +1450,83 @@ TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilit
   EXPECT_EQ(second->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION + 1u));
   EXPECT_EQ(second->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
   EXPECT_EQ(second->version_major, 1u);
+}
+
+// ----------------------------------------------------------------------------
+// #598: plugins log through the host's structured Log(), tagged with the plugin.
+// The fixtures (plugin_logging_test_dll.cpp) call ctx->log from init, per-frame, state change and
+// shutdown, through the real loader and a real LoadLibraryExA.
+// ----------------------------------------------------------------------------
+
+static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
+  const HMODULE plugin = GetModuleHandleA(dll);
+  if (plugin == nullptr) return 0xFFFFFFFFu;
+  const auto bound = reinterpret_cast<uint32_t (*)(void)>(GetProcAddress(plugin, "NevrTestPluginGetLogBoundAtInit"));
+  return bound != nullptr ? bound() : 0xFFFFFFFFu;
+}
+
+TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 6u);
+  NvrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NvrGameContext);
+  EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
+  EXPECT_GT(offsetof(NvrGameContext, plugin_id), offsetof(NvrGameContext, get_plugin_info))
+      << "the v6 fields extend the tail; a v5 plugin still reads the v5 fields at the same offsets";
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginInitLineReachesTheHostLogWithItsNameLevelAndFields) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(LoggingFixtureBoundAtInit("test_plugin_logging_a.dll"), 1u)
+      << "the context handed to init did not carry plugin_id and log";
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin=logger-a init hello answer=42 who=\"a b\""));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, EachPluginsFrameAndStateLinesCarryItsOwnName) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"logger-b", "test_plugin_logging_b.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  ClearTestLogs();
+
+  TickLoadedPluginsOnce();
+  NvrGameContext ctx = {};
+  ctx.ctx_size = sizeof(NvrGameContext);
+  NotifyPluginsStateChange(&ctx, 3, 5);
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "[NEVR.PLUGIN] plugin=logger-a frame n=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Debug, "[NEVR.PLUGIN] plugin=logger-b frame n=1"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin=logger-a state change from=3 to=5"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Info,
+                                     "[NEVR.PLUGIN] plugin=logger-b state change from=3 to=5"));
+  EXPECT_FALSE(TestLogContains("plugin=unknown")) << "a context reached a plugin with no id";
+}
+
+TEST_F(PluginLoaderDiagnosticTest, PluginCanLogFromShutdownWithWhatItKeptAtInit) {
+  g_testPluginLoadPlan.push_back({"logger-a", "test_plugin_logging_a.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  ClearTestLogs();
+
+  UnloadPlugins();
+
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "[NEVR.PLUGIN] plugin=logger-a shutdown bye"));
+}
+
+TEST(PluginLogHost, HostLogFunctionTagsLevelsAndKeepsAPercentSignOutOfTheFormat) {
+  ClearTestLogs();
+  const NevrLogField fields[] = {{"k", "100%s"}};
+  HostPluginLog("direct", NEVR_LOG_ERROR, "50%n done", fields, 1);
+  HostPluginLog("direct", 99u, "bad level", nullptr, 0);
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Error, "[NEVR.PLUGIN] plugin=direct 50%n done k=100%s"));
+  EXPECT_TRUE(TestLogContainsAtLevel(EchoVR::LogLevel::Warning,
+                                     "[NEVR.PLUGIN] plugin=direct bad level level_invalid=99"));
+  ClearTestLogs();
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one
@@ -798,6 +1731,32 @@ class N61_WsBridgeTest : public ::testing::Test {
   }
 };
 
+TEST(WsBridgeListener, GracefulStopReleasesBothListeningPorts) {
+  SetWebSocketBridgeTarget("wss://127.0.0.1:9/ws");
+  InstallWebSocketBridge();
+  const uint16_t proxyPort = GetWebSocketBridgePort();
+  const uint16_t matchPort = GetMatchmakerBridgePort();
+  ASSERT_NE(proxyPort, 0);
+  ASSERT_NE(matchPort, 0);
+  ASSERT_NE(proxyPort, matchPort);
+
+  StopWebSocketBridgeListener();
+  SetWebSocketBridgeTarget("");
+
+  for (const uint16_t port : {proxyPort, matchPort}) {
+    SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_NE(probe, INVALID_SOCKET);
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+    const int result = bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    const int error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+    EXPECT_NE(result, SOCKET_ERROR) << "port " << port << " stayed bound after stop: WSA " << error;
+    closesocket(probe);
+  }
+}
+
 // #70: when the shared remote session ends, every game socket on it (login and matchmaker) is closed so
 // the game reconnects; a socket on another remote, or one the game already closed, is left alone.
 TEST_F(N61_WsBridgeTest, RemoteEndSelectsEveryGameSocketOnThatSessionOnly) {
@@ -829,6 +1788,188 @@ TEST_F(N61_WsBridgeTest, LoginSessionEndRenumbersTheNextConnectionAsLogin) {
   EXPECT_TRUE(TestHook_ForgetLoginSession(remote.handle, &next));
   EXPECT_EQ(next, 1);
   EXPECT_FALSE(TestHook_ForgetLoginSession(remote.handle, &next)) << "already forgotten";
+}
+
+// #723/#729: the login remote ending runs the self-check session end, which flushes the queued results through
+// SendFrameToServer, which takes g_pairsMutex. Ending the session while holding that mutex deadlocked the
+// remote's own thread, and WebSocket::stop() (graceful shutdown) then waited on that thread forever. The path
+// runs on a worker thread here so a regression fails the test instead of hanging it.
+TEST_F(N61_WsBridgeTest, TheLoginRemoteEndingDoesNotDeadlockOnItsOwnMutex) {
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  ASSERT_NE(TestHook_N61_RegisterLogin(remote.handle, loginWs.handle), nullptr);
+
+  nevr_self_check::ResetForTest();
+  nevr_self_check::SetEnabled(true);
+  nevr_self_check::SetSender(&TestHook_SendFrameToServer);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId());
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"deadlock_probe", "a result waits in the queue", nullptr});
+  ASSERT_GE(id, 0);
+  nevr_self_check::Report(id, "queued", true);  // something for the session end to flush through the sender
+
+  std::promise<void> done;
+  std::future<void> finished = done.get_future();
+  std::thread worker([&] {
+    TestHook_CloseGameSocketsForRemote(remote.handle, 1, 1000);
+    done.set_value();
+  });
+  if (finished.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+    ADD_FAILURE() << "the remote-ended path never returned: it holds g_pairsMutex while the self-check flush takes it";
+    std::fflush(stdout);
+    std::_Exit(1);  // the stuck thread owns the mutex the fixture's teardown needs
+  }
+  worker.join();
+  nevr_self_check::ResetForTest();
+}
+
+// #723, the ServerDB drop: the session-end flush runs inside the login remote's own Close callback, and ix holds
+// its non-recursive _setReadyStateMutex there. A send on that same remote (the flush's sender) blocks on it, so the
+// remote's thread never returned and graceful shutdown (WebSocket::stop joins it) never finished. This drives a real
+// ix::WebSocket against a real local server that closes it, with a self-check result queued for the flush to send.
+TEST_F(N61_WsBridgeTest, TheLoginRemoteDroppedByItsServerEndsItsSessionWithoutSendingOnItself) {
+  nevr_self_check::ResetForTest();
+  nevr_self_check::SetEnabled(true);
+  nevr_self_check::SetSender(&TestHook_SendFrameToServer);
+  nevr_self_check::SetLoggedIn(true, nevr_evr_codec::UserId());
+  const nevr_self_check::CheckId id = nevr_self_check::Register({"drop_probe", "a result waits in the queue", nullptr});
+  ASSERT_GE(id, 0);
+  nevr_self_check::Report(id, "queued", true);
+
+  if (!TestHook_LoginRemoteDroppedThroughRealIx(10000)) {
+    ADD_FAILURE() << "the remote's Close callback never returned: the session-end flush sent on the closing remote";
+    std::fflush(stdout);
+    std::_Exit(1);  // the remote's thread is stuck on ix's own mutex; tearing down would wait on it
+  }
+  nevr_self_check::ResetForTest();
+}
+
+// #738: a send that fails runs ix's Close callback on the sending thread, and the bridge's Close handler takes
+// g_pairsMutex. Each production send on the login remote must therefore happen outside it. One test per send path;
+// the remote's reader is parked so the failure is found by the send (TestHook_SendOnDroppedRemote).
+static void ExpectSendOnDroppedRemoteReturns(int path, const char* what) {
+  const int result = TestHook_SendOnDroppedRemote(path, 10000);
+  if (result == 1) {
+    ADD_FAILURE() << what << ": the sending thread deadlocked on g_pairsMutex inside ix's Close callback";
+    std::fflush(stdout);
+    std::_Exit(1);  // the stuck thread owns the mutex the fixture's teardown needs
+  }
+  EXPECT_EQ(result, 0) << what << ": no send on the dropped remote ever failed";
+}
+
+TEST_F(N61_WsBridgeTest, SendFrameToServerOnADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(0, "SendFrameToServer");
+}
+
+TEST_F(N61_WsBridgeTest, AGameFrameForwardedToADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(1, "the game->server forward");
+}
+
+TEST_F(N61_WsBridgeTest, TheFlushWhenTheRemoteOpensOnADroppedRemoteDoesNotHoldThePairsLock) {
+  ExpectSendOnDroppedRemoteReturns(2, "the flush on the remote's open");
+}
+
+// ---- the flush's interleavings, with HandleRemoteOpen parked between its first batch
+// of sends and its re-lock (the "login injected" log line). Hooks are in ws_bridge.cpp (TestHook_FlushRig_*).
+void* TestHook_FlushRig_Start(unsigned int timeoutMs);
+void TestHook_FlushRig_RunOpen(void* handle);
+void TestHook_FlushRig_Forward(void* handle, int game, const std::string& frame);
+void TestHook_FlushRig_AddMatchmaker(void* handle);
+bool TestHook_FlushRig_ReplacePairAtSameAddress(void* handle, bool* allocatorReused);
+void TestHook_FlushRig_ReplacementState(void* handle, bool* remoteOpen, size_t* pending);
+bool TestHook_FlushRig_LoginPairOpen(void* handle);
+std::vector<std::string> TestHook_FlushRig_Received(void* handle, size_t n, unsigned int timeoutMs);
+void TestHook_FlushRig_Stop(void* handle);
+
+namespace {
+struct FlushPark {
+  std::promise<void> parked;
+  std::promise<void> release;
+  std::future<void> parkedF;
+  std::thread worker;
+  explicit FlushPark(void* rig) {
+    parkedF = parked.get_future();
+    g_flushParked = &parked;
+    g_flushRelease = release.get_future().share();
+    g_flushPark = true;
+    worker = std::thread([rig] { TestHook_FlushRig_RunOpen(rig); });
+  }
+  bool WaitParked() { return parkedF.wait_for(std::chrono::seconds(10)) == std::future_status::ready; }
+  void Release() { release.set_value(); worker.join(); g_flushPark = false; }
+};
+std::string FlushShow(const std::vector<std::string>& got) {
+  std::string out;
+  for (const std::string& f : got) out += (f.size() <= 16 ? f : "<login " + std::to_string(f.size()) + "B>") + " ";
+  return out;
+}
+}  // namespace
+
+// (a)(b)(c): a game frame and a runtime frame that arrive while the flush is mid-way queue behind it, are each sent
+// once, and the frame after the flush goes after them.
+TEST_F(N61_WsBridgeTest, FramesDuringTheFlushQueueBehindItInOrderOnce) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  TestHook_FlushRig_Forward(rig, 1, "g1");
+  EXPECT_TRUE(TestHook_SendFrameToServer("s1"));
+  EXPECT_FALSE(TestHook_FlushRig_LoginPairOpen(rig)) << "remoteOpen flipped before the drain finished";
+  park.Release();
+  EXPECT_TRUE(TestHook_FlushRig_LoginPairOpen(rig));
+  TestHook_FlushRig_Forward(rig, 1, "g2");
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 7, 3000);  // 6 expected; waits for a 7th
+  std::fprintf(stderr, "flush order: %s\n", FlushShow(got).c_str());
+  ASSERT_EQ(got.size(), 6u) << FlushShow(got);
+  EXPECT_GT(got[0].size(), 16u) << "first frame is the LoginRequest";
+  EXPECT_EQ(std::vector<std::string>(got.begin() + 1, got.end()),
+            (std::vector<std::string>{"q1", "q2", "g1", "s1", "g2"}));
+  TestHook_FlushRig_Stop(rig);
+}
+
+// TOCTOU/ABA: the login game socket closes while the flush is parked and a new game socket's pair takes the same
+// address. PairRegisteredLocked compares addresses, so the parked flush adopts the new pair: it must not send the new
+// pair's queued frame on the old remote, and must not mark the new pair's (still connecting) remote open.
+TEST_F(N61_WsBridgeTest, AFlushDoesNotAdoptAPairRegisteredAtTheSameAddress) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  bool reused = false;
+  const bool replaced = TestHook_FlushRig_ReplacePairAtSameAddress(rig, &reused);
+  park.Release();
+  if (!replaced) {
+    TestHook_FlushRig_Stop(rig);
+    GTEST_SKIP() << "the allocator did not hand the erased pair's address back on this run";
+  }
+  bool open = false;
+  size_t pending = 0;
+  TestHook_FlushRig_ReplacementState(rig, &open, &pending);
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 4, 1500);
+  std::fprintf(stderr, "flush aba: replacement remoteOpen=%d pending=%zu; old remote received: %s\n", open ? 1 : 0,
+               pending, FlushShow(got).c_str());
+  EXPECT_FALSE(open) << "the new pair's remote is still connecting but was marked open";
+  EXPECT_EQ(pending, 1u) << "the new pair's queued frame was taken by the old pair's flush";
+  EXPECT_EQ(std::count(got.begin(), got.end(), std::string("x-for-r2")), 0) << "sent on the wrong remote";
+  TestHook_FlushRig_Stop(rig);
+}
+
+// A matchmaker pair shares the login remote with remoteOpen=true from its admission (ws_bridge.cpp, the Matchmaker
+// branch of the Open handler). A frame it sends while the login pair is mid-flush queues behind the flush, so the
+// remote gets the frames of both sockets in the order they arrived (the flush held g_pairsMutex for its whole length
+// before #738, which gave the same order).
+TEST_F(N61_WsBridgeTest, AMatchmakerFrameDuringTheLoginFlushGoesAfterIt) {
+  void* rig = TestHook_FlushRig_Start(10000);
+  ASSERT_NE(rig, nullptr);
+  TestHook_FlushRig_AddMatchmaker(rig);
+  FlushPark park(rig);
+  ASSERT_TRUE(park.WaitParked());
+  TestHook_FlushRig_Forward(rig, 1, "g1");  // queued behind the flush
+  TestHook_FlushRig_Forward(rig, 3, "m1");  // the matchmaker, while the flush is mid-way
+  park.Release();
+  const std::vector<std::string> got = TestHook_FlushRig_Received(rig, 5, 3000);
+  std::fprintf(stderr, "flush matchmaker: %s\n", FlushShow(got).c_str());
+  ASSERT_EQ(got.size(), 5u) << FlushShow(got);
+  EXPECT_EQ(std::vector<std::string>(got.begin() + 1, got.end()), (std::vector<std::string>{"q1", "q2", "g1", "m1"}));
+  TestHook_FlushRig_Stop(rig);
 }
 
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
@@ -957,6 +2098,899 @@ TEST_F(N61_WsBridgeTest, N60_StopCalledOutsideMutex) {
   // Post-condition: mutex is free. If stop() were inside the lock, this fails.
   EXPECT_TRUE(TestHook_N60_IsMutexFree())
       << "N60: mutex must be free after Close — stop() was called inside the lock";
+}
+
+// ============================================================================
+// #520: which game socket is config and which is login. These tests run the REAL bridge: a game-side
+// client connects to its listener, the bridge's Open handler assigns the role, and a stand-in for the
+// community service answers every frame it gets. Nothing here sleeps; each wait is on a condition
+// variable (a log line, a received frame) with a bound that only a failing run reaches.
+// ============================================================================
+
+namespace {
+
+constexpr auto kRoleWait = std::chrono::seconds(20);
+
+// Waits for `done()` by yielding, for a state ixwebsocket changes without telling anyone (a closed
+// connection leaving a server's client set). Bounded; false when the bound passes.
+template <typename Done>
+bool YieldUntil(Done done) {
+  const auto deadline = std::chrono::steady_clock::now() + kRoleWait;
+  while (!done()) {
+    if (std::chrono::steady_clock::now() > deadline) return false;
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+std::vector<std::string> LogLinesContaining(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  std::vector<std::string> lines;
+  for (const std::string& line : g_testLogMessages) {
+    if (line.find(needle) != std::string::npos) lines.push_back(line);
+  }
+  return lines;
+}
+
+bool WaitForLogLines(const std::string& needle, size_t count) {
+  std::unique_lock<std::mutex> lock(g_testLogMutex);
+  return g_testLogCv.wait_for(lock, kRoleWait, [&] {
+    return static_cast<size_t>(std::count_if(g_testLogMessages.begin(), g_testLogMessages.end(),
+                                             [&needle](const std::string& line) {
+                                               return line.find(needle) != std::string::npos;
+                                             })) >= count;
+  });
+}
+
+// The community service as the bridge's remote: it counts the LoginRequests it receives and answers each
+// binary frame, a LoginRequest with LoginSettings and anything else with DocumentSuccess, so a test can see
+// which game socket the bridge routed a reply to and which request the reply answers.
+class RemoteService {
+ public:
+  // The answer to a FindSessionRequest: a symbol the router does not read, so it is routed as lobby traffic.
+  static constexpr uint64_t kLobbyReplySymbol = 0x7e57104410bb9001ULL;
+
+  bool Start() {
+    std::random_device device;
+    std::mt19937 generator(device());
+    std::uniform_int_distribution<int> ports(49152, 65535);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+      const int port = ports(generator);
+      server_ = std::make_unique<ix::WebSocketServer>(port, "127.0.0.1");
+      server_->disablePerMessageDeflate();
+      server_->setOnClientMessageCallback(
+          [this](std::shared_ptr<ix::ConnectionState>, ix::WebSocket& socket, const ix::WebSocketMessagePtr& message) {
+            if (message->type == ix::WebSocketMessageType::Open) {
+              ++opens_;
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              uris_.push_back(message->openInfo.uri);
+            }
+            if (message->type != ix::WebSocketMessageType::Message || !message->binary) return;
+            const uint64_t symbol = nevr_evr_codec::FirstSymbol(message->str);
+            {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              received_.push_back(symbol);
+            }
+            const bool isLogin = symbol == nevr_evr_codec::kSymLoginRequest;
+            if (isLogin) ++loginRequests_;
+            uint64_t reply = nevr_evr_codec::kSymDocumentSuccess;
+            if (isLogin) reply = loginReply_.load();
+            if (symbol == nevr_evr_codec::kSymConfigRequest) {
+              reply = nevr_evr_codec::kSymConfigSuccess;
+              if (message->str.find("main_menu") != std::string::npos) {
+                // The service echoes the request's type and id, as symbols, ahead of the resource.
+                std::string payload;
+                for (int copy = 0; copy < 2; ++copy) {
+                  for (int i = 0; i < 8; ++i) payload.push_back(static_cast<char>((0x1509ee27440e1d7bULL >> (8 * i)) & 0xFF));
+                }
+                payload += "{}";
+                socket.sendBinary(nevr_evr_codec::BuildMessage(reply, payload));
+                return;
+              }
+            }
+            if (symbol == nevr_evr_codec::kSymFindSessionRequest) {
+              if (holdLobbyReplies_.load()) {
+                ++heldLobbyReplies_;
+                return;
+              }
+              reply = kLobbyReplySymbol;
+            }
+            std::string customLogin;
+            {
+              std::lock_guard<std::mutex> lock(urisMutex_);
+              customLogin = loginReplyFrame_;
+            }
+            if (isLogin && !customLogin.empty()) {
+              socket.sendBinary(customLogin);
+              return;
+            }
+            socket.sendBinary(nevr_evr_codec::BuildMessage(reply, ""));
+          });
+      if (server_->listen().first) {
+        port_ = port;
+        server_->start();
+        return true;
+      }
+    }
+    server_.reset();
+    return false;
+  }
+  void Stop() {
+    if (server_) server_->stop();
+    server_.reset();
+  }
+  void CloseEveryClient() {
+    for (const auto& client : server_->getClients()) client->close();
+  }
+  // ixwebsocket's server stop closes every client it still holds, and a connection that is finishing when
+  // that happens can be left waiting for a close it will never get, which hangs the stop. So the service
+  // is stopped only once its client set is empty.
+  bool WaitForNoClients() {
+    return YieldUntil([this] { return server_->getClients().empty(); });
+  }
+  std::string Uri() const { return "ws://127.0.0.1:" + std::to_string(port_) + "/"; }
+  int LoginRequests() const { return loginRequests_.load(); }
+  // Connections the bridge has opened to the service.
+  int Opens() const { return opens_.load(); }
+  // The request target (path and query) of each connection the bridge opened, in order.
+  std::vector<std::string> Uris() {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return uris_;
+  }
+  // What the service answers a LoginRequest with (LoginSettings by default).
+  void SetLoginReply(uint64_t symbol) { loginReply_ = symbol; }
+  // A whole frame to answer a LoginRequest with, in place of the symbol above.
+  void SetLoginReplyFrame(std::string frame) {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    loginReplyFrame_ = std::move(frame);
+  }
+  // How many frames led with `symbol` among those the bridge sent the service.
+  int ReceivedCount(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(urisMutex_);
+    return static_cast<int>(std::count(received_.begin(), received_.end(), symbol));
+  }
+  // While held, a FindSessionRequest is not answered; ReleaseLobbyReplies sends each held answer then.
+  void HoldLobbyReplies(bool hold) { holdLobbyReplies_ = hold; }
+  int HeldLobbyReplies() const { return heldLobbyReplies_.load(); }
+  void ReleaseLobbyReplies() {
+    holdLobbyReplies_ = false;
+    for (int held = heldLobbyReplies_.exchange(0); held > 0; --held) PushToClients(kLobbyReplySymbol);
+  }
+  // Sends `symbol` to every connection, unasked.
+  void PushToClients(uint64_t symbol) {
+    for (const auto& client : server_->getClients()) client->sendBinary(nevr_evr_codec::BuildMessage(symbol, ""));
+  }
+
+ private:
+  std::unique_ptr<ix::WebSocketServer> server_;
+  int port_ = 0;
+  std::atomic<int> loginRequests_{0};
+  std::atomic<int> opens_{0};
+  std::atomic<bool> holdLobbyReplies_{false};
+  std::atomic<int> heldLobbyReplies_{0};
+  std::atomic<uint64_t> loginReply_{nevr_evr_codec::kSymLoginSettings};
+  std::mutex urisMutex_;  // guards uris_, received_ and loginReplyFrame_
+  std::vector<std::string> uris_;
+  std::vector<uint64_t> received_;
+  std::string loginReplyFrame_;
+};
+
+// A game-side socket: connects to the bridge at a request target and counts the frames the bridge sends it.
+class GameSocket {
+ public:
+  ~GameSocket() { socket_.stop(); }
+  bool Connect(uint16_t bridgePort, const std::string& target) {
+    socket_.setUrl("ws://127.0.0.1:" + std::to_string(bridgePort) + target);
+    socket_.disableAutomaticReconnection();
+    socket_.disablePerMessageDeflate();
+    socket_.setOnMessageCallback([this](const ix::WebSocketMessagePtr& message) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (message->type == ix::WebSocketMessageType::Open) open_ = true;
+      if (message->type == ix::WebSocketMessageType::Close) {
+        closed_ = true;
+        closeCode_ = message->closeInfo.code;
+      }
+      if (message->type == ix::WebSocketMessageType::Message) {
+        ++frames_;
+        symbols_.push_back(nevr_evr_codec::FirstSymbol(message->str));
+        payloads_.push_back(message->str);
+      }
+      changed_.notify_all();
+    });
+    socket_.start();
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [this] { return open_; });
+  }
+  // The bridge ended this socket (a close frame, or the connection dropping).
+  bool WaitForClose() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [this] { return closed_; });
+  }
+  bool WaitForFrames(int count) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [&] { return frames_ >= count; });
+  }
+  int Frames() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return frames_;
+  }
+  // The close code the bridge sent, 0 until it closed the socket.
+  int CloseCode() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return closeCode_;
+  }
+  // The first frame that led with `symbol`, whole; empty when none did.
+  std::string FrameWith(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t index = 0; index < symbols_.size(); ++index) {
+      if (symbols_[index] == symbol) return payloads_[index];
+    }
+    return std::string();
+  }
+  // How many frames led with `symbol`.
+  int Count(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<int>(std::count(symbols_.begin(), symbols_.end(), symbol));
+  }
+  // Waits for a frame whose first message is `symbol`.
+  bool WaitForSymbol(uint64_t symbol) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return changed_.wait_for(lock, kRoleWait, [&] { return Received(symbol); });
+  }
+  bool Received(uint64_t symbol) {
+    for (const uint64_t seen : symbols_) {
+      if (seen == symbol) return true;
+    }
+    return false;
+  }
+  bool HasReceived(uint64_t symbol) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return Received(symbol);
+  }
+  void SendRequest() { Send(nevr_evr_codec::kSymDocumentRequest); }
+  void Send(uint64_t symbol) { Send(symbol, std::string()); }
+  void Send(uint64_t symbol, const std::string& payload) {
+    socket_.sendBinary(nevr_evr_codec::BuildMessage(symbol, payload));
+  }
+
+ private:
+  ix::WebSocket socket_;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool open_ = false;
+  bool closed_ = false;
+  int closeCode_ = 0;
+  int frames_ = 0;
+  std::vector<uint64_t> symbols_;
+  std::vector<std::string> payloads_;
+};
+
+constexpr const char* kConnectedLine = "Proxy: game connected (conn=";
+
+class RolesByPathTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ix::initNetSystem();
+    TestHook_N61_ResetState();
+    ClearTestLogs();
+    g_testRouterMode = RouterMode();
+    fatalBefore_ = g_fatalErrorCalls;
+    ASSERT_TRUE(remote_.Start());
+    SetWebSocketBridgeTarget(remote_.Uri().c_str());
+    InstallWebSocketBridge();
+    port_ = GetWebSocketBridgePort();
+    if (BridgeExpected()) {
+      ASSERT_NE(port_, 0);
+    }
+  }
+  void TearDown() override {
+    // The game-side sockets are closed by now; stop the bridge once its server has let go of them (the
+    // same ixwebsocket stop hazard as the service's, below).
+    EXPECT_TRUE(YieldUntil([] { return TestHook_ConnectedGameSockets() == 0; }));
+    StopWebSocketBridgeListener();
+    g_testRouterMode = nullptr;
+    // The login session's remote outlives the game sockets that used it; dropping it closes the service's
+    // connection, which the service's stop waits for.
+    TestHook_N61_ResetState();
+    SetWebSocketBridgeTarget("");
+    EXPECT_TRUE(remote_.WaitForNoClients());
+    remote_.Stop();
+  }
+  // The value network.session_router has for this test: null is the key being absent.
+  virtual const char* RouterMode() const { return nullptr; }
+  virtual bool BridgeExpected() const { return true; }
+  int fatalBefore_ = 0;
+  // Connects `socket` at `target` and returns once the bridge has finished its Open handler for it.
+  void Admit(GameSocket& socket, const std::string& target, uint16_t port = 0) {
+    ASSERT_TRUE(socket.Connect(port != 0 ? port : port_, target)) << target;
+    ASSERT_TRUE(WaitForLogLines(kConnectedLine, ++admitted_)) << "the bridge never admitted " << target;
+  }
+  std::string AdmittedLine(size_t index) {
+    const std::vector<std::string> lines = LogLinesContaining(kConnectedLine);
+    return index < lines.size() ? lines[index] : std::string("<no such line>");
+  }
+  RemoteService remote_;
+  uint16_t port_ = 0;
+  size_t admitted_ = 0;
+};
+
+}  // namespace
+
+// The game's login socket may connect before its config socket. The role comes from the request target,
+// not from the order, so the socket that asked for /login is the login and receives the LoginRequest's
+// reply. By order the first connection is config: the login socket is labelled config, gets no
+// LoginRequest, and the config socket is labelled login and gets it (#520).
+TEST_F(RolesByPathTest, LoginSocketThatConnectsFirstIsStillTheLogin) {
+  GameSocket login, config;
+  Admit(login, "/login");
+  Admit(config, "/config");
+  EXPECT_NE(AdmittedLine(0).find("(conn=1, login"), std::string::npos) << AdmittedLine(0);
+  EXPECT_NE(AdmittedLine(1).find("(conn=0, config"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings))
+      << "the /login socket never received the reply to the LoginRequest";
+  // The config socket's own request is answered on its own remote connection, after anything the bridge
+  // sent on it first; so once that answer is here, a LoginRequest injected on the config socket would
+  // already have been answered too.
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings)) << "a LoginRequest was injected on the /config socket";
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// N91: a second socket that asks for /login while a login session exists is not a second login. It takes
+// no login slot and sends no LoginRequest; it shares the session.
+TEST_F(RolesByPathTest, SecondLoginSocketIsNotALoginAndInjectsNothing) {
+  GameSocket first, second;
+  Admit(first, "/login");
+  ASSERT_TRUE(first.WaitForFrames(1)) << "the first /login socket never received the reply to the LoginRequest";
+  Admit(second, "/login");
+  EXPECT_NE(AdmittedLine(0).find("(conn=1, login"), std::string::npos) << AdmittedLine(0);
+  EXPECT_EQ(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(AdmittedLine(1).find("sharing login session (no LoginRequest)"), std::string::npos) << AdmittedLine(1);
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// A config socket that opens after login is a config socket: it does not share the login session and the
+// login session's replies keep going to the login socket (it was counted as a matchmaker and took them).
+TEST_F(RolesByPathTest, ConfigSocketAfterLoginStaysConfigAndTakesNoLoginReplies) {
+  GameSocket firstConfig, login, lateConfig;
+  Admit(firstConfig, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+  Admit(lateConfig, "/config");
+  EXPECT_NE(AdmittedLine(2).find("(conn=0, config"), std::string::npos) << AdmittedLine(2);
+  EXPECT_EQ(AdmittedLine(2).find("sharing login session"), std::string::npos) << AdmittedLine(2);
+  login.SendRequest();
+  EXPECT_TRUE(login.WaitForFrames(2)) << "the reply to the login socket's request went to another socket";
+  EXPECT_EQ(lateConfig.Frames(), 0);
+}
+
+// #70: when the login session ends, the game's next /login is a new login (the numbering starts again).
+TEST_F(RolesByPathTest, LoginSocketAfterTheSessionEndsIsANewLogin) {
+  GameSocket first, second;
+  Admit(first, "/login");
+  ASSERT_TRUE(first.WaitForFrames(1));
+  remote_.CloseEveryClient();
+  ASSERT_TRUE(WaitForLogLines("login session ended", 1)) << "the remote closing did not end the login session";
+  Admit(second, "/login");
+  EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(second.WaitForFrames(1)) << "the new /login socket never received the reply to its LoginRequest";
+}
+
+// The measurement the issue asks for: every admission is one structured line with the slot, the role, why,
+// and the path the game asked for.
+TEST_F(RolesByPathTest, EachAdmissionLogsTheRoleItsBasisAndThePathItAskedFor) {
+  GameSocket login, config;
+  Admit(login, "/login");
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[0].find("conn=1 role=login basis=path listener=service target=/login has_query=false"), std::string::npos)
+      << lines[0];
+  EXPECT_NE(lines[1].find("conn=0 role=config basis=path listener=service target=/config has_query=false"), std::string::npos)
+      << lines[1];
+}
+
+// logging.md Rule 4: a query can carry a credential. The role is read from the path, and only the path is logged.
+TEST_F(RolesByPathTest, AQueryOnTheRequestTargetDoesNotChangeTheRoleAndIsNotLogged) {
+  GameSocket login;
+  Admit(login, "/login?token=SECRET-VALUE-520");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("conn=1 role=login basis=path listener=service target=/login has_query=true"), std::string::npos)
+      << lines[0];
+  EXPECT_TRUE(LogLinesContaining("SECRET-VALUE-520").empty());
+}
+
+// The matchmaker listener is a matchmaker whatever it asked for, and it shares the login session.
+TEST_F(RolesByPathTest, ASocketOnTheMatchmakerListenerSharesTheLoginSession) {
+  GameSocket login, matchmaker;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  EXPECT_NE(AdmittedLine(1).find("(conn=2, matchmaker"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(AdmittedLine(1).find("sharing login session (no LoginRequest)"), std::string::npos) << AdmittedLine(1);
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[1].find("conn=2 role=matchmaker basis=listener listener=matchmaker"), std::string::npos) << lines[1];
+}
+
+// While the redirect has tagged the config and login services, a socket that names neither is not given
+// either slot by the connect order; the tagged sockets still get theirs.
+TEST_F(RolesByPathTest, ASocketWithNoTargetDoesNotTakeASlotATaggedSocketIsExpectedFor) {
+  nevr_socket_role::GlobalAdvertisement().Note(nevr_socket_role::Role::Config);
+  nevr_socket_role::GlobalAdvertisement().Note(nevr_socket_role::Role::Login);
+  GameSocket pathless, matchmaker, login, config;
+  Admit(pathless, "/");
+  // A matchmaker with no login session has none to share, and the socket that has none is not a login
+  // session for the next one to share either.
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  Admit(login, "/login");
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 4U);
+  EXPECT_NE(lines[0].find("role=matchmaker basis=slot-reserved"), std::string::npos) << lines[0];
+  EXPECT_EQ(AdmittedLine(1).find("sharing login session"), std::string::npos) << AdmittedLine(1);
+  EXPECT_NE(lines[2].find("conn=1 role=login basis=path"), std::string::npos) << lines[2];
+  EXPECT_NE(lines[3].find("conn=0 role=config basis=path"), std::string::npos) << lines[3];
+  EXPECT_TRUE(login.WaitForFrames(1)) << "the /login socket never received the reply to the LoginRequest";
+}
+
+// The first frame a socket sends names its role (ADR 0003). A frame that contradicts the role the socket was
+// admitted with is logged once, with both roles.
+TEST_F(RolesByPathTest, AFirstFrameThatContradictsTheRoleIsLoggedOnce) {
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  login.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(WaitForLogLines("first frame contradicts the socket's role", 1));
+  const std::string line = LogLinesContaining("first frame contradicts the socket's role").front();
+  EXPECT_NE(line.find("conn=1 role=login first_frame_role=config"), std::string::npos) << line;
+  login.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(login.WaitForFrames(3));  // the LoginRequest's reply, then one reply per frame sent
+  EXPECT_EQ(LogLinesContaining("first frame contradicts the socket's role").size(), 1U);
+}
+
+TEST_F(RolesByPathTest, AFirstFrameThatMatchesTheRoleOrNamesNoneIsNotLogged) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForFrames(1));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  login.Send(nevr_evr_codec::kSymDocumentRequest);  // names no role: the login connection can send anything
+  ASSERT_TRUE(config.WaitForFrames(1));
+  ASSERT_TRUE(login.WaitForFrames(2));
+  EXPECT_TRUE(LogLinesContaining("first frame contradicts the socket's role").empty());
+}
+
+// A socket with no recognised request target keeps the connect order when nothing says otherwise:
+// config, then login.
+TEST_F(RolesByPathTest, SocketsWithoutATargetKeepTheConnectOrder) {
+  GameSocket first, second;
+  Admit(first, "/");
+  Admit(second, "/");
+  EXPECT_NE(AdmittedLine(0).find("(conn=0, config"), std::string::npos) << AdmittedLine(0);
+  EXPECT_NE(AdmittedLine(1).find("(conn=1, login"), std::string::npos) << AdmittedLine(1);
+  EXPECT_TRUE(second.WaitForFrames(1));
+}
+
+// ============================================================================
+// #708 S1: network.session_router. The same real bridge, with the /config sockets handed to
+// nevr_session_router. Login and matchmaker sockets keep the bridge's own rules in this mode.
+// ============================================================================
+
+namespace {
+
+class RouterConfigTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "config"; }
+};
+
+class RouterBogusModeTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "bogus"; }
+  bool BridgeExpected() const override { return false; }
+};
+
+}  // namespace
+
+// The default (the key absent) is the bridge's own routing, and each admission line says which path took it.
+TEST_F(RolesByPathTest, EveryAdmissionNamesTheRoutingPath) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("path=legacy game=0"), std::string::npos) << lines[0];
+  EXPECT_EQ(LogLinesContaining("path=router").size(), 0U);
+  EXPECT_FALSE(LogLinesContaining("network.session_router=legacy").empty());
+}
+
+// C1: a /config socket in config mode is taken by the router, and its request is answered.
+TEST_F(RouterConfigTest, AConfigSocketIsRoutedAndItsRequestIsAnswered) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_NE(lines[0].find("conn=0 role=config basis=path listener=service target=/config"), std::string::npos) << lines[0];
+  EXPECT_NE(lines[0].find("path=router"), std::string::npos) << lines[0];
+  EXPECT_FALSE(LogLinesContaining("network.session_router=config").empty());
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess)) << "the router never delivered the reply";
+}
+
+// C2: the login socket is not the router's in this mode: the bridge injects its LoginRequest as before, and the
+// config socket, which the router owns, sees none of the login session's traffic.
+TEST_F(RouterConfigTest, ALoginSocketStaysOnTheBridgesRulesAndTheConfigSocketSeesNoLoginReply) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  const std::vector<std::string> lines = LogLinesContaining("game socket admitted");
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_NE(lines[0].find("path=router"), std::string::npos) << lines[0];
+  EXPECT_NE(lines[1].find("conn=1 role=login basis=path listener=service target=/login"), std::string::npos) << lines[1];
+  EXPECT_NE(lines[1].find("path=legacy"), std::string::npos) << lines[1];
+  EXPECT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+}
+
+// C3: the router gives every config socket one shared remote session, and each reply goes to the socket whose
+// request it answers.
+TEST_F(RouterConfigTest, TwoConfigSocketsShareOneRemoteSessionAndEachGetsItsOwnReply) {
+  GameSocket first, second;
+  Admit(first, "/config");
+  first.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(first.Frames(), 1);
+  EXPECT_EQ(second.Frames(), 1);
+  EXPECT_EQ(remote_.Opens(), 1) << "the router opened more than one remote session for the config sockets";
+}
+
+// C4: when the remote session ends, the router closes the config socket, and the game's next /config opens a
+// new session.
+TEST_F(RouterConfigTest, TheRemoteEndingClosesTheConfigSocketAndTheNextOneOpensANewSession) {
+  GameSocket first, second;
+  Admit(first, "/config");
+  first.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  remote_.CloseEveryClient();
+  EXPECT_TRUE(first.WaitForClose()) << "the config socket outlived its remote session";
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(remote_.Opens(), 2);
+}
+
+// C5: a game socket closing releases it from the router (the log says so) and the session stays up for the next.
+TEST_F(RouterConfigTest, AClosedConfigSocketIsReleasedAndTheSessionServesTheNext) {
+  auto first = std::make_unique<GameSocket>();
+  GameSocket second;
+  Admit(*first, "/config");
+  first->Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(first->WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  first.reset();
+  ASSERT_TRUE(WaitForLogLines("Proxy: game disconnected (conn=0, config) path=router", 1));
+  Admit(second, "/config");
+  second.Send(nevr_evr_codec::kSymConfigRequest);
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  EXPECT_EQ(remote_.Opens(), 1);
+}
+
+// C7: the graceful stop (N38/N64/N105) stops the router's remote session itself, on the caller, and counts it.
+TEST_F(RouterConfigTest, StoppingTheBridgeStopsTheRouterSessionAndCountsIt) {
+  GameSocket config;
+  Admit(config, "/config");
+  config.Send(nevr_evr_codec::kSymConfigRequest);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess));
+  ClearTestLogs();
+  StopWebSocketBridgeListener();
+  EXPECT_FALSE(LogLinesContaining("1 remote connection(s) closed").empty());
+}
+
+// C6: a value that names no mode is fatal at boot and installs nothing, never a guess.
+TEST_F(RouterBogusModeTest, ANonsenseModeIsFatalAndInstallsNothing) {
+  EXPECT_EQ(g_fatalErrorCalls, fatalBefore_ + 1);
+  EXPECT_FALSE(LogLinesContaining("network.session_router refused").empty());
+  EXPECT_EQ(GetWebSocketBridgePort(), 0);
+}
+
+// ============================================================================
+// #708 S2b: network.session_router=all. Every socket the bridge admits (config, login, matchmaker) is the
+// router's: one shared remote session, one LoginRequest per login session, and the account gate.
+// ============================================================================
+
+namespace {
+
+class RouterAllTest : public RolesByPathTest {
+ protected:
+  const char* RouterMode() const override { return "all"; }
+  void TearDown() override {
+    TestHook_SetRouterGate(-1);
+    TestHook_SetRefuseRemoteOpens(false);
+    RolesByPathTest::TearDown();
+  }
+  struct Stats {
+    uint64_t droppedGame = 0, droppedRemote = 0, droppedUnrequires = 0, loginsRemoved = 0, heldRemotes = 0;
+  };
+  Stats RouterStats() {
+    Stats stats;
+    EXPECT_TRUE(TestHook_RouterStats(&stats.droppedGame, &stats.droppedRemote, &stats.droppedUnrequires,
+                                     &stats.loginsRemoved, &stats.heldRemotes));
+    return stats;
+  }
+  // The bridge's login socket, admitted and answered.
+  void AdmitLogin(GameSocket& login) {
+    Admit(login, "/login");
+    ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login never reached the service";
+  }
+};
+
+enum class Kind { Config, Login, Matchmaker };
+
+const char* KindName(Kind kind) {
+  switch (kind) {
+    case Kind::Config: return "config";
+    case Kind::Login: return "login";
+    case Kind::Matchmaker: return "matchmaker";
+  }
+  return "?";
+}
+
+// Each of the six orders the game's three sockets can open in.
+class RouterAllOrderTest : public RouterAllTest, public ::testing::WithParamInterface<std::array<Kind, 3>> {};
+
+std::string OrderName(const ::testing::TestParamInfo<std::array<Kind, 3>>& info) {
+  std::string name;
+  for (const Kind kind : info.param) name += std::string(KindName(kind)) + "_";
+  name.pop_back();
+  return name;
+}
+
+}  // namespace
+
+// L1: whatever the open order, the service sees one LoginRequest, and the login socket gets its reply. A
+// matchmaker that opens before any login is attached has no session to share, so it keeps a connection of its
+// own: that is the only reason for a second connection to the service.
+TEST_P(RouterAllOrderTest, TheThreeSocketsShareOneLoginInAnyOrder) {
+  const std::array<Kind, 3> order = GetParam();
+  GameSocket config, login, matchmaker;
+  for (const Kind kind : order) {
+    switch (kind) {
+      case Kind::Config: Admit(config, "/config"); break;
+      case Kind::Login: Admit(login, "/login"); break;
+      case Kind::Matchmaker: ASSERT_NE(GetMatchmakerBridgePort(), 0); Admit(matchmaker, "/", GetMatchmakerBridgePort()); break;
+    }
+  }
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the login socket never received its reply";
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  const auto at = [&order](Kind kind) { return std::find(order.begin(), order.end(), kind) - order.begin(); };
+  const int expectedOpens = at(Kind::Matchmaker) < at(Kind::Login) ? 2 : 1;
+  EXPECT_TRUE(YieldUntil([&] { return remote_.Opens() >= expectedOpens; }));
+  EXPECT_EQ(remote_.Opens(), expectedOpens);
+  EXPECT_EQ(LogLinesContaining("path=router").size(), 6U) << "three admissions and three connects, all the router's";
+  EXPECT_FALSE(config.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_FALSE(matchmaker.HasReceived(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(RouterStats().droppedGame, 0U);
+  EXPECT_EQ(RouterStats().droppedRemote, 0U);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Orders, RouterAllOrderTest,
+    ::testing::Values(std::array<Kind, 3>{Kind::Config, Kind::Login, Kind::Matchmaker},
+                      std::array<Kind, 3>{Kind::Config, Kind::Matchmaker, Kind::Login},
+                      std::array<Kind, 3>{Kind::Login, Kind::Config, Kind::Matchmaker},
+                      std::array<Kind, 3>{Kind::Login, Kind::Matchmaker, Kind::Config},
+                      std::array<Kind, 3>{Kind::Matchmaker, Kind::Config, Kind::Login},
+                      std::array<Kind, 3>{Kind::Matchmaker, Kind::Login, Kind::Config}),
+    OrderName);
+
+// L2: a standalone matchmaker's connection is a protobuf one (format=evr is stripped from the target); the
+// session's connection keeps it.
+TEST_F(RouterAllTest, AStandaloneMatchmakerConnectionDropsFormatEvr) {
+  SetWebSocketBridgeTarget((remote_.Uri() + "?format=evr").c_str());
+  GameSocket matchmaker, login;
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(matchmaker, "/", GetMatchmakerBridgePort());
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  ASSERT_TRUE(YieldUntil([this] { return remote_.Opens() >= 2; }));
+  const std::vector<std::string> uris = remote_.Uris();
+  ASSERT_EQ(uris.size(), 2U);
+  EXPECT_EQ(uris[0].find("format=evr"), std::string::npos) << "the matchmaker's connection: " << uris[0];
+  EXPECT_NE(uris[1].find("format=evr"), std::string::npos) << "the session's connection: " << uris[1];
+}
+
+// L3 (N91): a second /login while a login session exists is a matchmaker on the shared session; it injects nothing.
+TEST_F(RouterAllTest, ASecondLoginSocketSharesTheSessionAndInjectsNothing) {
+  GameSocket first, second;
+  AdmitLogin(first);
+  Admit(second, "/login");
+  EXPECT_TRUE(WaitForLogLines("(matchmaker) shares login session", 1));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_EQ(remote_.Opens(), 1);
+  EXPECT_EQ(LogLinesContaining("login injected xpid=").size(), 1U);
+  EXPECT_EQ(second.Count(nevr_evr_codec::kSymLoginSettings), 0);
+}
+
+// The game's first config request has a '{' where the pad byte is: `{` + `{"type":"main_menu","id":"main_menu"}` + NUL. Its reply
+// is matched to the request by type and id, so the router must read the key out of it, or the game never gets
+// its main_menu config (seen live, #708 S2b).
+TEST_F(RouterAllTest, AConfigRequestWhosePadByteIsABraceIsAnswered) {
+  GameSocket config;
+  Admit(config, "/config");
+  const std::string payload = std::string(1, '{') + R"({"type":"main_menu","id":"main_menu"})" + std::string(1, '\0');
+  config.Send(nevr_evr_codec::kSymConfigRequest, payload);
+  ASSERT_TRUE(config.WaitForSymbol(nevr_evr_codec::kSymConfigSuccess)) << "the reply was dropped as unmatched";
+  EXPECT_TRUE(LogLinesContaining("config reply dropped").empty());
+  EXPECT_TRUE(LogLinesContaining("no usable type and id").empty());
+}
+
+// L4: the reply to a request on the login socket goes to the login socket.
+TEST_F(RouterAllTest, TheReplyToTheLoginSocketsRequestGoesToTheLoginSocket) {
+  GameSocket config, login;
+  Admit(config, "/config");
+  AdmitLogin(login);
+  login.SendRequest();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess));
+  EXPECT_EQ(config.Count(nevr_evr_codec::kSymDocumentSuccess), 0);
+}
+
+// T706 through the bridge: the lobby reply goes to the matchmaker that last asked.
+TEST_F(RouterAllTest, ALobbyReplyGoesToTheMatchmakerThatAsked) {
+  GameSocket login, first, second;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(first, "/", GetMatchmakerBridgePort());
+  Admit(second, "/", GetMatchmakerBridgePort());
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol));
+  second.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(second.WaitForSymbol(RemoteService::kLobbyReplySymbol));
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(first.WaitForFrames(2));
+  EXPECT_EQ(first.Count(RemoteService::kLobbyReplySymbol), 2);
+  EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 1);
+  EXPECT_FALSE(LogLinesContaining("sent symbol=0x312c2a01819aa3f5").empty()) << "the sender of the find is not on record";
+  EXPECT_FALSE(LogLinesContaining("-> game=").empty()) << "the destination of the reply is not on record";
+}
+
+// A matchmaker that opens while another is waiting for its answer does not take the answer.
+TEST_F(RouterAllTest, ANewMatchmakerDoesNotTakeTheAnswerAnotherIsWaitingFor) {
+  GameSocket login, first, second;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  Admit(first, "/", GetMatchmakerBridgePort());
+  remote_.HoldLobbyReplies(true);
+  first.Send(nevr_evr_codec::kSymFindSessionRequest);
+  ASSERT_TRUE(YieldUntil([this] { return remote_.HeldLobbyReplies() == 1; })) << "the find never reached the service";
+  Admit(second, "/", GetMatchmakerBridgePort());
+  remote_.ReleaseLobbyReplies();
+  ASSERT_TRUE(first.WaitForSymbol(RemoteService::kLobbyReplySymbol)) << "the answer did not reach the asker";
+  EXPECT_EQ(second.Count(RemoteService::kLobbyReplySymbol), 0);
+}
+
+// L5: a dedicated server has no login to complete; the service's LoginFailure reaches the game as a LoginSuccess.
+TEST_F(RouterAllTest, AServersLoginFailureReachesTheGameAsALoginSuccess) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginFailure);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess)) << "the game was left at the login gate";
+  EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginFailure));
+}
+
+// L6: an Unrequire nobody asked for is dropped and counted, not handed to a socket.
+TEST_F(RouterAllTest, AnUnrequireNobodyAskedForIsDroppedAndCounted) {
+  GameSocket login;
+  AdmitLogin(login);
+  remote_.PushToClients(nevr_evr_codec::kSymConnectionUnrequire);
+  ASSERT_TRUE(YieldUntil([this] { return RouterStats().droppedUnrequires == 1; })) << "the Unrequire was not counted";
+  EXPECT_EQ(login.Count(nevr_evr_codec::kSymConnectionUnrequire), 0);
+}
+
+// A login the service accepted is followed by the friend-list subscription, sent once, on the session.
+TEST_F(RouterAllTest, ALoginSuccessIsFollowedByTheFriendListSubscription) {
+  remote_.SetLoginReply(nevr_evr_codec::kSymLoginSuccess);
+  GameSocket login;
+  Admit(login, "/login");
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSuccess));
+  const uint64_t subscribe = nevr_evr_codec::FirstSymbol(nevr_evr_codec::BuildFriendListSubscribe());
+  ASSERT_TRUE(YieldUntil([&] { return remote_.ReceivedCount(subscribe) >= 1; })) << "no friend-list subscription";
+  EXPECT_EQ(remote_.ReceivedCount(subscribe), 1);
+}
+
+// L7: a runtime frame sent before the session exists is refused (and says so); once the login is up it goes to the
+// service, and its reply reaches the login socket.
+TEST_F(RouterAllTest, ARuntimeFrameIsRefusedBeforeTheSessionAndSentAfter) {
+  const nevr_social_party::Sender sender = nevr_social_party::SenderSlot().load();
+  ASSERT_NE(sender, nullptr);
+  const std::string frame = nevr_evr_codec::BuildMessage(nevr_evr_codec::kSymDocumentRequest, "");
+  EXPECT_FALSE(sender(frame));
+  EXPECT_FALSE(LogLinesContaining("game->server frame not sent").empty());
+  GameSocket login;
+  AdmitLogin(login);
+  EXPECT_TRUE(sender(frame));
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymDocumentSuccess)) << "the reply to the runtime frame was lost";
+}
+
+// L8: the ninth matchmaker is closed with 1013, and the first eight share the session's one connection.
+TEST_F(RouterAllTest, ANinthMatchmakerIsClosedTryAgainLater) {
+  GameSocket login;
+  AdmitLogin(login);
+  ASSERT_NE(GetMatchmakerBridgePort(), 0);
+  std::vector<std::unique_ptr<GameSocket>> matchmakers;
+  for (int index = 0; index < 8; ++index) {
+    matchmakers.push_back(std::make_unique<GameSocket>());
+    Admit(*matchmakers.back(), "/", GetMatchmakerBridgePort());
+  }
+  GameSocket ninth;
+  Admit(ninth, "/", GetMatchmakerBridgePort());
+  EXPECT_TRUE(ninth.WaitForClose());
+  EXPECT_EQ(ninth.CloseCode(), 1013);
+  EXPECT_EQ(remote_.Opens(), 1);
+}
+
+// L9: the remote ending ends the login session once, and removes no login (that is Quest's, not the PC's).
+TEST_F(RouterAllTest, TheRemoteEndingEndsTheSessionOnceAndRemovesNoLogin) {
+  GameSocket first, second;
+  AdmitLogin(first);
+  remote_.CloseEveryClient();
+  ASSERT_TRUE(WaitForLogLines("login session ended", 1));
+  ASSERT_TRUE(first.WaitForClose());
+  EXPECT_EQ(LogLinesContaining("login session ended").size(), 1U);
+  EXPECT_EQ(RouterStats().loginsRemoved, 0U);
+  EXPECT_FALSE(LogLinesContaining("router stats (session ended)").empty());
+  Admit(second, "/login");
+  EXPECT_TRUE(second.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the game's next login was not a new login";
+  EXPECT_EQ(remote_.LoginRequests(), 2);
+}
+
+// T704-A: the account is awaited and the adapter refuses to open a connection. The config socket is closed (the
+// game sees a failed connect), nothing reaches the service, and the login socket stays open with its session held.
+// When the account arrives the held session opens and carries the login.
+TEST_F(RouterAllTest, AHeldLoginSessionOpensWhenTheAccountArrives) {
+  TestHook_SetRouterGate(0);
+  TestHook_SetRefuseRemoteOpens(true);
+  GameSocket config, login;
+  Admit(config, "/config");
+  ASSERT_TRUE(config.WaitForClose());
+  EXPECT_EQ(config.CloseCode(), 1011);
+  Admit(login, "/login");
+  ASSERT_TRUE(WaitForLogLines("(login) held", 1));
+  EXPECT_EQ(remote_.Opens(), 0);
+  EXPECT_EQ(remote_.LoginRequests(), 0);
+  EXPECT_EQ(RouterStats().heldRemotes, 1U);
+  EXPECT_EQ(login.Frames(), 0);
+
+  TestHook_SetRefuseRemoteOpens(false);
+  TestHook_SetRouterGate(1);
+  TestHook_ReevaluateRouterGate();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings)) << "the held session never opened";
+  EXPECT_EQ(remote_.Opens(), 1);
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_EQ(RouterStats().heldRemotes, 0U);
+}
+
+// T704-B: the adapter opens the session but the account is still awaited: the login waits; the config socket
+// is served meanwhile. No LoginRequest is sent until the gate is ready.
+TEST_F(RouterAllTest, AnOpenSessionWaitsForTheAccountBeforeItsLogin) {
+  TestHook_SetRouterGate(0);
+  GameSocket config, login;
+  Admit(config, "/config");
+  Admit(login, "/login");
+  ASSERT_TRUE(WaitForLogLines("login deferred", 1));
+  EXPECT_EQ(remote_.LoginRequests(), 0);
+  TestHook_SetRouterGate(1);
+  TestHook_ReevaluateRouterGate();
+  ASSERT_TRUE(login.WaitForSymbol(nevr_evr_codec::kSymLoginSettings));
+  EXPECT_EQ(remote_.LoginRequests(), 1);
+  EXPECT_FALSE(LogLinesContaining("the account is available; injecting the deferred login").empty());
 }
 
 // ============================================================================
@@ -1135,6 +3169,37 @@ TEST(MatchmakerHostPatch, LoadUnloadReloadPatchesEveryLoadAndUnloadWritesNothing
   EXPECT_EQ(writes, 3);
 }
 
+// Self-check "matchmaking_reload_patch" (#451): the ledger the loader callback feeds says, per change, whether
+// every load of the module had its host default re-applied.
+TEST(MatchmakerHostPatch, ReloadLedgerPassesWhenEveryLoadWasPatchedAndFailsWhenOneWasNot) {
+  namespace mm = nevr_matchmaker_host_patch;
+  mm::ReloadLedger ledger;
+  std::string observed;
+  bool pass = false;
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "no load yet: nothing to report";
+
+  ledger.NoteLoad(mm::Result::Patched);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=1 patched=1");
+  EXPECT_TRUE(pass);
+  EXPECT_FALSE(ledger.Take(&observed, &pass)) << "unchanged: said once";
+
+  ledger.NoteLoad(mm::Result::Patched);  // the reload of #18, patched again
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=2 patched=2");
+  EXPECT_TRUE(pass);
+
+  ledger.NoteLoad(mm::Result::BytesMismatch);  // a load the patch did not land on
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=3 patched=2");
+  EXPECT_FALSE(pass);
+
+  ledger.NoteLoad(std::nullopt);
+  ASSERT_TRUE(ledger.Take(&observed, &pass));
+  EXPECT_EQ(observed, "loads=4 patched=2");
+  EXPECT_FALSE(pass);
+}
+
 TEST(MatchmakerHostPatch, OnlyTheMatchmakingModuleByWholeNameAnyCaseIsPatched) {
   namespace mm = nevr_matchmaker_host_patch;
   int writes = 0;
@@ -1202,6 +3267,25 @@ TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
   ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
   EXPECT_EQ(statusCode, 400U);
   EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+// A client (not a server) gets the service's LoginFailure itself, with the code line first: the game reads the
+// first line of the message.
+TEST_F(RouterAllTest, AClientsLoginFailureReachesTheGameWithTheCodeLineFirst) {
+  const BOOL wasServer = g_isServer;
+  g_isServer = FALSE;
+  remote_.SetLoginReplyFrame(
+      FrameWithText("[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+                    "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<"));
+  GameSocket login;
+  Admit(login, "/login");
+  const bool failed = login.WaitForSymbol(nevr_evr_codec::kSymLoginFailure);
+  g_isServer = wasServer;
+  ASSERT_TRUE(failed) << "the game never saw the LoginFailure";
+  EXPECT_FALSE(login.HasReceived(nevr_evr_codec::kSymLoginSuccess));
+  EXPECT_EQ(login.FrameWith(nevr_evr_codec::kSymLoginFailure),
+            FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                          "location.\nCheck your Discord DMs from @EchoVRCE."));
 }
 
 TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
@@ -1792,6 +3876,14 @@ struct GuardScratch {
     }
 };
 
+HANDLE g_guardEntered = nullptr;
+HANDLE g_guardContinue = nullptr;
+
+void WaitBeforeGuardPublish() {
+    SetEvent(g_guardEntered);
+    WaitForSingleObject(g_guardContinue, 5000);
+}
+
 }  // namespace
 
 TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
@@ -1803,6 +3895,36 @@ TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
     nevr_hook_guard::Record(s.page, "N84_unchanged");
     EXPECT_EQ(nevr_hook_guard::VerifyAll("test:unchanged"), 0)
         << "guard reported a mismatch on bytes nothing modified";
+}
+
+TEST(N84_HookGuard, ReadersSkipReservedEntryUntilWriterPublishesIt) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    g_guardEntered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_guardContinue = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ASSERT_NE(g_guardEntered, nullptr);
+    ASSERT_NE(g_guardContinue, nullptr);
+    nevr_hook_guard::SetBeforePublishForTest(&WaitBeforeGuardPublish);
+
+    std::thread writer([&] { nevr_hook_guard::Record(s.page, "N84_pending"); });
+    const DWORD entered = WaitForSingleObject(g_guardEntered, 5000);
+    if (entered == WAIT_OBJECT_0) {
+        EXPECT_EQ(nevr_hook_guard::RecordedCount(), 0);
+        EXPECT_FALSE(nevr_hook_guard::IsOurDetour(s.page));
+        EXPECT_EQ(nevr_hook_guard::VerifyAll("test:pending"), 0);
+    }
+    SetEvent(g_guardContinue);
+    writer.join();
+    nevr_hook_guard::SetBeforePublishForTest(nullptr);
+    EXPECT_EQ(entered, WAIT_OBJECT_0);
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(s.page));
+    CloseHandle(g_guardEntered);
+    CloseHandle(g_guardContinue);
+    g_guardEntered = nullptr;
+    g_guardContinue = nullptr;
 }
 
 TEST(N84_HookGuard, OverwrittenBytes_Detected) {
@@ -1825,6 +3947,39 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
 
     EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overwritten"), 1)
         << "guard did NOT detect a foreign detour overwriting a recorded address";
+}
+
+// #800: the wrapper's hook belongs to the host. The runtime records the bytes the host read after it
+// enabled its hook (the host's jump), not the bytes it finds when it gets round to recording, so a
+// re-hook between the host's enable and the runtime's init is a mismatch from the first VerifyAll.
+TEST(N84_HookGuard, RecordBytes_HostBytesMatchingTheTargetIsNoMismatch) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    unsigned char hostBytes[16];
+    memset(hostBytes, 0x90, sizeof(hostBytes));
+    hostBytes[0] = 0xE9;
+    memcpy(s.page, hostBytes, sizeof(hostBytes));
+
+    nevr_hook_guard::RecordBytes(s.page, "host_hook", hostBytes);
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), 1);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:host-bytes"), 0);
+    EXPECT_TRUE(nevr_hook_guard::IsOurDetour(s.page));
+}
+
+TEST(N84_HookGuard, RecordBytes_HostBytesDifferingFromTheTargetIsAMismatch) {
+    nevr_hook_guard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    unsigned char hostBytes[16];
+    memset(hostBytes, 0x90, sizeof(hostBytes));
+    hostBytes[0] = 0xE9;
+    memcpy(s.page, hostBytes, sizeof(hostBytes));
+    static_cast<unsigned char*>(s.page)[1] = 0x42;  // another hooker wrote over the host's jump
+
+    nevr_hook_guard::RecordBytes(s.page, "host_hook_rehooked", hostBytes);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:host-bytes-rehooked"), 1);
+    EXPECT_FALSE(nevr_hook_guard::IsOurDetour(s.page));
 }
 
 // IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
@@ -1865,6 +4020,61 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
     EXPECT_EQ(nevr_hook_guard::RecordedCount(), before)
         << "uncommitted memory was recorded; VerifyAll would fault reading it";
     VirtualFree(reserved, 0, MEM_RELEASE);
+}
+
+// The table holds every install site the runtime has. 62 is the count of sites in src/ that reach
+// nevr_hook_guard::Record (counted in hook_guard.cpp, next to kMaxGuarded); a capacity below it drops
+// guards on a healthy boot. A new site raises that count and this number with it.
+TEST(N84_HookGuard, CapacityCoversEveryInstallSiteTheRuntimeHas) {
+    constexpr int kInstallSitesInSource = 62;
+    EXPECT_GE(nevr_hook_guard::Capacity(), kInstallSitesInSource);
+}
+
+// A full table must not look like a clean one. Recording past Capacity() drops the site, and the drop
+// has to be counted and reported at ERROR by VerifyAll, not vanish.
+TEST(N84_HookGuard, FullTable_DropsAreCountedAndReportedLoudly) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+
+    const int cap = nevr_hook_guard::Capacity();
+    ASSERT_GT(cap, 0);
+    for (int i = 0; i < cap; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap);
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 0);
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:full"), 0);
+    EXPECT_FALSE(TestLogContains("hook guard table full")) << "reported a drop that never happened";
+
+    nevr_hook_guard::Record(s.page, "N84_dropped_first");
+    nevr_hook_guard::Record(s.page, "N84_dropped_second");
+    EXPECT_EQ(nevr_hook_guard::RecordedCount(), cap) << "a full table must not grow";
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 2);
+
+    EXPECT_EQ(nevr_hook_guard::VerifyAll("test:overflow"), 0) << "a drop is not an overwrite";
+    EXPECT_TRUE(TestLogContains("hook guard table full cap=")) << "the drop was not reported";
+    EXPECT_TRUE(TestLogContains("dropped=2 first=N84_dropped_first")) << "the report must name the first dropped detour";
+
+    // Edge-triggered: the same drops are not reported again, a new drop is.
+    ClearTestLogs();
+    nevr_hook_guard::VerifyAll("test:again");
+    EXPECT_FALSE(TestLogContains("hook guard table full"));
+    nevr_hook_guard::Record(s.page, "N84_dropped_third");
+    nevr_hook_guard::VerifyAll("test:third");
+    EXPECT_TRUE(TestLogContains("dropped=3 first=N84_dropped_first"));
+}
+
+// Overflow itself does not Log(): the drop is counted and VerifyAll() reports it once.
+TEST(N84_HookGuard, FullTable_RecordDoesNotLogUnderTheLoaderLock) {
+    nevr_hook_guard::ResetForTest();
+    ClearTestLogs();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+    for (int i = 0; i < nevr_hook_guard::Capacity() + 3; i++) nevr_hook_guard::Record(s.page, "N84_fill");
+    EXPECT_EQ(nevr_hook_guard::DroppedCount(), 3);
+    EXPECT_FALSE(TestLogContains("hook guard")) << "Record() logged on overflow; it can run under the loader lock";
 }
 
 // WOULD-FAIL-IF (N84): delete the memcmp in nevr_hook_guard::VerifyAll (hook_guard.cpp)
@@ -1913,6 +4123,24 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
                 h.cpu_brand.c_str(), h.physical_cores, h.logical_cores,
                 (unsigned long long)h.memory_used_mb, (unsigned long long)h.memory_total_mb,
                 h.wine_version.c_str(), h.wine_host_os.c_str(), h.os_build);
+}
+
+TEST(HostEnvironmentLine, NamesTheWineVersionHostOsAndWindowsBuild) {
+    nevr_system_info::Host host;
+    host.wine_version = "10.0";
+    host.wine_host_os = "Linux";
+    host.os_build = 19045;
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=10.0 host_os=Linux os_build=19045\n");
+}
+
+TEST(HostEnvironmentLine, ANativeWindowsHostSaysNoneAndAnUnmeasuredBuildSaysUnknown) {
+    nevr_system_info::Host host;  // nothing measured: native Windows with no build
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=unknown\n");
+    host.os_build = 22631;
+    EXPECT_EQ(nevr_host_environment::BootLine(host),
+              "[NEVR.BOOT] host environment: wine=none host_os=none os_build=22631\n");
 }
 
 TEST(SystemInfo, WineDetectionIsTheVersionString) {
@@ -1972,6 +4200,22 @@ TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
     const nevr_build_identity::Info& id = nevr_build_identity::Get();
     // The dirty flag is derived from git_describe, not a separate source.
     EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
+}
+
+// The one identity literal the release signer and the CI stamp check read out of the binary:
+// "NEVR-BUILD <version> <commit40>", version and commit from the same definitions as Info.
+TEST(BuildIdentity, IdentityLiteralBindsTheVersionAndTheFullCommit) {
+    const std::string literal = nevr_build_identity::IdentityLiteral();
+    const nevr_build_identity::Info& id = nevr_build_identity::Get();
+    const std::string prefix = "NEVR-BUILD ";
+    ASSERT_EQ(literal.compare(0, prefix.size(), prefix), 0) << literal;
+    const size_t space = literal.rfind(' ');
+    ASSERT_GT(space, prefix.size());
+    EXPECT_EQ(literal.substr(prefix.size(), space - prefix.size()), id.project_version);
+    const std::string commit = literal.substr(space + 1);
+    EXPECT_EQ(commit.size(), 40u) << commit;
+    EXPECT_EQ(commit.find_first_not_of("0123456789abcdef"), std::string::npos) << commit;
+    EXPECT_EQ(commit.compare(0, id.git_commit.size(), id.git_commit), 0) << "the short commit is its prefix";
 }
 
 TEST(BuildIdentity, IsCachedNotRemeasured) {
@@ -2097,4 +4341,265 @@ TEST(HmdSerial, StockChoice) {
   char full[nevr_hmd_serial::kSerialBytes];
   std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
   EXPECT_EQ(nevr_hmd_serial::Select(false, full).value, std::string(24, 'Z'));
+}
+
+
+// ============================================================================
+// #479 — the XPID provider-string patch reports failure through g_bootHookFailed.
+//
+// PatchDscProvider runs from Initialize(), before the CLI is parsed, so g_isServer is still false
+// there and ServerFatal() would only warn. The failure has to reach boot.cpp's server check
+// (`if (g_bootHookFailed) ServerFatal(...)`) through the flag instead.
+//
+// The test builds a 32 MB stand-in for the game image, puts the five provider strings at the
+// real RVAs, and points EchoVR::g_GameBaseAddress at it.
+// ============================================================================
+
+namespace {
+
+constexpr size_t kXpidImageSize = 0x2000000;
+
+struct XpidSite {
+    uintptr_t rva;
+    const char* original;  // 4 bytes including the terminator or dash
+    const char* patched;
+};
+
+const XpidSite kXpidSites[] = {
+    {nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "PSN-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_NAME, "PSN", "DSC"},
+    {nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "??\?-", "DSC-"},
+    {nevr_patch_addresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME, "???", "DSC"},
+};
+
+void WriteXpidOriginals(char* base) {
+    for (const auto& site : kXpidSites) memcpy(base + site.rva, site.original, 4);
+}
+
+// Points EchoVR::g_GameBaseAddress at `base` for one test and restores it, and clears the flag the
+// code under test sets.
+struct XpidBaseScope {
+    CHAR* saved;
+    explicit XpidBaseScope(char* base) : saved(EchoVR::g_GameBaseAddress) {
+        EchoVR::g_GameBaseAddress = base;
+        g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
+        g_serverFatalCalls = 0;
+    }
+    ~XpidBaseScope() {
+        EchoVR::g_GameBaseAddress = saved;
+        g_bootHookFailed = false;
+        g_bootHookFailedCause[0] = '\0';
+    }
+};
+
+// Opens the boot tee's file for one test and closes it again. Init() starts the boot phase, so
+// the code under test reports through TeeFprintf exactly as it does under the loader lock.
+// Output() returns what the tee wrote to nevr-boot.jsonl after the guard was constructed.
+struct BootTeeCapture {
+    std::string path;
+    std::streamoff start = 0;
+    BootTeeCapture() {
+        nevr_boot_log_tee::Init();
+        path = nevr_boot_log_tee::Path();
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in) start = in.tellg();
+    }
+    ~BootTeeCapture() { nevr_boot_log_tee::Close(); }
+    std::string Output() const {
+        std::ifstream in(path, std::ios::binary);
+        in.seekg(start);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+};
+
+}  // namespace
+
+TEST(XpidPatchBoot, ARecognisedImageIsPatchedAndBootContinues) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_FALSE(g_bootHookFailed) << "a healthy image must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "") << "a healthy image records no failure cause";
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    for (const auto& site : kXpidSites) {
+        EXPECT_EQ(memcmp(base + site.rva, site.patched, 4), 0) << "site rva=0x" << std::hex << site.rva;
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AnImageWithUnexpectedBytesFailsTheBootThroughTheFlagNotServerFatal) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);  // not this build
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a validation failure must reach boot.cpp's server check";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+    }
+    // Nothing is half-patched: validation happens before any write.
+    EXPECT_EQ(memcmp(base + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, AFailedWriteFailsTheBootThroughTheFlagNotServerFatal) {
+    // The same bytes through a read-only view of a section: validation passes, then
+    // VirtualProtect(PAGE_EXECUTE_READWRITE) on the view is refused, so every ApplyPatch fails.
+    HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        static_cast<DWORD>(kXpidImageSize), nullptr);
+    ASSERT_NE(section, nullptr);
+    char* writable = static_cast<char*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kXpidImageSize));
+    ASSERT_NE(writable, nullptr);
+    WriteXpidOriginals(writable);
+    UnmapViewOfFile(writable);
+    char* readOnly = static_cast<char*>(MapViewOfFile(section, FILE_MAP_READ, 0, 0, kXpidImageSize));
+    ASSERT_NE(readOnly, nullptr);
+    {
+        XpidBaseScope scope(readOnly);
+        PatchDscProvider();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed patch write must reach boot.cpp's server check";
+        EXPECT_STREQ(g_bootHookFailedCause, "XPID provider-string patch write failed");
+        EXPECT_EQ(g_serverFatalCalls, 0);
+    }
+    EXPECT_EQ(memcmp(readOnly + nevr_patch_addresses::XPID_PLATFORM_SHORT_NAME, "PSN", 4), 0);
+    UnmapViewOfFile(readOnly);
+    CloseHandle(section);
+}
+
+TEST(XpidPatchBoot, AMismatchRecordsSiteExpectedAndActualBytesInTheBootLogNotLog) {
+    // The boot path runs under the DllMain loader lock and reports through the boot tee. The
+    // mismatch record is the only place the expected and actual bytes exist, so it has to reach it.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        written = tee.Output();
+    }
+    char expected[160];
+    snprintf(expected, sizeof(expected),
+             "[NEVR.XPID] dash prefix mismatch rva=0x%X expected=50534e2d actual=58595a2d",
+             static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+    EXPECT_NE(written.find(expected), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPatchBoot, TheRefusalCauseNamesTheFirstMismatchedSite) {
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    WriteXpidOriginals(base);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX, "XYZ-", 4);
+    memcpy(base + nevr_patch_addresses::XPID_PLATFORM_FALLBACK_PREFIX, "XYZ-", 4);
+    {
+        XpidBaseScope scope(base);
+        PatchDscProvider();
+        char expected[96];
+        snprintf(expected, sizeof(expected), "XPID dash prefix mismatch rva=0x%X",
+                 static_cast<unsigned>(nevr_patch_addresses::XPID_PLATFORM_DASH_PREFIX));
+        EXPECT_STREQ(g_bootHookFailedCause, expected)
+            << "boot.cpp's ServerFatal prints this: it must name the failing site";
+    }
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+// ============================================================================
+// #532 — a failed GetProviderPrefix (OVR-ORG) detour refuses to start a server, the same as a
+// failed five-site byte patch. A server that kept running would build 17 callers' xpids with the
+// game's own PSN- prefixes while the bridge logs in as OVR-ORG.
+// ============================================================================
+
+namespace {
+
+// Real x86-64 prologue (mov [rsp+8],rbx; mov [rsp+10h],rsi; ret) at GetProviderPrefix, in memory
+// that can be executed, so MinHook can really detour it.
+constexpr unsigned char kStandInPrefixFunction[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0xC3};
+
+}  // namespace
+
+TEST(XpidPrefixDetourBoot, AFailedDetourFailsTheBootThroughTheFlagAndNamesItself) {
+    // MinHook is not initialised in this process, so MH_CreateHook refuses: the detour fails for real.
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    ClearTestLogs();
+    std::string written;
+    {
+        BootTeeCapture tee;
+        ASSERT_FALSE(tee.path.empty()) << "the boot tee could not resolve nevr-boot.jsonl";
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_TRUE(g_bootHookFailed) << "a failed OVR-ORG detour must reach boot.cpp's server check";
+        EXPECT_EQ(std::string(g_bootHookFailedCause).rfind("XPID GetProviderPrefix detour failed", 0), 0u)
+            << "boot.cpp's ServerFatal prints this: it must name the detour, was '" << g_bootHookFailedCause << "'";
+        EXPECT_EQ(g_serverFatalCalls, 0)
+            << "ServerFatal runs before the CLI is parsed, where it only warns; the flag is the signal";
+        written = tee.Output();
+    }
+    EXPECT_NE(written.find("[NEVR.XPID] warn; GetProviderPrefix detour FAILED"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_NE(written.find("a server will refuse to start"), std::string::npos) << "boot log was:\n" << written;
+    EXPECT_FALSE(TestLogContains("[NEVR.XPID]")) << "the XPID boot path must not call Log()";
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+TEST(XpidPrefixDetourBoot, AnInstalledDetourReturnsTheOvrOrgPrefixAndBootContinues) {
+    ASSERT_EQ(MH_Initialize(), MH_OK);
+    char* base = static_cast<char*>(VirtualAlloc(nullptr, kXpidImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    ASSERT_NE(base, nullptr);
+    memcpy(base + nevr_patch_addresses::GET_PROVIDER_PREFIX, kStandInPrefixFunction, sizeof(kStandInPrefixFunction));
+    memcpy(base + nevr_patch_addresses::PROVIDER_STRING_OVR_ORG, "OVR-ORG", 8);
+    {
+        XpidBaseScope scope(base);
+        PatchProviderPrefixOvrOrg();
+        EXPECT_FALSE(g_bootHookFailed) << "a working detour must not mark the boot failed";
+        EXPECT_STREQ(g_bootHookFailedCause, "");
+        using PrefixFn = const char* (*)(uint32_t*);
+        uint32_t provider = 2;  // PSN: the detour answers OVR-ORG whatever the game asked for
+        const char* prefix = reinterpret_cast<PrefixFn>(base + nevr_patch_addresses::GET_PROVIDER_PREFIX)(&provider);
+        EXPECT_STREQ(prefix, "OVR-ORG");
+    }
+    MH_Uninitialize();
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+// #587: a value option takes the next token as its value only when that token is not an option.
+TEST(CliOptionValue, ATokenThatIsNotAnOptionIsTheValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", value[] = L"120", negative[] = L"-5";
+    wchar_t* argv[] = {exe, flag, value};
+    ASSERT_NE(nevr_cli::OptionValue(3, argv, 1), nullptr);
+    EXPECT_STREQ(nevr_cli::OptionValue(3, argv, 1), L"120");
+    wchar_t* argvNegative[] = {exe, flag, negative};
+    ASSERT_NE(nevr_cli::OptionValue(3, argvNegative, 1), nullptr) << "-5 is a number to the game's tokenizer";
+    EXPECT_STREQ(nevr_cli::OptionValue(3, argvNegative, 1), L"-5");
+}
+
+TEST(CliOptionValue, AnOptionAfterAValueOptionIsNotItsValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-timestep", next[] = L"-no-console", plus[] = L"+x", dash[] = L"-";
+    wchar_t* argv[] = {exe, flag, next};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argv, 1), nullptr) << "-timestep -no-console must leave -no-console to the parse";
+    wchar_t* argvPlus[] = {exe, flag, plus};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvPlus, 1), nullptr);
+    wchar_t* argvDash[] = {exe, flag, dash};
+    EXPECT_EQ(nevr_cli::OptionValue(3, argvDash, 1), nullptr);
+}
+
+TEST(CliOptionValue, NothingAfterTheOptionIsNoValue) {
+    wchar_t exe[] = L"echovr.exe", flag[] = L"-config", beyond[] = L"past-argc";
+    wchar_t* argv[] = {exe, flag, beyond};  // a token sits past argc: a lookahead that ignores argc finds it
+    EXPECT_EQ(nevr_cli::OptionValue(2, argv, 1), nullptr);
+    EXPECT_EQ(nevr_cli::OptionValue(2, nullptr, 1), nullptr);
 }

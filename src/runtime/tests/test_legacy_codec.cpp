@@ -107,7 +107,7 @@ TEST(LegacySymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
       {"SNSLobbySessionFailurev2", lc::kSNSLobbySessionFailurev2},
       {"SNSLobbySessionSuccessv5", lc::kSNSLobbySessionSuccessv5},
       {"SNSLobbySessionFailurev4", lc::kSNSLobbySessionFailurev4},
-      {"SNSConfigSuccessv2", lc::kSNSConfigSuccessv2},
+      {"SNSConfigSuccessv2", nevr_evr_codec::kSymConfigSuccess},
       {"SNSReconcileIAP", lc::kSNSReconcileIAP},
       {"SNSReconcileIAPResult", lc::kSNSReconcileIAPResult},
       {"SNSLobbyMatchmakerStatus", lc::kSNSLobbyMatchmakerStatus},
@@ -116,6 +116,14 @@ TEST(LegacySymbols, EveryConstantIsTheCSymbol64OfItsGameName) {
   for (const auto& [name, value] : rows) {
     EXPECT_EQ(EchoVR::CSymbol64Hash(name), value) << name;
   }
+}
+
+// A byte >= 0x80 is sign-extended, as the game does (echovr.exe 0x1400ce199 MOVSX) (#657).
+TEST(LegacySymbolHash, NonAsciiBytesAreSignExtended) {
+  EXPECT_EQ(EchoVR::CSymbol64Hash("main_menu"), 0x1509ee27440e1d7bULL);
+  EXPECT_EQ(EchoVR::CSymbol64Hash(""), EchoVR::kCSymbol64Seed);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("caf\xc3\xa9"), 0xcd0714df62754f5fULL);
+  EXPECT_EQ(EchoVR::CSymbol64Hash("\xff\xfe"), 0x1f17d45f0697bb92ULL);
 }
 
 // ---- login --------------------------------------------------------------------------------------
@@ -364,7 +372,7 @@ TEST(LegacyLocal, LeaderboardRequestIsAnsweredWithAnEmptyBoardUnderTheSameTag) {
 TEST(LegacyConfig, ConfigAndReconcileRowsPassThroughBothWays) {
   const lc::Context ctx = MakeContext();
   for (const uint64_t symbol :
-       {nevr_evr_codec::kSymConfigRequest, lc::kSNSConfigSuccessv2, nevr_evr_codec::kSymConfigFailure,
+       {nevr_evr_codec::kSymConfigRequest, nevr_evr_codec::kSymConfigSuccess, nevr_evr_codec::kSymConfigFailure,
         lc::kSNSReconcileIAP, lc::kSNSReconcileIAPResult, nevr_evr_codec::kSymMatchmakerStatusRequest,
         lc::kSNSLobbyMatchmakerStatus, lc::kSNSLobbyPlayerSessionsSuccessv3}) {
     EXPECT_EQ(lc::LegacyToCurrent(symbol, "x", ctx, ProfileV2()).outcome, lc::Outcome::Passthrough)

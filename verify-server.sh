@@ -15,10 +15,11 @@
 #   ./verify-server.sh <run-name> [flag-set] [run-seconds]
 #
 # flag-set:
-#   default    -server -headless -noconsole   (byte-identical to launch-server.sh)
-#   noflag     -server -noconsole             (drops the -headless token)
+#   default    -server -headless -no-console   (byte-identical to launch-server.sh)
+#   noflag     -server -no-console             (drops the -headless token)
 #   upnp       default + -upnp                (flag path to g_upnpEnabled, not config)
-#   notelem    default + -notelemetry         (telemetry explicitly disabled)
+#   notelem    default + -no-telemetry         (telemetry explicitly disabled)
+#   timestep   default + -fixedtimestep -timestep 120  (the time-step options a server strips, #515)
 #
 # It deploys into the game install of the main checkout (NEVR_GAME_ROOT overrides), takes the same
 # one-run-at-a-time lock as launch-client.sh, and puts every file it deployed back on exit, including
@@ -28,7 +29,7 @@
 # and the run looks hung. Read the files after it exits.
 set -uo pipefail
 
-RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag|upnp|notelem] [seconds]}"
+RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag|upnp|notelem|timestep] [seconds]}"
 FLAGSET="${2:-default}"
 RUN_SECONDS="${3:-100}"
 
@@ -43,18 +44,21 @@ SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}"
 OUT="$SCRATCH_ROOT/server-runs/${RUN_NAME}"
 
 case "$FLAGSET" in
-  default) ARGS=(-server -headless -noconsole) ;;
-  noflag)  ARGS=(-server -noconsole) ;;
+  default) ARGS=(-server -headless -no-console) ;;
+  noflag)  ARGS=(-server -no-console) ;;
   # N122/R4: exercises the FLAG path to g_upnpEnabled (boot.cpp) rather than the
   # config-key path (config.cpp). Both set the same global, but only one of them
   # is covered by a run that relies on config.yaml's network.upnp key (N133 moved
   # it out of config.json; issue #21 made config.json optional) — and a flag that silently
   # stopped working would look identical to a config that silently kept working.
-  upnp)    ARGS=(-server -headless -noconsole -upnp) ;;
+  upnp)    ARGS=(-server -headless -no-console -upnp) ;;
   # R5: telemetry is gated on telemetry_uri in config, not on a flag. This flagset
   # exists so the disabled path is exercised deliberately rather than by omission.
-  notelem) ARGS=(-server -headless -noconsole -notelemetry) ;;
-  *) echo "unknown flag-set: $FLAGSET (use default, noflag, upnp or notelem)" >&2; exit 2 ;;
+  notelem) ARGS=(-server -headless -no-console -no-telemetry) ;;
+  # #515: the time-step options GameMainWrapperHook removes from a server's command line before the game
+  # parses it. The run's log shows the removal line, the tick-rate line and the clock read-back.
+  timestep) ARGS=(-server -headless -no-console -fixedtimestep -timestep 120) ;;
+  *) echo "unknown flag-set: $FLAGSET (use default, noflag, upnp, notelem or timestep)" >&2; exit 2 ;;
 esac
 
 MIN_SECONDS="${NEVR_VERIFY_MIN_SECONDS:-45}"
@@ -183,10 +187,18 @@ WINE_RUNNING=1
 # a window that opens and closes before teardown would otherwise go unseen.
 MAX_WINDOWS=0
 elapsed=0
+started_at=$SECONDS
 while [ "$elapsed" -lt "$RUN_SECONDS" ]; do
-  sleep "$POLL_SECONDS" 9>&-
+  # One sample interval, ended at once if the game exits first. The sleep runs in the background and
+  # the shell waits on it, so an INT/TERM trap runs now and not after the interval (and `wait -n` on
+  # the game's PID leaves its exit status for the `wait` below).
+  sleep "$POLL_SECONDS" 9>&- &
+  sampler=$!
+  wait -n "$WINE_PID" "$sampler"
+  kill "$sampler" 2>/dev/null
+  wait "$sampler" 2>/dev/null
+  kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=$((SECONDS-started_at))s" >> "$OUT/context.txt"; break; }
   elapsed=$((elapsed+POLL_SECONDS))
-  kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=${elapsed}s" >> "$OUT/context.txt"; break; }
   pids=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE" | tr '\n' ' ')
   n=$(count_game_windows "$pids")
   [ "$n" -gt "$MAX_WINDOWS" ] && MAX_WINDOWS="$n"

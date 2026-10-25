@@ -1,13 +1,11 @@
 #include "quest/sentinel/quest_config.h"
 
+#include "core/nevr_config.h"
 #include "runtime/lifecycle/service_redirect.h"
 
-#include <nlohmann/json.hpp>
-
 #include <array>
-#include <cstring>
-#include <map>
-#include <set>
+#include <exception>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -16,8 +14,6 @@ namespace {
 
 constexpr std::size_t kMaxUriBytes = 2048;
 constexpr std::size_t kMaxKeyBytes = 512;
-// A file of thousands of bad keys must not become thousands of log writes at startup.
-constexpr std::size_t kMaxFileWarnings = 32;
 
 enum class Kind { kSocketUri, kHttpUri, kSecret };
 
@@ -27,12 +23,19 @@ struct KeySpec {
   Value ResolvedConfig::*slot;
 };
 
+// The config.yaml paths: the PC's keys (src/runtime/lifecycle/service_map.cpp kMap).
 constexpr std::array<KeySpec, 4> kKeys = {{
-    {"nevr_socket_uri", Kind::kSocketUri, &ResolvedConfig::socketUri},
-    {"nevr_http_uri", Kind::kHttpUri, &ResolvedConfig::httpUri},
-    {"nevr_http_key", Kind::kSecret, &ResolvedConfig::httpKey},
-    {"nevr_server_key", Kind::kSecret, &ResolvedConfig::serverKey},
+    {"services.socket_uri", Kind::kSocketUri, &ResolvedConfig::socketUri},
+    {"auth.http_uri", Kind::kHttpUri, &ResolvedConfig::httpUri},
+    {"auth.http_key", Kind::kSecret, &ResolvedConfig::httpKey},
+    {"auth.server_key", Kind::kSecret, &ResolvedConfig::serverKey},
 }};
+
+// The boolean keys. A missing or unusable value keeps the default.
+constexpr const char* kSocialFacadeKey = "social.facade";                      // PC's key and default (true)
+constexpr const char* kSendPresenceToMetaKey = "social.send_presence_to_meta";  // Quest only (default true)
+constexpr const char* kHardwareDumpKey = "diagnostics.hardware_dump";          // Quest only (default false)
+constexpr const char* kUiEventProbeKey = "diagnostics.ui_event_probe";          // Quest only (default false)
 
 struct FeatureSpec {
   const char* name;
@@ -46,9 +49,9 @@ constexpr std::array<FeatureSpec, 8> kFeatures = {{
     {"login", Feature::kLogin, &Features::login},
     {"social", Feature::kSocial, &Features::social},
     {"hwdump", Feature::kHwDump, &Features::hwdump},
-    {"obb_skip", Feature::kObbSkip, &Features::obbSkip},
     {"presence_names", Feature::kPresenceNames, &Features::presenceNames},
     {"presence_local", Feature::kPresenceLocal, &Features::presenceLocal},
+    {"ui_event_probe", Feature::kUiEventProbe, &Features::uiEventProbe},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -85,19 +88,6 @@ const char* ValidateValue(Kind kind, std::string_view v) {
   return "";
 }
 
-// A name taken from the file is logged only when it is one of ours. Anything else (a typo, a value
-// pasted as a key, a token of any shape) is counted, never echoed.
-const char* KnownName(const std::string& name) {
-  if (name == "features") return "features";
-  for (const KeySpec& k : kKeys) {
-    if (name == k.name) return k.name;
-  }
-  for (const FeatureSpec& f : kFeatures) {
-    if (name == f.name) return f.name;
-  }
-  return "<unknown>";
-}
-
 void Add(LoadResult& r, LogLevel level, std::string message) {
   r.events.push_back({level, std::move(message)});
 }
@@ -118,135 +108,89 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
     }
     (config.*kKeys[i].slot) = {raw, Source::kEmbedded};
   }
-  // Default-on features: a name this build does not know is reported once and ignored.
-  const std::string_view list = d.features == nullptr ? "" : d.features;
-  std::size_t start = 0;
-  while (start < list.size()) {
-    std::size_t end = list.find(',', start);
-    if (end == std::string_view::npos) end = list.size();
-    const std::string_view name = list.substr(start, end - start);
-    start = end + 1;
-    if (name.empty()) continue;
-    const FeatureSpec* spec = nullptr;
-    for (const FeatureSpec& f : kFeatures) {
-      if (name == f.name) spec = &f;
-    }
-    if (spec != nullptr) {
-      config.requested.*spec->flag = true;
-    } else if (events != nullptr) {
-      events->push_back({LogLevel::kWarn, "embedded default feature ignored reason=unknown_name"});
-    }
-  }
 }
 
-struct WarnBudget {
-  std::size_t emitted = 0;
-  std::size_t suppressed = 0;
-};
-
-void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
-  const auto warn = [&r, &budget](std::string message) {
-    if (budget.emitted < kMaxFileWarnings) {
-      ++budget.emitted;
-      Add(r, LogLevel::kWarn, std::move(message));
-    } else {
-      ++budget.suppressed;
-    }
-  };
-  if (text.size() > kMaxConfigBytes) {
-    r.fileRejected = true;
-    Add(r, LogLevel::kError,
-        "config file rejected reason=too_large limit_bytes=" + std::to_string(kMaxConfigBytes));
-    return;
-  }
-  // The parser keeps the last of two equal keys; the callback sees every key so duplicates are logged.
-  std::vector<std::set<std::string>> seen;
-  std::map<std::string, std::size_t> duplicates;
-  std::size_t unknownKeys = 0;
-  std::size_t unknownFeatures = 0;
-  const nlohmann::json::parser_callback_t onParse = [&seen, &duplicates](int, nlohmann::json::parse_event_t event,
-                                                                         nlohmann::json& parsed) {
-    if (event == nlohmann::json::parse_event_t::object_start) {
-      seen.emplace_back();
-    } else if (event == nlohmann::json::parse_event_t::object_end) {
-      if (!seen.empty()) seen.pop_back();
-    } else if (event == nlohmann::json::parse_event_t::key && !seen.empty() && parsed.is_string()) {
-      if (!seen.back().insert(parsed.get<std::string>()).second) ++duplicates[parsed.get<std::string>()];
-    }
-    return true;
-  };
-  const nlohmann::json doc = nlohmann::json::parse(text, onParse, /*allow_exceptions=*/false);
-  for (const auto& entry : duplicates) {
-    warn(std::string("config file duplicate key=") + KnownName(entry.first) + " extra=" + std::to_string(entry.second) +
-         " last value wins");
-  }
-  if (doc.is_discarded()) {
-    r.fileRejected = true;
-    Add(r, LogLevel::kError, "config file rejected reason=malformed_json");
-    return;
-  }
-  if (!doc.is_object()) {
-    r.fileRejected = true;
-    Add(r, LogLevel::kError, "config file rejected reason=top_level_not_object");
-    return;
-  }
-
-  for (const auto& item : doc.items()) {
-    const std::string& name = item.key();
-    const nlohmann::json& value = item.value();
-    if (name == "features") continue;
-    const KeySpec* spec = nullptr;
-    for (const KeySpec& k : kKeys) {
-      if (name == k.name) spec = &k;
-    }
-    if (spec == nullptr) {
-      warn("config file unknown key #" + std::to_string(++unknownKeys) + " ignored");
-      continue;
-    }
-    if (!value.is_string()) {
-      warn(std::string("config file key=") + spec->name + " rejected reason=not_a_string");
-      continue;
-    }
-    const std::string& text_value = value.get_ref<const std::string&>();
-    const char* bad = ValidateValue(spec->kind, text_value);
-    if (bad[0] != '\0') {
-      warn(std::string("config file key=") + spec->name + " rejected reason=" + bad);
-      continue;
-    }
-    (r.config.*spec->slot) = {text_value, Source::kFile};
-  }
-
-  const auto features = doc.find("features");
-  if (features == doc.end()) return;
-  if (!features->is_object()) {
-    warn("config file features rejected reason=not_an_object (all features stay off)");
-    return;
-  }
-  for (const auto& item : features->items()) {
-    const FeatureSpec* spec = nullptr;
-    for (const FeatureSpec& f : kFeatures) {
-      if (item.key() == f.name) spec = &f;
-    }
-    if (spec == nullptr) {
-      warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
-      continue;
-    }
-    if (!item.value().is_boolean()) {
-      warn(
-          std::string("config file feature=") + spec->name + " rejected reason=not_a_boolean (stays off)");
-      continue;
-    }
-    r.config.requested.*spec->flag = item.value().get<bool>();
-  }
+// What the build and an absent or rejected file give: the network features follow from the targets (Derive checks
+// them), the social facade and its names are on, the local presence and the hardware dump are off.
+void SetDefaultRequests(ResolvedConfig& config) {
+  config.requested.redirect = true;
+  config.requested.bridge = true;
+  config.requested.login = true;
+  config.requested.social = true;
+  config.requested.presenceNames = true;
+  config.requested.presenceLocal = false;
+  config.requested.hwdump = false;
+  config.requested.uiEventProbe = false;
 }
 
+// A boolean key: absent keeps `fallback`; an unusable value keeps it too and is rejected by key, never by value.
+bool ReadBool(const nevr::NevrConfig& cfg, const char* key, bool fallback, LoadResult& r) {
+  bool unsetBare = false;
+  const std::optional<std::string> text = cfg.GetString(key, &unsetBare);
+  if (!text) return fallback;
+  if (unsetBare) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=unset_variable (default stays)");
+    return fallback;
+  }
+  const std::optional<bool> value = cfg.GetBool(key);
+  if (!value) {
+    Add(r, LogLevel::kWarn, std::string("config file key=") + key + " rejected reason=not_a_boolean (default stays)");
+    return fallback;
+  }
+  return *value;
+}
 
-void ApplyFile(LoadResult& r, const std::string& text) {
-  WarnBudget budget;
-  ApplyFileImpl(r, text, budget);
-  if (budget.suppressed != 0) {
+// Reads every key from a loaded config. A throw (nevr_config's, or yaml-cpp's through it) propagates to ApplyFile.
+void ApplyLoaded(LoadResult& r, const nevr::NevrConfig& cfg, const std::string& path) {
+  if (!cfg.UnsetBareVars().empty()) {
+    // Count only: the name is the file's own word. The key lines below say which of ours it hit.
     Add(r, LogLevel::kWarn,
-        "config file further warnings suppressed count=" + std::to_string(budget.suppressed));
+        "config file=" + path + " unset_variable_references=" + std::to_string(cfg.UnsetBareVars().size()) +
+            " (the text is kept as written; a key that uses one counts as unset)");
+  }
+  for (const KeySpec& k : kKeys) {
+    bool unsetBare = false;
+    const std::optional<std::string> value = cfg.GetString(k.name, &unsetBare);
+    if (!value) continue;
+    if (unsetBare) {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + k.name + " rejected reason=unset_variable");
+      continue;
+    }
+    const char* bad = ValidateValue(k.kind, *value);
+    if (bad[0] != '\0') {
+      Add(r, LogLevel::kWarn, std::string("config file key=") + k.name + " rejected reason=" + bad);
+      continue;
+    }
+    (r.config.*k.slot) = {*value, Source::kFile};
+  }
+  Features& want = r.config.requested;
+  want.social = ReadBool(cfg, kSocialFacadeKey, true, r);
+  want.presenceNames = want.social;
+  want.hwdump = ReadBool(cfg, kHardwareDumpKey, false, r);
+  want.uiEventProbe = ReadBool(cfg, kUiEventProbeKey, false, r);
+  want.presenceLocal = !ReadBool(cfg, kSendPresenceToMetaKey, true, r);
+}
+
+void Reject(LoadResult& r, const std::string& path, const std::string& reason) {
+  r.fileRejected = true;
+  Add(r, LogLevel::kError, "config file=" + path + " rejected reason=" + reason + " (embedded defaults stay)");
+}
+
+void ApplyFile(LoadResult& r, const std::string& text, const std::string& path) {
+  if (text.size() > kMaxConfigBytes) {
+    Reject(r, path, "too_large limit_bytes=" + std::to_string(kMaxConfigBytes));
+    return;
+  }
+  // The YAML parser throws. Every throw ends here, by name; none reaches the sentinel's constructor. The reason is
+  // nevr_config's token for the failure, never the parser's text, which echoes the file's own words.
+  try {
+    const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(text);
+    ApplyLoaded(r, cfg, path);
+    Add(r, LogLevel::kInfo, "config file=" + path + " loaded");
+  } catch (const nevr::NevrConfigError& e) {
+    Reject(r, path, nevr::ReasonToken(e.Kind()));
+  } catch (const std::exception&) {
+    Reject(r, path, "internal_error");
   }
 }
 
@@ -294,6 +238,11 @@ void Derive(LoadResult& r) {
     c.effective.presenceLocal = false;
     force_off("presence_local", "social_not_enabled");
   }
+  // The probe works through the social facade's slots, so it follows social.
+  if (c.effective.uiEventProbe && !c.effective.social) {
+    c.effective.uiEventProbe = false;
+    force_off("ui_event_probe", "social_not_enabled");
+  }
 }
 
 void ReportState(LoadResult& r) {
@@ -310,17 +259,19 @@ void ReportState(LoadResult& r) {
 
 }  // namespace
 
-LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText) {
+LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText, const std::string& filePath) {
   LoadResult r;
   ApplyEmbedded(r.config, defaults, &r.events);
+  SetDefaultRequests(r.config);
   if (fileText == nullptr) {
-    Add(r, LogLevel::kInfo, std::string("config file ") + kConfigFileName + " absent, using embedded defaults");
+    Add(r, LogLevel::kInfo, "config file=" + filePath + " absent, using embedded defaults");
   } else {
-    ApplyFile(r, *fileText);
+    ApplyFile(r, *fileText, filePath);
     if (r.fileRejected) {
       // A rejected file contributes nothing: values and features are the embedded defaults.
       r.config = ResolvedConfig();
       ApplyEmbedded(r.config, defaults, nullptr);
+      SetDefaultRequests(r.config);
     }
   }
   Derive(r);
@@ -328,28 +279,16 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
   return r;
 }
 
-const char* LevelName(LogLevel level) {
-  switch (level) {
-    case LogLevel::kInfo: return "INFO";
-    case LogLevel::kWarn: return "WARN";
-    case LogLevel::kError: break;
-  }
-  return "ERROR";
+namespace {
+std::string InFilesDir(const std::string& filesDir, const char* name) {
+  if (filesDir.empty()) return name;
+  return filesDir.back() == '/' ? filesDir + name : filesDir + "/" + name;
 }
+}  // namespace
 
-std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message) {
-  nlohmann::json line;
-  line["ts_unix_ms"] = unixMs;
-  line["level"] = LevelName(level);
-  line["tag"] = "NEVR-Sentinel";
-  line["msg"] = message;
-  return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
-}
+std::string ConfigFilePath(const std::string& filesDir) { return InFilesDir(filesDir, kConfigFileName); }
 
-std::string ConfigFilePath(const std::string& filesDir) {
-  if (filesDir.empty()) return kConfigFileName;
-  return filesDir.back() == '/' ? filesDir + kConfigFileName : filesDir + "/" + kConfigFileName;
-}
+std::string LegacyConfigFilePath(const std::string& filesDir) { return InFilesDir(filesDir, kLegacyConfigFileName); }
 
 bool FeatureEnabled(const ResolvedConfig& config, Feature feature) {
   for (const FeatureSpec& f : kFeatures) {

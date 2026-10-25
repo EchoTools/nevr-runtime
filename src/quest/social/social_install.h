@@ -70,6 +70,14 @@ void ResetCountersForTest() noexcept;
 // instruction of each). Never throws.
 GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 
+// The game function that posts a script event by symbol (SendComponentEventGlobal), found only in libr15 of the pinned
+// build: the image base plus kLibR15SendComponentEventVaddr, nullptr otherwise. Never throws.
+GameEvents ResolveGameEvents(sentinel::ImageLookup lookup) noexcept;
+
+// The events InstallSocialHook hands the facade: none unless `probe` (features.ui_event_probe) is on, else
+// whatever ResolveGameEvents finds. With none, the invite and party slots take the original path.
+GameEvents SelectGameEvents(bool probe, sentinel::ImageLookup lookup) noexcept;
+
 // ---- rich presence trace (#393) -----------------------------------------------------------------------------
 //
 // The game's SyncRichPresence asks pnsovr's CNSOVRRichPresence which destination its game type maps to and
@@ -109,7 +117,8 @@ sentinel::GotStatus InstallPresenceTrace();
 const char* PresenceDisplayName(const char* gameType) noexcept;
 
 // Whether the wrappers answer the destination lookup from the table when the game's own list has no match
-// (config feature presence_names; off by default). Pass-through logging is unconditional.
+// (config feature presence_names, which follows the social facade: on whenever the facade is on, which is the default; the
+// flag itself starts false until the sentinel sets it). Pass-through logging is unconditional.
 void SetPresenceNames(bool enabled) noexcept;
 
 // Whether rich presence stops going to Meta (#396, config feature presence_local; off by default): the object's
@@ -150,7 +159,8 @@ void PublishFacadeObject();
 // Registers the friend-name decoder (nevr_social_names::RegisterDefaultDecoder, the zstd profile reader), builds the
 // process-wide facade (outside any game frame), arms the callback and redirects the slot. Once that has worked it also
 // installs the party-invite gate override (social_invite_gate.h), whose outcome is logged, not returned.
-// `enabled` is the caller's activation decision; false touches nothing.
-InstallResult InstallSocialHook(bool enabled);
+// `enabled` is the caller's activation decision; false touches nothing. `uiEventProbe` is features.ui_event_probe:
+// only when it is on does the facade get a script event post function (#318).
+InstallResult InstallSocialHook(bool enabled, bool uiEventProbe = false);
 
 }  // namespace quest_social

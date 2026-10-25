@@ -131,14 +131,20 @@ Fn ReadBound(const sentinel::ElfImage& image, const T::PinnedSlot& slot) {
 }  // namespace
 
 // ovr_User_GetOrgScopedID has twelve call sites: three are the login's, nine are CNSOVRSocial's (friends, room
-// members, invitable users) and ask about other users. Only the login's are answered locally; every other caller,
-// and any caller this build does not know, goes to the SDK exactly as it did before local answers.
+// members, invitable users) and ask about other users. Only the login's are answered locally (and only while
+// local answers are on). One of the nine Social sites, while the facade is selected (the game's Social() is not
+// CNSOVRSocial, so nothing should run these), is refused: no Meta call and no data (local::Refuse); that does not
+// depend on local answers being on. Every other caller, the login's own sites with local answers off, and any
+// caller this build does not know, goes to the SDK exactly as it did before local answers.
 std::uint64_t OnOrgScopedIdRequest(OrgRequestThunk::Fn original, const void* caller, std::uint64_t user) noexcept {
-  if (local::Enabled() &&
-      T::IsLoginOrgRequestCaller(caller, g_pnsovr_base.load(std::memory_order_relaxed))) {
+  const std::uintptr_t base = g_pnsovr_base.load(std::memory_order_relaxed);
+  if (local::Enabled() && T::IsLoginOrgRequestCaller(caller, base)) {
     const std::uint64_t id = local::Request(Prerequisite::OrgScopedId);
     NoteRequest(Prerequisite::OrgScopedId, id);
     return id;
+  }
+  if (local::SocialSelected() && T::IsSocialOrgRequestCaller(caller, base)) {
+    return local::Refuse(reinterpret_cast<std::uintptr_t>(caller) - base);
   }
   const std::uint64_t request = original(user);
   local::NoteSdkRequestId(request);
@@ -154,7 +160,7 @@ std::uint64_t OnEntitlementRequest(EntitlementRequestThunk::Fn original) noexcep
   return 0;
 }
 
-PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept {
+PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset, HoldFn hold) noexcept {
   const std::lock_guard<std::mutex> lock(InstallMutex());
   if (g_installed.load(std::memory_order_acquire)) return g_result_storage;
   const std::uintptr_t base = image.base;
@@ -182,7 +188,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.accessors += Install(hooks.accessors[7], kUserProofGetNonceHook, T::kUserProofGetNonce, base) ? 1 : 0;
 
   result.substitute = SubstitutionAllowed(result.accessors, api.message_is_error != nullptr);
-  ConfigurePrerequisites(api, result.substitute, ready, reset);
+  ConfigurePrerequisites(api, result.substitute, ready, reset, hold);
 
   result.callbacks += Install(hooks.callbacks[0], kOrgCallbackHook, T::kOrgScopedIdCallback, base) ? 1 : 0;
   result.callbacks += Install(hooks.callbacks[1], kUserCallbackHook, T::kLoggedInUserCallback, base) ? 1 : 0;
@@ -221,6 +227,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
                        {"local_answers", result.local ? "on" : "off"},
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},
+                       {"hold_gated", hold != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});
   // What can still read a stand-in after a NEVR login (login_prerequisites.h "Residual"): a stood-in
   // access token stays in the engine's token string, read by the matchmaker queue URLs; the user

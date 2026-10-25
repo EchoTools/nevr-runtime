@@ -42,7 +42,7 @@ with no production contact and no credentials.
 `gai` builds `tools/winvm/gai_probe.c` and times the exact `getaddrinfo` call that
 `CBroadcaster::Initialize` makes (empty node string, flags 0, `AF_INET`/UDP).
 
-`boot` deploys the DLL, launches `echovr.exe -noovr -server -headless -noconsole`,
+`boot` deploys the DLL, launches `echovr.exe -noovr -server -headless -no-console`,
 observes for `--wait` seconds (default 90, minimum 45), then judges:
 
 | Check | Fails when |
@@ -73,10 +73,10 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   near-zero CPU, no sockets, silent log. The first attempt mistook one for a
   `getaddrinfo` hang. `no_modal_dialog` enumerates the game's windows from inside the
   interactive session (`tools/winvm/enum_windows.ps1`) for this reason.
-- `-noconsole` is rejected by the game unless `-headless` is also given (the dialog
+- The legacy `dbgcore.dll` rejects its own no-console flag unless `-headless` is also given (the dialog
   above is the legacy `dbgcore.dll` saying so).
 - A `dbgcore.dll` in the game directory is fatal to the nEVR runtime unless
-  `-allow-dbgcore` is passed. `--with-legacy-dbgcore` reproduces that configuration.
+  `-skip-dbgcore-check` is passed. `--with-legacy-dbgcore` reproduces that configuration.
 - The stock install was extracted one level too deep
   (`_data\_data\<version>\...`); the game then cannot find its packages. Preflight
   reports this and how to fix it (a directory junction).

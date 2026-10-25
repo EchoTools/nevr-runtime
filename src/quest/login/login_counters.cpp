@@ -41,6 +41,10 @@ bool RegisterLoginHookCounters() noexcept {
                                        sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("prereq_local_id_collisions", &local::CollisionCounter(),
                                        sentinel::ReportKind::kFaults) && ok;
+  // Social org-id requests refused locally while the facade is selected (#411): nothing should run them, so any
+  // count is a fault; the log names the call site.
+  ok = sentinel::RegisterReportCounter("prereq_social_org_refused", &local::RefusedCounter(),
+                                       sentinel::ReportKind::kFaults) && ok;
   // The entitlement request answered locally (#411): every call is one request that did not reach Meta.
   ok = sentinel::RegisterReportCounter("prereq_entitlement_local_calls", &EntitlementRequestThunk::CallCounter()) && ok;
   return ok;

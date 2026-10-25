@@ -121,6 +121,8 @@ inline constexpr std::uint64_t kLogWindowMs = 60000;
 using ReadyFn = bool (*)() noexcept;
 // Resets any stand-in the game currently holds (login_hook), called on a not-ready callback.
 using ResetFn = void (*)() noexcept;
+// True while the local answers must wait for token auth (IdentitySource::HoldsAnswers). nullptr => never hold.
+using HoldFn = bool (*)() noexcept;
 
 // The game's test for a transient Oculus error, on the error message text (see above). Exposed for
 // the host test.
@@ -142,9 +144,9 @@ struct OvrErrorApi {
 bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept;
 
 // Publishes the API, generates the stand-ins and turns the handlers on. `substitute` comes from
-// SubstitutionAllowed; `ready` gates every stand-in. Until this is called every handler passes
+// SubstitutionAllowed; `ready` gates every stand-in; `hold` gates the delivery of local answers. Until this is called every handler passes
 // straight through and logs nothing. Call once, before the callback hooks are installed.
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset) noexcept;
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset, HoldFn hold) noexcept;
 
 // Ends the current login attempt: resets the transient budgets and the log windows, so the next
 // attempt gets its own. The login send hook calls it on every send decision.
@@ -186,8 +188,14 @@ void SetPrerequisiteClockForTest(MonotonicMsFn clock) noexcept;  // nullptr: the
 // pump's or a callback's path is hooked or guarded (tools/pinned_ovr_imports.txt, checked against the
 // pinned library by `just test-quest-hooks-pinned`).
 //
-// Delivery is held until the identity is ready (ReadyFn), so the game's login waits where it already
-// waits for the sign-in code and a login that sign-in would complete is never failed.
+// Delivery follows the hold (HoldFn, from IdentitySource::HoldsAnswers), not the readiness. The answers wait only
+// while token auth has a token coming without the player (starting, refreshing, a failure it retries): the game's
+// login waits where it already waits, and a login that token auth would complete is never failed. Otherwise
+// they are delivered. When the identity is also not ready (the player is awaited, or no token will come) each
+// synthetic callback is followed by the reset (ResetFn), which puts the org id back to -1 and the user name back to
+// "?"; the game's own UpdateInternal then fails the login with "Log in request failed: One or more prerequisites
+// are missing", the local failure the sign-in prompt is written onto. A source with no hold function (nullptr)
+// never holds.
 namespace local {
 
 // Synthetic message handles the pump can hold at once. A pending answer takes no handle: it is an id in a
@@ -220,6 +228,22 @@ int OnMessageGetType(int (*original)(const void*), const void* message) noexcept
 std::uint64_t OnMessageGetRequestId(std::uint64_t (*original)(const void*), const void* message) noexcept;
 void OnFreeMessage(void (*original)(void*), void* message) noexcept;
 
+// Social org-id requests (#411). With the social facade selected, CNSOVRSocial is not driven (the game's Social()
+// is the facade), so a request for another user's org-scoped id is a request nobody asked for and no answer could
+// be right: a Meta id has no NEVR account id. It is refused locally: a local id from a space of its own, never
+// handed a handle and never reaching the SDK, so no Meta call is made and no data comes back. Counted as a fault
+// (a caller that runs is visible in the report), and logged once per call site. When the facade is not selected
+// (stock Meta social) the request is forwarded as before.
+using SocialSelectedFn = bool (*)() noexcept;
+void SetSocialSelectedProbe(SocialSelectedFn probe) noexcept;  // nullptr: never selected
+bool SocialSelected() noexcept;
+// Bit 31 of the id: set on a refused id, so it can never equal one the delivery range hands out.
+inline constexpr std::uint64_t kRefusedIdBit = 0x80000000ULL;
+// Refuses the request made from `site` (the caller's offset in libpnsovr; 0 when unknown) and returns its id.
+std::uint64_t Refuse(std::uint64_t site) noexcept;
+std::uint64_t Refused() noexcept;
+const std::atomic<std::uint64_t>& RefusedCounter() noexcept;
+
 std::uint64_t Requested() noexcept;   // local request ids handed out
 std::uint64_t Delivered() noexcept;   // synthetic messages popped
 std::uint64_t Deferred() noexcept;    // pops that had an answer ready but every handle was still held
@@ -248,6 +272,7 @@ struct PrerequisiteInstall {
   bool local = false;   // the four user requests are answered locally
   bool substitute = false;
 };
-PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset) noexcept;
+PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, ReadyFn ready, ResetFn reset,
+                                              HoldFn hold) noexcept;
 
 }  // namespace nevr_quest_login

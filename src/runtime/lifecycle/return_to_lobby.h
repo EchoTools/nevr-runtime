@@ -22,6 +22,12 @@ void SetEntrantCounter(EntrantCounter counter);
 /// too. Returns false only when the TTL is above 0 and the detour could not be installed.
 bool Configure(uint64_t ttlSeconds);
 
+/// `pGame` is the NET GAME (return_to_lobby_queue.h NetGameFromContext), not the game context.
+/// Calls the game's NetGameScheduleReturnToLobby now, never held, unless the game's call queue it
+/// pushes to does not exist (return_to_lobby_queue.h, #730): then it logs a warning naming `caller`
+/// and returns false. Every runtime caller of the game's function goes through this.
+bool ScheduleNow(PVOID pGame, const char* caller);
+
 /// Schedules the return to lobby now or holds it, per the policy.
 void Request(PVOID pGame);
 

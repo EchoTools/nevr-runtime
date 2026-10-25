@@ -13,7 +13,6 @@
 
 #include <atomic>
 #include <initializer_list>
-#include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -22,15 +21,29 @@
 
 namespace {
 
-// Stable small integer per OS thread, standing in for GetCurrentThreadId()
-// so this test stays free of windows.h like the code under test.
+// A small integer per thread object, standing in for GetCurrentThreadId() so
+// this test stays free of windows.h like the code under test. It comes from a
+// counter, not from std::thread::id: the C library reuses the id of a joined
+// thread, so two sequential game threads could share an id and a token (#424).
 uint32_t ThreadToken() {
-  static std::mutex mutex;
-  static std::map<std::thread::id, uint32_t> tokens;
-  std::lock_guard<std::mutex> lock(mutex);
-  const auto inserted = tokens.emplace(std::this_thread::get_id(), static_cast<uint32_t>(tokens.size() + 1));
-  return inserted.first->second;
+  static std::atomic<uint32_t> next{0};
+  thread_local const uint32_t token = ++next;
+  return token;
 }
+
+// Joins the owner thread when a test body returns early (a failed ASSERT):
+// ~MicOwnerThread detaches a live thread by design, and a test object that
+// dies while that thread waits on its members hangs the process instead of
+// reporting the failure (#424).
+struct OwnerGuard {
+  explicit OwnerGuard(MicOwnerThread& owner) : owner_(owner) {}
+  ~OwnerGuard() { owner_.Shutdown(); }
+  OwnerGuard(const OwnerGuard&) = delete;
+  OwnerGuard& operator=(const OwnerGuard&) = delete;
+
+ private:
+  MicOwnerThread& owner_;
+};
 
 struct RecordingAudio {
   std::mutex mutex;
@@ -109,8 +122,23 @@ GameCallResult CallFromNewThread(MicOwnerThread& owner, MicCaptureLifecycle& lif
   return out;
 }
 
+// Two threads that run one after the other get different tokens even when the
+// OS hands the second the id of the first (what the next test relies on).
+TEST(MicOwnerThread, SequentialThreadsGetDistinctTokens) {
+  uint32_t first = 0;
+  uint32_t second = 0;
+  std::thread a([&]() { first = ThreadToken(); });
+  a.join();
+  std::thread b([&]() { second = ThreadToken(); });
+  b.join();
+  EXPECT_NE(first, second);
+  EXPECT_NE(first, 0u);
+  EXPECT_NE(second, 0u);
+}
+
 TEST(MicOwnerThread, GameCallPatternFromDifferentThreadsSucceedsOnOneOwnerThread) {
   MicOwnerThread owner;
+  OwnerGuard guard(owner);
   MicCaptureLifecycle lifecycle;
   RecordingAudio audio;
 
@@ -242,6 +270,7 @@ void ShutdownFromOwner(void* context) {
 
 TEST(MicOwnerThread, ShutdownJoinsAndNextRunStartsAFreshThread) {
   MicOwnerThread owner;
+  OwnerGuard guard(owner);
   EXPECT_FALSE(owner.IsRunning());
   EXPECT_TRUE(owner.Shutdown()) << "Shutdown with no thread is a no-op success";
 
@@ -269,6 +298,7 @@ bool ReadFlag(void* context) { return *static_cast<bool*>(context); }
 
 TEST(MicOwnerThread, ShutdownWhenStopsOnlyWhenThePredicateHolds) {
   MicOwnerThread owner;
+  OwnerGuard guard(owner);
   std::thread::id first;
   ASSERT_TRUE(owner.Run(RecordThread, &first));
 

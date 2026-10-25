@@ -1,7 +1,8 @@
 # Every direct call to the four user-request imports in the pinned libpnsovr.so (build id ca47bb8d..., sha256 26e9a216...),
 # and who answers it. `login`: the call belongs to the login (it registers one of GotLoggedInUserCb, GotLoggedInUserOrgIdCb,
 # GotLoggedInUserAccessTokenCb, GotUserProofCB under the returned request id) and is answered locally by the sentinel.
-# `social`: CNSOVRSocial asking about another user with its own callback; forwarded to the SDK. Only
+# `social`: CNSOVRSocial asking about another user with its own callback; refused locally once the social facade is
+# selected (local::Refuse), forwarded to the SDK when it is not. Only
 # ovr_User_GetOrgScopedID has such callers, so only it is gated by call site (kOrgRequestLoginReturns, return address
 # = site + 4 in login_prerequisite_targets.h). Checked against the real library by `just test-quest-hooks-pinned`.
 #

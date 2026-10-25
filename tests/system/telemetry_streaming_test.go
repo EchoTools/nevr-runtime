@@ -153,7 +153,7 @@ func TestTelemetry_StreamingWireFormat(t *testing.T) {
 		"timeout_seconds": 60,
 		"gametype":        "echo_arena",
 		"level":           "mpl_arena_a",
-		"extra_args":      []string{"-telemetryrate", "10"},
+		"extra_args":      []string{"-telemetry-rate", "10"},
 		"config_overrides": map[string]any{
 			"telemetry_uri": mock.URL(),
 		},

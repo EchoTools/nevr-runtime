@@ -12,6 +12,10 @@
 #define NEVR_GIT_COMMIT_HASH "unknown"
 #endif
 
+#ifndef NEVR_GIT_COMMIT_FULL
+#define NEVR_GIT_COMMIT_FULL "0000000000000000000000000000000000000000"
+#endif
+
 #ifndef NEVR_GIT_DESCRIBE
 #define NEVR_GIT_DESCRIBE "unknown"
 #endif
@@ -28,6 +32,13 @@
 #define NEVR_STR(x)  NEVR_STR_(x)
 
 namespace nevr_build_identity {
+
+// The identity literal: a leading NUL in the array so the string is NUL-bounded in the file whatever
+// the linker places before it; the pointer handed out skips it. The version and the commit come from the
+// same compile definitions as Info above (one code path).
+static const char kIdentityArray[] = "\0NEVR-BUILD " NEVR_PROJECT_VERSION " " NEVR_GIT_COMMIT_FULL;
+
+const char* IdentityLiteral() { return kIdentityArray + 1; }
 
 const Info& Get() {
   static const Info info = []() {

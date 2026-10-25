@@ -89,7 +89,7 @@ std::atomic<SOCKET> g_client{INVALID_SOCKET};
 // join at DLL detach runs under the loader lock. Stop() is the real teardown.
 std::thread* g_thread = nullptr;
 std::mutex g_fireMutex;
-std::string g_lastFireUser;  // the user id a fire resolved ("self", "friend"), under g_fireMutex
+std::string g_lastFireUser;  // the user id a fire resolved ("self", "other"), under g_fireMutex
 std::deque<std::shared_ptr<FireRequest>> g_fireQueue;
 
 void* NetGame() {
@@ -318,7 +318,13 @@ std::string FireEarlyQuit(void* netGame, const nevr_scenario_protocol::Command& 
     const bool isOn = nevr::ValidatePrologue(store, kCountdownActiveOn.data(), kCountdownActiveOn.size());
     if (!isOff && !isOn) return "the countdown-active store at 0x140d96319 is not MOV byte ptr [RBX], 0/1";
     auto want = cmd.flag ? kCountdownActiveOn : kCountdownActiveOff;
-    ProcessMemcpy(store, want.data(), want.size());
+    DWORD error = ERROR_SUCCESS;
+    if (!ProcessMemcpy(store, want.data(), want.size(), &error)) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.SCENARIO] patch failed name=early_quit_countdown_active va=0x%llX error=%lu",
+          static_cast<unsigned long long>(kCountdownActiveStoreVA), static_cast<unsigned long>(error));
+      return "the countdown-active store patch failed at 0x140d96319 (error " + std::to_string(error) + ")";
+    }
     Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: lockoutcountdownactive store 0x140d96319 was %d, now %d",
         isOn ? 1 : 0, cmd.flag ? 1 : 0);
   } else if (cmd.action == "dispatch_event") {
@@ -389,10 +395,23 @@ std::string FireAction(const nevr_scenario_protocol::Command& cmd) {
     const std::uint64_t self = nevr_social_party::Global().Snapshot().selfId;
     if (self == 0) return "no local user yet";
     user = "OVR-ORG-" + std::to_string(self);
-  } else if (user == "friend") {  // the first friend in the roster: a real player, read-only use
-    std::uint64_t friendId = 0;
-    if (!nevr_social_roster::Global().IdAt(0, &friendId) || friendId == 0) return "the roster has no friend yet";
-    user = "OVR-ORG-" + std::to_string(friendId);
+  } else if (user == "other") {
+    // Another player the game can show a profile for: the first friend in the roster, else the first
+    // person in the recently-met list. The roster is empty on an account with no confirmed friends
+    // (the friend list response it was built from carried none), and the recently-met list is still
+    // the game's own list of real players, each with the profile action the scenario exercises.
+    std::uint64_t otherId = 0;
+    if (!nevr_social_roster::Global().IdAt(0, &otherId) || otherId == 0) {
+      const std::uint64_t selfId = nevr_social_party::Global().Snapshot().selfId;
+      for (const nevr_social_facade::RecentlyMetForTest& person : nevr_social_facade::RecentlyMetUsersForTest()) {
+        if (person.id != 0 && person.id != selfId) {
+          otherId = person.id;
+          break;
+        }
+      }
+    }
+    if (otherId == 0) return "no other player known yet: no friend in the roster and no one recently met";
+    user = "OVR-ORG-" + std::to_string(otherId);
   }
   {
     std::lock_guard<std::mutex> lock(g_fireMutex);
@@ -711,8 +730,11 @@ nlohmann::json Handle(const std::string& line) {
         std::lock_guard<std::mutex> lock(g_fireMutex);
         g_fireQueue.push_back(request);
       }
-      if (done.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-        return Fail("no game frame tick ran the fire within 5 s");
+      // A client entering the social lobby spends a long time in one frame loading a level (a 98 s
+      // level load was measured on 2026-10-18); a fire posted in that window waits for the next tick,
+      // not a hung game. 120 s covers the load and still fails a game that never ticks again (#674).
+      if (done.wait_for(std::chrono::seconds(120)) != std::future_status::ready) {
+        return Fail("no game frame tick ran the fire within 120 s");
       }
       const std::string why = done.get();
       if (!why.empty()) return Fail(why);

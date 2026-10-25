@@ -43,6 +43,7 @@
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
 #include "runtime/ext/plugin_loader.h"    // N68: TickPlugins
@@ -58,7 +59,7 @@
 #include <MinHook.h>
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/cli.h"              // g_isServer
-#include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, PerformGracefulShutdown
+#include "runtime/lifecycle/crash_recovery.h"   // ForceFatalExit, EnsureStackReserve
 #endif
 
 /* --------------------------------------------------------------------
@@ -320,14 +321,6 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // (nevr_hook_liveness::Mark above is the entry evidence this hook needs; no frame
     // counter is kept here.)
 
-    // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
-    // This fires every game tick, so CTRL+C responsiveness is bounded by the
-    // frame interval (~8ms at 120Hz, ~16ms at 60Hz).
-    if (g_shutdownRequested) {
-      PerformGracefulShutdown(0);
-      // Unreachable — ForceFatalExit calls TerminateProcess.
-    }
-
     // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
     //
     // This path runs ONLY on a client (hook_liveness.cpp:18 records this hook as
@@ -469,8 +462,8 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
  * the flags byte at entry, so a live -server run shows whether bit1 is set;
  * static analysis could not find the setter (indirect dispatch, and
  * revault_search_code returns reconstruction-node noise for generic offset
- * patterns).  In a hung -server run the hook installs and is never invoked,
- * so the block is upstream of this function.
+ * patterns).  A -server run reaches this function once multiplayer begins, which
+ * the state machine starts after the login (state_machine.cpp).
  *
  * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
  * through unmodified. Server mode only (client mode calls this constantly
@@ -625,15 +618,10 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             continue;
         }
 
-        // MH_STATUS capture (was: boolean-only check, then a fabricated
-        // "expected=00000000" in the failure log below — this branch only runs
-        // after the prologue check above already passed, so there is no real
-        // "expected" bytes value to show here; MH_CreateHook/EnableHook's own
-        // status is the actual reason).
-        MH_STATUS cst = MH_CreateHook(target, h.detour, h.original);
-        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-
-        if (est == MH_OK) {
+        // The prologue matched above. PatchDetour reports the MinHook stage and
+        // status on failure and records the installed target with HookGuard.
+        *h.original = target;
+        if (PatchDetour(h.original, h.detour, h.name)) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.PATCH] hooked name=%s va=0x%llX why=\"%s\"",
                 h.name, static_cast<unsigned long long>(h.va), h.why);
@@ -641,7 +629,8 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
         } else {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.PATCH] hook failed name=%s va=0x%llX reason=%s",
-                h.name, static_cast<unsigned long long>(h.va), MH_StatusToString(est));
+                h.name, static_cast<unsigned long long>(h.va), Hooking::LastAttachError());
+            *h.original = nullptr;
             if (!failedNames.empty()) failedNames += ", ";
             failedNames += h.name;
             failed++;
@@ -666,14 +655,25 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
     } else {
         // Save original byte before overwriting — N33: restore on Shutdown.
         memcpy(&s_busywait_original_byte, busywait, 1);
-        s_busywait_patched = true;
         uint8_t ret_byte = 0xC3;
-        ProcessMemcpy(busywait, &ret_byte, 1);
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX why=\"its QPC + Sleep(0) spin loop starves the hyper-thread sibling; now returns immediately (costs about 250 us of frame-pacing precision)\" saved_orig_byte=0x%02X",
-            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
-            static_cast<unsigned int>(s_busywait_original_byte));
-        installed++;
+        DWORD error = ERROR_SUCCESS;
+        if (WriteBusyWaitByte(busywait, &ret_byte, s_busywait_patched, true,
+                              [&error](void* address, const uint8_t* byte, size_t size) {
+                                  return ProcessMemcpy(address, byte, size, &error);
+                              })) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX why=\"its QPC + Sleep(0) spin loop starves the hyper-thread sibling; now returns immediately (costs about 250 us of frame-pacing precision)\" saved_orig_byte=0x%02X",
+                static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
+                static_cast<unsigned int>(s_busywait_original_byte));
+            installed++;
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] patch failed name=CPrecisionSleep::BusyWait va=0x%llX error=%lu",
+                static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT), static_cast<unsigned long>(error));
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += "CPrecisionSleep::BusyWait";
+            failed++;
+        }
     }
 
     // BUG #62 fix: httpport HTTP-listener bind failure must be fatal (server mode).
@@ -702,14 +702,11 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             failedNames += "HTTPListenerBringup";
             failed++;
         } else {
-            // Prologue already validated above (matched, or this branch could
-            // not be reached) — a failure here is MH_CreateHook/EnableHook's
-            // own status, not a byte mismatch, so report that instead of
-            // re-printing prologue bytes that are known to match.
-            MH_STATUS cst = MH_CreateHook(target, (void*)&HttpListenerBringupHook,
-                                          (void**)&s_origHttpListenerBringup);
-            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-            if (est == MH_OK) {
+            // The prologue matched above; report the hook lifecycle failure
+            // rather than repeating bytes known to match.
+            s_origHttpListenerBringup = reinterpret_cast<decltype(s_origHttpListenerBringup)>(target);
+            if (PatchDetour(&s_origHttpListenerBringup,
+                            reinterpret_cast<PVOID>(&HttpListenerBringupHook), "HTTPListenerBringup")) {
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX why=\"the engine only logs a failed HTTP API listener bind and keeps running, leaving a server with a dead session API; a bind failure is now fatal in server mode\"",
                     static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
@@ -717,7 +714,8 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
             } else {
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX reason=%s",
-                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP), MH_StatusToString(est));
+                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP), Hooking::LastAttachError());
+                s_origHttpListenerBringup = nullptr;
                 if (!failedNames.empty()) failedNames += ", ";
                 failedNames += "HTTPListenerBringup";
                 failed++;
@@ -755,19 +753,19 @@ void nevr_binary_bug_fixes::Init(uintptr_t base_addr) {
                 NETGAME_HOST_CHECK_PROLOGUE[2], NETGAME_HOST_CHECK_PROLOGUE[3],
                 actual[0], actual[1], actual[2], actual[3]);
         } else {
-            MH_STATUS cst = MH_CreateHook(target, (void*)&NetGameHostCheckHook,
-                                          (void**)&s_origNetGameHostCheck);
-            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
-            if (est == MH_OK) {
+            s_origNetGameHostCheck = reinterpret_cast<decltype(s_origNetGameHostCheck)>(target);
+            if (PatchDetour(&s_origNetGameHostCheck,
+                            reinterpret_cast<PVOID>(&NetGameHostCheckHook), "NetGameHostCheck")) {
                 diagNetGameHostCheckStatus = "hooked";
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x%llX",
                     static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
             } else {
-                diagNetGameHostCheckStatus = MH_StatusToString(est);
+                diagNetGameHostCheckStatus = Hooking::LastAttachError();
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=%s",
-                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK), MH_StatusToString(est));
+                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK), Hooking::LastAttachError());
+                s_origNetGameHostCheck = nullptr;
             }
         }
     }
@@ -826,13 +824,25 @@ void nevr_binary_bug_fixes::Shutdown() {
     if (s_busywait_patched) {
         void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
         if (busywait) {
-            ProcessMemcpy(busywait, &s_busywait_original_byte, 1);
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] binary bug fixes shutdown restored BusyWait byte 0x%02X at va=0x%llX",
-                static_cast<unsigned int>(s_busywait_original_byte),
+            DWORD error = ERROR_SUCCESS;
+            if (WriteBusyWaitByte(busywait, &s_busywait_original_byte, s_busywait_patched, false,
+                                  [&error](void* address, const uint8_t* byte, size_t size) {
+                                      return ProcessMemcpy(address, byte, size, &error);
+                                  })) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.PATCH] binary bug fixes shutdown restored BusyWait byte 0x%02X at va=0x%llX",
+                    static_cast<unsigned int>(s_busywait_original_byte),
+                    static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] restore failed name=CPrecisionSleep::BusyWait va=0x%llX error=%lu",
+                    static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT), static_cast<unsigned long>(error));
+            }
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] restore failed name=CPrecisionSleep::BusyWait va=0x%llX reason=address_unmapped",
                 static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
         }
-        s_busywait_patched = false;
     }
     if (s_cached_timer != NULL) {
         CloseHandle(s_cached_timer);

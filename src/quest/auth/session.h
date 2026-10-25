@@ -75,7 +75,7 @@ class CredentialStore {
 // What the player needs to sign in: the verification page, the code to enter there, the link with
 // the code filled in, and when the code stops working (unix seconds).
 struct LoginPrompt {
-  std::string url;   // verification page, e.g. https://echovrce.com/login/device
+  std::string url;   // verification page, e.g. https://echovrce.com/device
   std::string code;
   std::string link;  // url + "?code=" + code
   uint64_t expires_unix = 0;

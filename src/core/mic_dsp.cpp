@@ -12,7 +12,10 @@ MicRingBuffer::MicRingBuffer(uint32_t capacity)
 
 bool MicRingBuffer::Push(const int16_t* samples, uint32_t count) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (capacity_ == 0) return count > 0;
+  if (capacity_ == 0) {
+    droppedSamples_ += count;
+    return count > 0;
+  }
   bool dropped = false;
   for (uint32_t i = 0; i < count; i++) {
     data_[head_] = samples[i];
@@ -21,9 +24,38 @@ bool MicRingBuffer::Push(const int16_t* samples, uint32_t count) {
       count_++;
     } else {
       dropped = true;
+      droppedSamples_++;
     }
   }
   return dropped;
+}
+
+uint64_t MicRingBuffer::DroppedSamples() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return droppedSamples_;
+}
+
+MicOverflowReport MicOverflowLogGate::Poll(const MicFlowCounters& now, uint64_t nowMs) {
+  if (now.droppedTotal <= reported_.droppedTotal) {
+    // Nothing is waiting to be reported: the window slides to now, so a report that follows covers only
+    // the time since its overflow began, not the healthy reads before it.
+    reported_ = now;
+    windowStartMs_ = nowMs;
+    return {};
+  }
+  if (hasLogged_ && nowMs - lastLogMs_ < intervalMs_) return {};
+  MicOverflowReport report;
+  report.dropped = now.droppedTotal - reported_.droppedTotal;
+  report.readCalls = now.readCalls - reported_.readCalls;
+  report.samplesRead = now.samplesRead - reported_.samplesRead;
+  report.samplesPushed = now.samplesPushed - reported_.samplesPushed;
+  report.windowMs = nowMs - windowStartMs_;
+  report.readerStalled = report.readCalls == 0;
+  reported_ = now;
+  windowStartMs_ = nowMs;
+  lastLogMs_ = nowMs;
+  hasLogged_ = true;
+  return report;
 }
 
 uint32_t MicRingBuffer::Available() const {

@@ -117,6 +117,10 @@ const char* HexString(char (&buf)[19], std::uint64_t value) {
 }
 
 void LogFields(LogLevel level, const char* event, std::initializer_list<LogField> fields) {
+  LogFieldList(level, event, fields.begin(), static_cast<std::size_t>(fields.size()));
+}
+
+void LogFieldList(LogLevel level, const char* event, const LogField* fields, std::size_t count) {
   Writer w;
   w.Raw("{\"ts_ms\":");
   w.Number(NowMs());
@@ -125,7 +129,8 @@ void LogFields(LogLevel level, const char* event, std::initializer_list<LogField
   w.Raw(",\"event\":");
   w.Quoted(event);
   bool truncated = false;
-  for (const LogField& f : fields) {
+  for (std::size_t i = 0; i < count; ++i) {
+    const LogField& f = fields[i];
     const std::size_t need =
         8 + EscapedLength(f.key) + (f.text != nullptr ? EscapedLength(f.text) : 20);
     if (!w.HasRoom(need)) {
