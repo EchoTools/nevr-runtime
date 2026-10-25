@@ -2,7 +2,7 @@
 
 // The runtime's side of the host contract (core/runtime_abi.h, docs/adr/0008-bugsplat-host-and-nevr-runtime.md).
 // The runtime is compiled into the host's image, so the descriptor is handed to the host's loader
-// as a function pointer instead of an export: the DLL's export table stays the 26 names the game
+// as a function pointer instead of an export: the DLL's export table stays the 28 pinned names the game
 // imports (tools/verify_pe_contract.py).
 
 #include "core/runtime_abi.h"

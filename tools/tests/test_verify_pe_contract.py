@@ -43,9 +43,27 @@ def game_dump(rows=None):
 class HostContractTest(unittest.TestCase):
     def test_current_surface_passes(self):
         exports = contract.check_host(host_dump())
-        self.assertEqual(len(exports), 26)
+        self.assertEqual(len(exports), 28)
         self.assertEqual(exports[contract.ORDINAL_ONE], 1)
         self.assertEqual(exports, contract.EXPECTED_EXPORTS)
+
+    def test_every_name_in_exports_def_is_pinned(self):
+        # exports.def is what the linker exports; a name added there without a pin is surface nobody reviewed
+        # (#884 added two and the pin stayed at 26).
+        text = (REPO / "src" / "runtime" / "exports.def").read_text(encoding="utf-8")
+        declared = set()
+        for line in text.splitlines()[2:]:
+            line = line.split(";", 1)[0].strip()
+            if line:
+                declared.add(line.split("=", 1)[0].split()[0])
+        self.assertGreater(len(declared), 10, "exports.def parsed to almost nothing")
+        self.assertEqual(sorted(declared - set(contract.EXPECTED_EXPORTS)), [])
+
+    def test_pinned_ordinals_follow_the_linker_name_order(self):
+        # Every ordinal but the placeholder's is the linker's: 2.. in byte order of the name.
+        others = sorted(n for n in contract.EXPECTED_EXPORTS if n != contract.ORDINAL_ONE)
+        self.assertEqual({n: i + 2 for i, n in enumerate(others)},
+                         {n: o for n, o in contract.EXPECTED_EXPORTS.items() if n != contract.ORDINAL_ONE})
 
     def test_missing_export_fails(self):
         surface = {k: v for k, v in contract.EXPECTED_EXPORTS.items() if k != "NEVR_SetGameModule"}
@@ -54,7 +72,7 @@ class HostContractTest(unittest.TestCase):
 
     def test_extra_export_fails(self):
         surface = dict(contract.EXPECTED_EXPORTS)
-        surface["MH_CreateHook"] = 27
+        surface["MH_CreateHook"] = 29
         with self.assertRaisesRegex(contract.ContractError, "extra=.*MH_CreateHook"):
             contract.check_host(host_dump(exports=surface))
 
@@ -67,9 +85,9 @@ class HostContractTest(unittest.TestCase):
 
     def test_renumbered_export_fails(self):
         surface = dict(contract.EXPECTED_EXPORTS)
-        surface["NEVR_GetUPnPConfig"], surface["NEVR_RegisterResourceOverride"] = 14, 13
+        surface["NEVR_GetUPnPConfig"], surface["NEVR_RegisterResourceOverride"] = 16, 14
         with self.assertRaisesRegex(contract.ContractError,
-                                    "ordinals drifted.*NEVR_GetUPnPConfig: expected 13, found 14"):
+                                    "ordinals drifted.*NEVR_GetUPnPConfig: expected 14, found 16"):
             contract.check_host(host_dump(exports=surface))
 
     def test_eager_runtime_import_fails(self):

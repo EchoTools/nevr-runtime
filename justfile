@@ -2485,7 +2485,7 @@ verify:
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
     python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
     # #575 step 1: the game-facing PE surface of BugSplat64.dll is pinned before any change of which
-    # target owns the code: the exact 26-name export set with its ordinals, DetoursExportPlaceholder at
+    # target owns the code: the exact 28-name export set with its ordinals, DetoursExportPlaceholder at
     # ordinal 1, no eager nevr.dll import. The game's own BugSplat64.dll imports are cross-checked when
     # the game binary is present (it is not in CI or a fresh worktree). Fail-closed: no `|| true`.
     if [ -f echovr/bin/win10/echovr.exe ]; then

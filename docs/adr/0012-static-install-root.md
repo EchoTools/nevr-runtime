@@ -68,7 +68,7 @@ because the file sits in the install folder.
    without nEVR, and there is no fallback to a single-DLL install. The load, the check, the dialog and the stop run in the host's
    detour on the game's main wrapper (ADR 0008's rendezvous), never in `DllMain`: ADR 0008's rule that `DllMain` does no file I/O
    and returns `TRUE` stands, and the dialog is shown without the loader lock held.
-4. **The host's export table does not change** (the 26 names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
+4. **The host's export table does not change** (the names and ordinals `tools/verify_pe_contract.py` pins). Logging stays in
    the host as ADR 0008 describes it (`nevr-bootstrap.jsonl`, `crash_capture`).
 
 A last-known-good copy of `nevr-runtime.dll` is out of scope until there is a reason for one. The plugin loader stays in `nevr-runtime.dll`.

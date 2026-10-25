@@ -21,7 +21,7 @@ runtime. The two speak one versioned C ABI and nothing else crosses between them
 
 ### The host's PE contract
 
-`tools/verify_pe_contract.py` pins the export table of `BugSplat64.dll`: the 26 names
+`tools/verify_pe_contract.py` pins the export table of `BugSplat64.dll`: the 28 names
 and their ordinals, `DetoursExportPlaceholder` at ordinal 1, and no import of
 `nevr.dll`. With the game binary present it also checks that the nine
 `BugSplat64.dll` imports of `echovr.exe` are imported by name, are the pinned set and
