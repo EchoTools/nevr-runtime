@@ -55,6 +55,8 @@ volatile LONG g_event_count = 0;
 volatile LONG g_event_overflow = 0;
 
 bool g_wrong_prologue = false;
+bool g_wrong_image = false;       // an image the host refuses: not the supported build
+bool g_fail_hook_create = false;  // MH_CreateHook "fails" in the host
 int g_launcher_mode = 0;
 // A value that needs all 64 bits: a truncated argument or result changes it.
 constexpr std::int64_t kCommandLine = 0x1234'5678'9ABC'DEF0;
@@ -101,7 +103,7 @@ BYTE* BuildGameImage(bool wrong_prologue) {
   nt->Signature = IMAGE_NT_SIGNATURE;
   nt->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
   nt->FileHeader.NumberOfSections = 1;
-  nt->FileHeader.TimeDateStamp = 0x6452dff6;
+  nt->FileHeader.TimeDateStamp = g_wrong_image ? 0x6452dff7 : 0x6452dff6;
   nt->FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
   nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
   nt->OptionalHeader.SizeOfHeaders = kPage;
@@ -142,6 +144,10 @@ extern "C" __declspec(dllexport) HMODULE RendezvousProbeGameImage() {
 
 extern "C" __declspec(dllexport) int RendezvousProbeLauncherMode() {
   return g_launcher_mode;
+}
+
+extern "C" __declspec(dllexport) int RendezvousProbeFailHookCreate() {
+  return g_fail_hook_create ? 1 : 0;
 }
 
 namespace {
@@ -313,6 +319,11 @@ void RunChildScenario(const std::string& scenario) {
     g_wrong_prologue = true;
     expect_hooked = false;
     dispatched = false;
+  } else if (scenario == "bad-image" || scenario == "hook-create-fails") {
+    g_wrong_image = scenario == "bad-image";
+    g_fail_hook_create = scenario == "hook-create-fails";
+    expect_hooked = false;
+    dispatched = false;
   } else if (scenario == "missing") {
     dispatched = false;
   } else if (scenario != "valid" && scenario != "reenter") {
@@ -328,14 +339,13 @@ void RunChildScenario(const std::string& scenario) {
   HMODULE host = LoadLibraryW(host_path.c_str());
   Require(host != nullptr, "host shim failed to load");
 
-  // A rejected prologue installs no detour, so there is no first-call trigger.
-  // The host's always-present deferred path flushes the fixed-memory attach
-  // diagnostic on demand (the production trigger is the MiniDmpSender constructor /
-  // NEVR_SetGameModule); exercise it so the parent can verify the record landed.
-  if (scenario == "bad-prologue") {
-    const auto flush =
-        reinterpret_cast<void (*)()>(GetProcAddress(host, "nevr_host_test_FlushDeferred"));
-    if (flush != nullptr) flush();
+  // A refused image, prologue or hook installs no detour, so there is no first-call trigger, and the game may
+  // never construct the crash reporter. The attach itself reports the refusal from a thread; the child only
+  // waits for it, so the record the parent reads is the attach's own doing.
+  if (!expect_hooked) {
+    const auto wait =
+        reinterpret_cast<int (*)()>(GetProcAddress(host, "nevr_host_test_WaitFailureFlush"));
+    Require(wait != nullptr && wait() == 1, "the attach's failure report did not finish");
   }
 
   for (LONG call = 0; call < calls; ++call) CallTarget(kCommandLine + (static_cast<std::int64_t>(call) << 4));
@@ -611,6 +621,8 @@ int RunSuite() {
       {"missing", nullptr},
       {"reenter", L"reenter-init"},
       {"bad-prologue", L"good"},
+      {"bad-image", L"good"},
+      {"hook-create-fails", L"good"},
   };
 
   for (const Scenario& scenario : scenarios) {
@@ -639,6 +651,16 @@ int RunSuite() {
       Require(record.at("expected_prologue") == "4883ec3848c744242000000000" &&
                   record.at("actual_prologue") == "4883ec3848c744242800000000",
               "the mismatch record does not carry the expected and the actual bytes");
+    } else if (std::strcmp(scenario.name, "bad-image") == 0) {
+      Require(records.size() == 1 && Find(records, "host_attach", "image_check", "rejected") == 0,
+              "a refused image was not on disk as the one image_check rejected record");
+    } else if (std::strcmp(scenario.name, "hook-create-fails") == 0) {
+      Require(records.size() == 3, "a refused hook recorded other than image_check, prologue_check, hook_install");
+      const int failed = Find(records, "host_attach", "hook_install", "failed");
+      Require(Find(records, "host_attach", "image_check", "accepted") == 0 &&
+                  Find(records, "host_attach", "prologue_check", "accepted") == 1 && failed == 2,
+              "a failed MH_CreateHook was not on disk as a hook_install failed record after the two accepted checks");
+      Require(records[2].at("stage") == "create", "the hook_install failure does not name the create stage");
     } else if (std::strcmp(scenario.name, "missing") == 0) {
       ExpectHookedRecords(records, "runtime_absent");
     } else {

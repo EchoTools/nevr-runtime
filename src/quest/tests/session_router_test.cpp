@@ -1832,6 +1832,52 @@ void TestSessionEndClosesConfigAndConfigReconnectsToANewSession() {
 
 // ---- the config reply owner ----------------------------------------------------------------
 
+// T706 (nakama issue 706): a second matchmaker socket opens while the first still carries the game's find. Lobby frames
+// follow the matchmaker socket that last sent a request, not the newest one by order: the game disconnects a
+// socket it never asked ("from non-matchmaker peer"). Failure caught: replies going to the newest socket.
+void TestLobbyFramesFollowTheMatchmakerThatAsked() {
+  const CaseScope scope("lobby follows requester");
+  Rig rig(WithLogin(kLogin));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  rig.router->OnGameOpen(4, Hinted(Role::Matchmaker));  // opened, but sends nothing yet
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "a"), true);
+  auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && sent[0].id == 3);
+  QCHECK(rig.logs.Has("game=3 conn=2 (matchmaker) sent symbol="));  // the sender of the find is on record
+  QCHECK(rig.logs.Has("-> game=3 conn=2 (matchmaker)"));            // and so is where the reply went
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "find again"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "b"), true);
+  sent = rig.games.Sent();
+  QCHECK(sent.size() == 2 && sent[1].id == 4);
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find on the first"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "c"), true);
+  sent = rig.games.Sent();
+  QCHECK(sent.size() == 3 && sent[2].id == 3);
+}
+
+// The limit of "the matchmaker that last sent a frame" standing in for "the socket whose request this answers":
+// both matchmakers are mid-request, so a reply to the earlier asker goes to the later one. Pins that behavior.
+void TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest() {
+  const CaseScope scope("two askers");
+  Rig rig(WithLogin(kLogin));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameOpen(4, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  rig.router->OnGameFrame(4, Msg(kSymSomething, "find"), true);
+  rig.router->OnRemoteFrame(session, Msg(kSymSomething, "answer to 3"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && sent[0].id == 4);
+}
+
 // Two config sockets asking for the same resource are answered oldest request first, whichever socket is older.
 // Game 3 (a matchmaker by order, then config) asks first, game 1 second; each success, and the Unrequire after
 // it, goes to the socket whose request it answers. Failure caught: the oldest socket, or the newest, taking both.
@@ -2354,6 +2400,131 @@ void TestHeldSessionQueuesLoginThenFlushesOnReady() {
   QCHECK(rig.router->GetStats().pendingFrames == 0);
 }
 
+// G4 (#709): a config connection opened the session and the transport accepted it while the account is
+// awaited; the login connection then attaches to an OPEN session. No login is injected until the gate says
+// Ready; Ready injects it once. Failure caught: the hold being bypassed by a session the config socket opened.
+void TestGateDefersLoginInjectionOnAnAlreadyOpenSession() {
+  const CaseScope scope("gate defers injection");
+  Gate gate;
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  rig.router->OnGameOpen(3, Hinted(Role::Matchmaker));
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "find"), true);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 0);  // behind the login that is waiting
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 1);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+}
+
+// G4: the gate ending in Refused ends the session instead of leaving the login waiting forever.
+void TestGateRefusedEndsADeferredInjection() {
+  const CaseScope scope("gate refused after defer");
+  Gate gate;
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Config));
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  gate.Set(LoginGate::Refused);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  QCHECK(!rig.games.Closes().empty());
+}
+
+// G4: the gate turns Awaiting between the login opening the session and the transport reporting it open. The
+// session opens for the config pass, the login waits, and Ready injects it once.
+void TestGateAwaitingWhenTheSessionOpensDefersTheLogin() {
+  const CaseScope scope("gate awaiting at open");
+  Gate gate;
+  gate.Set(LoginGate::Ready);
+  Options o = WithLogin(kLogin);
+  o.loginGate = gate.Fn();
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  gate.Set(LoginGate::Awaiting);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 0);
+  gate.Set(LoginGate::Ready);
+  rig.router->ReevaluateHeldLogins();
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+}
+
+// G1: a frame the runtime makes (a party update) goes on the session remote like a game frame: queued behind
+// the login while the session is not open, sent in order once it is, and refused when there is no session.
+void TestSendToSessionQueuesBehindTheLoginAndThenSends() {
+  const CaseScope scope("send to session");
+  Rig rig(WithLogin(kLogin));
+  QCHECK(!rig.router->SendToSession(Msg(kSymSomething, "no session")));
+  rig.router->OnGameOpen(1, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  QCHECK(rig.router->SendToSession(Msg(kSymSomething, "early")));  // the session is not open: queued
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 0);
+  rig.router->OnRemoteOpen(session);
+  QCHECK(CountUpstream(rig, session, nevr_evr_codec::kSymLoginRequest) == 1);
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 1);  // behind the login
+  QCHECK(rig.router->SendToSession(Msg(kSymSomething, "late")));
+  QCHECK(CountUpstream(rig, session, kSymSomething) == 2);
+}
+
+// G3: a dedicated server's LoginFailure is replaced by the frame the option returns; the game gets it as a
+// LoginSuccess, the log says it was synthesized, and no friend-list subscribe follows. Without the option the
+// failure reaches the game unchanged.
+void TestLoginFailureReplacementIsDeliveredAndNotSubscribed() {
+  const CaseScope scope("login failure replacement");
+  Options o = WithLogin(kLogin);
+  o.subscribeFriendList = true;
+  o.replaceLoginFailure = []() { return std::optional<std::string>(Msg(nevr_evr_codec::kSymLoginSuccess, std::string(32, '\0'))); };
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId session = SessionRemote(rig);
+  rig.router->OnRemoteOpen(session);
+  rig.router->OnRemoteFrame(session, Msg(nevr_evr_codec::kSymLoginFailure, std::string(24, '\0')), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && nevr_evr_codec::FirstSymbol(sent[0].data) == nevr_evr_codec::kSymLoginSuccess);
+  QCHECK(sent.empty() || sent[0].id == 2);
+  QCHECK(rig.logs.Has("synthesized"));
+  QCHECK(!rig.logs.Has("LOGIN SUCCESS"));
+  QCHECK(rig.remotes.Sent().size() == 1);  // the login only: no subscribe
+}
+
+// S2b: the adapter learns when the SESSION ends (not when a standalone matchmaker's remote does), once, after
+// the router's lock is released, and can ask which remote is the session.
+void TestSessionEndedCallbackFiresOncePerSession() {
+  const CaseScope scope("session ended callback");
+  int ended = 0;
+  Options o = WithLogin(kLogin);
+  o.onSessionEnded = [&ended]() { ++ended; };
+  Rig rig(std::move(o));
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnGameOpen(1, Hinted(Role::Matchmaker));  // standalone remote: not the session
+  rig.router->OnGameOpen(2, Hinted(Role::Login));
+  const RemoteId session = SessionRemote(rig);
+  QCHECK(rig.router->SessionRemote().has_value() && *rig.router->SessionRemote() == session);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 2);
+  if (opens.size() != 2) return;
+  rig.router->OnRemoteClose(opens[0].remote, 1000);  // the standalone matchmaker's remote
+  QCHECK(ended == 0);
+  rig.router->OnRemoteClose(session, 1006);
+  QCHECK(ended == 1);
+  QCHECK(!rig.router->SessionRemote().has_value());
+  rig.router->OnRemoteClose(session, 1006);  // already gone
+  QCHECK(ended == 1);
+}
+
 // a held session whose login socket closes and reopens three times. A closing socket's queued frames
 // leave the session's queue with it, so Ready flushes one login per LIVE socket, and the counts stay
 // consistent. Failure caught: the closed sockets' requests flushed to the service, whose replies would be
@@ -2651,6 +2822,16 @@ void TestConfigRequestKeyMatchesTheServicesDecoder() {
   }
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("").has_value());
   QCHECK(!nevr_evr_codec::ParseConfigRequestKey("x").has_value());  // a pad byte and no JSON
+  // The pad byte is whatever the game left there, '{' included: seen live (#708 S2b) on the game's first request,
+  // `{` + `{"type":"main_menu","id":"main_menu"}` + NUL, 39 bytes. Failure caught: that request keyed as unreadable, so
+  // the service's reply matched nothing and the game never got its main_menu config.
+  const std::string braced = std::string(1, '{') + R"({"type":"main_menu","id":"main_menu"})" + std::string(1, '\0');
+  const std::optional<nevr_evr_codec::ConfigKey> bracedKey = nevr_evr_codec::ParseConfigRequestKey(braced);
+  QCHECK(bracedKey.has_value());
+  if (bracedKey.has_value()) {
+    QCHECK(bracedKey->type == nevr_evr_codec::ConfigSymbol("main_menu"));
+    QCHECK(bracedKey->id == nevr_evr_codec::ConfigSymbol("main_menu"));
+  }
 }
 
 // The key of a reply: the success carries the two symbols, the failure the two strings.
@@ -3219,6 +3400,14 @@ int main() {
     return 1;
   }
   TestConnectionIdentity();
+  TestLobbyFramesFollowTheMatchmakerThatAsked();
+  TestGateDefersLoginInjectionOnAnAlreadyOpenSession();
+  TestGateRefusedEndsADeferredInjection();
+  TestSessionEndedCallbackFiresOncePerSession();
+  TestLoginFailureReplacementIsDeliveredAndNotSubscribed();
+  TestSendToSessionQueuesBehindTheLoginAndThenSends();
+  TestGateAwaitingWhenTheSessionOpensDefersTheLogin();
+  TestLobbyReplyGoesToTheLastAskerWhenTwoAreMidRequest();
   TestStandaloneMatchmakerRemoteEndDoesNotEndTheSession();
   TestLoginIsFirstThenQueuedFramesInOrder();
   TestFrameDuringLoginBuildStaysBehindLogin();

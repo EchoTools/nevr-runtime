@@ -10,14 +10,18 @@
  */
 
 #include "sentinel.h"
+#include "generated/nevr_build_info.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
+#include "data_wiring.h"
 #include "obb_skip_hook.h"
 #include "permission_wait_hook.h"
 #include "process_end_hook.h"
+#include "toast_presenter.h"
+#include "vk_ext_window.h"
 #include "pinned_targets.h"
 #include "quest/integration/entry_hooks.h"
 
@@ -89,8 +93,21 @@ void SetProcessEndCallback(void (*callback)() noexcept) noexcept { nevr_quest::p
 bool InstallProcessEndHook() noexcept { return nevr_quest::process_end::Install(); }
 
 // The game waits for the storage permission it just asked for (#640). A refused install is logged by GotHook and
-// leaves the game's call intact.
-bool InstallPermissionWaitHook() noexcept { return nevr_quest::permission_wait::Install(); }
+// leaves the game's call intact. The first-run data step (#807, data_wiring.h) runs right after that hook's wait, so it
+// is armed first.
+bool InstallPermissionWaitHook() noexcept {
+    nevr_quest::data_wiring::Options options;
+    options.show = &nevr_quest::toast::Show;
+    options.allow_fetch = nevr_build::kIsDev;  // a release build only looks and tells the player; it never downloads
+    options.probe_enabled = nevr_build::kIsDev;  // the headset probe is for development builds only
+    if (!nevr_build::kIsDev) options.hold_ms = 0;  // no presenter is known to draw on a headset: a release build holds nothing
+    nevr_quest::data_wiring::Install(options);
+    return nevr_quest::permission_wait::Install();
+}
+
+// The Vulkan extension window (#868): the device extensions libr15 requires stay inside the 128 entries it reads. A
+// refused install is logged by GotHook and leaves the game's calls intact.
+bool InstallVkExtWindowHook() noexcept { return nevr_quest::vk_window::Install(); }
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.

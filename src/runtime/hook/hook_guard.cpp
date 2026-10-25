@@ -80,7 +80,10 @@ void FormatBytes(const unsigned char* src, int n, char* out, size_t out_cap) {
 
 namespace nevr_hook_guard {
 
-void Record(const void* target, const char* name) {
+namespace {
+
+// `bytes` is the owner's record of what it wrote, or null to snapshot what is at `target` now.
+void RecordImpl(const void* target, const char* name, const unsigned char* bytes) {
   if (target == nullptr) return;
   if (!Readable(target, kSnapshotBytes)) return;
 
@@ -103,12 +106,21 @@ void Record(const void* target, const char* name) {
 
   g_sites[idx].target = target;
   g_sites[idx].name = name != nullptr ? name : "(unnamed)";
-  memcpy(g_sites[idx].bytes, target, kSnapshotBytes);
+  memcpy(g_sites[idx].bytes, bytes != nullptr ? bytes : static_cast<const unsigned char*>(target), kSnapshotBytes);
 #ifdef NEVR_TEST_HOOKS
   if (g_beforePublishForTest != nullptr) g_beforePublishForTest();
 #endif
   InterlockedExchange(&g_sites[idx].published, 1);
   InterlockedIncrement(&g_recorded);
+}
+
+}  // namespace
+
+void Record(const void* target, const char* name) { RecordImpl(target, name, nullptr); }
+
+void RecordBytes(const void* target, const char* name, const unsigned char (&bytes)[16]) {
+  static_assert(sizeof(bytes) == kSnapshotBytes, "the host's hook record is the guard's snapshot size");
+  RecordImpl(target, name, bytes);
 }
 
 bool IsOurDetour(const void* target) {

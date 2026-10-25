@@ -86,7 +86,8 @@ class FakeConnector : public WsConnector {
   ConnectResult Connect(const ConnectRequest& request) override {
     ConnectResult result;
     {
-      std::lock_guard<std::mutex> lock(mutex);
+      std::unique_lock<std::mutex> lock(mutex);
+      cv.wait(lock, [&] { return !held; });
       urls.push_back(request.url);
       ++calls;
       result.status = nextStatus;
@@ -106,10 +107,24 @@ class FakeConnector : public WsConnector {
     std::unique_lock<std::mutex> lock(mutex);
     return cv.wait_for(lock, std::chrono::milliseconds(ms), [&] { return connection != nullptr; });
   }
+  // Holds every Connect until Release(): a test that needs two games open before the session's one attempt can
+  // fail holds it, so the order does not depend on how the worker thread and the test thread are scheduled.
+  void Hold() {
+    std::lock_guard<std::mutex> lock(mutex);
+    held = true;
+  }
+  void Release() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      held = false;
+    }
+    cv.notify_all();
+  }
   std::mutex mutex;
   std::condition_variable cv;
   std::vector<std::string> urls;
-  int calls = 0;
+  std::atomic<int> calls{0};  // written under `mutex`, read by the test thread without it
+  bool held = false;
   ConnectStatus nextStatus = ConnectStatus::Ok;
   int nextHttp = 0;
   FakeConnection* connection = nullptr;  // owned by the transport's worker; valid until the session ends
@@ -253,7 +268,11 @@ void TestMissingIdentityIsRefused() {
 void TestTlsVerificationFailureHasNoFallback() {
   Rig rig;
   rig.connector.nextStatus = ConnectStatus::TlsVerificationFailed;
+  // The failure forgets the session ("the next connection is a new login"), so a game opened after it would start
+  // a second one: hold the attempt until both games are open, whatever the thread scheduling.
+  rig.connector.Hold();
   rig.OpenLoginGame();
+  rig.connector.Release();
   QCHECK(rig.games.WaitFor([&] { return rig.games.closes.size() == 2; }));  // config and login share the one session that failed once
   std::this_thread::sleep_for(std::chrono::milliseconds(300));  // a retry would show up by now
   QCHECK(rig.connector.calls == 1);

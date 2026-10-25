@@ -120,6 +120,8 @@ your PR does:
   of code, script or check you add or change, delete or alter that line alone, run the tests, and show that one of
   them fails. A changed line that no test notices is untested. Paste each mutant with its failing output, then the
   restored tree passing. A line with no behaviour (prose, a comment) has no mutant; say which lines those are.
+  Revert a mutant from a saved copy of the file or a stash, or commit first; never `git checkout` a file that has
+  uncommitted work in it.
 
   ```
   ## Mutants
@@ -142,6 +144,8 @@ your PR does:
 - **The PR body ends with `Read AGENTS.md at <merge-base sha>`** (see "Review, verification and merge").
   `.github/workflows/pr-read-check.yml` fails the PR without it. On a PR from a fork, a maintainer has to approve the
   workflow run before it runs.
+- **The PR body names the issue it resolves or advances** (`Closes #N` or `Refs #N`; see "Review, verification and
+  merge"). `.github/workflows/pr-issue-link-check.yml` fails the PR without it. The same fork rule applies.
 - **Runs use a throwaway copy of the game install, never the install itself** (#524; "The game install"). No check
   enforces this: the scripts still default to the checkout's `echovr/`, so point every writer at the copy yourself.
 
@@ -162,9 +166,9 @@ comment (for example N41, N48) is not a rule.
 | Rule | Statement | Guards | Checked by |
 | --- | --- | --- | --- |
 | N4 | A server whose config fails to load, or whose shutdown hangs, exits; it never blocks forever (`ForceFatalExit` through the registered fatal handler; a teardown watchdog). | `src/core/nevr_config.h`, `src/core/nevr_config_policy.cpp`, `src/runtime/lifecycle/crash_recovery.cpp` | nothing |
-| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs under the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify (the call order); `src/runtime/tests/test_boot_log_routing.cpp` (the routing); `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
+| N36 | Guarded initialization (`InitializeAfterGameImageGuard`) runs from the runtime's `initialize` (`runtime_entry.cpp`), which the host's detour on the game's main wrapper calls once, outside the loader lock, in the boot phase: it calls `nevr_boot_log_tee::Init()` before `InitializeFunctionPointers()`, and every return passes `nevr_boot_log_tee::Close()`. In the boot phase `Log()` reports through the boot tee (the sink `Init()` sets with `SetBootLogSink`), never the game's CLog, so code shared with later phases calls `Log()` and never branches on the phase. | `src/runtime/lifecycle/initialize.cpp`, `src/core/logging.cpp`, `src/runtime/log/boot_log_tee.cpp` | verify (the call order); `src/runtime/tests/test_boot_log_routing.cpp` (the routing); `tools/tests/test_patch_detour_logging.py` (the sink, the early return, no caller branching) |
 | (unnamed) | `DllMain` never runs plugin shutdown or unload (it holds the loader lock). | `src/runtime/lifecycle/dllmain.cpp` | verify (sensor "Plugin detach teardown boundary", which names no rule) |
-| N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization under the loader lock, through kernel32 calls only (no CRT locks); it is the one documented exception to the addendum's no-file-I/O-from-DllMain rule. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |
+| N43 | The boot log tee (`nevr_boot_log_tee`) deliberately opens and writes its file during initialization, through kernel32 calls only (no CRT locks), so it stays safe if a caller ever holds the loader lock; initialization runs from the host's wrapper detour, not from `DllMain`, so the addendum's no-file-I/O-from-DllMain rule does not reach it. | `src/runtime/log/boot_log_tee.h`, `src/runtime/log/boot_log_tee.cpp`, `src/runtime/lifecycle/initialize.cpp` | nothing names it |
 | N59 | Initialization calls `PatchDscProvider()` (the PSN/??? to DSC provider-string rewrite). | `src/runtime/lifecycle/initialize.cpp` | verify |
 | N62 | The signal-delivered shutdown never takes the loader lock: its dependencies are resolved once at init (`ResolveShutdownDependencies`), nothing is resolved at shutdown, and the signal-context flag is `volatile sig_atomic_t`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/boot.cpp` | verify |
 | N63 | A second signal during shutdown calls `ForceFatalExit`; it never sleeps and returns. | `src/runtime/lifecycle/crash_recovery.cpp` | verify |
@@ -175,8 +179,8 @@ comment (for example N41, N48) is not a rule.
 | N71 | `BreakpointVEH` has a generic null-pointer access-violation branch and a table of at least 25 known session-flags null-dereference sites; those game functions are deliberately not hooked. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery_sites.h` | verify; `src/runtime/tests/test_crash_recovery.cpp` |
 | N82 | Only the vectored handler in `crash_recovery.cpp` acts on `EXCEPTION_BREAKPOINT`; every other one returns `EXCEPTION_CONTINUE_SEARCH` for it. | `src/runtime/lifecycle/crash_recovery.cpp` | `tools/verify_hook_invariants.py` |
 | N87 | Under Wine, CTRL+C arrives as `CTRL_C_EVENT` at console control handlers, not at the CRT `SIGINT` handler; the runtime keeps its handler at the front of the chain and re-arms it after the game installs its own. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/lifecycle/crash_recovery.h`, `src/runtime/server/gameserver.cpp` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_crash_recovery.cpp` |
-| N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; initialization calls `InstallGameMainHook()`. | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/initialize.cpp` | verify |
-| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, before the first original call (#519). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); nothing for the boot-state limit or the image base |
+| N125 | The game-loop `setjmp` on `g_gameLoopJmpBuf` and its `longjmp` both live in `crash_recovery.cpp`; the host owns the one hook on the game's main wrapper, the runtime hands the host `RuntimeGameMain` as its `game_main`, and its `initialize` calls `ArmGameMain` (HookGuard records the host's hook from the bytes the host wrote). | `src/runtime/lifecycle/crash_recovery.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/lifecycle/runtime_entry.cpp` | verify |
+| N146 | Before the original `PreprocessCommandLine` call only minimal state is set up (no modules, file I/O or bridge), because the client's D3D initialization runs inside that call. The one exception is the early plugin pass: `LoadPlugins(PluginPhase::Early)` runs once, before the original call, and loads only the `config.yaml` entries marked `early: true` (none marked: it loads nothing), so a plugin that serves game data from elsewhere is in place before the game reads its manifests and packages; the normal pass loads the rest after the graphics device exists, and a pointer from `get_plugin_info` stays valid across both passes (`g_plugins` has stable element addresses). The spectator-stream check inside `PreprocessCommandLine` is patched by `PatchSpectatorStreamCheck`, prologue-validated and logged; on a server it is written once, by `PatchEnableServer` in the deferred bootstrap after the first original call, never before that call (written before it, the check sets the spectator flow, in which the game begins multiplayer a second time, after the state machine's begin). `BugSplat64.dll` links at the stock image base `0x180000000`, so the game's graphics DLLs load. The matchmaker bridge port is chosen at run time and patched into `pnsradmatchmaking.dll`'s compiled-in host (`ApplyMatchmakingLoad`), never a fixed port. | `src/runtime/lifecycle/boot.cpp`, `src/runtime/patch/mode_patches.cpp`, `src/runtime/CMakeLists.txt`, `src/runtime/compat/ws_bridge.cpp`, `src/runtime/patch/pnsrad_enabler.cpp`, `src/runtime/ext/plugin_loader.cpp` | `tools/tests/test_spectatorstream_order.py`, `tools/tests/test_plugin_loader_storage.py` (the early-pass latch, the N146 text, the storage), `src/runtime/tests/test_behavioral.cpp` (`InfoPointerStaysValidWhilePluginsAreAddedWithoutAPlan`, `InfoPointerKeptInTheEarlyPassStaysValidAfterTheNormalPass`), `src/runtime/tests/test_checked_patch.cpp` (the spectator-stream patch); `tools/tests/test_pnsrad_load_boundary.py` (the host patch runs on every load, at the module's `LoadLibrary` return); nothing for the boot-state limit or the image base |
 | N13 | CTRL+C from a terminal must reach the game's process group (Wine started with `WINEDEBUG=-all`, not behind a pipeline), and the signal and console handlers call `PerformGracefulShutdown` directly, never through a flag checked per frame (the frame loop stops before the flag is read, and the listening socket survives as a zombie; see N38). | the launch scripts, `src/runtime/lifecycle/crash_recovery.cpp` | nothing (manual run; noted in `src/runtime/tests/test_xpid_patch.cpp`) |
 
 #### Server, bridge and login
@@ -215,8 +219,9 @@ comment (for example N41, N48) is not a rule.
 | N114 | The plugin capability channel stays wired: the loader resolves `NvrPluginGetCapabilities` and `NvrPluginInitEx`, and `NEVR_PLUGIN_API_VERSION` is 6. | `src/runtime/ext/plugin_loader.cpp`, `src/extension/plugin_interface.h` | verify |
 | N135 | A plugin logs through the host: every context the loader passes a plugin (init, per-frame, state change) carries that plugin's `plugin_id` (its `config.yaml` entry's name) and the host's `log` function (`HostPluginLog`), whose line is `[NEVR.PLUGIN] plugin=<id> <message> <key>=<value> ...` through `Log()`; a plugin's text cannot start a second line or overrun the boot buffer (`plugin_log.h`); `plugin_logger.h` binds to it at init and falls back to stderr only before that or on a host older than v6. | `src/extension/plugin_interface.h`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_log.h`, `plugins/common/include/plugin_logger.h` | `tools/tests/test_runtime_lifecycle_invariants.py`; `src/runtime/tests/test_behavioral.cpp` (`PluginLogApi`, `PluginLoaderDiagnosticTest`), `src/runtime/tests/test_plugin_log.cpp`, `src/runtime/tests/test_plugin_logger.cpp` |
 | N120 | On a server a degraded runtime does not keep running: the HookGuard verdict is captured and escalated to `ServerFatal`, `platform_compat` fails a server run on a missing TLS hook, and the XPID patch logs both outcomes and escalates a validation failure, a failed byte write and a failed `GetProviderPrefix` (OVR-ORG) detour alike (`g_bootHookFailed` with a cause, so `boot.cpp` refuses the server), and the server bring-up prologues are validated at boot (`ValidatePrologue`, N97) with a mismatch escalated to `ServerFatal` (see N102). | `src/runtime/ext/plugin_loader.cpp`, `src/modules/platform-compat/src/platform_compat.cpp`, `src/runtime/patch/xpid_patch.cpp`, `src/runtime/lifecycle/state_machine.cpp`, `src/runtime/lifecycle/boot.cpp` | verify; `src/runtime/tests/test_behavioral.cpp` (`XpidPatchBoot`, `XpidPrefixDetourBoot`), `src/runtime/tests/test_server_bringup.cpp`, `tools/tests/test_server_bringup_wiring.py` |
-| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 32 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
+| N133 | Every nEVR config key is read from `config.yaml` (`nevr_config`), never from the game's JSON; the flat key map has 33 entries; modules read config through `NvrModuleContext.config_get`, and a module reports its API version; the sample config has the `auth`, `services`, `identity` and `version` sections. | `src/runtime/lifecycle/config.cpp`, `src/runtime/lifecycle/service_config.cpp`, `src/core/nevr_config.h`, `src/modules/token-auth/src/token_auth.cpp`, `docs/reference/example-config.yaml` | verify (N133 S7a-d); `src/runtime/tests/test_behavioral.cpp` |
 | N134 | The plugin set is the ordered `plugins:` list in `config.yaml`, and a required plugin that fails to load is a failure (S6); plugins get `ctx_size` and the plugin-query API, and load in capability-priority order (S8). | `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_loader.h`, `src/runtime/ext/plugin_load_plan.h`, `src/runtime/lifecycle/service_config.cpp` | verify (N134 S8, N114 S7); `src/runtime/tests/test_behavioral.cpp`, `src/runtime/tests/test_plugin_load_plan.cpp` |
+| N147 | A release build loads only plugins signed through the release-signer pipeline: `StageOne` verifies the file (`VerifyPluginFile`: Authenticode digest, `messageDigest` bound to the signed content, chain to the pinned Microsoft root through an exclusive-root engine at the stamped time, whole-OID profile EKU, bound RFC 3161 token, denylist) on a handle held `FILE_SHARE_READ` across the load, with no default-search fallback; a plugin's imports, delay-load imports and forwarded exports pass the same check transitively (`VerifyPluginTree`, held open across the load; a name gets `.dll` when it has no extension, and one that is neither a file in the plugins directory nor supplied by the system is refused, an absent delay-load excepted: the late-load filter checks it when it is called), and so does every later `LoadLibrary*` of a file in that directory, one made from a staged plugin's `DllMain` included (a `DllLoadHook` filter: the name gets `.dll` when it has no extension, a relative path with a directory part (`\` or `/`) is refused whatever it leads to (the loader appends it to every directory it searches, each through links, so no candidate list is complete; a bare name and a full path keep their rules), the directory is the ANSI path converted through the code page; refused with `ERROR_MOD_NOT_FOUND`); a refusal is a manifest entry, a log line and, on a client with graphics only, one dialog per run (`plugin_refusal_notice.h`, never on a server or headless run; a refusal after `LoadPlugins` finished shows it itself), and for a required plugin `ServerFatal`. The dev build (`mingw-plugin-dev`, `NEVR_ALLOW_UNSIGNED_PLUGINS`) carries `NEVR-PLUGIN-TRUST unsigned-allowed` and `tools/package_release.py` refuses to package it. The profile EKU pin is confirmed against the real signed v5.4.3 `BugSplat64.dll` (`RealSigned.*` in `test_plugin_trust`, which `just test-auth-unit` feeds from `tools/fetch_real_signed_dll.py`); the signer subject is deliberately not pinned. A signed-only build refuses an unsigned plugin. | `src/runtime/ext/plugin_signature.cpp`, `src/runtime/ext/plugin_trust.cpp`, `src/runtime/ext/plugin_loader.cpp`, `src/runtime/ext/plugin_tree.cpp`, `src/runtime/ext/plugin_refusal_notice.h`, `src/runtime/hook/dll_load_hook.cpp`, `tools/package_release.py` | `src/runtime/tests/test_plugin_signature.cpp`, `src/runtime/tests/test_plugin_trust.cpp`, `src/runtime/tests/test_plugin_tree.cpp`, `src/runtime/tests/test_behavioral.cpp` (`PluginSignatureGateTest`, `PluginDependencyGateTest`, `PluginRefusalNotice`), `tools/tests/test_package_release.py`, `tools/tests/test_build_identity_literal.py` (the late-load spellings, the non-ASCII game path, the `DllMain` load and the late notice) |
 
 #### Hooks and binary patches
 
@@ -317,18 +322,22 @@ just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
 
-Releases are built by CI from a tag, never locally. The steps, in order, from a clone of origin:
+Every release follows RELEASING.md.
+
+Releases are built by CI from a tag, never locally, and always from a draft (a draft fires no workflow, so the build is started by
+hand on the tag ref). The steps, in order, from a clone of origin:
 
 ```sh
 just release-preflight                                    # 1. refuses (exit 1, one line per problem) unless this clone is exactly origin/main
 git tag -a v<x.y.z> -m "<x.y.z>" && git push origin v<x.y.z>   # 2. tag origin's tip and push the tag
-just release-preflight && gh release create v<x.y.z> --prerelease --verify-tag   # 3. once more, then publish the release (not a draft)
+just release-preflight && gh release create v<x.y.z> --title v<x.y.z> --draft --prerelease --verify-tag   # 3. once more, then a draft for the pushed tag
+gh workflow run build.yml --ref v<x.y.z>          # 4. builds, attests and attaches the two files to the draft; it stays a draft
+gh release edit v<x.y.z> --draft=false            # 5. publish, only after the draft's files are checked and signed (RELEASING.md)
 ```
 
 A release is the tag's version plus GitHub's pre-release flag. The version is exactly the tag (`v5.0.0` is `5.0.0`); every other build
-stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. `build.yml` fires on
-`published`, goes through one packaging path (the sealed zip, `SHA256SUMS`, `RELEASE-NOTES.md`, all attested, plus the `dist/`
-zip; the `.tar.zst` archives stay a workflow artifact) and does nothing for a release that already carries those assets. Nothing in a file depends on the pre-release flag:
+stamps `X.Y.(Z+1)-dev.<N>+<sha>`, which sorts after the tag it descends from and before the next release. The build goes through one
+packaging path (the sealed Windows zip, attested, and the Quest library; the notes and a SHA-256 table of both are the release body, written after signing; the `.tar.zst` archives stay a workflow artifact). Nothing in a file depends on the pre-release flag:
 promote with `gh release edit v<x.y.z> --prerelease=false`; it fires no workflow and changes no byte. `BugSplat64.dll` carries one
 identity literal, `NEVR-BUILD <version> <commit40>` (NUL-bounded, exactly one), that binds its version and its commit.
 The `dist` package and the Windows zip's DLL are both the stripped build (players get stripped builds only); `just dist` splits each shipped PE's debug info into `dist/symbols/<name>/<file>.dbg` first and links the
@@ -336,24 +345,17 @@ stripped file to it (`.gnu_debuglink`: name and CRC32; PE has no build-id). `bui
 keeps the `.dbg` files as the `symbols` workflow artifact (not a release asset) and attests them. A build with symbols is the
 ordinary `build/<preset>/bin/` output.
 
-A release whose files must be signed before anything is public goes through a DRAFT: a draft fires no workflow, so the build is
-started by hand on the tag ref.
-
-```sh
-just release-preflight && gh release create v<x.y.z> --draft --prerelease --verify-tag   # D1. a draft for the pushed tag (instead of step 3)
-gh workflow run build.yml --ref v<x.y.z>          # D2. builds, attests and attaches the four files to the draft; it stays a draft
-```
-
-`tools/release_draft.sh` decides: a tag with exactly one draft, no published release, and none of the four names on the draft is
-built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries any of the
-four names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
+`tools/release_draft.sh` decides what step 4 does: a tag with exactly one draft, no published release, and neither of the two names on the draft is
+built and attached; no release, or a published one, is a dry run (nothing is uploaded); a draft that already carries either of the
+two names fails the run red, so a second dispatch never overwrites signed files. Publishing the filled draft fires `published`,
 which `tools/release_already_built.sh` turns into a green no-op (both read `tools/release_asset_names.sh`). The `drafts` job
 (a dispatch on a tag only, no checkout, one `gh api` call) holds `contents: write` because a read-only token cannot list drafts;
 `guard` keeps `contents: read` and gets the listing as JSON on stdin of `tools/release_draft.sh`. Hand-publishing the draft while
-a dispatch is running makes that run upload to the published release.
+a dispatch is running makes that run upload to the published release. The signed Windows zip lives on the GitHub release; the Quest APKs and dry
+runs are published outside GitHub.
 
 `just release-preflight` also runs first inside `just package-dev`. It belongs before pushing a release tag (step 1) and before
-`gh release create` (step 3, or D1): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
+`gh release create` (step 3): the manual gate. It is not in `build.yml` (CI checks out the tag itself) and not in `just verify`
 (it must work in a dirty tree).
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
@@ -422,7 +424,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
 | `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
 | `src/runtime/compat/` | ws_bridge | making the game's ageing network stack work against modern services |
-| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled only into the test harnesses until the target split (ADR 0008) |
+| `src/runtime/host/` | host_entry, runtime_rendezvous, game_targets, loader_lock, bootstrap_diagnostics, crash_capture, runtime_load, host_json, host_paths, path_buffer | what the stable `BugSplat64.dll` host runs behind its `DllMain` and exports; compiled into `BugSplat64.dll` and the test harnesses; `DllMain` and `NEVR_SetGameModule` call `nevr_host::OnProcessAttach` / `SetGameModule` (ADR 0008, ADR 0012) |
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
@@ -612,6 +614,11 @@ your seat name, for example `claude-main` or `codex`.
   files the repo's own tools write at the scratch root stay where they are. When you are done,
   delete the scripts, copies and build output you created, outright, not into the user's trash.
   Run logs and evidence are kept. Never delete by pattern across the shared directory.
+- **Ownership is proven, never inferred.** Remove a worktree, branch or scratch path only when your ledger row
+  (`~/.local/share/repo-hygiene/nevr-runtime-ledger.md`, the ledger above) names it, or `~/.local/bin/whence <path>` (call it by that path: zsh's builtin `whence` shadows the bare name and prints nothing; it prints the sessions that mention the path, the oldest first, which is its
+  birth) shows your own session made it. A name that looks like yours, or a location under your scratch
+  directory, is not proof: another seat's live worktree can sit there. Anything you cannot prove is another
+  seat's; leave it and ask its owner.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
   `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
   and `git status --short --ignored` lists only build output (move any run log you need out
@@ -783,8 +790,22 @@ your seat name, for example `claude-main` or `codex`.
   the new tip.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing.
+- **Name the result before the check.** Before a check, a test run or a done condition, write down the result that would
+  change what you do next. A check no result of which would change anything is cut.
+- **Force the mechanism to prove a fix.** Plant the bug, or inject the delay or the thread hop that exposes it, and run
+  once with the bug and once without; paste both outputs. "Run it N times" is neither proof nor a done condition. When a
+  failure cannot be forced, the fix is a log line that makes the next real occurrence explain itself.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **A PR is opened only for an existing issue, and its body names it.** The issue states the problem and its done-bar;
+  a PR without one has nothing to be checked against and nothing to close. The body carries one line for each
+  issue it resolves: `Closes #N` (or `Fixes #N`, `Resolves #N`). A PR that leaves part of an issue open, such as a
+  live run still owed, uses `Refs #N` (or `Part of #N`, `Completes #N`) and says in the body what is still open. A fix
+  that has no issue gets an issue first. There is no "no issue" form.
+  `.github/workflows/pr-issue-link-check.yml` runs `tools/check_pr_issue_link.py` on every open, edit and push and fails
+  a body that names none; it cannot tell whether the diff really resolves the issue, so the review (the first bullet
+  above) confirms that each linked issue is resolved by the diff. The merged PR's issue is then closed with the PR
+  linked (`docs/standards/planning.md`, "Hygiene rules"); an issue a merged PR fixed is never left open.
 - **The PR body ends with the line `Read AGENTS.md at <sha>`.** It is the last non-empty line, and
   `<sha>` is the PR's base commit: `git merge-base HEAD origin/<target>`, where `<target>` is the
   branch the PR targets (usually `main`), the commit whose AGENTS.md you branched from (7 to 40 hex
@@ -833,6 +854,16 @@ your seat name, for example `claude-main` or `codex`.
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
+- **Public prose carries no hosting URLs, no chat quotes and no local paths.** A seat never publishes on its own: it
+  drafts every public post (issue, PR body or edit, comment, review, release note) and sends the text to Spritz; it
+  posts only after her approval. The reason: seats post on the owner's account, so their words are public in his name,
+  and a seat's job is the code, not communication. A PR body, issue body, comment, review and commit message is public.
+  It MUST NOT contain a URL or host name that hands out builds or data (a download host, a CDN, a storage bucket), the
+  words of a person from chat or a message (quoted, or paraphrased as the reason for a change), or a local path (e.g.
+  `/home/...`, `/var/tmp/...`, `/mnt/...`, `/tmp/...`, `~/...`, `C:\...`). In findings and PR bodies, use repo-relative
+  paths, or `<scratch>` for scratch output. Name a design decision by its reasoning, an issue or an ADR, never by "the
+  owner said" or "decided by <name>". Code and configuration that must name the host they fetch from are not prose and
+  are exempt.
 - **`docs/audits/` is the historical record.** Its entries are dated by design and are exempt from the
   current-tree rule above: they cite the tree as it was when measured, and an index entry may name a
   retired file by its commit. Nothing in it is rewritten or deleted without the owner's confirmation.
@@ -934,8 +965,8 @@ When something fails, the first act is reading the failing program's **own** log
   repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate, run on main when prepping a release (a PR
   runs the quick check, see "Builds"):
-  `just build`, then a second real `cmake --build` (because `just build` greps its
-  own output and always exits 0), then `test-auth-unit` and `test-quest-shared`,
+  `just build`, then a second `cmake --build` whose exit code is read directly (`just build` fails on a
+  failed build, so the second pass confirms the artifact), then `test-auth-unit` and `test-quest-shared`,
   the Python test suite and source-invariant checks. The Go system suites are
   separate recipes and are not part of `just verify`.
 

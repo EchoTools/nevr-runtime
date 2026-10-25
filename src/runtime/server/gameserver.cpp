@@ -16,6 +16,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
@@ -63,7 +64,8 @@ static uint64_t AcceptedEntrantsNow() {
 }
 
 void CallScheduleReturnToLobby() {
-    if (g_pGame) nevr_return_to_lobby::Request(g_pGame);
+    // g_pGame is the game context; the game's function takes the net game (#730).
+    if (g_pGame) nevr_return_to_lobby::Request(nevr_return_to_lobby_queue::NetGameFromContext(g_pGame));
 }
 
 #include "core/logging.h"

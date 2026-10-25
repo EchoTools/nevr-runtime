@@ -3,16 +3,17 @@
 Commit `@COMMIT@`.
 
 @IF_APK@Two artifacts, built the same way from the same commit:
-@IF_NOAPK@Two zips and their checksums. **No Quest APK in this release** (the Quest build is not part of
-@IF_NOAPK@the public set).
+@IF_NOAPK@Two files. **No Quest APK in this release** (the Quest build is not part of the public set).
 
-| file | what |
-|---|---|
-| `@ZIP@` | Windows: `BugSplat64.dll`, `install.ps1`, `uninstall.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_APK@| file | what |
+@IF_NOAPK@| file | SHA-256 | what |
+@IF_APK@|---|---|
+@IF_NOAPK@|---|---|---|
+@IF_APK@| `@ZIP@` | Windows: `BugSplat64.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
+@IF_NOAPK@| `@ZIP@` | `@SHA_ZIP@` | Windows, for players and server operators: `BugSplat64.dll`, `echovr_server.exe` (both stripped, no debug symbols), `install.ps1`, `uninstall.ps1`, `quest-diagnose.ps1`, `README.txt`, `SIGNING.txt`, `SHA256SUMS` |
 @IF_APK@| `@APK@` | Quest: the repacked, debug-signed APK |
 @IF_APK@| `SHA256SUMS` | SHA-256 of the two files above |
-@IF_NOAPK@| `nevr-runtime-v@VERSION@.zip` | `BugSplat64.dll`, `echovr_server.exe`, `README.md`, `INSTALL.md`; both PE files stripped, no debug symbols |
-@IF_NOAPK@| `SHA256SUMS` | SHA-256 of `@ZIP@` |
+@IF_NOAPK@| `@QUEST@` | `@SHA_QUEST@` | Quest library for packagers: a loose ELF, attested and not signed |
 
 @IF_APK@Neither build needs a config file. The service endpoints and the public client keys are built in; the
 @IF_APK@Windows DLL logs in with no `config.yaml`, and the Quest APK logs in and runs its social features
@@ -30,15 +31,20 @@ Commit `@COMMIT@`.
 - **Windows:** unzip, close the game, run `install.ps1` (PowerShell, `-ExecutionPolicy Bypass`). It backs up
   the original `BugSplat64.dll` with a timestamp and renames a legacy `dbgcore.dll` aside; `uninstall.ps1`
   restores both. Nothing is deleted.
+@IF_NOAPK@- **Dedicated server:** copy `echovr_server.exe` next to `echovr.exe` and write `_local\config.yaml`; the zip's
+@IF_NOAPK@  `README.txt` has the command and the smallest working config.
 @IF_APK@- **Quest:** `adb install -r @APK@` over the build you already have (it is signed with the same key as
 @IF_APK@  earlier test builds; a different key needs an uninstall first, which clears the app's data).
 
 ## Signing
-A separate signing step may sign `BugSplat64.dll`, `install.ps1` and `uninstall.ps1` after the build and
+The runtime in this release loads only plugins signed through the release-signer pipeline. An unsigned plugin (or one with a changed byte) is refused and listed in the plugin manifest; a plugin marked required that is refused stops a server.
+
+A separate signing step may sign `BugSplat64.dll`, `echovr_server.exe`, `install.ps1`, `uninstall.ps1` and `quest-diagnose.ps1` after the build and
 replace the zip under the same name; these notes are the same either way. A file is signed when it carries a
-signature, and `SIGNING.txt` inside the zip says how to check each one. Compare the zip's SHA-256 with
-`SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it. Windows Defender or SmartScreen may warn
-about a file that is not signed.
+signature, and `SIGNING.txt` inside the zip says how to check each one.
+@IF_APK@Compare the zip's SHA-256 with `SHA256SUMS`; the zip's own `SHA256SUMS` lists the files inside it.
+@IF_NOAPK@Compare the zip's SHA-256 with the table above; the zip's own `SHA256SUMS` lists the files inside it.
+Windows Defender or SmartScreen may warn about a file that is not signed.
 @IF_APK@The Quest APK is debug-signed with the same key as earlier test builds, which is a sideload signature,
 @IF_APK@not a code-signing certificate.
 

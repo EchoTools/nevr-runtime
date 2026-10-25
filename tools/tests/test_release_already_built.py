@@ -1,6 +1,6 @@
 """tools/release_already_built.sh: does a release already carry the build's whole asset set?
 
-The signal is the release's asset NAMES (five files for version X.Y.Z), never the pre-release flag.
+The signal is the release's asset NAMES (two files for version X.Y.Z), never the pre-release flag.
 A listing that fails is an error, not "false"."""
 
 import os
@@ -38,24 +38,23 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
                               capture_output=True, text=True)
 
     def names(self, version="5.0.0", drop=None):
-        names = [f"nevr-runtime-v{version}-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md",
-                 f"nevr-runtime-v{version}.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so"]
+        names = [f"nevr-runtime-v{version}-windows.zip", f"nevr-runtime-v{version}-quest-libovrplatformloader.so"]
         return "\n".join(n for n in names if n != drop) + "\n"
 
-    def test_all_five_assets_mean_already_built(self):
+    def test_both_assets_mean_already_built(self):
         result = self.run_script(FAKE_ASSETS=self.names())
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "true"), result.stderr)
 
     def test_one_missing_asset_means_not_built_and_names_it(self):
-        result = self.run_script(FAKE_ASSETS=self.names(drop="RELEASE-NOTES.md"))
+        result = self.run_script(FAKE_ASSETS=self.names(drop="nevr-runtime-v5.0.0-quest-libovrplatformloader.so"))
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "false"))
-        self.assertIn("RELEASE-NOTES.md", result.stderr)
+        self.assertIn("nevr-runtime-v5.0.0-quest-libovrplatformloader.so", result.stderr)
 
-    def test_every_one_of_the_five_is_required(self):
+    def test_every_one_of_the_two_is_required(self):
         every = self.names().split()
-        self.assertEqual(len(every), 5)
-        self.assertEqual(sorted(every), sorted(["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-                                       "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]))
+        self.assertEqual(len(every), 2)
+        self.assertEqual(sorted(every), sorted(["nevr-runtime-v5.0.0-windows.zip",
+                                                "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]))
         for name in every:
             with self.subTest(missing=name):
                 result = self.run_script(FAKE_ASSETS=self.names(drop=name))
@@ -65,16 +64,22 @@ class ReleaseAlreadyBuiltTest(unittest.TestCase):
     def test_the_tar_zst_archives_are_not_required_and_do_not_count(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "nevr-runtime-v5.0.0.tar.zst\n")
         self.assertEqual(result.stdout.strip(), "true")
-        only_tars = ("nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0-windows.tar.zst\n"
-                     "SHA256SUMS\nRELEASE-NOTES.md\n")
+        only_tars = "nevr-runtime-v5.0.0.tar.zst\nnevr-runtime-v5.0.0-windows.tar.zst\n"
         self.assertEqual(self.run_script(FAKE_ASSETS=only_tars).stdout.strip(), "false")
+
+    def test_the_old_five_file_set_is_not_this_release(self):
+        old = ("nevr-runtime-v5.0.0-windows-player.zip\nSHA256SUMS\nRELEASE-NOTES.md\n"
+               "nevr-runtime-v5.0.0-windows-server.zip\nnevr-runtime-v5.0.0-quest-libovrplatformloader.so\n")
+        result = self.run_script(FAKE_ASSETS=old)
+        self.assertEqual(result.stdout.strip(), "false")
+        self.assertIn("nevr-runtime-v5.0.0-windows.zip", result.stderr)
 
     def test_extra_assets_do_not_matter(self):
         result = self.run_script(FAKE_ASSETS=self.names() + "something-else.txt\n")
         self.assertEqual(result.stdout.strip(), "true")
 
     def test_a_partial_name_is_not_a_match(self):
-        names = self.names().replace("SHA256SUMS", "SHA256SUMS.sig")
+        names = self.names().replace("-windows.zip", "-windows.zip.sig")
         self.assertEqual(self.run_script(FAKE_ASSETS=names).stdout.strip(), "false")
 
     def test_a_failed_listing_is_an_error_not_false(self):

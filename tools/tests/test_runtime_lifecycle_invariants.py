@@ -542,7 +542,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_game_main_hook_has_no_c_style_casts(self):
         # Issue #254 (CPP-MINGW addendum: no C-style casts).
         source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
-        body = extract_braced_function(source, "void InstallGameMainHook(")
+        body = extract_braced_function(source, "void ArmGameMain(")
         self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
 
     def test_matchmaking_host_patch_decision_is_stateless(self):

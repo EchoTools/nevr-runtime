@@ -153,6 +153,7 @@ struct RealCounterSteps final : Steps {
   bool InstallObbSkip(bool counted) override { return counted; }
   bool InstallProcessEnd() override { return true; }
   bool InstallPermissionWait() override { return true; }
+  bool InstallVkExtWindow() override { return true; }
   bool StartTokenAuth() override { return true; }
   bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }

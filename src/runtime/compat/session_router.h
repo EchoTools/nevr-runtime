@@ -52,7 +52,7 @@
 //   * remote end (close or error): every game socket on that session, config included, is closed and the
 //     session is forgotten, so the game's next connection is a new login rather than a matchmaker.
 //   * a held session: while the wiring says the account the login needs is still being obtained
-//     (Options::loginGate answers Awaiting) the session remote is not opened, whichever connection opened the
+//     (Options::loginGate answers Awaiting) the session remote is not opened when the login connection opened the
 //     session, and the connections on it are neither failed nor closed; their frames queue. When the gate
 //     answers Ready the remote opens and the queued frames follow; when it answers Refused the hold ends with a
 //     close of every connection on the session (kCloseInternalError). A standalone matchmaker is never held.
@@ -176,6 +176,9 @@ using LogSink = std::function<void(LogLevel level, const std::string& line)>;
 // Produces the complete EVR LoginRequest message for the login session, or nullopt when the identity is
 // not available (no token, no configured credentials). The router never fabricates one.
 using LoginFrameBuilder = std::function<std::optional<std::string>()>;
+// Called with the router lock held (lock-free and fast, like LoginGateFn) when the service answers a login with
+// a LoginFailure: a frame returned replaces the failure for the game.
+using LoginFailureReplacement = std::function<std::optional<std::string>()>;
 
 // Whether the account a login needs is available. Awaiting: not yet (the player has not signed in); the
 // session is held. Ready: it is. Refused: it will not be (the sign-in failed for good).
@@ -200,6 +203,9 @@ struct Options {
   Limits limits;
   LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
   LoginGateFn loginGate;              // null (default): the account is always available (PC, tests)
+  LoginFailureReplacement replaceLoginFailure;  // null (default): the failure reaches the game (a dedicated server sets it)
+  // Called once, with no router lock held, when the shared session's remote ends (the login session is gone).
+  std::function<void()> onSessionEnded;
   bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
   // Non-empty: the JSON document of the SNSLoginRemovedNotify sent to a game whose login session was lost
   // under it (Quest). Built by the wiring (nlohmann::json); empty (default) sends no notice (PC).
@@ -243,6 +249,9 @@ class Router {
   // `hint.hinted`: the adapter names the role and it is final. Otherwise the role is provisional (by order).
   void OnGameOpen(GameId game, OpenHint hint = OpenHint());
   void OnGameFrame(GameId game, std::string frame, bool binary);
+  // A frame the runtime itself makes (not a game's): queued on the session remote in order with the game's
+  // frames. False when there is no session or its queue is full.
+  bool SendToSession(std::string frame);
   void OnGameClose(GameId game);
   void OnGameWritable(GameId game);
   // The connection has been upgraded for the wiring's silent period and has sent no data frame: the login
@@ -268,6 +277,8 @@ class Router {
   void Shutdown();
 
   Stats GetStats() const;
+  // The remote that carries the shared session, if there is one.
+  std::optional<RemoteId> SessionRemote() const;
 
  private:
   struct Item {
@@ -298,6 +309,7 @@ class Router {
     bool deferred = false;      // a held session: Open has not been called yet
     bool open = false;
     bool loginPending = false;  // login builder running: frames of non-config connections queue behind it
+    bool loginDeferred = false;  // the login waits for the gate: the session was already open when it attached (G4)
     bool loginSent = false;
     bool loginAttached = false;  // a login connection has been attached (never cleared): a matchmaker may share
     // Game frames that arrived before the remote opened or while the login is being built, in arrival order.
@@ -335,6 +347,7 @@ class Router {
   void SendLoginRemovedLocked(GameId game, Game& g, Effects& fx);
   void ForgetLoginUserLocked();
   void RecomputeActiveLocked();
+  void DeferLoginLocked(RemoteId remote, Remote& r, Effects& fx);
   bool OnSessionLocked(GameId id) const;
   GameId RouteSessionFrameLocked(const std::string& frame, bool* quietDrop, bool* logged, Effects& fx);
   bool TakeUnrequireLocked(GameId target);

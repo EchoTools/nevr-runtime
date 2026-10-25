@@ -558,7 +558,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    Awaiting covers every state in which a token is still to come, including a failure the session
    retries every recovery period (`Snapshot::will_retry`) and an expired token being replaced; only a
    final failure, a stopped session or a token without an account is Refused.
-   While it answers Awaiting the router creates the session's record, whichever connection opened it,
+   While it answers Awaiting the router creates the session's record, when the login connection opened it
+   (a config connection opens its remote at once and is refused when there is no account),
    but does not open its remote (`Stats::heldRemotes`), and queues what the connections on it send in
    order: a config connection waits with the session until the player has signed in. The login
    connection is silent until the game's `LogInRequestv2` (the game sends none before the player has

@@ -104,6 +104,14 @@
             "name": "mingw-dev",
             "displayName": "MinGW Release for a local package (just package-dev): its own build tree",
             "inherits": "mingw-release"
+        },
+        {
+            "name": "mingw-plugin-dev",
+            "displayName": "MinGW Release that loads unsigned plugins (plugin developers only, never ship)",
+            "inherits": "mingw-release",
+            "cacheVariables": {
+                "NEVR_ALLOW_UNSIGNED_PLUGINS": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -146,6 +154,11 @@
             "name": "mingw-dev",
             "displayName": "Build MinGW (local dev package)",
             "configurePreset": "mingw-dev"
+        },
+        {
+            "name": "mingw-plugin-dev",
+            "displayName": "Build MinGW (loads unsigned plugins, plugin developers only)",
+            "configurePreset": "mingw-plugin-dev"
         }
     ]
 }

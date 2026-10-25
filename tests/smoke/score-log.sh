@@ -154,7 +154,7 @@ C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cac
 C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
-C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No game base address
+C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No accepted client session|\[SAVE_LOADOUT\] No game base address
 C13@@client@@Current loadout read back@@\[CURRENT_LOADOUT\] Player:@@\[CURRENT_LOADOUT\] Empty response|\[CURRENT_LOADOUT\] Invalid
 EOF
 

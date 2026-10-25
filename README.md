@@ -59,7 +59,7 @@ says how to check each one and which log line proves it.
 - **Hardware dump.** A one-time hardware and environment dump file on request. (Quest)
 
 ### Game server mode
-The dedicated game server does not complete bring-up today ([#45](https://github.com/EchoTools/nevr-runtime/issues/45)): `echovr.exe -server -headless -no-console` boots, logs in and joins the social lobby group, then never reaches dedicated-server bring-up. The bullets below are what the code implements; none of it is shown working end to end.
+`echovr.exe -server -headless -no-console` boots, logs in, begins multiplayer, loads the in-process server library and registers with the game service. [`docs/testing/smoke-checklist.md`](docs/testing/smoke-checklist.md) (rows SV01 on) says how to check each item below.
 
 - **Dedicated game server.** `-server` implies headless and no OVR; headless graphics need no GPU; `echovr_server.exe` starts one. (PC)
 - **Registers with the game service.** Authenticates, registers (with guild and region filters), takes sessions and returns to the lobby after a round. (PC)
@@ -78,8 +78,6 @@ name ([#393](https://github.com/EchoTools/nevr-runtime/issues/393)) and the part
 Invite Members ([#318](https://github.com/EchoTools/nevr-runtime/issues/318)) do not work
 yet. On PC:
 
-- the dedicated game server does not complete bring-up
-  ([#45](https://github.com/EchoTools/nevr-runtime/issues/45));
 - the main menu shows no game service status, because the status request fails
   ([#408](https://github.com/EchoTools/nevr-runtime/issues/408));
 - the matchmaking screen's time remaining is always 0
@@ -107,11 +105,10 @@ yet. On PC:
    `BugSplat64.dll.original-<timestamp>`, renames a legacy `dbgcore.dll` to
    `dbgcore.dll.legacy-<date>` and installs the new file. It deletes nothing.
 3. **Uninstall:** `uninstall.ps1 -Dir <bin\win10>` restores both and keeps the backups.
-4. **Quest:** a release is the Windows zip only: the Quest APK repacks the store game and is not part of
-   the public set. Testers receive a development build
-   (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, from `just package-dev`) privately; install it with
-   `adb install -r`. It is signed with the same key as earlier test builds, so it installs over them and
-   keeps your data.
+4. **Quest:** a release is the Windows zip only: the APK repacks the store game, so it is not on GitHub. The
+   development build (`nevr-runtime-v<X.Y.Z-dev.N>-<sha7>-quest.apk`, built by `just package-dev`) is published
+   outside GitHub; download it and install it with `adb install -r`. It is signed with the same key as
+   earlier test builds, so it installs over them and keeps your data.
 5. Windows Defender or SmartScreen may warn about a file that carries no signature. `Get-AuthenticodeSignature .\BugSplat64.dll`
    (PowerShell) says whether a file is signed.
 
@@ -208,10 +205,11 @@ From `build/mingw-release/bin/`:
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | Optional plugin DLLs | `plugins/` next to the game binary |
 
-The distribution package includes an empty `plugins/` directory for optional
-operator plugins; plugin DLLs are built separately and are not bundled. The
-community beta install guide covers installing the game client and uses only
-`BugSplat64.dll`.
+The staged server package and its `.tar.zst` carry an empty `plugins/` directory
+for optional operator plugins; the Windows zip (`nevr-runtime-v<ver>-windows.zip`)
+has no entry for it, so create `plugins/` next to the game binary. Plugin DLLs are
+built separately and are not bundled. The community beta install guide covers installing the game client and
+uses only `BugSplat64.dll`.
 
 For the community beta on Windows, follow [`docs/beta/INSTALL.md`](docs/beta/INSTALL.md).
 

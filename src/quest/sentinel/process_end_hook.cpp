@@ -23,6 +23,7 @@ std::atomic<EnderFn> g_ender{&EndProcess};
 std::atomic<AfterFn> g_after{nullptr};
 std::atomic<unsigned> g_budgetMs{kFlushBudgetMs};
 std::atomic<unsigned long long> g_returned{0};
+std::atomic<sentinel::pinned::AndroidAppOpaque*> g_app{nullptr};
 
 // The before-exit callback and the wait for it. One Shared per call, never freed: a callback that outlives
 // its wait still has somewhere to write when it finally returns.
@@ -77,10 +78,18 @@ bool RunBounded(BeforeExitFn fn, unsigned budgetMs) noexcept {
   return done;
 }
 
-// Steps 1 and 2, after android_main returned. Reached only through g_after.
-void AfterReturn() noexcept {
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
-                      {{"action", "ending_process"}, {"exit_code", 0}});
+void RawExit(int code) noexcept { _exit(code); }
+std::atomic<ExitFn> g_exit{&RawExit};
+
+// Steps 1 and 2: the line and the bounded before-exit callback. `reason` is null on the ordinary return.
+void RunAfterReturn(int exitCode, const char* reason) noexcept {
+  if (reason == nullptr) {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
+                        {{"action", "ending_process"}, {"exit_code", exitCode}});
+  } else {
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "android_main_returned",
+                        {{"action", "ending_process"}, {"exit_code", exitCode}, {"reason", reason}});
+  }
   const BeforeExitFn callback = g_beforeExit.load(std::memory_order_acquire);
   if (callback == nullptr) return;
   const bool finished = RunBounded(callback, g_budgetMs.load(std::memory_order_relaxed));
@@ -90,8 +99,12 @@ void AfterReturn() noexcept {
   }
 }
 
+// Steps 1 and 2, after android_main returned. Reached only through g_after.
+void AfterReturn() noexcept { RunAfterReturn(0, nullptr); }
+
 // android_main. The handler touches the game only through `original` and reaches the rest through pointers.
 void MainHandler(MainThunk::Fn original, sentinel::pinned::AndroidAppOpaque* app) noexcept {
+  g_app.store(app, std::memory_order_release);
   original(app);
   g_returned.fetch_add(1, std::memory_order_relaxed);
   const AfterFn after = g_after.load(std::memory_order_acquire);
@@ -104,9 +117,18 @@ NEVR_HOOK_RECORD(kMainHook, MainThunk, &MainHandler);
 
 }  // namespace
 
+sentinel::pinned::AndroidAppOpaque* CurrentApp() noexcept { return g_app.load(std::memory_order_acquire); }
+
 void SetBeforeExit(BeforeExitFn fn) noexcept { g_beforeExit.store(fn, std::memory_order_release); }
 
 void EndProcess() noexcept { _exit(0); }
+
+void EndWithExitCode(int exitCode, const char* reason) noexcept {
+  RunAfterReturn(exitCode, reason);
+  g_exit.load(std::memory_order_acquire)(exitCode);
+}
+
+void SetExitForTest(ExitFn fn) noexcept { g_exit.store(fn != nullptr ? fn : &RawExit, std::memory_order_release); }
 
 bool InstallAt(const sentinel::GotTarget& target, EnderFn ender) noexcept {
   g_ender.store(ender, std::memory_order_release);
@@ -135,6 +157,8 @@ void ResetForTest() noexcept {
   g_after.store(nullptr, std::memory_order_relaxed);
   g_budgetMs.store(kFlushBudgetMs, std::memory_order_relaxed);
   g_returned.store(0, std::memory_order_relaxed);
+  g_app.store(nullptr, std::memory_order_relaxed);
+  g_exit.store(&RawExit, std::memory_order_relaxed);
 }
 
 Counts CurrentCounts() noexcept { return {g_returned.load(std::memory_order_relaxed)}; }

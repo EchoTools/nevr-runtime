@@ -28,8 +28,7 @@ def release(draft, assets=()):
     return {"draft": draft, "assets": list(assets)}
 
 
-FOUR = ["nevr-runtime-v5.0.0-windows.zip", "SHA256SUMS", "RELEASE-NOTES.md", "nevr-runtime-v5.0.0.zip",
-        "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # five names; the name FOUR predates the Quest library
+BUILT = ["nevr-runtime-v5.0.0-windows.zip", "nevr-runtime-v5.0.0-quest-libovrplatformloader.so"]  # the build's two files
 
 
 class ReleaseDraftTest(unittest.TestCase):
@@ -62,7 +61,7 @@ class ReleaseDraftTest(unittest.TestCase):
                     shutil.copy(REPO / "tools" / f, d / f)
                 with open(d / "release_asset_names.sh", "a") as fh:
                     fh.write(body)
-                result = subprocess.run([str(d / "release_draft.sh"), TAG], input=json.dumps([release(True, FOUR)]),
+                result = subprocess.run([str(d / "release_draft.sh"), TAG], input=json.dumps([release(True, BUILT)]),
                                         env=self.env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertNotEqual(result.stdout.strip(), "draft")
@@ -74,17 +73,23 @@ class ReleaseDraftTest(unittest.TestCase):
     def test_a_draft_that_already_carries_the_built_files_is_refused_never_overwritten(self):
         # A second dispatch after the signer replaced the draft's assets would rebuild UNSIGNED files over
         # the signed ones: it fails red and uploads nothing.
-        result = self.run_script([release(True, FOUR)])
+        result = self.run_script([release(True, BUILT)])
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertNotEqual(result.stdout.strip(), "draft")
         self.assertIn("the draft already carries built assets", result.stderr)
         self.assertIn("refusing to overwrite", result.stderr)
 
     def test_a_draft_with_some_but_not_all_of_the_files_needs_a_human(self):
-        for name in FOUR:
+        for name in BUILT:
             result = self.run_script([release(True, [name])])
             self.assertEqual(result.returncode, 1, name)
             self.assertIn("refusing to overwrite", result.stderr)
+
+    def test_the_names_of_the_old_five_file_release_are_not_the_builds_files(self):
+        old = ["nevr-runtime-v5.0.0-windows-player.zip", "SHA256SUMS", "RELEASE-NOTES.md",
+               "nevr-runtime-v5.0.0-windows-server.zip"]
+        result = self.run_script([release(True, old)])
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "draft"), result.stderr)
 
     def test_a_draft_with_only_unrelated_assets_proceeds(self):
         # An APK or notes the human attached by hand are not the build's files.
@@ -93,7 +98,7 @@ class ReleaseDraftTest(unittest.TestCase):
 
     def test_the_published_releases_assets_do_not_count_on_the_draft(self):
         # a published release beside the draft is refused for being ambiguous, never for its assets
-        result = self.run_script([release(True), release(False, FOUR)])
+        result = self.run_script([release(True), release(False, BUILT)])
         self.assertEqual(result.returncode, 1)
         self.assertIn("both a draft and a published release", result.stderr)
 
@@ -126,9 +131,9 @@ class ReleaseDraftTest(unittest.TestCase):
             self.assertIn("refusing to decide", result.stderr)
 
     def test_the_decision_line_names_the_counts_and_the_outcome(self):
-        cases = [([release(True)], "1 draft(s), 0 published, 0 of 5 built names on the draft(s): draft"),
-                 ([release(True, FOUR[:2])], "1 draft(s), 0 published, 2 of 5 built names on the draft(s): refused"),
-                 ([], "0 draft(s), 0 published, 0 of 5 built names on the draft(s): none")]
+        cases = [([release(True)], "1 draft(s), 0 published, 0 of 2 built names on the draft(s): draft"),
+                 ([release(True, BUILT[:1])], "1 draft(s), 0 published, 1 of 2 built names on the draft(s): refused"),
+                 ([], "0 draft(s), 0 published, 0 of 2 built names on the draft(s): none")]
         for releases, line in cases:
             self.assertIn(line, self.run_script(releases).stderr)
 

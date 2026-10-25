@@ -1,5 +1,6 @@
 #include "runtime/lifecycle/return_to_lobby.h"
 
+#include <atomic>
 #include <cstring>
 #include <mutex>
 
@@ -10,6 +11,7 @@
 #include "runtime/lifecycle/cli.h"             // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"  // ConsoleShutdownPending
 #include "runtime/lifecycle/return_to_lobby_hold.h"
+#include "runtime/lifecycle/return_to_lobby_queue.h"
 
 namespace nevr_return_to_lobby {
 namespace {
@@ -30,9 +32,7 @@ bool ShutdownPending() { return ConsoleShutdownPending(); }
 
 // After PatchDetour the pointer holds the trampoline to the game's function, so this calls the
 // original and never re-enters the hook.
-void CallGame(PVOID pGame) {
-  if (pGame != nullptr) EchoVR::NetGameScheduleReturnToLobby(pGame);
-}
+void CallGame(PVOID pGame, const char* caller) { ScheduleNow(pGame, caller); }
 
 VOID HookedScheduleReturnToLobby(PVOID pGame) { Request(pGame); }
 
@@ -56,6 +56,25 @@ bool ArmDetour(uint64_t ttlSeconds) {
 }
 
 }  // namespace
+
+bool ScheduleNow(PVOID pGame, const char* caller) {
+  const nevr_return_to_lobby_queue::Verdict verdict = nevr_return_to_lobby_queue::Check(pGame);
+  if (verdict != nevr_return_to_lobby_queue::Verdict::Ready) {
+    // The game asks again every tick while a session stays empty: log the first refusal and then
+    // each doubling, so a stuck request is visible without filling the log.
+    static std::atomic<uint64_t> refused{0};
+    const uint64_t count = refused.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count & (count - 1)) == 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] return to lobby not scheduled caller=%s reason=%s refused=%llu — "
+          "the game's call queue is not allocated and the game's function would fault on it (#730)",
+          caller, nevr_return_to_lobby_queue::Name(verdict), static_cast<unsigned long long>(count));
+    }
+    return false;
+  }
+  EchoVR::NetGameScheduleReturnToLobby(pGame);
+  return true;
+}
 
 void SetEntrantCounter(EntrantCounter counter) {
   std::lock_guard<std::mutex> lock(g_mutex);
@@ -89,7 +108,7 @@ void Request(PVOID pGame) {
     ttlMs = g_policy.TtlMs();
   }
   if (verdict == nevr_return_to_lobby_hold::RequestVerdict::Proceed) {
-    CallGame(pGame);
+    CallGame(pGame, "request");
     return;
   }
   // The game asks again every tick while the session stays empty; only the first request of a
@@ -129,7 +148,7 @@ void Poll() {
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PATCH] return to lobby hold expired after %llu ms (%llu requests) — returning to lobby",
           static_cast<unsigned long long>(heldMs), static_cast<unsigned long long>(requests));
-      CallGame(game);
+      CallGame(game, "hold_release");
       return;
   }
 }

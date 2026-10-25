@@ -430,6 +430,12 @@ class ProductionSteps final : public Steps {
     return ok;
   }
 
+  bool InstallVkExtWindow() override {
+    const bool ok = nevr_quest::integration::InstallVkExtWindowHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
+
   bool InstallLoginPrompt(bool countersRegistered) override {
     const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";

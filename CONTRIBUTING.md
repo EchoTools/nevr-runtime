@@ -51,8 +51,9 @@ binary. See "Testing" in `AGENTS.md`.
    and how it was verified. The merge gate is the local capped quick check (`just verify` runs only on main, when prepping a release); no workflow runs on a pull request or
    a push. Run CI by hand with `gh workflow run <file> --ref <branch>` (`build.yml`, `android.yml`,
    `vcpkg-cache.yml`, `defender-scan.yml`).
-4. Link the issue it resolves with `Closes #N` (or say in the body why there is none), and give the PR the same
-   milestone as that issue.
+4. Open the issue first, and name it in the PR body: `Closes #N` for each issue the PR resolves, or `Refs #N` for one it
+   only advances (the body says what is still open). `.github/workflows/pr-issue-link-check.yml` fails a body that names
+   none. Give the PR the same milestone as that issue.
 
 ## Planning: milestones, points and sprints
 

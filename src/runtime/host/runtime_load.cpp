@@ -168,6 +168,7 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
     record["degraded_action"] = result.DegradedAction();
     record["path_ok"] = result.path_ok;
     record["loader_lock_held"] = result.loader_lock_held;
+    record["source"] = result.in_process ? "in_process" : "file";
     if (result.path_ok) record["path"] = ToUtf8(result.path);
     record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
     const bool descriptor_read = DescriptorRead(result.outcome);
@@ -214,6 +215,18 @@ void RuntimeLoader::Prepare(HMODULE host_module) {
   if (!path_ok_) path_[0] = L'\0';
 }
 
+void RuntimeLoader::PrepareInProcess(HMODULE host_module, NevrGetRuntimeApiFn get_api) {
+  in_process_module_ = host_module;
+  in_process_get_api_ = get_api;
+  path_ok_ = false;
+  path_[0] = L'\0';
+  if (host_module != nullptr) {
+    const DWORD length = GetModuleFileNameW(host_module, path_, MAX_PATH);
+    path_ok_ = length != 0 && length < MAX_PATH;
+    if (!path_ok_) path_[0] = L'\0';
+  }
+}
+
 RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
                                       BootstrapDiagnostics& diagnostics) {
   result_ = RuntimeLoadResult{};
@@ -228,7 +241,10 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   nevr_runtime_abi::Status abi_status = nevr_runtime_abi::Status::kNullDescriptor;
   std::int32_t init_code = 0;
 
-  if (path_ok_) {
+  const bool in_process = in_process_get_api_ != nullptr;
+  if (in_process) {
+    module = in_process_module_;
+  } else if (path_ok_) {
     // Distinguish "runtime absent" (the file itself is missing) from a load
     // failure with the file present (e.g. a missing dependency). LoadLibraryExW
     // returns ERROR_MOD_NOT_FOUND for both, so the file must be probed first.
@@ -243,8 +259,10 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
     }
   }
   if (module != nullptr) {
-    const auto get_api = reinterpret_cast<NevrGetRuntimeApiFn>(
-        GetProcAddress(module, nevr_runtime_abi::kGetRuntimeApiExport));
+    const NevrGetRuntimeApiFn get_api =
+        in_process ? in_process_get_api_
+                   : reinterpret_cast<NevrGetRuntimeApiFn>(
+                         GetProcAddress(module, nevr_runtime_abi::kGetRuntimeApiExport));
     has_entry = get_api != nullptr;
     if (has_entry) {
       api = get_api();
@@ -258,6 +276,7 @@ RuntimeLoadResult RuntimeLoader::Load(const NevrHostContext& host,
   result_ = ClassifyLoad(path_ok_, path_, load_error, module, has_entry, api, abi_status,
                          init_code);
   result_.loader_lock_held = loader_lock_held;
+  result_.in_process = in_process;
   EmitLoadDiagnostic(diagnostics, result_);
   return result_;
 }

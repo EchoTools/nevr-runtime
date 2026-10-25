@@ -7,6 +7,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/return_to_lobby.h"
 #include "runtime/lifecycle/server_bringup.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/ext/plugin_loader.h"
@@ -128,7 +129,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     if (state == EchoVR::NetGameState::LoadFailed) {
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
-      EchoVR::NetGameScheduleReturnToLobby(pGame);
+      nevr_return_to_lobby::ScheduleNow(pGame, "load_failed");
       return;
     }
 

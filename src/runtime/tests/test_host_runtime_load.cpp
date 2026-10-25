@@ -470,3 +470,67 @@ TEST(HostRuntimeLoad, ARecordThatCannotBeBuiltBecomesAMarkerLineNotAnException) 
   EXPECT_EQ(marker.at("loader_lock_held"), true);
   EXPECT_TRUE(marker.contains("what"));
 }
+
+// The runtime inside the host's own image (#800): no LoadLibrary, the module is the host, and the
+// record says the descriptor came from the process itself.
+namespace {
+const NevrRuntimeApi* InProcessApi() {
+  static const NevrRuntimeApi api = ValidApi();
+  return &api;
+}
+const NevrRuntimeApi* NullApi() { return nullptr; }
+const NevrRuntimeApi* BadMajorApi() {
+  static NevrRuntimeApi api = ValidApi();
+  api.header.abi_major = nevr_runtime_abi::kMajor + 1;
+  return &api;
+}
+}  // namespace
+
+TEST(HostRuntimeLoad, InProcessRuntimeLoadsWithoutALoadLibraryAndRecordsItsSource) {
+  const std::wstring local = MakeTempDir(L"inproc");
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(local.c_str(), nullptr, nullptr);
+  HMODULE host_module = GetModuleHandleW(L"kernel32.dll");
+  nevr_host::RuntimeLoader loader;
+  loader.PrepareInProcess(host_module, &InProcessApi);
+  NevrHostContext host{};
+
+  const RuntimeLoadResult result = loader.Load(host, diagnostics);
+
+  EXPECT_EQ(result.outcome, RuntimeLoadOutcome::kLoaded);
+  EXPECT_EQ(result.module, host_module);
+  EXPECT_EQ(result.api, InProcessApi());
+  EXPECT_TRUE(result.in_process);
+  const std::string text = ReadAll((local + L"\\nevr\\echovr\\logs\\nevr-bootstrap.jsonl").c_str());
+  ASSERT_FALSE(text.empty());
+  const nlohmann::json record = nlohmann::json::parse(text.substr(0, text.find('\n')));
+  EXPECT_EQ(record.at("outcome"), "loaded");
+  EXPECT_EQ(record.at("source"), "in_process");
+}
+
+TEST(HostRuntimeLoad, InProcessRuntimeStillGoesThroughTheDescriptorChecks) {
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(L"", L"", L"");
+  HMODULE host_module = GetModuleHandleW(L"kernel32.dll");
+  NevrHostContext host{};
+  {
+    nevr_host::RuntimeLoader loader;
+    loader.PrepareInProcess(host_module, &NullApi);
+    EXPECT_EQ(loader.Load(host, diagnostics).outcome, RuntimeLoadOutcome::kNullDescriptor);
+  }
+  {
+    nevr_host::RuntimeLoader loader;
+    loader.PrepareInProcess(host_module, &BadMajorApi);
+    EXPECT_EQ(loader.Load(host, diagnostics).outcome, RuntimeLoadOutcome::kAbiRejected);
+  }
+}
+
+TEST(HostRuntimeLoad, AFileRuntimeIsNotReportedAsInProcess) {
+  HMODULE not_the_host = GetModuleHandleW(L"kernel32.dll");
+  nevr_host::RuntimeLoader loader;
+  loader.Prepare(not_the_host);
+  BootstrapDiagnostics diagnostics;
+  diagnostics.PrepareForTest(L"", L"", L"");
+  NevrHostContext host{};
+  EXPECT_FALSE(loader.Load(host, diagnostics).in_process);
+}
