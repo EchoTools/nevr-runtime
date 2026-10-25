@@ -22,7 +22,7 @@ namespace nevr_patch_addresses {
 // Server Mode Patches (PatchEnableServer)
 // ============================================================================
 
-/// Address: FUN_140116720 (PreprocessCommandLine, 808+ lines)
+/// Address: inside fcn.140157fb0 (0x140157fb0..0x14015a039; BeginMultiplayer calls it)
 /// Forces bits in game state flags at CR15NetGame + 0x2DA0:
 ///   bit 1, bit 2 (loadout_save_allowed), bit 3 (loadout_action_enabled),
 ///   bit 6 (LAN), bit 14 (game_mode_active)
@@ -164,7 +164,8 @@ constexpr size_t HEADLESS_DINPUT_SIZE = 5;
 
 /// Ground-truth VA 0x14154af7f (RVA 0x154af7f): the ONLY caller of the cgs_dx12
 /// D3D12 device-init fcn.14058e7f0 (verified: single direct E8 call @ 0x14154af86).
-/// The call block is gated by graphics-enable bit 0x100 at CEngine+0x2cfec:
+/// The call block, in CEngine init (FUN_14154a950), is gated by graphics-enable
+/// bit 0x100 at CEngine+0x2cfec:
 ///   14154af74: testl $0x100,0x2cfec(%r14)
 ///   14154af7f: je    0x14154afde        ; flag clear -> game's own device-free init
 ///   14154af81: call  0x1405977f0        ; flag set  -> graphics init prelude
@@ -211,7 +212,7 @@ constexpr uintptr_t HEADLESS_ENGINE_RENDER_INIT = 0x154B0E4;
 constexpr uintptr_t HEADLESS_GUI_INIT = 0x154B38F;
 
 /// Ground-truth VA 0x14154d7e4 (RVA 0x154d7e4): the render-submit-context init gate,
-/// the LAST bit-0x1 gate in the same CEngine init (FUN_14154a950), tail block:
+/// in FUN_14154d6c0 (CEngine vtable slot 8, 0x14154d6c0..0x14154d7f8), tail block:
 ///   14154d7dd: testb $0x1,0x2cfec(%rbx)   ; renderer-enable bit 0x1 at CEngine+0x2cfec
 ///   14154d7e4: je    0x14154d7ef          ; bit clear -> game's own "no renderer -> skip" branch
 ///   14154d7e6: lea   0x8(%rbx),%rcx
@@ -376,8 +377,8 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// src/abi/echovr_functions.cpp (BroadcasterReceiveLocalEvent and BroadcasterListen), so detouring them makes our own calls
 /// re-enter our own hooks. tools/verify_hook_invariants.py fails the build if a
 /// NEW address joins that intersection.
-constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;          // = CBroadcaster::Listen
-constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;   // = CBroadcaster::ReceiveLocalEvent
+constexpr uintptr_t BROADCASTER_LISTEN = 0xF80ED0;               // CBroadcaster::Listen
+constexpr uintptr_t BROADCASTER_RECEIVE_LOCAL_EVENT = 0xF87AA0;  // CBroadcaster::ReceiveLocalEvent
 
 /// Address: CrashExceptionFilter (0x1401cef00, 49 instructions) — ReVault-verified.
 /// The game's crash entry point. Registered as an unhandled-exception filter (no

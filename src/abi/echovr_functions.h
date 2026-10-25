@@ -142,8 +142,10 @@ extern udp_recvfrom_sockaddr_storageFunc* udp_recvfrom_sockaddr_storage;
 typedef void CleanupPingsFunc(long long* in_RCX, long long* in_R8);
 extern CleanupPingsFunc* CleanupPings;
 
-typedef unsigned int udp_protocol_lookup_or_dispatchFunc(long long, unsigned long long, int);
-extern udp_protocol_lookup_or_dispatchFunc* udp_protocol_lookup_or_dispatch;
+// Peer_LookupByAddrOrID: looks a peer up by id (int != 0) or by address (64-bit key) and returns a
+// float field of the peer, 0.0 when none is found. It dispatches nothing.
+typedef float Peer_LookupByAddrOrIDFunc(long long, unsigned long long, int);
+extern Peer_LookupByAddrOrIDFunc* Peer_LookupByAddrOrID;
 
 typedef unsigned long long* udp_protocol_get_stateFunc(long long, unsigned long long*, unsigned long long, int);
 extern udp_protocol_get_stateFunc* udp_protocol_get_state;

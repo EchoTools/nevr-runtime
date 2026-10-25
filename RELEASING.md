@@ -1,7 +1,8 @@
 # Releasing nEVR runtime
 
 Every release follows this file (`AGENTS.md`). A release is a tag, a draft that CI fills, a signing pass, and one
-publish. Nothing about a published release is edited afterwards: a wrong release is fixed by the next version.
+publish. The checks before the tag run locally; the workflow runs once, on the real tag (GitHub Actions minutes are
+billed). Nothing about a published release is edited afterwards: a wrong release is fixed by the next version.
 
 ## Names
 
@@ -13,6 +14,8 @@ publish. Nothing about a published release is edited afterwards: a wrong release
 - **GitHub release title:** the tag, `vX.Y.Z`, and nothing else (`gh release create vX.Y.Z --title vX.Y.Z`).
 - **Pre-release or release:** the flag is the only difference. A release is created as a pre-release; promoting it
   (`gh release edit vX.Y.Z --prerelease=false`) changes no byte and fires no workflow. Nothing in a file depends on the flag.
+  There is no `-rc` tag: `release_tag_regex` accepts only `vX.Y.Z`, so a pre-release carries the version it will have if
+  promoted, and the next pre-release is the next version the commits compute (a published tag is never reused).
 
 ## Assets
 
@@ -32,7 +35,7 @@ body"). The attestation stays the machine-checkable proof of the CI bytes.
 
 Not release assets: the `.tar.zst` archives and the `.dbg` symbol files (workflow artifacts, 7 and 90 days), and any Quest APK.
 
-**The signed Windows zip lives on the GitHub release.** Quest APKs and dry runs are published outside GitHub.
+**The signed Windows zip lives on the GitHub release.** Quest APKs are published outside GitHub.
 
 **Quest APKs never go on GitHub.** They are published outside GitHub, under `nevr-runtime/quest/<file>` with a
 `<file>.sha256` beside it. Check the file locally (size, `sha256sum`, `unzip -tq`), install it on the publishing host
@@ -45,16 +48,18 @@ installed: the CDN caches the 200 HTML answer for that exact address. A changed 
    unpushed, no uncommitted change.
 2. `just verify` has run on this tip of `main`: its log starts `verify: HEAD <sha>` and `verify: tree clean`, and ends
    `verify: OK`. It runs once per tip (`AGENTS.md`, "Builds"); a missing HEAD line is checked, not re-run.
-3. A dry run of the full release workflow on this exact commit is green. It is the first release step and the proof for
-   the merge and the tag: the real tag follows only a green dry run.
+3. The build the workflow does passes locally on this exact commit. GitHub Actions minutes are billed, so the pipeline
+   runs once, on the real tag; nothing is rehearsed there. After step 2 (which builds `mingw-release` and checks it),
+   run the packaging the workflow runs, from the same clone:
    ```sh
-   git tag -a v0.0.<issue> -m "scratch dry run" <commit> && git push origin v0.0.<issue>   # a scratch tag, never the release's
-   gh workflow run build.yml --ref v0.0.<issue>      # no release exists: nothing is attached, attested or published
+   just package-dev    # tools/package_release.py over the stripped DLL and the Quest library; stamps -dev, not a release
    ```
-   The run is green only when the `build` job (including its `Verify` step) and the `quest` job both succeed; the `quest`
-   job runs for a tag ref, never for a branch. Delete the scratch tag when the run ends (`git push origin --delete
-   v0.0.<issue>`, `git tag -d v0.0.<issue>`). A candidate that is a merge of branches not yet on `main` is a valid
-   dry-run commit for merging them; the tag is cut on `main` after the merge.
+   Read its output to the end: it fails on a Windows or Quest build that does not package. It needs the Quest signing
+   keystore in `pass`, the store APK and the NDK, as its recipe says. What it cannot show is the signer, the attestation
+   and the draft upload; those are checked on the draft ("Check the draft").
+4. The PC login test passes with this tip's `BugSplat64.dll` on a throwaway copy of the install, against production
+   (`AGENTS.md`, "Client login test mechanics"): the run's log shows the four keys on the `built-in defaults embedded in
+   this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 
 ## Cut the draft
 
@@ -82,7 +87,8 @@ carries either of the two names fails red, so a bad draft is never rebuilt in pl
 --yes`; this leaves the tag) and, when the fault is in the files only, create the draft again from step 3. When the fault
 is in the tree, also delete the tag (`git push origin --delete vX.Y.Z`, `git tag -d vX.Y.Z`), fix `main`, and start again at
 "Before the tag". A tag with no published release may be removed; the rule that a tag name is never reused applies once a
-release is published ("When a published release is wrong").
+release is published ("When a published release is wrong"). Each cut is another workflow run, so the local checks before
+the tag are where a fault is found.
 
 ## Check the draft
 
@@ -111,20 +117,21 @@ under the same names.
 
 ```sh
 gh workflow run sign-release.yml -R thesprockee/release-signer --ref main \
-  -f repo=EchoTools/nevr-runtime -f tag=vX.Y.Z -f dry_run=true     # signs, verifies, writes nothing to the draft
+  -f repo=EchoTools/nevr-runtime -f tag=vX.Y.Z -f dry_run=false    # signs, verifies, replaces the DRAFT's assets
 ```
 
-A dry run keeps the signed set as a workflow artifact and a decision record binding the tag, the source commit and each
-asset's unsigned and signed SHA-256. `dry_run=false` also replaces the assets of the **draft** (the signer never writes a
-published release and never flips the pre-release flag); it needs the signer's GitHub App to be installed on this repository.
-That installation, and the signing credentials, are the owner's.
+The run keeps the signed set as a workflow artifact and a decision record binding the tag, the source commit and each
+asset's unsigned and signed SHA-256. It replaces the assets of the **draft** only (the signer never writes a published
+release and never flips the pre-release flag); it needs the signer's GitHub App to be installed on this repository. That
+installation, and the signing credentials, are the owner's. The signer also takes `dry_run=true` (it writes nothing to the
+draft); it is another Actions run, so it is not a step here.
 
 Check a signed file as `SIGNING.txt` in the Windows zip says: `Get-AuthenticodeSignature` status `Valid`, or
 `osslsigncode verify` with both `-CAfile` and `-TSA-CAfile` set to the Microsoft Identity Verification Root 2020
 certificate. The CI attestation covers the bytes CI built; for a file the signer replaced, the Authenticode signature and
 the signer's decision record are the evidence for the new bytes.
 
-After the signer has replaced assets (a `dry_run=false` pass), run the checks above again on the draft before publishing,
+After the signer has replaced assets, run the checks above again on the draft before publishing,
 read this way:
 
 - The signer replaces the zip. The `SHA256SUMS` inside it lists the signed files in it, so unzip the signed zip into a
@@ -153,11 +160,14 @@ gh release view vX.Y.Z --json body --jq .body                         # the tabl
 
 `notes` takes the version and the commit from the `BugSplat64.dll` inside the zip, so the body cannot describe another
 build. The table must be written after the last signing pass: each pass signs with a fresh timestamp and changes the
-zip's bytes. The body of a published release stays editable ("Immutable releases"); the assets do not.
+zip's bytes. `notes` renders the table and the install notes only. Before the body goes on the draft, append a section
+that says, for each audience the release is for (players, server hosts, plugin developers), what changed for them in plain
+words, and says what is not tested or not in the build. The body of a published release stays editable ("Immutable
+releases"); the assets do not.
 
 ## Publish
 
-Only from the checked draft:
+Only from the checked draft. The tag and the publish cannot be undone: the owner is told right before the publish.
 
 ```sh
 gh release edit vX.Y.Z --draft=false          # publish; the pre-release flag is untouched

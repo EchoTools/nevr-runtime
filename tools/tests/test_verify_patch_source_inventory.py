@@ -13,6 +13,7 @@ VERIFIER = REPO / "tools" / "verify_patch_source_inventory.py"
 EXPECTED_PATCH_SOURCES = (
     "patch/asset_cache.cpp",
     "patch/asset_cdn.cpp",
+    "patch/asset_registry.cpp",
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/coop_ai_trace.cpp",
@@ -21,6 +22,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/headless_graphics.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
+    "patch/plugin_assets.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/resource_override.cpp",
     "patch/party_invite_gate.cpp",
@@ -57,6 +59,12 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             text=True,
         )
 
+    def test_the_real_runtime_cmake_list_matches_the_pin(self):
+        # The pin is what `just verify` checks; running it here puts it in `pytest tools/tests`, which every PR
+        # runs (#884 added two patch sources and the pin stayed at 16 until the release build failed on it).
+        result = subprocess.run([sys.executable, VERIFIER], capture_output=True, check=False, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_accepts_complete_authoritative_fixture(self):
         with tempfile.TemporaryDirectory(
             prefix="patch-source-inventory-", dir="/var/tmp/work-nevr-runtime"
@@ -66,7 +74,7 @@ class VerifyPatchSourceInventoryTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("patch-source-inventory: OK count=16", result.stdout)
+        self.assertIn("patch-source-inventory: OK count=18", result.stdout)
 
     def test_rejects_missing_duplicate_unexpected_and_missing_disk_entries(self):
         scenarios = (

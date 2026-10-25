@@ -65,12 +65,20 @@ class ReleaseAssetsTest(unittest.TestCase):
                      "gh workflow run build.yml --ref v<x.y.z>"):
             self.assertIn(step, agents)
 
-    def test_releasing_md_makes_a_green_scratch_tag_dry_run_a_step_before_the_real_tag(self):
+    def test_releasing_md_checks_locally_before_the_tag_and_rehearses_nothing_on_actions(self):
+        # Actions minutes are billed: the workflow runs once, on the real tag. No scratch tag, no dispatch before it.
         text = (REPO / "RELEASING.md").read_text()
         before = text.split("## Before the tag", 1)[1].split("## Cut the draft", 1)[0]
-        self.assertIn("gh workflow run build.yml --ref v0.0.<issue>", before)
-        self.assertIn("`build` job (including its `Verify` step) and the `quest`", before)
-        self.assertIn("git push origin --delete", before)
+        self.assertIn("just package-dev", before)
+        self.assertIn("`just verify` has run on this tip", before)
+        self.assertIn("PC login test passes", before)
+        self.assertNotIn("gh workflow run", before)
+        self.assertNotIn("v0.0.<issue>", before)
+        dispatches = [l for l in text.splitlines() if l.startswith("gh workflow run build.yml")]
+        self.assertEqual(dispatches, ["gh workflow run build.yml --ref vX.Y.Z                    # 4. build, attest, attach the two files; it stays a draft"])
+        sign = text.split("## Sign", 1)[1].split("Check a signed file as", 1)[0]
+        self.assertIn("-f dry_run=false", sign)
+        self.assertNotIn("-f dry_run=true", sign)
 
     def test_releasing_md_creates_a_titled_draft_and_publishes_from_it(self):
         text = (REPO / "RELEASING.md").read_text()
@@ -132,7 +140,7 @@ class ReleaseAssetsTest(unittest.TestCase):
         releasing = (REPO / "RELEASING.md").read_text(encoding="utf-8")
         self.assertIn("There is no top-level `SHA256SUMS` and no `RELEASE-NOTES.md` asset", releasing)
         self.assertIn("a table\nof the SHA-256 of each of the two assets", releasing)
-        self.assertIn("Quest APKs and dry runs are published outside GitHub", releasing)
+        self.assertIn("Quest APKs are published outside GitHub", releasing)
         self.assertNotIn("echo.taxi", releasing)
         self.assertIn("The zip has no `plugins/` entry", releasing)
         self.assertNotIn("an empty `plugins/`", releasing)

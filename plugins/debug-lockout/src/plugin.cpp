@@ -2,7 +2,8 @@
  * plugin.cpp — debug_lockout: verify whether the early-quit lockout state
  * is correctly received by the game client.
  *
- * Hooks CR14LocalPlayerCS::ApplyEarlyQuitState @ 0x1401ae2e0. Before the
+ * Hooks CR15NetGame::SetEarlyQuitPenaltyLevel @ 0x1401ae2e0, the early-quit
+ * setter (docs/engine/early-quit.md section 2.1). Before the
  * original runs it force-injects an active level-3 lockout (penalty_level=3,
  * penalty_ts = now + 3600 at BOTH +0x64820 and +0x64828, num_early_quits=16)
  * so the client behaves as if nakama had sent one — no server needed. Then it
@@ -10,8 +11,9 @@
  * survives.
  *
  * ReVault disassembly:
- *   0x1401ae2f0: CMP [RCX + 0x64820], -1 ... JGE 0x1401ae41d — early-exit:
- *                if +0x64820 already holds a timestamp >= the incoming one,
+ *   0x1401ae2e6..0x1401ae2f9: MOV RAX,[RCX + 0x64820]; CMP RAX,-1; JZ;
+ *                CMP RAX,RDX; JGE 0x1401ae41d — early-exit: if +0x64820
+ *                already holds a timestamp (not -1) >= the incoming one,
  *                the function writes NOTHING, so injected state survives.
  *   0x1401ae339: MOV [RCX + 0x64820], RDX   — stores the incoming penalty_ts
  *   0x1401ae372: MOV qword ptr [RCX + 0x64828], -0x1  — stores -1 sentinel
@@ -32,7 +34,7 @@
 NEVR_DEFINE_PLUGIN_LOG("[debug_lockout]")
 
 /*
- * Hook target: CR14LocalPlayerCS::ApplyEarlyQuitState @ 0x1401ae2e0.
+ * Hook target: CR15NetGame::SetEarlyQuitPenaltyLevel @ 0x1401ae2e0.
  * Prologue: PUSH RDI; SUB RSP, 0x20 — six bytes, MinHook-safe.
  * VA and prologue bytes sourced from ReVault, validated at init time.
  */
@@ -40,11 +42,23 @@ static constexpr uint64_t  kHookTargetVA    = 0x1401ae2e0;
 static constexpr uint8_t   kPrologue[]      = {0x40, 0x57, 0x48, 0x83, 0xec, 0x20};
 
 /*
- * Function signature (__fastcall, first arg in RCX, second in RDX).
+ * Function signature, read from the disassembly at 0x1401ae2e0:
+ *   RCX  the net game
+ *   RDX  the incoming stamp, stored at +0x64820
+ *   R8   unused (overwritten at 0x1401ae313 before it is read)
+ *   R9D  numearlyquits, stored at +0x64830
+ *   [entry RSP+0x28] numsteadymatches (u32)    -> +0x64834
+ *   [entry RSP+0x30] numsteadyearlyquits (u32) -> +0x64838
+ *   [entry RSP+0x38] penaltylevel (u8)         -> +0x64844
+ *   [entry RSP+0x40] steadyplayerlevel (u8)    -> +0x64845
+ * The detour passes every argument on, so the setter stores what the caller sent.
  */
-using ApplyEarlyQuitStateFn = void (__fastcall *)(void* playerCS, uint64_t penalty_ts);
+using SetEarlyQuitPenaltyLevelFn = void (__fastcall *)(void* netGame, int64_t stamp, int64_t unused,
+                                                      uint32_t numEarlyQuits, uint32_t numSteadyMatches,
+                                                      uint32_t numSteadyEarlyQuits, uint8_t penaltyLevel,
+                                                      uint8_t steadyPlayerLevel);
 
-static ApplyEarlyQuitStateFn g_original = nullptr;
+static SetEarlyQuitPenaltyLevelFn g_original = nullptr;
 static nevr::HookManager     g_hooks;
 
 /*
@@ -54,22 +68,27 @@ static nevr::HookManager     g_hooks;
  * (see the header comment), so in the normal case — server sends no lockout,
  * i.e. -1 — the injected state survives untouched.
  */
-static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penalty_ts)
+static void __fastcall Detour_SetEarlyQuitPenaltyLevel(void* netGame, int64_t stamp, int64_t unused,
+                                                       uint32_t numEarlyQuits, uint32_t numSteadyMatches,
+                                                       uint32_t numSteadyEarlyQuits, uint8_t penaltyLevel,
+                                                       uint8_t steadyPlayerLevel)
 {
+    const uint64_t penalty_ts = static_cast<uint64_t>(stamp);
     uint64_t forced_ts = static_cast<uint64_t>(time(nullptr)) + 3600;
 
-    *(uint8_t*)((uint8_t*)playerCS + 0x64844)  = 3;         /* penalty_level    */
-    *(uint64_t*)((uint8_t*)playerCS + 0x64820) = forced_ts; /* stored penalty_ts */
-    *(uint64_t*)((uint8_t*)playerCS + 0x64828) = forced_ts; /* consumed penalty_ts */
-    *(int32_t*)((uint8_t*)playerCS + 0x64830)  = 16;        /* num_early_quits  */
+    *(uint8_t*)((uint8_t*)netGame + 0x64844)  = 3;         /* penalty_level    */
+    *(uint64_t*)((uint8_t*)netGame + 0x64820) = forced_ts; /* stored penalty_ts */
+    *(uint64_t*)((uint8_t*)netGame + 0x64828) = forced_ts; /* consumed penalty_ts */
+    *(int32_t*)((uint8_t*)netGame + 0x64830)  = 16;        /* num_early_quits  */
 
     PluginLog("FORCE-LOCKOUT: injected penalty_level=3 penalty_ts=%llu (+3600s) at +0x64820 and +0x64828",
               static_cast<unsigned long long>(forced_ts));
 
-    g_original(playerCS, penalty_ts);
+    g_original(netGame, stamp, unused, numEarlyQuits, numSteadyMatches, numSteadyEarlyQuits, penaltyLevel,
+               steadyPlayerLevel);
 
-    uint64_t field_64820 = *(uint64_t*)((uint8_t*)playerCS + 0x64820);
-    uint64_t field_64828 = *(uint64_t*)((uint8_t*)playerCS + 0x64828);
+    uint64_t field_64820 = *(uint64_t*)((uint8_t*)netGame + 0x64820);
+    uint64_t field_64828 = *(uint64_t*)((uint8_t*)netGame + 0x64828);
 
     PluginLog("LOCKOUT state applied: incoming penalty_ts=%llu (%s)",
               (unsigned long long)penalty_ts,
@@ -84,10 +103,14 @@ static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penal
         PluginLogWarning("  *** BUG CONFIRMED: +0x64828 is -1, lockout will never activate ***");
     }
 
-    // Force bit 46: ApplyEarlyQuitState clears it unconditionally when state
-    // changes, but the lockoutcountdownactive expression reads only this bit.
-    // We must set it after the original runs.
-    uint64_t* flags = *(uint64_t**)((uint8_t*)playerCS + 0x2da0);
+    // Force bit 46: the lockoutcountdownactive expression reads only bit 46.
+    // The setter clears bits 45 and 46 (0x1401ae3e4, 0x1401ae3f8) only on an
+    // update it applies: it returns first when the stored stamp is not -1 and
+    // is >= the incoming one (0x1401ae2f9), and skips the clear when all five
+    // counters and levels match (0x1401ae3d1). This detour stores now+3600 as
+    // the stamp first, so the clear runs only for an incoming stamp later than
+    // that. Set it after the original runs either way.
+    uint64_t* flags = *(uint64_t**)((uint8_t*)netGame + 0x2da0);
     if (flags) {
         *flags |= (1ULL << 46);
         PluginLog("FORCE-LOCKOUT: flags bit 46 set (flags[0] = 0x%llx)", *flags);
@@ -97,9 +120,9 @@ static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penal
 
     // Force feature flags byte: the SNSEarlyQuitFeatureFlags handler would
     // normally write this, but silent mode blocks it. Set all 4 bits.
-    *(uint8_t*)((uint8_t*)playerCS + 0x64847) = 0x0f;
+    *(uint8_t*)((uint8_t*)netGame + 0x64847) = 0x0f;
     PluginLog("FORCE-LOCKOUT: feature flags byte +0x64847 = 0x%02x",
-              *(uint8_t*)((uint8_t*)playerCS + 0x64847));
+              *(uint8_t*)((uint8_t*)netGame + 0x64847));
 }
 
 /*
@@ -186,17 +209,17 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
     /* Step 4: Create and enable the hook via HookManager. */
     MH_STATUS s = g_hooks.CreateAndEnable(
         target,
-        reinterpret_cast<void*>(&Detour_ApplyEarlyQuitState),
+        reinterpret_cast<void*>(&Detour_SetEarlyQuitPenaltyLevel),
         reinterpret_cast<void**>(&g_original));
 
     if (s != MH_OK) {
-        PluginLogError("hook: CreateAndEnable failed for ApplyEarlyQuitState @ 0x%llx: %s",
+        PluginLogError("hook: CreateAndEnable failed for SetEarlyQuitPenaltyLevel @ 0x%llx: %s",
                   static_cast<unsigned long long>(kHookTargetVA),
                   MH_StatusToString(s));
         return -1;
     }
 
-    PluginLog("hook: installed on ApplyEarlyQuitState @ 0x%llx"
+    PluginLog("hook: installed on SetEarlyQuitPenaltyLevel @ 0x%llx"
               " (%zu hooks tracked)",
               static_cast<unsigned long long>(kHookTargetVA),
               g_hooks.count());

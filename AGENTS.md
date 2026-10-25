@@ -413,7 +413,7 @@ The game has a ~15-20 second splash-screen delay at startup before any nEVR code
 | `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins its export table (26 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr.dll`) and, with the game binary present, the nine imports of `echovr.exe`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. `tools/verify_pe_contract.py` pins its export table (28 names and ordinals, `DetoursExportPlaceholder` at ordinal 1, no import of `nevr.dll`) and, with the game binary present, the nine imports of `echovr.exe`. `docs/adr/0008-bugsplat-host-and-nevr-runtime.md` records the stable-host/`nevr.dll` design, what exists of it and the rendezvous decision (the game's main wrapper). Several features are built in rather than loaded as plugins: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -659,7 +659,9 @@ your seat name, for example `claude-main` or `codex`.
   `justfile`) may lag the count `python3 tools/verify_gtest_floor.py --floor 0` prints (`declarations=`) by up to
   `SLACK` in that test, so a PR that adds a few tests leaves the line alone. A PR that would put the count more than
   `SLACK` above the floor sets the floor to the count; a PR that drops the count below the floor sets the floor to
-  the count and says in its body which tests went and why. Every PR, whatever it touches, also runs
+  the count and says in its body which tests went and why. A PR that touches `src/runtime/exports.def`, an
+  `NEVR_MODULE_API` function or `src/runtime/host/` also runs
+  `python3 tools/verify_pe_contract.py --dll build/<preset>/bin/BugSplat64.dll` on the build it made. Every PR, whatever it touches, also runs
   `just test-tools` (the `tools/tests` suite) and `python3 tools/verify_doc_paths.py` (run `just worktree-setup`
   first in a fresh worktree: the doc-path check reads `extern/`). `just test-tools` keeps every run: its full output,
   JUnit XML, the pytest-randomly seed, and a start and an end record in `runs.jsonl`, under `$NEVR_TEST_LOG_DIR` (default

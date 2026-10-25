@@ -127,14 +127,17 @@ constexpr uint64_t LAST_SCORE_SCORER_PACKED_OFFSET = 0x6C;
 }  // namespace nevr_game_offsets
 
 // Game function pointer typedefs (cast known VAs to these)
-// FUN_140d5ced0(CR15NetGame, hash) → uint64_t (game_status symbol hash)
-using GetSymbolHashFn = uint64_t(__fastcall*)(void* netGame, uint64_t propertyHash);
+// FUN_140d5ced0(out, CR15NetGame, key) → out: the replicated symbol variable `key` of the net game.
+// It writes 8 bytes to *out, the symbol or -1 when the variable is absent (FUN_140d5cdb0 writes
+// both), and returns out; GameState_SerializeToJson (0x140155c80) calls it this way.
+using GetSymbolHashFn = uint64_t*(__fastcall*)(uint64_t* out, void* netGame, uint64_t propertyHash);
 
-// FUN_140d36750(CR15NetGame, hash) → float (game_clock)
+// FUN_140d36750(CR15NetGame, key) → float (game_timer, seconds)
 using GetFloatPropertyFn = float(__fastcall*)(void* netGame, uint64_t propertyHash);
 
-// FUN_140d05730(GameStateData, hash) → int32_t (blue/orange points)
-using GetIntPropertyFn = int32_t(__fastcall*)(void* gameStateData, uint64_t propertyHash);
+// FUN_140d05730(CR15NetGame, key) → int32_t (blue_score / red_score). The owner is the net game, not
+// the object at net game + GAME_STATE_DATA_OFFSET.
+using GetIntPropertyFn = int32_t(__fastcall*)(void* netGame, uint64_t propertyHash);
 
 // FUN_1404f37a0(entityManager, handle) → entity*
 using EntityLookupFn = void*(__fastcall*)(void* entityManager, int64_t handle);
@@ -151,13 +154,49 @@ using GetBoneCountFn = uint32_t(__fastcall*)(void* entity);
 // FUN_14042d690(entity, slot) → transform component ptr (returns ptr+0xa0 into component data)
 using GetTransformComponentFn = void*(__fastcall*)(void* entity, uint16_t slot);
 
-// Property hashes for game function calls
+// Property keys for game function calls: each is the CSymbol64 of the replicated variable's name
+// (test_telemetry_game_properties pins each to its name).
 namespace nevr_property_hash {
-constexpr uint64_t GAME_STATUS = 0xB29936AD399FC0FF;
-constexpr uint64_t GAME_CLOCK = 0xB29936D484F1D1E8;
-constexpr uint64_t BLUE_POINTS = 0x1C97052A21E09F11;
-constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;
+constexpr uint64_t GAME_STATUS = 0xB2996AD399FDC0FF;    // "game_state"
+constexpr uint64_t GAME_CLOCK = 0xB2996AD484F1D1E8;     // "game_timer"
+constexpr uint64_t BLUE_POINTS = 0x1C97052A21E09F11;    // "blue_score"
+constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;  // "red_score"
 }  // namespace nevr_property_hash
+
+// The game's three property getters, resolved from nevr_game_func_addr (a test passes fakes).
+struct GamePropertyGetters {
+  GetSymbolHashFn symbol;
+  GetFloatPropertyFn f32;
+  GetIntPropertyFn i32;
+};
+
+// What the getters return for one snapshot. statusHash is -1 when the symbol getter is absent or the
+// variable is; the others stay 0 when their getter is absent.
+struct GameProperties {
+  uint64_t statusHash = ~0ULL;
+  float clock = 0.0f;
+  int32_t bluePoints = 0;
+  int32_t orangePoints = 0;
+};
+
+// Reads the game status, clock and scores of `netGame`, every getter with the net game as its owner.
+// Game thread only.
+inline GameProperties ReadGameProperties(const GamePropertyGetters& getters, void* netGame) {
+  GameProperties props;
+  if (getters.symbol) {
+    uint64_t out = ~0ULL;
+    getters.symbol(&out, netGame, nevr_property_hash::GAME_STATUS);
+    props.statusHash = out;
+  }
+  if (getters.f32) {
+    props.clock = getters.f32(netGame, nevr_property_hash::GAME_CLOCK);
+  }
+  if (getters.i32) {
+    props.bluePoints = getters.i32(netGame, nevr_property_hash::BLUE_POINTS);
+    props.orangePoints = getters.i32(netGame, nevr_property_hash::ORANGE_POINTS);
+  }
+  return props;
+}
 
 // Game function virtual addresses (offsets from base)
 namespace nevr_game_func_addr {
@@ -181,6 +220,8 @@ constexpr uint64_t PRE_MATCH_3 = 0xD69CC3ED9F1E31BF;
 constexpr uint64_t ROUND_START_1 = 0xDAD765F3754F6262;
 constexpr uint64_t ROUND_START_2 = 0x37756D8877ED5768;
 constexpr uint64_t ROUND_START_3 = 0x7B54C48FED3ECD93;
+constexpr uint64_t ROUND_START_4 = 0xE1C16321DEF4CC6C;  // team_room_wait_enter
+constexpr uint64_t ROUND_START_5 = 0xFBC46082C080FBCF;  // team_room_wait_update
 // PLAYING
 constexpr uint64_t PLAYING_1 = 0x3B529C356A118CC6;
 constexpr uint64_t PLAYING_2 = 0xAB08D245B707B56B;
@@ -193,6 +234,9 @@ constexpr uint64_t ROUND_OVER_2 = 0x67E1E232F03BE11D;
 // POST_MATCH
 constexpr uint64_t POST_MATCH_1 = 0x9567032E22CDC734;
 constexpr uint64_t POST_MATCH_2 = 0xF83FCDBB25BA6F07;
+constexpr uint64_t POST_MATCH_3 = 0x344D080EA700B7EA;  // post_match_celebration_personal_stats_enter
+constexpr uint64_t POST_MATCH_4 = 0x3EDA28AAE966FA2D;  // post_match_celebration_personal_stats_update
+constexpr uint64_t POST_MATCH_5 = 0xFC6140CC02F9C63D;  // waiting_to_return_to_lobby
 // PRE_SUDDEN_DEATH
 constexpr uint64_t PRE_SUDDEN_DEATH_1 = 0xE1C684082C60875C;
 constexpr uint64_t PRE_SUDDEN_DEATH_2 = 0xFC23497054CBCBCF;
