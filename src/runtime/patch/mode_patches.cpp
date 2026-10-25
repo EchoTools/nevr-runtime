@@ -606,7 +606,7 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
 VOID PatchEnableServer() {
   using namespace nevr_patch_addresses;
 
-  // Patch server flag checks in command line processing (FUN_140116720 in cr15game.cpp)
+  // Patch the server flag checks inside fcn.140157fb0 (SERVER_FLAGS_CHECK; BeginMultiplayer calls it)
   // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
   // permanently, bypassing the normal conditional checks
   const BYTE serverFlagsCheck[] = {
