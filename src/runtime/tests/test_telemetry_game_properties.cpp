@@ -6,6 +6,9 @@
 // game as the owner: FUN_140d5ced0(out, netGame, key) for the status symbol, FUN_140d36750(netGame,
 // key) for the clock and FUN_140d05730(netGame, key) for the scores. The fakes below record what
 // ReadGameProperties passes them.
+//
+// GameStatusFromSymbol (#921) maps the game's state symbols as the game's own state-to-string
+// function does (echovr.exe 0x14016d510): every state name it knows, hashed, to its group.
 
 #include <gtest/gtest.h>
 
@@ -13,6 +16,7 @@
 #include <vector>
 
 #include "abi/symbol_hash.h"
+#include "runtime/server/telemetry_game_status.h"
 #include "runtime/server/telemetry_snapshot.h"
 
 namespace {
@@ -96,6 +100,52 @@ TEST_F(ReadGamePropertiesTest, AbsentGettersLeaveTheDefaults) {
   EXPECT_EQ(props.bluePoints, 0);
   EXPECT_EQ(props.orangePoints, 0);
   EXPECT_TRUE(g_symbolCalls.empty());
+}
+
+struct NamedState {
+  const char* name;
+  telemetry::v2::GameStatus status;
+};
+
+// The 25 symbols 0x14016d510 compares, by name, with the string it returns for each.
+constexpr NamedState kGameStates[] = {
+    {"pre_match_enter", telemetry::v2::GAME_STATUS_PRE_MATCH},
+    {"pre_match_wait_for_ready_enter", telemetry::v2::GAME_STATUS_PRE_MATCH},
+    {"pre_match_wait_for_ready_update", telemetry::v2::GAME_STATUS_PRE_MATCH},
+    {"round_start", telemetry::v2::GAME_STATUS_ROUND_START},
+    {"pre_launch_enter", telemetry::v2::GAME_STATUS_ROUND_START},
+    {"pre_launch_update", telemetry::v2::GAME_STATUS_ROUND_START},
+    {"team_room_wait_enter", telemetry::v2::GAME_STATUS_ROUND_START},
+    {"team_room_wait_update", telemetry::v2::GAME_STATUS_ROUND_START},
+    {"main_loop_enter", telemetry::v2::GAME_STATUS_PLAYING},
+    {"main_loop_update", telemetry::v2::GAME_STATUS_PLAYING},
+    {"point_score_enter", telemetry::v2::GAME_STATUS_SCORE},
+    {"point_score_update", telemetry::v2::GAME_STATUS_SCORE},
+    {"round_over_enter", telemetry::v2::GAME_STATUS_ROUND_OVER},
+    {"round_over_update", telemetry::v2::GAME_STATUS_ROUND_OVER},
+    {"post_match_celebration_enter", telemetry::v2::GAME_STATUS_POST_MATCH},
+    {"post_match_celebration_update", telemetry::v2::GAME_STATUS_POST_MATCH},
+    {"post_match_celebration_personal_stats_enter", telemetry::v2::GAME_STATUS_POST_MATCH},
+    {"post_match_celebration_personal_stats_update", telemetry::v2::GAME_STATUS_POST_MATCH},
+    {"waiting_to_return_to_lobby", telemetry::v2::GAME_STATUS_POST_MATCH},
+    {"pre_sudden_death_enter", telemetry::v2::GAME_STATUS_PRE_SUDDEN_DEATH},
+    {"pre_sudden_death_update", telemetry::v2::GAME_STATUS_PRE_SUDDEN_DEATH},
+    {"sudden_death_new_round_enter", telemetry::v2::GAME_STATUS_SUDDEN_DEATH},
+    {"sudden_death_new_round_update", telemetry::v2::GAME_STATUS_SUDDEN_DEATH},
+    {"post_sudden_death_enter", telemetry::v2::GAME_STATUS_POST_SUDDEN_DEATH},
+    {"post_sudden_death_update", telemetry::v2::GAME_STATUS_POST_SUDDEN_DEATH},
+};
+
+TEST(GameStatusFromSymbol, EveryStateTheGameNamesMapsToItsGroup) {
+  for (const NamedState& state : kGameStates) {
+    EXPECT_EQ(GameStatusFromSymbol(EchoVR::CSymbol64Hash(state.name)), state.status) << state.name;
+  }
+}
+
+TEST(GameStatusFromSymbol, AnUnknownOrAbsentSymbolIsUnspecified) {
+  EXPECT_EQ(GameStatusFromSymbol(EchoVR::CSymbol64Hash("game_state")), telemetry::v2::GAME_STATUS_UNSPECIFIED);
+  EXPECT_EQ(GameStatusFromSymbol(~0ULL), telemetry::v2::GAME_STATUS_UNSPECIFIED);
+  EXPECT_EQ(GameStatusFromSymbol(0), telemetry::v2::GAME_STATUS_UNSPECIFIED);
 }
 
 }  // namespace
