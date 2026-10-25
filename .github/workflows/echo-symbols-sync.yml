@@ -189,6 +189,8 @@ jobs:
           git push --force-with-lease="refs/heads/$branch:${lease}" origin "HEAD:refs/heads/$branch"
 
           {
+            echo "Refs #890"
+            echo
             echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
             echo
             echo "echo-symbols-sha: $head"
