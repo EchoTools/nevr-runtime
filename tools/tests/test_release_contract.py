@@ -45,6 +45,7 @@ class ReleaseContractTest(unittest.TestCase):
             "test_session_unregister",
             "test_mic_lifecycle",
             "test_telemetry_snapshot_store",
+            "test_telemetry_game_properties",
         )
         for target in targets:
             self.assertIn(f"--target {target}", recipe)
