@@ -87,6 +87,7 @@ struct FakeSteps final : Steps {
   bool InstallObbSkip(bool counted) override { return Step(counted ? "obb" : "obb_uncounted"); }
   bool InstallProcessEnd() override { return Step("process_end"); }
   bool InstallPermissionWait() override { return Step("permission_wait"); }
+  bool InstallVkExtWindow() override { return Step("vk_ext_window"); }
   bool StartTokenAuth() override { return Step("token"); }
   bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
@@ -119,7 +120,7 @@ struct FakeSteps final : Steps {
 void TestEverythingOffInstallsOnlyTheProofHookAndTheObbSkip() {
   FakeSteps s = FakeSteps::With(false, false, false, false);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait"};
+  const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
   QCHECK(s.calls == want);
   QCHECK(r.at(StepId::kStartTokenAuth).state == StepState::kSkipped);
   QCHECK(r.at(StepId::kInstallRedirect).state == StepState::kSkipped);
@@ -138,7 +139,7 @@ void TestFullStackOrder() {
   const ConstructorReport r = RunConstructorSequence(s);
   const std::vector<std::string> want = {"arm",       "config",     "reg_clock",  "reg_redirect", "reg_dlopen",
                                          "reg_login", "reg_social", "reg_prompt", "reg_obb",      "reporter",
-                                         "clock",     "obb", "process_end", "permission_wait",        "token",      "prompt",       "bridge",
+                                         "clock",     "obb", "process_end", "permission_wait", "vk_ext_window",        "token",      "prompt",       "bridge",
                                          "redirect",  "social",     "dlopen",     "hwdump"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
@@ -152,7 +153,7 @@ void TestHwDumpIsIndependentAndContained() {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     s.config.effective.hwdump = true;
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "hwdump"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "hwdump"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallHwDump).state == StepState::kOk);
   }
@@ -199,6 +200,38 @@ void TestPermissionWaitIsUnconditionalIndependentAndContained() {
   }
 }
 
+// The Vulkan extension window (#868) runs on every launch like the permission-wait hook: no feature and no configuration
+// turns it off (it is in release builds too), it needs no counters, it installs right after the permission-wait hook and
+// before token auth, and a failing or a throwing step leaves every other step as it was.
+void TestVkExtWindowIsUnconditionalIndependentAndContained() {
+  {
+    FakeSteps s = FakeSteps::With(false, false, false, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state == StepState::kOk);
+    QCHECK(std::strcmp(StepName(StepId::kInstallVkExtWindow), "install_vk_ext_window") == 0);
+    QCHECK(s.Index("vk_ext_window") == s.Index("permission_wait") + 1);
+  }
+  {  // before token auth, which a configuration with the network features does run
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    RunConstructorSequence(s);
+    QCHECK(s.Index("vk_ext_window") >= 0 && s.Index("vk_ext_window") < s.Index("token"));
+  }
+  {  // the configuration cannot be resolved and the permission-wait hook fails: still installed
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"config", "permission_wait"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state == StepState::kOk);
+    QCHECK(s.Ran("vk_ext_window"));
+  }
+  for (const char* mode : {"fail", "throw"}) {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    if (std::strcmp(mode, "fail") == 0) s.failing = {"vk_ext_window"}; else s.throwing = {"vk_ext_window"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(r.at(StepId::kInstallVkExtWindow).state != StepState::kOk);
+    QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen"));
+  }
+}
+
 // The process-end hook (#621) runs on every launch like the OBB skip: no feature and no configuration turns it
 // off, it needs no counters, it installs right after the OBB skip and before token auth, and a failing or a
 // throwing step leaves every other step as it was.
@@ -233,7 +266,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
   {
     FakeSteps s = FakeSteps::With(false, false, false, false);
     const ConstructorReport r = RunConstructorSequence(s);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kRegisterObbSkipCounters).state == StepState::kOk);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
@@ -244,7 +277,7 @@ void TestObbSkipIsUnconditionalIndependentAndContained() {
     s.failing = {"config"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
-    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait"};
+    const std::vector<std::string> want = {"arm", "config", "reg_clock", "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window"};
     QCHECK(s.calls == want);
     QCHECK(r.at(StepId::kInstallObbSkip).state == StepState::kOk);
   }
@@ -344,7 +377,7 @@ void TestClockHookFailureLeavesTheRest() {
   s.failing = {"clock"};
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kInstallClockHook).state == StepState::kFailed);
-  for (const char* ran : {"obb", "process_end", "permission_wait", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
+  for (const char* ran : {"obb", "process_end", "permission_wait", "vk_ext_window", "token", "bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
 }
 
 void TestTokenAuthFailureTurnsOffTheBridgeAndWhatNeedsIt() {
@@ -434,7 +467,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 
 void TestEveryStepThrowingIsContained() {
   for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
-                           "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "token", "prompt", "bridge", "redirect", "social",
+                           "reg_obb", "reporter", "clock", "obb", "process_end", "permission_wait", "vk_ext_window", "token", "prompt", "bridge", "redirect", "social",
                            "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
@@ -1126,6 +1159,7 @@ int main() {
   TestObbSkipIsUnconditionalIndependentAndContained();
   TestProcessEndIsUnconditionalIndependentAndContained();
   TestPermissionWaitIsUnconditionalIndependentAndContained();
+  TestVkExtWindowIsUnconditionalIndependentAndContained();
   TestCountersBeforeTheSingleReporterStart();
   TestCrashReporterAndConfigComeFirst();
   TestFeatureGating();

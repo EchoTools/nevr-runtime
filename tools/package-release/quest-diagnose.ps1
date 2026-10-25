@@ -264,8 +264,16 @@ try {
   if ($startFailed) { $problems.Add('The game did not start: ' + $start.Output) }
   elseif (-not $running) { $problems.Add("The game was not running $LaunchWaitSeconds s after it started (it ended or crashed).") }
   if ($crashMarker) { $problems.Add("The launch log has a crash marker: $crashMarker") }
-  if (-not $obb) { $problems.Add('The launch log has no "OBB mounted at" line: the game did not reach its data step.') }
-  $result = if ($problems.Count -eq 0) { 'No problem found in these facts. Send the zip anyway if the game still misbehaves.' } else { $problems -join "`n           " }
+  # #764: a failure is an exit, a death, a crash marker or the game's own Initialization Error. A line a build does not
+  # write (the OBB mount line) is never a failure of a game that is still running.
+  if ($log -match '(?m)^.*(Initialization Error.*)$') {
+    $initError = $Matches[1].TrimEnd("`r")
+    $initFile = [regex]::Match($log, 'Failed to find package manifest file [^ \r\n]*').Value
+    $problems.Add("The game logged: $initError" + $(if ($initFile) { " ($initFile)" } else { '' }))
+  }
+  $result = if ($problems.Count -eq 0 -and -not $obb -and -not $dataRoot) {
+    "No failure seen: running after ${LaunchWaitSeconds} s; this build logged no data-mount line, so the data step can't be confirmed from the log. Send the zip anyway if the game still misbehaves."
+  } elseif ($problems.Count -eq 0) { 'No problem found in these facts. Send the zip anyway if the game still misbehaves.' } else { $problems -join "`n           " }
 
   $yesNo = { param($b) if ($b) { 'present' } else { 'absent' } }
   $mediaNote = if (-not $dataMedia -and $mediaDir) { ' (the files folder exists; the runtime serves it as android_media_unmarked)' } else { '' }
