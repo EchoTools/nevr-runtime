@@ -257,6 +257,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/plugin_refusal_notice.h"
 #include "runtime/hook/dll_load_hook.h"
 #include "runtime/ext/plugin_trust.h"
+#include "runtime/patch/asset_registry.h"
 #include "runtime/ext/module_loader.h"
 #include "core/hex_dump.h"
 #include "runtime/patch/matchmaker_host_patch.h"
@@ -1306,6 +1307,31 @@ TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysVa
   EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
+// #432: an asset a plugin registered points into its image. The host drops it before FreeLibrary, so a
+// plugin that never deregisters cannot leave the engine holding a pointer into freed memory.
+TEST_F(PluginLoaderDiagnosticTest, UnloadReleasesAssetsRegisteredInsideThePluginImage) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  LoadPlugins();
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  const HMODULE module = GetModuleHandleA("test_plugin_onframe.dll");
+  ASSERT_NE(module, nullptr);
+
+  nevr::assets::Registry& registry = nevr::assets::Global();
+  const auto* inside = reinterpret_cast<const uint8_t*>(module) + 0x10;  // within the mapped image
+  static const unsigned char outside[16] = {1};                          // a different image: this test
+  ASSERT_EQ(registry.Register(0x11, 0x22, inside, 16, "inside"), nevr::assets::RegisterStatus::Ok);
+  ASSERT_EQ(registry.Register(0x11, 0x23, outside, sizeof(outside), "outside"),
+            nevr::assets::RegisterStatus::Ok);
+
+  UnloadPlugins();
+
+  nevr::assets::Asset found;
+  EXPECT_FALSE(registry.Find(0x11, 0x22, &found)) << "an asset inside the freed image was left registered";
+  EXPECT_TRUE(registry.Find(0x11, 0x23, &found)) << "an asset outside the plugin's image must stay";
+  EXPECT_TRUE(TestLogContains("released 1 asset(s) still registered by a plugin at unload"));
+  registry.Deregister(outside, outside + sizeof(outside));
+}
+
 // #596: the address GetLoadedPluginInfo hands out belongs to the storage, not to a prediction of how
 // many plugins a later pass adds. Registering plugins the loader never planned for (the test hook
 // appends exactly as a load does) must not move the first one's entry.
@@ -1466,7 +1492,7 @@ static uint32_t LoggingFixtureBoundAtInit(const char* dll) {
 }
 
 TEST(PluginLogApi, ContextCarriesALogFunctionAndTheVersionSaysSo) {
-  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 6u);
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION), 7u);
   NvrGameContext ctx = {};
   ctx.ctx_size = sizeof(NvrGameContext);
   EXPECT_GE(ctx.ctx_size, offsetof(NvrGameContext, log) + sizeof(NevrLogFn));
@@ -3633,6 +3659,28 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   EXPECT_EQ(profile.at("nevr_social"), 2);
   EXPECT_EQ(profile.at("nevr_plugins"), inputs.plugins);
   EXPECT_TRUE(profile.at("nevr_plugins").is_array());
+}
+
+// #432: the assets a plugin carries are reported beside the plugin list so the game service knows which levels
+// this game client can load. Absent when there are none, so a plugin-less login is byte-identical to before.
+TEST(LoginProfile, NoAssetsMeansNoAssetsKey) {
+  nevr_login_profile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
+  EXPECT_FALSE(profile.contains("nevr_assets"));
+}
+
+TEST(LoginProfile, AssetsAreCarriedAsAnArrayNextToThePluginList) {
+  nevr_login_profile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.plugins = nlohmann::json::parse(R"([{"name":"maps","loaded":true}])");
+  inputs.assets = nlohmann::json::parse(
+      R"([{"type":"0xa71a14664bd4e047","name":"0x1111222233334444","label":"level_a","bytes":64}])");
+  const nlohmann::json profile = nlohmann::json::parse(nevr_login_profile::BuildLoginProfileJson(inputs));
+  ASSERT_TRUE(profile.contains("nevr_assets"));
+  ASSERT_TRUE(profile.at("nevr_assets").is_array());
+  EXPECT_EQ(profile.at("nevr_assets"), inputs.assets);
+  EXPECT_EQ(profile.at("nevr_plugins"), inputs.plugins);
 }
 
 TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {

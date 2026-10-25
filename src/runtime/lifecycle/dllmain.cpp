@@ -20,6 +20,7 @@
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/log/builtin_filter.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/patch/plugin_assets.h"
 
 #include <dbghelp.h>
 
@@ -105,6 +106,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         nevr_binary_bug_fixes::Shutdown();
         nevr_broadcaster_guard::Shutdown();
         nevr_builtin_log_filter::Shutdown();
+        nevr::assets::ShutdownPluginAssets();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
         // Dynamic unload only: FreeLibrary during process termination can leave a module in use

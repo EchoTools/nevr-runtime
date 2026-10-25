@@ -7,6 +7,8 @@ EXPORTS
    NEVR_RegisterResourceOverride
    NEVR_ResetResourceOverrides
    NEVR_DeregisterResourceOverrides
+   NEVR_RegisterAsset
+   NEVR_DeregisterAssets
    ; BugSplat MiniDmpSender stubs — MSVC mangled names the game expects
    ??0MiniDmpSender@@QEAA@PEB_W000K@Z = BugSplat_MiniDmpSender_Ctor
    ??1MiniDmpSender@@UEAA@XZ = BugSplat_MiniDmpSender_Dtor
