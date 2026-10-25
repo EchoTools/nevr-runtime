@@ -135,14 +135,18 @@ On apply:
 **H** on both platforms. If any of the five counters or levels changed, the setter clears flags bits 45 and 46
 and fires `delegate_onearlyquitpenaltyupdate` (`0xa2e48b35c7cd078f`). Quest does both with one AND
 `0xffff9fffffffffff`; PC uses two ANDs, at `0x1401ae3e4` and `0x1401ae3f8`, and dispatches at `0x1401ae409`. **H**
-The update callback then fires the same event again, unconditionally (PC tail jump `0x140161932`; Quest
-`0x136ad50`). **H**
+On the first apply (stored was -1) the old steady counters and level are set equal to the new ones before
+the compare, so only numearlyquits and penaltylevel can trigger it then (Quest `0x136ade0`: `mov w8,w7; mov
+w9,w5; mov w13,w4`; PC `0x1401ae397`..`0x1401ae3b1`). **H** The update callback then fires the same event
+again, unconditionally (PC tail jump `0x140161932`; Quest `0x136ad50`). **H**
 
 The setter's third argument is a long. The Quest symbol is
 `SetEarlyQuitPenaltyLevel(long, long, unsigned int, unsigned int, unsigned int, unsigned char, unsigned char)`;
-on Quest the second long (x2) is never stored and is passed on as the third argument of the event send
-(`0x136ae1c`). PC overwrites R8D at `0x1401ae313` without reading it. **H** Who reads the event's extra argument
-was not traced.
+on Quest the second long (x2) is never read: the standalone setter tail-branches (`0x136ae1c`, thunk
+`0x1021530`) to `SendComponentEventGlobal` `0x1344758`, which takes (netGame, event) and loads its own
+`x2 = 0xffffffffffff` before each call it makes (`0x1344778`, `0x13447a0`, `0x13447d8`). PC overwrites R8D at
+`0x1401ae313` without reading it. **H** So the argument reaches the setter on PC and is dropped on both
+platforms.
 
 ### 2.2 The login path
 
@@ -159,8 +163,8 @@ It reads the **server** profile (`CNSUser::ServerProfile` of `*(netGame+0x28d0)`
 | `earlyquit\|numearlyquits` | 0 | `+0x64830` |
 | `earlyquit\|numsteadymatches` | 0 | `+0x64834` |
 | `earlyquit\|numsteadyearlyquits` | 0 | `+0x64838` |
-| `earlyquit\|penaltylevel` | 0, and 0 if ≥ 0x10000 | `+0x64844` |
-| `earlyquit\|steadyplayerlevel` | 0, and 0 if ≥ 0x10000 | `+0x64845` |
+| `earlyquit\|penaltylevel` | 0, and 0 if ≥ 0x10000; stored as a byte, so 0x100..0xffff truncate | `+0x64844` |
+| `earlyquit\|steadyplayerlevel` | 0, and 0 if ≥ 0x10000; stored as a byte | `+0x64845` |
 
 **H** (Quest strings `0x2caa9f5`..`0x2caaa71`; PC strings `0x1416e0870`..`0x1416e08f8`). The PC call passes **R8 =
 -1** (`LEA R8,[RCX-1]` with RCX = 0, at `0x14017e453`). **H** So the login path brings no expiry on either
@@ -175,38 +179,51 @@ platform: Quest's inlined copy writes -1 to `+0x64828`, as the setter does. **H*
 | netGame construction: Quest ctor `0x1383db8`, PC `ConfigureEngine` `0x140146c58` | -1 |
 | the setter / its inlined copies (update, login) | -1 |
 
-No other writer was found (PC instruction search `0x64828`: 4 hits, the two writes above plus the two reads below;
-Quest decompiled-text search `0x64828) = `: 4 hits, all `= 0xffffffffffffffff`). **M** (absence by search).
+No other writer was found. On PC, a scan of `.text` for the displacement bytes `28 48 06 00` finds exactly 4 sites:
+`0x140146c5b` and `0x1401ae375` (the two writes above), `0x1401bc5ed` and `0x140d9622f` (the two reads below).
+ReVault's instruction search for `0x64828` gives the same 4. On Quest, the decompiled-text search `0x64828) = `
+gives 4 hits, all `= 0xffffffffffffffff`; Quest stores the pair with `stp x1,x14,[x11]` at `+0x64820`, which an
+instruction search for `0x64828` cannot see. **M** (absence by search).
 **In the stock game the expiry is always -1, so no message can start a countdown.**
 
 Two readers:
 
 - **`CR15NetGame::Update`** (Quest `0x1394b40`, test `tbz x8,#0x2d` at `0x1394ca4`; PC `0x1401bbdb0`, test at
   `0x1401bc5dc`): if flags bit 45 is set and `+0x64828` is negative or ≤ now, it clears bit 45 (Quest
-  `0x1394cd0`, PC `0x1401bc60c`) and fires `delegate_onearlyquitpenaltyupdate`. **H**
+  `0x1394cd0`, PC `0x1401bc60c`) and fires `delegate_onearlyquitpenaltyupdate`. **H** The block runs only when
+  flags bit 14 is set and on one value of Update's argument (Quest `tbnz w8,#0xe,0x1394c8c` at `0x1394c40`, `cmp
+  x20,#1` at `0x1394c44` and `0x1394c9c`; PC `SHR RAX,0xe; TEST AL,1` at `0x1401bbfa0`, `TEST RSI,RSI` / `CMP RSI,1`
+  from `0x1401bc011`). **M**; what bit 14 and the argument mean was not read. The PC name is **M**, from the
+  shape: ReVault also gives `CR15NetGame::Update` to `0x1401bf610`.
 - **`CR15NetEarlyQuitPenaltyExpression::operator()`** (Quest `0x2421ba0 / 0x2321ba0`, PC `0x140d96190`),
   section 4. Its `lockoutcountdownsec` is `+0x64828 − now` when `+0x64828` is not -1 and later than now,
   otherwise 0 (PC `0x140d96308`: `CMP RBP,-1; JZ; CMP RBP,RAX; JLE; MOV RDI,RBP; SUB RDI,RAX`). **H**
 
 The clock is **Unix seconds** on both platforms. PC `CSysTime::GetTime` `0x1400de820` is `XOR ECX,ECX; JMP
 _time64` (`0x141315468`), and `0x141315398` converts the FILETIME: it subtracts `0x019DB1DED53E8000`, divides by
-10^7 and caps the result at `0x793582aff`. Both Update (`0x1401bc5e5`) and the expression (`0x140d96303`) call it.
-**H** On Quest, Update calls `CSysTime::GetTime64` and the expression calls `CSysTime::GetTime`
-(`0x1084d80 / 0xf84d80` and `0x1084d28 / 0xf84d28`). Both are `clock_gettime(0, &ts)`, where import thunk
+10^7, and fails above `0x793582aff`, when `_time64` returns -1. Both Update (`0x1401bc5e5`) and the expression (`0x140d96303`) call it.
+**H** On Quest, Update calls `CSysTime::GetTime64` and the expression calls `CSysTime::GetTime`, through the PLT
+thunks `0xfd18e0` and `0xff2ab0` (`0x1084d80 / 0xf84d80` and `0x1084d28 / 0xf84d28`). Both are `clock_gettime(0, &ts)`, where import thunk
 `0xfd7a00` is `clock_gettime` and clock 0 is `CLOCK_REALTIME`; each returns `tv_sec`, or -1 on failure. **H**
 
 Flags bit 45 ("countdown running") and bit 46 (`showearlyquitwarning`) have **no setter** in either binary.
 Searched: Quest instruction search for the masks and constants `#0x200000000000|#0x400000000000|#0x600000000000|
 #-0x200000000001|...` (82 results, the early-quit ones are the five AND sites above), bit-field ops on `#0x2d`/`#0x2e`
-(10 results, none on flags); PC constant and `bts/btr/btc` searches (none on netGame). **M** (absence by
-search; a mask built in a register would not match).
+(10 results, none on flags). On PC, ReVault's instruction search covers only code with a function record, and it
+misses `0x1401618b0` and `0x1401ae430`. So the 64-bit mask immediates were also scanned in the bytes of `.text`:
+the AND masks occur only at `0x1401ae3dc`, `0x1401ae3e9`, `0x1401ae439` and `0x1401bc604`. The OR-style constants
+occur at `0x140688bcf` (a particle-graph table), `0x1413bbd94` (a TEST), `0x1416514bb` / `0x1416514ca` (the mask
+table at `0x141651380`) and in unrelated code. None of these was shown to touch the flags. **M** (absence by
+search). Two limits: a mask built in a register would not match, and the flags u64 is not netGame's own. PC
+`ConfigureEngine` copies the pointer from another object (`MOV RAX,[RBP+0x248]; MOV [RSI+0x2da0],RAX` at
+`0x140146222`), so a writer need not go through `netGame+0x2da0`.
 
 ### 2.4 What clears or forgives
 
 | Event | Effect in the stock game |
 | --- | --- |
-| an applied update or login whose counters changed | clears bits 45 and 46, fires the penalty event |
-| `CR15NetGame::Update` at expiry | clears bit 45 when `+0x64828` < 0 or ≤ now, fires the event |
+| an applied update or login whose counters changed (on the first apply: numearlyquits or penaltylevel) | clears bits 45 and 46, fires the penalty event |
+| `CR15NetGame::Update` at expiry, under its precondition (section 2.3) | clears bit 45 when `+0x64828` < 0 or ≤ now, fires the event |
 | `SetEarlyQuitWarningShown` (Quest `0x1392760 / 0x1292760`; PC `0x1401ae430`, no function record, bytes: `MOV RAX,[RCX+0x2da0]; MOV RDX,0xffffbfffffffffff; AND [RAX],RDX; ...; JMP 0x1401a9fe0`) | clears bit 46, fires the event. **H** on both |
 | `SetSteadyPlayerShown` (Quest `0x1392784 / 0x1292784`) | copies the current steady level and counters into the "previous" slots, fires the event. **H**. No script runs it (section 3.1) |
 | an update whose `+0x18` is not newer than `+0x64820` | **nothing**: the whole update is dropped |
@@ -222,7 +239,8 @@ and Update `0x2435794` are no-ops. PC node `0x140d8e920` queues `0x1401ae430` on
 
 `CR15NetEarlyQuitFeatureFlagExpression` (Quest `0x2421b28 / 0x2321b28`, PC `0x140d960a0`) takes an input `index`
 (`0xe32dc7d3d78b41a8`) and outputs `output` = `index <= 0x20 && ((1 << index) & byte +0x64847) != 0`. PC shifts
-an 8-bit register (`SHL DIL,CL`), Quest a 32-bit value; both read one byte, so index 8 and above reads 0. **H**
+an 8-bit register (`SHL DIL,CL`), Quest a 32-bit value; both read one byte, so index 8 to 31 reads 0. Index 32
+shifts by 0 on both (the count is masked to 5 bits) and reads bit 0; no script passes it. **H**
 
 The scripts pass only **0, 1 and 5**. A project-wide scan of every `INTCONST` that feeds the expression found 84
 Quest nodes in 26 libraries; nothing reads bits 2, 3, 4, 6 or 7. **M** (tabulated from search results;
@@ -377,7 +395,7 @@ shows when `lockoutcountdownactive` is true.
 | Config parse: u32 header, zstd, stack allocator, table strides | yes **H** | |
 | Feature-flag store `& 0xdd`, event | yes **H** | PC's callback has no function record (`0x1401618b0`) |
 | Update notification fields read | +0x18, +0x28..+0x35 **H** | PC loads +0x20 into R8 and passes it to the setter, which discards it; Quest never loads it **H** |
-| Setter | gate, stores, -1 to the expiry **H** | PC standalone (two callers), two ANDs; Quest inlined, one AND, and its standalone copy passes the 2nd long to the event **H** |
+| Setter | gate, stores, -1 to the expiry, the second long dropped **H** | PC standalone (two callers), two ANDs; Quest inlined, one AND **H** |
 | Login path | server profile keys, gate **H** | PC passes R8 = -1 explicitly **H** |
 | `Update` expiry test | yes **H** | |
 | Clock | Unix seconds **H** | PC `_time64`; Quest `clock_gettime(CLOCK_REALTIME)` |
@@ -402,8 +420,11 @@ shows when `lockoutcountdownactive` is true.
   `[NEVR.EARLYQUIT] penalty set: incoming penaltyts=... stored=... now=... level=... early_quits=... -> lockout
   expiry=... active=...`.
 
-With those three changes, everything in section 4 is reachable. The countdown is the runtime's own value in
-`+0x64828`, written at the one slot both readers use (section 2.3). The bit-45 path in `Update` ends it on time.
+With those three changes everything in section 4 is reachable, except a notice that opens by itself: nothing
+sets bit 46 (section 4.2). The countdown is the runtime's own value in `+0x64828`, written at the one slot both
+readers use (section 2.3). Its digits reach 0 at the expiry by themselves, because the expression compares with
+the clock and the hook sets `lockoutcountdownactive` from them. The bit-45 clear in `Update`, and the event it
+fires, also need that block's precondition (section 2.3).
 
 `src/runtime/scenario/scenario_control.cpp` `FireEarlyQuit` (scenario builds only) writes the slots and the
 constant store directly. A run that uses it exercises the scripts, not the path from the service to the client.
@@ -425,8 +446,9 @@ within a process. **H** (from the gate):
 
 The service sends a per-player stamp that always increases at +0x18 and the expiry at +0x20. The hook takes
 the setter's third argument (R8: +0x20 from the update, -1 from the login path) and writes it to `+0x64828`,
-but only when the setter applied the update. Every update the service sends passes the gate. **H** (from the
-gate and the R8 path).
+but only when the setter applied the update. As long as the service's stamps always rise, every update it
+sends passes the gate: **H** for the gate and the R8 path. The rising stamp is the service's job, not something
+the binary shows.
 
 What the binary supports, against each reading:
 
@@ -434,7 +456,7 @@ What the binary supports, against each reading:
 | --- | --- | --- |
 | the gate wants +0x18 to rise for every update to apply (section 2.1) **H** | an expiry does not always rise | a stamp always does |
 | the profile key for the same slot is `earlyquit\|penaltyts`, "penalty timestamp" (section 2.2) **H** | | consistent with a stamp **L** |
-| the setter takes a second long it never stores; Quest forwards it to the event; PC loads +0x20 into it (section 2.1) **H** | +0x20 unused | +0x20 is the argument the game passes and drops |
+| the setter takes a second long it never reads, on either platform; PC loads +0x20 into it (section 2.1) **H** | +0x20 unused | +0x20 is the argument the game passes and drops |
 | the login path passes -1 for that long (section 2.2) **H** | | the login path brings no expiry; one has to come from an update |
 | every stock writer of `+0x64828` stores -1 (section 2.3) **M** | | |
 
@@ -449,7 +471,7 @@ expiry reaches the scripts only through the runtime.
 - Why a sent `SNSEarlyQuitConfig` reaches the allocator's INT3 (`0x1400d502b`). One idea, not measured: a payload
   without the 4-byte header has its first 4 JSON bytes read as the size. The allocator's capacity was not read.
   Nakama does not send the config.
-- Who reads the extra argument Quest's setter passes with the penalty event.
+- What flags bit 14 and `Update`'s argument mean (the precondition of the expiry block, section 2.3).
 - Whether `LocalUserProfileReceivedCB` runs more than once in a session, and so whether a later profile can reach
   the setter.
 - Which input picks `LOCKOUT` and which `PARTY LOCKOUT` in `f70460f9a7d466ab`; graph flags +0xe0 and +0xe2;
@@ -458,8 +480,10 @@ expiry reaches the scripts only through the runtime.
   `eb2515f3` and `aa7d6565`; the `delegate_onpageenabled` path of `18000621255c6ea5`.
 - The notice body text and the tier names: on screen, in no binary's string table.
 - The PC script `.dll` graphs: they were not compared node by node with the Quest twins.
-- Absence of a setter for flags bits 45/46 and of a non -1 writer of `+0x64828` rests on searches (section 2.3),
-  not a read of every writer of `*(netGame+0x2da0)`.
+- The absence of a setter for flags bits 45/46, and of a non -1 writer of `+0x64828`, rests on searches and a byte
+  scan (section 2.3), not on a read of every writer of the flags u64. That u64 belongs to another object, so its
+  writers need not go through netGame.
+- The order in which the login profile and `SNSEarlyQuitFeatureFlags` arrive at login.
 
 ## 8. Verdict on #907 and EchoTools/nakama#712
 
@@ -493,7 +517,11 @@ Points the plans should carry. None of them changes the layout:
    planned hook writes -1 and ends a running lockout. Whether the profile is delivered again in a session is
    not established (section 7). The service should keep the profile's `penaltyts` at or below the last stamp
    it sent.
-4. **Quest has no hook.** Quest inlines the setter in `EarlyQuitUpdateCB` (`0x136ac50`) and `LoadEarlyQuitPenalty`
+4. **Send the feature flags first.** The bar's gate reads bit 0 when the penalty event fires, and nothing
+   re-raises that event when the flags arrive (section 4.4). At login, the service should send
+   `SNSEarlyQuitFeatureFlags` before anything that applies a penalty: under reading B, before the post-login
+   update.
+5. **Quest has no hook.** Quest inlines the setter in `EarlyQuitUpdateCB` (`0x136ac50`) and `LoadEarlyQuitPenalty`
    (`0x136c958`), so a Quest port would hook those two. Its expression is at `0x2421ba0` and its mask at
    `0x136ac24`. A Quest client sees no lockout under either reading.
 
@@ -508,9 +536,14 @@ reading B (#907 and #712):
 | --- | --- | --- |
 | 1. Set a 600 s lockout | applies; bar ≈ 10:00; log `incoming penaltyts=now+600 ... expiry=now+600 active=1` | applies; bar ≈ 10:00; log shows stamp s1 and expiry now+600 |
 | 2. Shorten it to 60 s | **dropped by the gate** (incoming now+60 < stored now+600); bar keeps counting from ≈ 9:xx; counters unchanged; log `incoming penaltyts=now+60 stored=now+600 ... expiry=now+600` | applies (s2 > s1); bar ≈ 1:00; log shows expiry now+60 and applied |
-| 3. Forgive it (the service sends no lockout) | bar ends (`resetStoredTs`), log `(cleared by the game service)`; the update's counters and levels are dropped, so the Quit Info and loyalty pages keep the old numbers | applies (s3 > s2); bar ends; counters and levels update |
+| 3. Forgive it (the service sends no lockout) | if +0x18 is 0 or -1: bar ends (`resetStoredTs`), log `(cleared by the game service)`, and the update's counters and levels are dropped, so the Quit Info and loyalty pages keep the old numbers. If +0x18 is a positive time at or before now: dropped, and the old countdown stays | applies (s3 > s2); bar ends; counters and levels update |
 | 3a. Forgive to a lower level that still has a lockout | dropped (earlier expiry); old countdown and counters stay | applies; countdown shows the lower level's end |
-| 4. Set a lockout, quit the game, start it and log in | the profile's `penaltyts` (an expiry) applies in the fresh process; the bar returns from the profile alone | the profile's stamp applies with R8 = -1: no countdown until the post-login update, then the bar returns. No bar after the update means #712 step 3 or the stamp order is wrong |
+| 4. Set a lockout, quit the game, start it and log in (see the note below) | the profile's `penaltyts` (an expiry) applies in the fresh process; the bar returns from the profile alone | the profile's stamp applies with R8 = -1: no countdown until the post-login update, then the bar returns. No bar after the update means #712 step 3 or the stamp order is wrong |
+
+Step 4 has a precondition. The bar needs feature bit 0 when the penalty event fires, and the flags message's
+own event is handled by no script. If the login profile is applied before `SNSEarlyQuitFeatureFlags` arrives, the
+bar stays down until the next penalty event: an update, or `Update` at expiry. Note the order from the run's
+log.
 
 Steps 2 and 3a decide between the readings: A keeps the old end, B shows the new one. Step 4 checks the login
 path's -1 on the live client. Under B, a log line at step 2 with the expiry the service sent proves that +0x20
