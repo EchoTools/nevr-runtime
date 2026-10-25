@@ -1,0 +1,230 @@
+name: echo-symbols sync
+
+# Daily check of Dualgame/echo-symbols against tools/symbols.pin. When its main
+# moves past the pin, fetch the echo_vr-pc and echo_vr-quest subsets at that exact sha, validate them,
+# regenerate src/runtime/log/symcache_data.cpp, run the tool tests and a compile
+# check, then open or update one PR. It never merges and never opens a second PR
+# for the same branch. What actually runs here: `go test ./...`, `validate`,
+# `regenerate`, `diff` and `g++ -std=c++17 -fsyntax-only` on the generated
+# table. The full build is the
+# reviewer's quick check; build.yml runs only on workflow_dispatch and release,
+# and a PR opened with GITHUB_TOKEN starts no workflow runs at all.
+#
+# Trust boundary: data is fetched by sha from the public raw endpoint, never from
+# a branch tip, so the workflow and the pin describe the same bytes. Permissions
+# are limited to the two write scopes the PR needs.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: echo-symbols-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: pin, validate, regenerate, PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: tools/symcache/go.mod
+          cache: false
+
+      - name: Delete merged or closed automation branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr list --state all --search 'head:automation/echo-symbols-' --limit 1000 \
+            --json headRefName,state,isCrossRepository > "$RUNNER_TEMP/prs.json"
+          # The tool itself deletes and returns nonzero on the first failed
+          # `git push`; no output capture can hide its status.
+          (cd tools/symcache && go run . pr-cleanup --input "$RUNNER_TEMP/prs.json" --limit 1000 --execute)
+
+      - name: Compare the pin with echo-symbols main
+        id: pin
+        run: |
+          set -euo pipefail
+          pin=$(cat tools/symbols.pin)
+          head=$(git ls-remote https://github.com/Dualgame/echo-symbols.git refs/heads/main | cut -f1)
+          # Both values reach URLs and commit messages; reject a malformed pin
+          # before either happens.
+          (cd tools/symcache && go run . pin-check --sha "$pin" && go run . pin-check --sha "$head")
+          if [ -z "$pin" ] || [ -z "$head" ]; then
+            echo "could not read a sha (pin='$pin' head='$head')" >&2
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          if [ "$pin" = "$head" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "echo-symbols is unchanged at $pin"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "echo-symbols moved $pin -> $head"
+          fi
+
+      - name: Fetch both subsets at both shas
+        if: steps.pin.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          base=https://raw.githubusercontent.com/Dualgame/echo-symbols
+          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/old-pc.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.pin }}/subsets/echo_vr-quest.json" -o "$RUNNER_TEMP/old-quest.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-pc.json" -o "$RUNNER_TEMP/new-pc.json"
+          curl -fsSL "$base/${{ steps.pin.outputs.head }}/subsets/echo_vr-quest.json" -o "$RUNNER_TEMP/new-quest.json"
+
+      - name: Validate, regenerate, compile check
+        if: steps.pin.outputs.changed == 'true'
+        working-directory: tools/symcache
+        run: |
+          set -euo pipefail
+          go test ./...
+          go run . validate --input "$RUNNER_TEMP/new-pc.json" --quest-input "$RUNNER_TEMP/new-quest.json" \
+            --previous "$(sed -n 's/.*kSymCacheCount = \([0-9]*\);/\1/p' ../../src/runtime/log/symcache_data.cpp)"
+          go run . regenerate --pin "${{ steps.pin.outputs.head }}" \
+            --input "$RUNNER_TEMP/new-pc.json" --quest-input "$RUNNER_TEMP/new-quest.json" \
+            --out ../../src/runtime/log/symcache_data.cpp \
+            --previous-from ../../src/runtime/log/symcache_data.cpp
+          go run . diff --old "$RUNNER_TEMP/old-pc.json" --new "$RUNNER_TEMP/new-pc.json" \
+            --old-quest "$RUNNER_TEMP/old-quest.json" --new-quest "$RUNNER_TEMP/new-quest.json" > "$RUNNER_TEMP/diff.md"
+          # The generated table is C++ data in the runtime; compile it before proposing it.
+          g++ -std=c++17 -fsyntax-only -I../../src ../../src/runtime/log/symcache_data.cpp
+
+      - name: Open or update the PR
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pin='${{ steps.pin.outputs.pin }}'
+          head='${{ steps.pin.outputs.head }}'
+          short=$(printf '%s' "$head" | cut -c1-12)
+          prefix="automation/echo-symbols-"
+
+          # The pin a PR tracks lives in its branch commit; HeadRefOid is a
+          # nevr-runtime sha, so it is never compared with the echo-symbols
+          # head. Fetch the PR ref when the checkout does not already have it.
+          pin_for() {
+            number=$1
+            tip=$2
+            if git cat-file -e "$tip:tools/symbols.pin" 2>/dev/null; then
+              tracked=$(git show "$tip:tools/symbols.pin" | tr -d '[:space:]')
+            else
+              git fetch -q origin "refs/pull/$number/head" || return 1
+              tracked=$(git show "FETCH_HEAD:tools/symbols.pin" | tr -d '[:space:]')
+            fi
+            case "$tracked" in
+              *[!0-9a-f]*|"") return 1 ;;
+            esac
+            [ "${#tracked}" -eq 40 ] || return 1
+            printf '%s' "$tracked"
+          }
+
+          gh pr list --state all --search 'head:automation/echo-symbols-' --limit 1000 \
+            --json number,headRefName,headRefOid,state,isCrossRepository > "$RUNNER_TEMP/prs.json"
+          (cd tools/symcache && go run . pr-filter --input "$RUNNER_TEMP/prs.json" --limit 1000 > "$RUNNER_TEMP/filtered.json")
+          # Capture jq's status before the loop: a process substitution would
+          # return 0 even when jq fails.
+          if ! jq -c '.[]' "$RUNNER_TEMP/filtered.json" > "$RUNNER_TEMP/prs.jsonl"; then
+            echo "jq failed to read the filtered PR list" >&2
+            exit 1
+          fi
+          : > "$RUNNER_TEMP/enriched.jsonl"
+          while IFS= read -r pr; do
+            [ -n "$pr" ] || continue
+            branch=$(printf '%s' "$pr" | jq -r .headRefName)
+            case "$branch" in
+              "$prefix"*) ;;
+              *) continue ;;
+            esac
+            number=$(printf '%s' "$pr" | jq -r .number)
+            state=$(printf '%s' "$pr" | jq -r .state)
+            tip=$(printf '%s' "$pr" | jq -r .headRefOid)
+            tracked=""
+            if [ "$state" = "OPEN" ] || [ "$state" = "CLOSED" ]; then
+              tracked=$(pin_for "$number" "$tip") || {
+                echo "cannot read the echo-symbols pin of PR #$number ($branch)" >&2
+                exit 1
+              }
+            fi
+            printf '%s' "$pr" | jq -c --arg pin "$tracked" '. + {pin:$pin}' >> "$RUNNER_TEMP/enriched.jsonl"
+          done < "$RUNNER_TEMP/prs.jsonl"
+
+          jq -s '[.[] | select(.state == "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/open.json"
+          jq -s '[.[] | select(.state != "OPEN")]' "$RUNNER_TEMP/enriched.jsonl" > "$RUNNER_TEMP/closed.json"
+
+          decision=$(cd tools/symcache && go run . pr-plan --head "$head" \
+            --open "$RUNNER_TEMP/open.json" --closed "$RUNNER_TEMP/closed.json")
+          action=$(printf '%s\n' "$decision" | sed -n 's/^action=//p')
+          pr=$(printf '%s\n' "$decision" | sed -n 's/^pr=//p')
+          branch=$(printf '%s\n' "$decision" | sed -n 's/^branch=//p')
+          tip=$(printf '%s\n' "$decision" | sed -n 's/^tip=//p')
+          note=$(printf '%s\n' "$decision" | sed -n 's/^note=//p')
+          if [ "$action" = "skip" ]; then
+            echo "$note"
+            exit 0
+          fi
+
+          printf '%s\n' "$head" > tools/symbols.pin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add tools/symbols.pin src/runtime/log/symcache_data.cpp
+          git commit -m "chore(symcache): echo-symbols $pin -> $short"
+
+          lease=""
+          if [ "$action" = "update" ]; then lease="$tip"; fi
+          git push --force-with-lease="refs/heads/$branch:${lease}" origin "HEAD:refs/heads/$branch"
+
+          {
+            echo "Refs #890"
+            echo
+            echo "Automated sync of [Dualgame/echo-symbols](https://github.com/Dualgame/echo-symbols) from \`$pin\` to \`$head\`."
+            echo
+            echo "echo-symbols-sha: $head"
+            echo
+            echo "Data: the union of the \`echo_vr-pc\` and \`echo_vr-quest\` subsets at the pinned sha; on a case-only hash collision the PC name is kept (the merge reports the conflict count)."
+            echo
+            cat "$RUNNER_TEMP/diff.md"
+            echo
+            echo "## What ran on this change"
+            echo
+            echo "- \`go test ./...\` in \`tools/symcache\`"
+            echo "- \`go run . validate\` on the corpus at \`$head\`: keys, strings, every name re-hashed with CSymbol64, count within 20% of \`$pin\`"
+            echo "- \`go run . regenerate\`: wrote \`src/runtime/log/symcache_data.cpp\` (the table in this commit)"
+            echo "- \`go run . diff\`: produced the lists above"
+            echo "- \`g++ -std=c++17 -fsyntax-only -Isrc src/runtime/log/symcache_data.cpp\`"
+            echo
+            echo "## What did not run"
+            echo
+            echo "Checks don't auto-run on this PR: a pull request opened with GITHUB_TOKEN starts no workflow runs, so neither \`build.yml\` nor \`pr-read-check.yml\` fires on it. The reviewer runs the quick check:"
+            echo
+            echo "- \`just build\`"
+            echo "- \`cd tools/symcache && go test ./...\`"
+            echo "- \`python3 -m pytest -q tools/tests\`"
+            echo "- \`python3 tools/verify_doc_paths.py\`"
+            echo
+            echo "Branch lifecycle: deleted by the next scheduled run after it merges or closes."
+            echo
+            echo "Read AGENTS.md at $(git merge-base HEAD origin/main)"
+          } > "$RUNNER_TEMP/pr.md"
+
+          if [ "$action" = "update" ]; then
+            gh pr edit "$pr" --title "chore(symcache): echo-symbols $short" --body-file "$RUNNER_TEMP/pr.md"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(symcache): echo-symbols $short" \
+              --body-file "$RUNNER_TEMP/pr.md"
+          fi
